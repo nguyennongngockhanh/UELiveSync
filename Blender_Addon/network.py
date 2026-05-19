@@ -2,191 +2,99 @@ import socket
 import struct
 import time
 
+# =========================================================
+# PHASE 3.2 PROTOCOL CONSTANTS
+# =========================================================
+LIVE_SYNC_MAGIC = 0x4C56534D
+LIVE_SYNC_VERSION = 1
 
-HOST = "127.0.0.1"
-PORT = 5000
-
-MAGIC = 0x534E5955
-
-sock = None
-
-
-def connect():
-
-    global sock
-
-    try:
-        sock = socket.socket(
-            socket.AF_INET,
-            socket.SOCK_STREAM
-        )
-
-        sock.setsockopt(
-            socket.IPPROTO_TCP,
-            socket.TCP_NODELAY,
-            1
-        )
-
-        sock.connect(
-            (HOST, PORT)
-        )
-
-        print(
-            "UE Live Sync Connected"
-        )
-
-        return True
-
-    except Exception as e:
-
-        print(
-            f"Connection failed: {e}"
-        )
-
-        sock = None
-
-        return False
+# =========================================================
+# GLOBAL STATE (sequence tracking)
+# =========================================================
+_sequence_id = 0
 
 
-def disconnect():
+class LiveSyncClient:
+    def __init__(self, host="127.0.0.1", port=5000):
+        self.host = host
+        self.port = port
 
-    global sock
+        self.sock = None
+        self.connected = False
 
-    if sock:
+        self.connect()
 
+    # =========================================================
+    # CONNECTION LAYER (PHASE 3.2 HARDENED)
+    # =========================================================
+    def connect(self):
         try:
-            sock.close()
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.connect((self.host, self.port))
+            self.connected = True
+            print("[LiveSync] Connected to UE")
+        except Exception as e:
+            self.connected = False
+            self.sock = None
+            print("[LiveSync] Connection failed:", e)
 
-        except:
-            pass
+    def reconnect(self):
+        self.close()
+        time.sleep(0.5)
+        self.connect()
 
-    sock = None
+    def close(self):
+        if self.sock:
+            try:
+                self.sock.close()
+            except:
+                pass
+        self.sock = None
+        self.connected = False
 
-    print(
-        "UE Live Sync Disconnected"
-    )
+    # =========================================================
+    # MAIN SEND PIPELINE
+    # =========================================================
+    def send_packet(self, objects_data):
+        global _sequence_id
 
+        if not self.connected or not self.sock:
+            self.reconnect()
+            if not self.connected:
+                return
 
-def is_connected():
+        _sequence_id += 1
 
-    global sock
+        payload = bytearray()
 
-    return sock is not None
+        object_count = len(objects_data)
 
+        # =====================================================
+        # OBJECT SERIALIZATION (UNCHANGED LOGIC SLOT)
+        # =====================================================
+        for obj in objects_data:
+            payload.extend(obj)
 
-def build_snapshot_packet(objects):
+        # =====================================================
+        # HEADER (PHASE 3.2 ENHANCED)
+        # =====================================================
+        packet_size = len(payload) + struct.calcsize("<I H Q I I")
 
-    payload = bytearray()
-
-    object_count = len(objects)
-
-    for obj in objects:
-
-        name_bytes = obj[
-            "object"
-        ].encode("utf-8")
-
-        transform = obj[
-            "transform"
-        ]
-
-        loc = transform[
-            "location"
-        ]
-
-        rot = transform[
-            "rotation"
-        ]
-
-        scale = transform[
-            "scale"
-        ]
-
-        # object name
-        payload.extend(
-            struct.pack(
-                f"<H{len(name_bytes)}s",
-                len(name_bytes),
-                name_bytes
-            )
+        header = struct.pack(
+            "<I H Q I I",
+            LIVE_SYNC_MAGIC,     # uint32 magic
+            LIVE_SYNC_VERSION,   # uint16 version
+            _sequence_id,        # uint64 sequence
+            packet_size,         # uint32 size
+            object_count        # uint32 objects
         )
 
-        # location
-        payload.extend(
-            struct.pack(
-                "<3f",
-                loc[0],
-                loc[1],
-                loc[2]
-            )
-        )
+        # =====================================================
+        # SAFE SEND (HANDLE DROP)
+        # =====================================================
+        try:
+            self.sock.sendall(header + payload)
 
-        # rotation quaternion
-        payload.extend(
-            struct.pack(
-                "<4f",
-                rot[0],
-                rot[1],
-                rot[2],
-                rot[3]
-            )
-        )
-
-        # scale
-        payload.extend(
-            struct.pack(
-                "<3f",
-                scale[0],
-                scale[1],
-                scale[2]
-            )
-        )
-
-    header_size = (
-        4 +  # magic
-        4 +  # packet size
-        4 +  # object count
-        8    # timestamp
-    )
-
-    packet_size = (
-        header_size +
-        len(payload)
-    )
-
-    header = (
-        struct.pack("<I", MAGIC) +
-        struct.pack("<I", packet_size) +
-        struct.pack("<I", object_count) +
-        struct.pack("<d", time.time())
-    )
-
-    return header + payload
-
-
-def send_snapshot(snapshot):
-
-    global sock
-
-    if not sock:
-        return False
-
-    try:
-
-        packet = build_snapshot_packet(
-            snapshot["objects"]
-        )
-
-        sock.sendall(packet)
-
-        return True
-
-    except Exception as e:
-
-        print(
-            f"Send failed: {e}"
-        )
-
-        disconnect()
-
-        return False
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            print("[LiveSync] Connection lost, retrying...")
+            self.reconnect()

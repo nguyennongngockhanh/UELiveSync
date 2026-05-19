@@ -3,87 +3,40 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 
-#include "Sockets.h"
 #include "SyncTypes.h"
-
-#include "Containers/Ticker.h"
-
-#include "GameFramework/Actor.h"
-
-#include "LiveSyncQueue.h"
 
 #include "UELiveSyncSubsystem.generated.h"
 
-class FLiveSyncRunnable;
+class FSocket;
 class FRunnableThread;
+class FLiveSyncRunnable;
 
 UCLASS()
-class UELIVESYNC_API UUELiveSyncSubsystem
-    : public UWorldSubsystem
+class UELIVESYNC_API UUELiveSyncSubsystem : public UWorldSubsystem
 {
     GENERATED_BODY()
 
 public:
 
-    virtual void Initialize(
-        FSubsystemCollectionBase& Collection) override;
-
+    virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
-
-private:
-
-    // transform interpolation states
-    TMap<FString, FSyncTransformState>
-        TransformStates;
-
-    // fast actor lookup cache
-    TMap<FString, TWeakObjectPtr<AActor>>
-        ActorCache;
-
-    // listener socket
-    FSocket* ListenerSocket = nullptr;
-
-    // active TCP connection
-    FSocket* ConnectionSocket = nullptr;
-
-    // legacy buffer (can remove later)
-    TArray<uint8> Buffer;
-
-    FTSTicker::FDelegateHandle TickHandle;
-
-    /* =============================
-       PHASE 3.1 THREADING
-    ============================= */
-
-    TQueue<
-        FLiveSyncPacket,
-        EQueueMode::Mpsc> PacketQueue;
-
-    FLiveSyncRunnable* NetworkRunnable = nullptr;
-
-    FRunnableThread* NetworkThread = nullptr;
-
-    bool bIsConnected = false;
-
-    /* ============================= */
 
     bool Tick(float DeltaTime);
 
+private:
+
+    // =========================================================
+    // NETWORK LAYER
+    // =========================================================
     void StartServer();
-
-    void ReceiveData();
-
     void StartNetworkThread();
-
     void StopNetworkThread();
 
+    // =========================================================
+    // PIPELINE
+    // =========================================================
     void ProcessQueuedPackets();
-
-    void ProcessPacket(
-        const FLiveSyncPacket& Packet);
-
-    void ProcessBinaryPacket(
-        const FLiveSyncPacket& Packet);
+    void ProcessBinaryPacket(const FLiveSyncPacket& Packet);
 
     void UpdateTargetTransform(
         const FString& ActorName,
@@ -91,12 +44,54 @@ private:
         const FQuat& Rotation,
         const FVector& Scale);
 
-    void InterpolateTransforms(
-        float DeltaTime);
+    void InterpolateTransforms(float DeltaTime);
 
-    // actor cache
+    // =========================================================
+    // ACTOR SYSTEM
+    // =========================================================
     void BuildActorCache();
+    AActor* FindActorFast(const FString& Name);
 
-    AActor* FindActorFast(
-        const FString& Name);
+private:
+
+    // =========================================================
+    // SOCKETS
+    // =========================================================
+    FSocket* ListenerSocket = nullptr;
+    FSocket* ConnectionSocket = nullptr;
+
+    // =========================================================
+    // THREADING
+    // =========================================================
+    FRunnableThread* NetworkThread = nullptr;
+    FLiveSyncRunnable* NetworkRunnable = nullptr;
+
+    // =========================================================
+    // QUEUE (thread → game)
+    // =========================================================
+    TQueue<FLiveSyncPacket, EQueueMode::Mpsc> PacketQueue;
+
+    // =========================================================
+    // WORLD CACHE
+    // =========================================================
+    TMap<FString, TWeakObjectPtr<AActor>> ActorCache;
+    TMap<FString, FSyncTransformState> TransformStates;
+
+    // =========================================================
+    // TICK
+    // =========================================================
+    FDelegateHandle TickHandle;
+
+    // =========================================================
+    // PHASE 3.2 ADDITIONS (REAL HARDENING)
+    // =========================================================
+
+    // protocol version guard (prevents Blender mismatch)
+    static constexpr uint16 ProtocolVersion = LIVE_SYNC_VERSION;
+
+    // last processed packet sequence (anti-duplicate / reorder)
+    uint64 LastSequenceId = 0;
+
+    // connection state tracking (runtime safety)
+    bool bThreadRunning = false;
 };
