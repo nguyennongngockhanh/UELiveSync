@@ -1,53 +1,102 @@
 import bpy
 import time
+import uuid
 
 from bpy.app.handlers import persistent
 
 from mathutils import Matrix
 
-from .network import send_snapshot, connect
+from .network import (
+    connect,
+    send_objects,
+    serialize_object
+)
 
+
+# =========================================================
+# GLOBAL STATE
+# =========================================================
 
 timer_running = False
 
 last_sent_transforms = {}
 
 
+# =========================================================
+# GUID SYSTEM
+# =========================================================
+
+def ensure_guid(obj):
+
+    if "ue_guid" not in obj:
+
+        obj["ue_guid"] = uuid.uuid4().hex
+
+    return obj["ue_guid"]
+
+
+# =========================================================
+# TRANSFORM COMPARISON
+# =========================================================
+
 def transforms_different(a, b):
 
     if b is None:
         return True
 
+    # =====================================================
+    # LOCATION
+    # =====================================================
+
     for i in range(3):
 
         if abs(
             a["location"][i] -
-            b["location"][i]) > 0.01:
+            b["location"][i]
+        ) > 0.01:
 
             return True
+
+    # =====================================================
+    # ROTATION
+    # =====================================================
 
     for i in range(4):
 
         if abs(
             a["rotation"][i] -
-            b["rotation"][i]) > 0.0001:
+            b["rotation"][i]
+        ) > 0.0001:
 
             return True
+
+    # =====================================================
+    # SCALE
+    # =====================================================
 
     for i in range(3):
 
         if abs(
             a["scale"][i] -
-            b["scale"][i]) > 0.001:
+            b["scale"][i]
+        ) > 0.001:
 
             return True
 
     return False
 
 
+# =========================================================
+# TRANSFORM EXTRACTION
+# =========================================================
+
 def get_transform(obj):
 
     mw = obj.matrix_world.copy()
+
+    # =====================================================
+    # BLENDER -> UE COORDINATE CONVERSION
+    # =====================================================
 
     conversion = Matrix((
         (1,  0, 0, 0),
@@ -56,7 +105,11 @@ def get_transform(obj):
         (0,  0, 0, 1)
     ))
 
-    ue_matrix = conversion @ mw @ conversion
+    ue_matrix = (
+        conversion @
+        mw @
+        conversion
+    )
 
     loc = ue_matrix.to_translation()
 
@@ -66,12 +119,20 @@ def get_transform(obj):
 
     return {
 
+        # =================================================
+        # LOCATION (cm)
+        # =================================================
+
         "location": [
 
             loc.x * 100.0,
             loc.y * 100.0,
             loc.z * 100.0
         ],
+
+        # =================================================
+        # ROTATION (quat x y z w)
+        # =================================================
 
         "rotation": [
 
@@ -81,6 +142,10 @@ def get_transform(obj):
             rot.w
         ],
 
+        # =================================================
+        # SCALE
+        # =================================================
+
         "scale": [
 
             scale.x,
@@ -89,6 +154,10 @@ def get_transform(obj):
         ]
     }
 
+
+# =========================================================
+# MAIN UPDATE LOOP
+# =========================================================
 
 @persistent
 def check_updates():
@@ -101,28 +170,58 @@ def check_updates():
 
     objects_to_send = []
 
+    # =====================================================
+    # OBJECT ITERATION
+    # =====================================================
+
     for obj in bpy.data.objects:
 
         if obj.type != 'MESH':
             continue
 
+        # =================================================
+        # GUID
+        # =================================================
+
+        guid = ensure_guid(obj)
+
+        # =================================================
+        # TRANSFORM
+        # =================================================
+
         transform = get_transform(obj)
 
         previous = last_sent_transforms.get(
-            obj.name)
+            guid
+        )
+
+        # =================================================
+        # CHANGE DETECTION
+        # =================================================
 
         if transforms_different(
             transform,
-            previous):
+            previous
+        ):
 
-            objects_to_send.append({
+            # =============================================
+            # SERIALIZE OBJECT
+            # =============================================
 
-                "object": obj.name,
+            serialized = serialize_object(
+                guid,
+                transform
+            )
 
-                "transform": transform
-            })
+            objects_to_send.append(
+                serialized
+            )
 
-            last_sent_transforms[obj.name] = {
+            # =============================================
+            # CACHE LAST STATE
+            # =============================================
+
+            last_sent_transforms[guid] = {
 
                 "location":
                     transform["location"][:],
@@ -134,22 +233,22 @@ def check_updates():
                     transform["scale"][:]
             }
 
+    # =====================================================
+    # SEND PACKET
+    # =====================================================
+
     if objects_to_send:
 
-        snapshot = {
-
-            "type": "snapshot",
-
-            "timestamp": time.time(),
-
-            "objects":
-                objects_to_send
-        }
-
-        send_snapshot(snapshot)
+        send_objects(
+            objects_to_send
+        )
 
     return 0.016
 
+
+# =========================================================
+# START SYNC
+# =========================================================
 
 def start_sync():
 
@@ -163,10 +262,15 @@ def start_sync():
     timer_running = True
 
     bpy.app.timers.register(
-        lambda: check_updates())
+        lambda: check_updates()
+    )
 
     print("UE Live Sync Started")
 
+
+# =========================================================
+# STOP SYNC
+# =========================================================
 
 def stop_sync():
 

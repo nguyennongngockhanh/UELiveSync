@@ -4,18 +4,36 @@
 
 #include "HAL/PlatformProcess.h"
 
+#include "SyncTypes.h"
+
+
+// =========================================================
+// CONSTRUCTOR
+// =========================================================
+
 FLiveSyncRunnable::FLiveSyncRunnable(
+
     FSocket* InSocket,
-    TQueue<FLiveSyncPacket,
-    EQueueMode::Mpsc>* InQueue)
+
+    TQueue<
+        FLiveSyncPacket,
+        EQueueMode::Mpsc>* InQueue)
 
 {
-    Socket = InSocket;
+    Socket =
+        InSocket;
 
-    PacketQueue = InQueue;
+    PacketQueue =
+        InQueue;
 
-    bRunThread = true;
+    bRunThread =
+        true;
 }
+
+
+// =========================================================
+// MAIN THREAD LOOP
+// =========================================================
 
 uint32 FLiveSyncRunnable::Run()
 {
@@ -26,33 +44,47 @@ uint32 FLiveSyncRunnable::Run()
             break;
         }
 
-        // wait for data
+        // =================================================
+        // WAIT FOR DATA
+        // =================================================
+
         if (!Socket->Wait(
-            ESocketWaitConditions::WaitForRead,
-            FTimespan::FromMilliseconds(100)))
+
+            ESocketWaitConditions::
+            WaitForRead,
+
+            FTimespan::
+            FromMilliseconds(
+                100)))
         {
             continue;
         }
 
-        // =========================
+        // =================================================
         // READ HEADER
-        // =========================
+        // =================================================
 
         FPacketHeader Header;
 
-        int32 TotalHeaderRead = 0;
+        int32 TotalHeaderRead =
+            0;
 
         uint8* HeaderPtr =
+
             reinterpret_cast<uint8*>(
                 &Header);
 
-        while (TotalHeaderRead <
+        while (
+            TotalHeaderRead <
             sizeof(FPacketHeader))
         {
-            int32 BytesRead = 0;
+            int32 BytesRead =
+                0;
 
             bool bOk =
+
                 Socket->Recv(
+
                     HeaderPtr +
                     TotalHeaderRead,
 
@@ -61,7 +93,8 @@ uint32 FLiveSyncRunnable::Run()
 
                     BytesRead);
 
-            if (!bOk || BytesRead <= 0)
+            if (!bOk ||
+                BytesRead <= 0)
             {
                 return 0;
             }
@@ -70,48 +103,110 @@ uint32 FLiveSyncRunnable::Run()
                 BytesRead;
         }
 
-        // validate magic
+        // =================================================
+        // DEBUG HEADER SIZE
+        // =================================================
+
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("Header Size = %d"),
+            sizeof(FPacketHeader)
+        );
+
+        // =================================================
+        // VALIDATE MAGIC
+        // =================================================
+
         if (Header.Magic !=
             LIVE_SYNC_MAGIC)
         {
-            UE_LOG(LogTemp, Error,
+            UE_LOG(
+                LogTemp,
+                Error,
                 TEXT("Invalid packet magic"));
 
             continue;
         }
 
-        // validate packet size
+        // =================================================
+        // VALIDATE VERSION
+        // =================================================
+
+        if (Header.Version !=
+            LIVE_SYNC_VERSION)
+        {
+            UE_LOG(
+                LogTemp,
+                Error,
+                TEXT("Protocol version mismatch"));
+
+            continue;
+        }
+
+        // =================================================
+        // VALIDATE PACKET SIZE
+        // =================================================
+
         if (Header.PacketSize <
             sizeof(FPacketHeader))
         {
-            UE_LOG(LogTemp, Error,
+            UE_LOG(
+                LogTemp,
+                Error,
                 TEXT("Invalid packet size"));
 
             continue;
         }
 
+        // =================================================
+        // PAYLOAD SIZE
+        // =================================================
+
         int32 PayloadSize =
+
             Header.PacketSize -
             sizeof(FPacketHeader);
 
-        // =========================
+        // =================================================
+        // PAYLOAD ALIGNMENT CHECK
+        // =================================================
+
+        if (PayloadSize %
+            LIVE_SYNC_OBJECT_SIZE
+            != 0)
+        {
+            UE_LOG(
+                LogTemp,
+                Error,
+                TEXT("Payload alignment invalid"));
+
+            continue;
+        }
+
+        // =================================================
         // READ PAYLOAD
-        // =========================
+        // =================================================
 
         TArray<uint8> Payload;
 
         Payload.SetNumUninitialized(
             PayloadSize);
 
-        int32 TotalPayloadRead = 0;
+        int32 TotalPayloadRead =
+            0;
 
-        while (TotalPayloadRead <
+        while (
+            TotalPayloadRead <
             PayloadSize)
         {
-            int32 BytesRead = 0;
+            int32 BytesRead =
+                0;
 
             bool bOk =
+
                 Socket->Recv(
+
                     Payload.GetData() +
                     TotalPayloadRead,
 
@@ -120,7 +215,8 @@ uint32 FLiveSyncRunnable::Run()
 
                     BytesRead);
 
-            if (!bOk || BytesRead <= 0)
+            if (!bOk ||
+                BytesRead <= 0)
             {
                 return 0;
             }
@@ -129,26 +225,54 @@ uint32 FLiveSyncRunnable::Run()
                 BytesRead;
         }
 
-        // =========================
+        // =================================================
         // BUILD FINAL PACKET
-        // =========================
+        // =================================================
 
         FLiveSyncPacket Packet;
 
-        Packet.RawData.SetNumUninitialized(
-            Header.PacketSize);
+        Packet.RawData.
+            SetNumUninitialized(
+
+                Header.PacketSize);
+
+        // =================================================
+        // COPY HEADER
+        // =================================================
 
         FMemory::Memcpy(
+
             Packet.RawData.GetData(),
+
             &Header,
+
             sizeof(FPacketHeader));
 
+        // =================================================
+        // COPY PAYLOAD
+        // =================================================
+
         FMemory::Memcpy(
+
             Packet.RawData.GetData() +
             sizeof(FPacketHeader),
 
             Payload.GetData(),
+
             PayloadSize);
+
+        // =================================================
+        // RECEIVE TIME
+        // =================================================
+
+        Packet.ReceiveTime =
+
+            FPlatformTime::
+            Seconds();
+
+        // =================================================
+        // ENQUEUE
+        // =================================================
 
         PacketQueue->Enqueue(
             MoveTemp(Packet));
@@ -157,7 +281,13 @@ uint32 FLiveSyncRunnable::Run()
     return 0;
 }
 
+
+// =========================================================
+// STOP THREAD
+// =========================================================
+
 void FLiveSyncRunnable::Stop()
 {
-    bRunThread = false;
+    bRunThread =
+        false;
 }

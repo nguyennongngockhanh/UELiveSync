@@ -1,97 +1,182 @@
 #pragma once
 
 #include "CoreMinimal.h"
+
 #include "Subsystems/WorldSubsystem.h"
+
+#include "Containers/Ticker.h"
+
+#include "Misc/Guid.h"
 
 #include "SyncTypes.h"
 
 #include "UELiveSyncSubsystem.generated.h"
 
+
 class FSocket;
+
 class FRunnableThread;
+
 class FLiveSyncRunnable;
 
+
+// =========================================================
+// LIVE SYNC SUBSYSTEM
+// =========================================================
+
 UCLASS()
-class UELIVESYNC_API UUELiveSyncSubsystem : public UWorldSubsystem
+class UELIVESYNC_API UUELiveSyncSubsystem
+    : public UWorldSubsystem
 {
     GENERATED_BODY()
 
 public:
 
-    virtual void Initialize(FSubsystemCollectionBase& Collection) override;
-    virtual void Deinitialize() override;
+    // =====================================================
+    // LIFECYCLE
+    // =====================================================
 
-    bool Tick(float DeltaTime);
+    virtual void Initialize(
+        FSubsystemCollectionBase&
+        Collection) override;
+
+    virtual void Deinitialize()
+        override;
+
+    // =====================================================
+    // TICK
+    // =====================================================
+
+    bool Tick(
+        float DeltaTime);
 
 private:
 
-    // =========================================================
+    // =====================================================
     // NETWORK LAYER
-    // =========================================================
+    // =====================================================
+
     void StartServer();
+
     void StartNetworkThread();
+
     void StopNetworkThread();
 
-    // =========================================================
-    // PIPELINE
-    // =========================================================
+    // =====================================================
+    // PACKET PIPELINE
+    // =====================================================
+
     void ProcessQueuedPackets();
-    void ProcessBinaryPacket(const FLiveSyncPacket& Packet);
+
+    void ProcessBinaryPacket(
+        const FLiveSyncPacket&
+        Packet);
+
+    // =====================================================
+    // TRANSFORM PIPELINE
+    // =====================================================
 
     void UpdateTargetTransform(
-        const FString& ActorName,
+
+        const FGuid& Guid,
+
         const FVector& Location,
+
         const FQuat& Rotation,
-        const FVector& Scale);
 
-    void InterpolateTransforms(float DeltaTime);
+        const FVector& Scale
+    );
 
-    // =========================================================
-    // ACTOR SYSTEM
-    // =========================================================
+    void InterpolateTransforms(
+        float DeltaTime);
+
+    // =====================================================
+    // ACTOR CACHE
+    // =====================================================
+
     void BuildActorCache();
-    AActor* FindActorFast(const FString& Name);
+
+    AActor* FindActorFast(
+        const FGuid& Guid);
 
 private:
 
-    // =========================================================
+    // =====================================================
     // SOCKETS
-    // =========================================================
-    FSocket* ListenerSocket = nullptr;
-    FSocket* ConnectionSocket = nullptr;
+    // =====================================================
 
-    // =========================================================
+    FSocket* ListenerSocket =
+        nullptr;
+
+    FSocket* ConnectionSocket =
+        nullptr;
+
+    // =====================================================
     // THREADING
-    // =========================================================
-    FRunnableThread* NetworkThread = nullptr;
-    FLiveSyncRunnable* NetworkRunnable = nullptr;
+    // =====================================================
 
-    // =========================================================
-    // QUEUE (thread → game)
-    // =========================================================
-    TQueue<FLiveSyncPacket, EQueueMode::Mpsc> PacketQueue;
+    FRunnableThread* NetworkThread =
+        nullptr;
 
-    // =========================================================
-    // WORLD CACHE
-    // =========================================================
-    TMap<FString, TWeakObjectPtr<AActor>> ActorCache;
-    TMap<FString, FSyncTransformState> TransformStates;
+    FLiveSyncRunnable* NetworkRunnable =
+        nullptr;
 
-    // =========================================================
-    // TICK
-    // =========================================================
-    FDelegateHandle TickHandle;
+    // =====================================================
+    // THREAD → GAME QUEUE
+    // =====================================================
 
-    // =========================================================
-    // PHASE 3.2 ADDITIONS (REAL HARDENING)
-    // =========================================================
+    TQueue<
+        FLiveSyncPacket,
+        EQueueMode::Mpsc>
 
-    // protocol version guard (prevents Blender mismatch)
-    static constexpr uint16 ProtocolVersion = LIVE_SYNC_VERSION;
+        PacketQueue;
 
-    // last processed packet sequence (anti-duplicate / reorder)
-    uint64 LastSequenceId = 0;
+    // =====================================================
+    // GUID ACTOR CACHE
+    // =====================================================
 
-    // connection state tracking (runtime safety)
-    bool bThreadRunning = false;
+    TMap<
+        FGuid,
+        TWeakObjectPtr<AActor>>
+
+        ActorCache;
+
+    // =====================================================
+    // GUID TRANSFORM STATES
+    // =====================================================
+
+    TMap<
+        FGuid,
+        FSyncTransformState>
+
+        TransformStates;
+
+    // =====================================================
+    // TICK HANDLE
+    // =====================================================
+
+    FTSTicker::FDelegateHandle
+        TickHandle;
+
+    // =====================================================
+    // PROTOCOL STATE
+    // =====================================================
+
+    static constexpr uint16
+        ProtocolVersion =
+        LIVE_SYNC_VERSION;
+
+    // =====================================================
+    // ANTI-REORDER / DUPLICATE
+    // =====================================================
+
+    uint64 LastSequenceId =
+        0;
+
+    // =====================================================
+    // THREAD STATE
+    // =====================================================
+
+    bool bThreadRunning =
+        false;
 };

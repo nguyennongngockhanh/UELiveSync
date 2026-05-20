@@ -1,191 +1,317 @@
 #include "UELiveSyncSubsystem.h"
 
 #include "Engine/World.h"
+
 #include "GameFramework/Actor.h"
+
 #include "EngineUtils.h"
 
 #include "Common/TcpSocketBuilder.h"
 
 #include "Sockets.h"
+
 #include "SocketSubsystem.h"
 
 #include "Interfaces/IPv4/IPv4Address.h"
 
-#include "Containers/Ticker.h"
-
 #include "HAL/RunnableThread.h"
+
+#include "Misc/Guid.h"
 
 #include "LiveSyncRunnable.h"
 
-void UUELiveSyncSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+
+// =========================================================
+// INITIALIZE
+// =========================================================
+
+void UUELiveSyncSubsystem::Initialize(
+    FSubsystemCollectionBase&
+    Collection)
 {
     Super::Initialize(Collection);
 
     StartServer();
+
     BuildActorCache();
 
     TickHandle =
-        FTSTicker::GetCoreTicker().AddTicker(
-            FTickerDelegate::CreateUObject(this, &UUELiveSyncSubsystem::Tick),
+        FTSTicker::GetCoreTicker().
+        AddTicker(
+
+            FTickerDelegate::
+            CreateUObject(
+
+                this,
+                &UUELiveSyncSubsystem::Tick),
+
             0.0f
         );
 
-    UE_LOG(LogTemp, Warning, TEXT("UE Live Sync Started"));
+    UE_LOG(
+        LogTemp,
+        Warning,
+        TEXT("UE Live Sync Started"));
 }
+
+
+// =========================================================
+// DEINITIALIZE
+// =========================================================
 
 void UUELiveSyncSubsystem::Deinitialize()
 {
     StopNetworkThread();
 
-    FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
+    FTSTicker::GetCoreTicker().
+        RemoveTicker(
+            TickHandle);
 
     if (ConnectionSocket)
     {
         ConnectionSocket->Close();
-        ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)
-            ->DestroySocket(ConnectionSocket);
 
-        ConnectionSocket = nullptr;
+        ISocketSubsystem::
+            Get(PLATFORM_SOCKETSUBSYSTEM)
+            ->DestroySocket(
+                ConnectionSocket);
+
+        ConnectionSocket =
+            nullptr;
     }
 
     if (ListenerSocket)
     {
         ListenerSocket->Close();
-        ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)
-            ->DestroySocket(ListenerSocket);
 
-        ListenerSocket = nullptr;
+        ISocketSubsystem::
+            Get(PLATFORM_SOCKETSUBSYSTEM)
+            ->DestroySocket(
+                ListenerSocket);
+
+        ListenerSocket =
+            nullptr;
     }
 
     Super::Deinitialize();
 }
 
+
+// =========================================================
+// START SERVER
+// =========================================================
+
 void UUELiveSyncSubsystem::StartServer()
 {
     FIPv4Address Address;
-    FIPv4Address::Parse(TEXT("0.0.0.0"), Address);
+
+    FIPv4Address::Parse(
+        TEXT("0.0.0.0"),
+        Address);
 
     ListenerSocket =
-        FTcpSocketBuilder(TEXT("UE_LiveSync_Server"))
+
+        FTcpSocketBuilder(
+            TEXT("UE_LiveSync_Server"))
+
         .AsReusable()
-        .BoundToAddress(Address)
-        .BoundToPort(5000)
+
+        .BoundToAddress(
+            Address)
+
+        .BoundToPort(
+            5000)
+
         .Listening(8);
 
     if (!ListenerSocket)
     {
-        UE_LOG(LogTemp, Error, TEXT("Failed to start TCP server"));
+        UE_LOG(
+            LogTemp,
+            Error,
+            TEXT("Failed to start TCP server"));
+
         return;
     }
 
-    UE_LOG(LogTemp, Warning, TEXT("Live Sync Listening on port 5000"));
+    UE_LOG(
+        LogTemp,
+        Warning,
+        TEXT("Live Sync Listening on port 5000"));
 }
 
-bool UUELiveSyncSubsystem::Tick(float DeltaTime)
-{
-    // =========================================================
-    // ACCEPT CONNECTION
-    // =========================================================
-    if (!ConnectionSocket && ListenerSocket)
-    {
-        bool bPending = false;
 
-        if (ListenerSocket->HasPendingConnection(bPending) && bPending)
+// =========================================================
+// MAIN TICK
+// =========================================================
+
+bool UUELiveSyncSubsystem::Tick(
+    float DeltaTime)
+{
+    // =====================================================
+    // ACCEPT CONNECTION
+    // =====================================================
+
+    if (!ConnectionSocket &&
+        ListenerSocket)
+    {
+        bool bPending =
+            false;
+
+        if (ListenerSocket->
+            HasPendingConnection(
+                bPending)
+            && bPending)
         {
             FSocket* NewSocket =
-                ListenerSocket->Accept(TEXT("LiveSyncConnection"));
+
+                ListenerSocket->
+                Accept(
+                    TEXT("LiveSyncConnection"));
 
             if (NewSocket)
             {
-                if (NewSocket->GetConnectionState() == SCS_Connected)
+                if (NewSocket->
+                    GetConnectionState()
+                    == SCS_Connected)
                 {
-                    ConnectionSocket = NewSocket;
+                    ConnectionSocket =
+                        NewSocket;
 
-                    UE_LOG(LogTemp, Warning, TEXT("Blender Connected"));
+                    UE_LOG(
+                        LogTemp,
+                        Warning,
+                        TEXT("Blender Connected"));
 
                     StartNetworkThread();
                 }
                 else
                 {
                     NewSocket->Close();
-                    ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)
-                        ->DestroySocket(NewSocket);
+
+                    ISocketSubsystem::
+                        Get(
+                            PLATFORM_SOCKETSUBSYSTEM)
+                        ->DestroySocket(
+                            NewSocket);
                 }
             }
         }
     }
 
-    // =========================================================
-    // STALE CONNECTION SAFETY (PHASE 3.2 FIX)
-    // =========================================================
+    // =====================================================
+    // STALE CONNECTION SAFETY
+    // =====================================================
+
     if (ConnectionSocket &&
-        ConnectionSocket->GetConnectionState() != SCS_Connected)
+        ConnectionSocket->
+        GetConnectionState()
+        != SCS_Connected)
     {
-        UE_LOG(LogTemp, Warning, TEXT("Stale Connection Removed"));
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("Stale Connection Removed"));
 
         StopNetworkThread();
 
         ConnectionSocket->Close();
-        ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)
-            ->DestroySocket(ConnectionSocket);
 
-        ConnectionSocket = nullptr;
+        ISocketSubsystem::
+            Get(PLATFORM_SOCKETSUBSYSTEM)
+            ->DestroySocket(
+                ConnectionSocket);
+
+        ConnectionSocket =
+            nullptr;
     }
 
-    // =========================================================
+    // =====================================================
     // ACTOR CACHE REFRESH
-    // =========================================================
-    static float CacheTimer = 0.0f;
-    CacheTimer += DeltaTime;
+    // =====================================================
+
+    static float CacheTimer =
+        0.0f;
+
+    CacheTimer +=
+        DeltaTime;
 
     if (CacheTimer > 5.0f)
     {
         BuildActorCache();
-        CacheTimer = 0.0f;
+
+        CacheTimer =
+            0.0f;
     }
 
-    // =========================================================
+    // =====================================================
     // PIPELINE
-    // =========================================================
+    // =====================================================
+
     ProcessQueuedPackets();
-    InterpolateTransforms(DeltaTime);
+
+    InterpolateTransforms(
+        DeltaTime);
 
     return true;
 }
 
-void UUELiveSyncSubsystem::StartNetworkThread()
+
+// =========================================================
+// START NETWORK THREAD
+// =========================================================
+
+void UUELiveSyncSubsystem::
+StartNetworkThread()
 {
     if (!ConnectionSocket)
     {
         return;
     }
 
-    // =========================================================
-    // SAFETY: PREVENT DOUBLE START
-    // =========================================================
-    if (NetworkThread || NetworkRunnable)
+    // =====================================================
+    // PREVENT DOUBLE START
+    // =====================================================
+
+    if (NetworkThread ||
+        NetworkRunnable)
     {
         StopNetworkThread();
     }
 
-    NetworkRunnable = new FLiveSyncRunnable(
-        ConnectionSocket,
-        &PacketQueue
-    );
+    NetworkRunnable =
+        new FLiveSyncRunnable(
+
+            ConnectionSocket,
+
+            &PacketQueue
+        );
 
     NetworkThread =
+
         FRunnableThread::Create(
+
             NetworkRunnable,
+
             TEXT("UE_LiveSync_Thread")
         );
 
     if (NetworkThread)
     {
-        UE_LOG(LogTemp, Warning, TEXT("Network Thread Started"));
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("Network Thread Started"));
     }
 }
 
-void UUELiveSyncSubsystem::StopNetworkThread()
+
+// =========================================================
+// STOP NETWORK THREAD
+// =========================================================
+
+void UUELiveSyncSubsystem::
+StopNetworkThread()
 {
     if (NetworkRunnable)
     {
@@ -194,135 +320,315 @@ void UUELiveSyncSubsystem::StopNetworkThread()
 
     if (NetworkThread)
     {
-        NetworkThread->WaitForCompletion();
+        NetworkThread->
+            WaitForCompletion();
+
         delete NetworkThread;
-        NetworkThread = nullptr;
+
+        NetworkThread =
+            nullptr;
     }
 
     delete NetworkRunnable;
-    NetworkRunnable = nullptr;
 
-    // =========================================================
-    // SOCKET CLEANUP SAFETY
-    // =========================================================
+    NetworkRunnable =
+        nullptr;
+
     if (ConnectionSocket)
     {
         ConnectionSocket->Close();
-        ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)
-            ->DestroySocket(ConnectionSocket);
 
-        ConnectionSocket = nullptr;
+        ISocketSubsystem::
+            Get(PLATFORM_SOCKETSUBSYSTEM)
+            ->DestroySocket(
+                ConnectionSocket);
+
+        ConnectionSocket =
+            nullptr;
     }
 
-    UE_LOG(LogTemp, Warning, TEXT("Network Thread Stopped"));
+    UE_LOG(
+        LogTemp,
+        Warning,
+        TEXT("Network Thread Stopped"));
 }
 
-void UUELiveSyncSubsystem::ProcessQueuedPackets()
+
+// =========================================================
+// PROCESS QUEUE
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ProcessQueuedPackets()
 {
     FLiveSyncPacket Packet;
 
-    while (PacketQueue.Dequeue(Packet))
+    while (
+        PacketQueue.Dequeue(
+            Packet))
     {
-        ProcessBinaryPacket(Packet);
+        ProcessBinaryPacket(
+            Packet);
     }
 }
 
-void UUELiveSyncSubsystem::ProcessBinaryPacket(const FLiveSyncPacket& Packet)
+
+// =========================================================
+// PROCESS BINARY PACKET
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ProcessBinaryPacket(
+    const FLiveSyncPacket&
+    Packet)
 {
-    if (Packet.RawData.Num() < sizeof(FPacketHeader))
+    if (Packet.RawData.Num() <
+        sizeof(FPacketHeader))
     {
         return;
     }
 
-    const uint8* Ptr = Packet.RawData.GetData();
+    const uint8* Ptr =
+        Packet.RawData.GetData();
 
     FPacketHeader Header;
-    FMemory::Memcpy(&Header, Ptr, sizeof(FPacketHeader));
 
-    // =========================================================
+    FMemory::Memcpy(
+        &Header,
+        Ptr,
+        sizeof(FPacketHeader));
+
+    // =====================================================
+    // DEBUG HEADER
+    // =====================================================
+
+    UE_LOG(
+        LogTemp,
+        Warning,
+        TEXT("Packet Received | Magic=%u Version=%u Sequence=%llu Size=%u Objects=%u"),
+
+        Header.Magic,
+        Header.Version,
+        Header.SequenceId,
+        Header.PacketSize,
+        Header.ObjectCount
+    );
+
+    // =====================================================
     // MAGIC CHECK
-    // =========================================================
-    if (Header.Magic != LIVE_SYNC_MAGIC)
+    // =====================================================
+
+    if (Header.Magic !=
+        LIVE_SYNC_MAGIC)
     {
         return;
     }
 
-    // =========================================================
-    // VERSION SAFETY (PHASE 3.2)
-    // =========================================================
-    if (Header.Version != LIVE_SYNC_VERSION)
+    // =====================================================
+    // VERSION CHECK
+    // =====================================================
+
+    if (Header.Version !=
+        LIVE_SYNC_VERSION)
     {
-        UE_LOG(LogTemp, Warning, TEXT("Protocol version mismatch"));
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("Protocol version mismatch"));
+
         return;
     }
 
-    // =========================================================
-    // SIZE SAFETY
-    // =========================================================
-    if (Header.PacketSize > Packet.RawData.Num())
+    // =====================================================
+    // SEQUENCE CHECK
+    // =====================================================
+
+    if (Header.SequenceId <=
+        LastSequenceId)
     {
         return;
     }
 
-    const uint8* PacketEnd = Ptr + Packet.RawData.Num();
+    LastSequenceId =
+        Header.SequenceId;
+
+    // =====================================================
+    // SIZE CHECK
+    // =====================================================
+
+    if (Header.PacketSize >
+        Packet.RawData.Num())
+    {
+        return;
+    }
+
     Ptr += sizeof(FPacketHeader);
 
-    for (uint32 i = 0; i < Header.ObjectCount; i++)
+    const uint8* PacketEnd =
+        Packet.RawData.GetData()
+        + Packet.RawData.Num();
+
+    // =====================================================
+    // OBJECT LOOP
+    // =====================================================
+
+    for (uint32 i = 0;
+         i < Header.ObjectCount;
+         i++)
     {
-        if (Ptr + sizeof(uint16) > PacketEnd)
+        // =================================================
+        // GUID
+        // =================================================
+
+        if (Ptr + 16 >
+            PacketEnd)
+        {
             return;
+        }
 
-        uint16 NameLength = 0;
-        FMemory::Memcpy(&NameLength, Ptr, sizeof(uint16));
-        Ptr += sizeof(uint16);
+        FString GuidHex;
 
-        if (Ptr + NameLength > PacketEnd)
+        for (int32 b = 0; b < 16; b++)
+        {
+            GuidHex += FString::Printf(
+                TEXT("%02x"),
+                Ptr[b]
+            );
+        }
+
+        FGuid Guid;
+
+        if (!FGuid::ParseExact(
+
+            GuidHex,
+
+            EGuidFormats::Digits,
+
+            Guid))
+        {
             return;
+        }
 
-        FUTF8ToTCHAR Converter(
-            reinterpret_cast<const ANSICHAR*>(Ptr),
-            NameLength
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("Received GUID=%s"),
+
+            *Guid.ToString(EGuidFormats::Digits)
         );
 
-        FString ActorName(Converter.Length(), Converter.Get());
-        Ptr += NameLength;
+        Ptr += 16;
 
-        FVector Location;
-        FMemory::Memcpy(&Location, Ptr, sizeof(FVector));
-        Ptr += sizeof(FVector);
+        // =================================================
+        // LOCATION
+        // =================================================
 
-        FQuat Rotation;
-        FMemory::Memcpy(&Rotation, Ptr, sizeof(FQuat));
-        Ptr += sizeof(FQuat);
+        if (Ptr + sizeof(FVector3f) >
+            PacketEnd)
+        {
+            return;
+        }
 
-        FVector Scale;
-        FMemory::Memcpy(&Scale, Ptr, sizeof(FVector));
-        Ptr += sizeof(FVector);
+        FVector3f LocationFloat;
+
+        FMemory::Memcpy(
+            &LocationFloat,
+            Ptr,
+            sizeof(FVector3f));
+
+        Ptr += sizeof(FVector3f);
+
+        FVector Location(
+            LocationFloat);
+
+        // =================================================
+        // ROTATION
+        // =================================================
+
+        if (Ptr + sizeof(FQuat4f) >
+            PacketEnd)
+        {
+            return;
+        }
+
+        FQuat4f RotationFloat;
+
+        FMemory::Memcpy(
+            &RotationFloat,
+            Ptr,
+            sizeof(FQuat4f));
+
+        Ptr += sizeof(FQuat4f);
+
+        FQuat Rotation(
+            RotationFloat);
 
         Rotation.Normalize();
 
+        // =================================================
+        // SCALE
+        // =================================================
+
+        if (Ptr + sizeof(FVector3f) >
+            PacketEnd)
+        {
+            return;
+        }
+
+        FVector3f ScaleFloat;
+
+        FMemory::Memcpy(
+            &ScaleFloat,
+            Ptr,
+            sizeof(FVector3f));
+
+        Ptr += sizeof(FVector3f);
+
+        FVector Scale(
+            ScaleFloat);
+
+        // =================================================
+        // APPLY
+        // =================================================
+
         UpdateTargetTransform(
-            ActorName,
+
+            Guid,
+
             Location,
+
             Rotation,
+
             Scale
         );
     }
 }
 
+
+// =========================================================
+// UPDATE TARGET TRANSFORM
+// =========================================================
+
 void UUELiveSyncSubsystem::
 UpdateTargetTransform(
-    const FString& ActorName,
+
+    const FGuid& Guid,
+
     const FVector& Location,
+
     const FQuat& Rotation,
+
     const FVector& Scale)
 {
     FSyncTransformState& State =
-        TransformStates.FindOrAdd(
-            ActorName);
+
+        TransformStates.
+        FindOrAdd(
+            Guid);
 
     double CurrentTime =
-        FPlatformTime::Seconds();
+        FPlatformTime::
+        Seconds();
 
     if (!State.bInitialized)
     {
@@ -347,34 +653,49 @@ UpdateTargetTransform(
         State.LastUpdateTime =
             CurrentTime;
 
-        State.bInitialized = true;
+        State.bInitialized =
+            true;
 
-        return;
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("Transform State Initialized")
+        );
     }
 
     float LocationDistance =
+
         FVector::Dist(
+
             State.TargetLocation,
+
             Location);
 
     float RotationDistance =
+
         State.TargetRotation.
         AngularDistance(
             Rotation);
 
     float ScaleDistance =
+
         FVector::Dist(
+
             State.TargetScale,
+
             Scale);
 
     bool bLocationChanged =
-        LocationDistance >= 0.05f;
+        LocationDistance >=
+        0.05f;
 
     bool bRotationChanged =
-        RotationDistance >= 0.002f;
+        RotationDistance >=
+        0.002f;
 
     bool bScaleChanged =
-        ScaleDistance >= 0.001f;
+        ScaleDistance >=
+        0.001f;
 
     if (!bLocationChanged &&
         !bRotationChanged &&
@@ -384,28 +705,38 @@ UpdateTargetTransform(
     }
 
     double DeltaTime =
+
         CurrentTime -
         State.LastUpdateTime;
 
     if (bLocationChanged &&
-        DeltaTime > SMALL_NUMBER)
+        DeltaTime >
+        SMALL_NUMBER)
     {
         FVector DeltaLocation =
+
             Location -
             State.TargetLocation;
 
         FVector NewVelocity =
+
             DeltaLocation /
             DeltaTime;
 
         State.Velocity =
+
             FMath::VInterpTo(
+
                 State.Velocity,
+
                 NewVelocity,
+
                 DeltaTime,
+
                 8.0f);
 
         State.Velocity =
+
             State.Velocity.
             GetClampedToMaxSize(
                 5000.0f);
@@ -424,6 +755,11 @@ UpdateTargetTransform(
         CurrentTime;
 }
 
+
+// =========================================================
+// INTERPOLATION
+// =========================================================
+
 void UUELiveSyncSubsystem::
 InterpolateTransforms(
     float DeltaTime)
@@ -431,17 +767,21 @@ InterpolateTransforms(
     const float PredictionTime =
         0.012f;
 
-    for (auto& Pair : TransformStates)
+    for (auto& Pair :
+        TransformStates)
     {
-        const FString& ActorName =
+        const FGuid& Guid =
             Pair.Key;
 
-        FSyncTransformState& State =
+        FSyncTransformState&
+            State =
             Pair.Value;
 
-        TWeakObjectPtr<AActor>* ActorPtr =
+        TWeakObjectPtr<AActor>*
+            ActorPtr =
+
             ActorCache.Find(
-                ActorName);
+                Guid);
 
         if (!ActorPtr)
         {
@@ -457,57 +797,104 @@ InterpolateTransforms(
         }
 
         FVector PredictedLocation =
+
             State.TargetLocation +
+
             (State.Velocity *
              PredictionTime);
 
         float Distance =
+
             FVector::Dist(
+
                 State.CurrentLocation,
+
                 PredictedLocation);
 
         State.AdaptiveInterpSpeed =
-            FMath::GetMappedRangeValueClamped(
-                FVector2D(0.0f, 300.0f),
-                FVector2D(8.0f, 24.0f),
+
+            FMath::
+            GetMappedRangeValueClamped(
+
+                FVector2D(
+                    0.0f,
+                    300.0f),
+
+                FVector2D(
+                    8.0f,
+                    24.0f),
+
                 Distance);
 
         State.CurrentLocation =
+
             FMath::VInterpTo(
+
                 State.CurrentLocation,
+
                 PredictedLocation,
+
                 DeltaTime,
-                State.AdaptiveInterpSpeed);
+
+                State.
+                AdaptiveInterpSpeed);
 
         State.CurrentRotation =
+
             FQuat::Slerp(
+
                 State.CurrentRotation,
+
                 State.TargetRotation,
+
                 DeltaTime *
                 12.0f);
 
         State.CurrentScale =
+
             FMath::VInterpTo(
+
                 State.CurrentScale,
+
                 State.TargetScale,
+
                 DeltaTime,
+
                 12.0f);
 
         FTransform FinalTransform(
+
             State.CurrentRotation,
+
             State.CurrentLocation,
+
             State.CurrentScale);
+
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("Applying Transform To %s"),
+
+            *Actor->GetActorLabel()
+        );
 
         Actor->SetActorTransform(
             FinalTransform);
     }
 }
 
-void UUELiveSyncSubsystem::BuildActorCache()
+
+// =========================================================
+// BUILD ACTOR CACHE
+// =========================================================
+
+void UUELiveSyncSubsystem::
+BuildActorCache()
 {
     ActorCache.Empty();
 
-    UWorld* World = GetWorld();
+    UWorld* World =
+        GetWorld();
 
     if (!World)
     {
@@ -519,31 +906,87 @@ void UUELiveSyncSubsystem::BuildActorCache()
         It;
         ++It)
     {
-        AActor* Actor = *It;
+        AActor* Actor =
+            *It;
 
         if (!Actor)
         {
             continue;
         }
 
-        FString Name =
-            Actor->GetActorLabel();
+        for (const FName& Tag :
+            Actor->Tags)
+        {
+            FString TagString =
+                Tag.ToString();
 
-        ActorCache.Add(
-            Name,
-            Actor);
+            FString Prefix =
+                TEXT("LiveSync_GUID=");
+
+            if (!TagString.
+                StartsWith(
+                    Prefix))
+            {
+                continue;
+            }
+
+            FString GuidString =
+
+                TagString.RightChop(
+                    Prefix.Len());
+
+            FGuid Guid;
+
+            if (!FGuid::ParseExact(
+
+                GuidString,
+
+                EGuidFormats::Digits,
+
+                Guid))
+            {
+                continue;
+            }
+
+            ActorCache.Add(
+                Guid,
+                Actor);
+
+            UE_LOG(
+                LogTemp,
+                Warning,
+                TEXT("Cached Actor %s | GUID=%s"),
+
+                *Actor->GetActorLabel(),
+
+                *Guid.ToString(EGuidFormats::Digits)
+            );
+
+            break;
+        }
     }
 
-    UE_LOG(LogTemp, Warning,
-        TEXT("Actor cache built: %d actors"),
+    UE_LOG(
+        LogTemp,
+        Warning,
+        TEXT("GUID actor cache built: %d actors"),
         ActorCache.Num());
 }
 
-AActor* UUELiveSyncSubsystem::FindActorFast(
-    const FString& Name)
+
+// =========================================================
+// FIND ACTOR
+// =========================================================
+
+AActor* UUELiveSyncSubsystem::
+FindActorFast(
+    const FGuid& Guid)
 {
-    TWeakObjectPtr<AActor>* Found =
-        ActorCache.Find(Name);
+    TWeakObjectPtr<AActor>*
+        Found =
+
+        ActorCache.Find(
+            Guid);
 
     if (!Found)
     {

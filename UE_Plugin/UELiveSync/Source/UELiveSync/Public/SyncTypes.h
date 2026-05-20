@@ -1,55 +1,157 @@
 #pragma once
 
 #include "CoreMinimal.h"
+
 #include "Math/Quat.h"
+
+#include "Misc/Guid.h"
+
 #include "SyncTypes.generated.h"
+
+
+// =========================================================
+// TRANSFORM STATE
+// =========================================================
 
 USTRUCT()
 struct FSyncTransformState
 {
     GENERATED_BODY()
 
-    FVector CurrentLocation = FVector::ZeroVector;
-    FVector TargetLocation = FVector::ZeroVector;
-    FVector Velocity = FVector::ZeroVector;
+    // =====================================================
+    // LOCATION
+    // =====================================================
 
-    FQuat CurrentRotation = FQuat::Identity;
-    FQuat TargetRotation = FQuat::Identity;
+    FVector CurrentLocation =
+        FVector::ZeroVector;
 
-    FVector CurrentScale = FVector::OneVector;
-    FVector TargetScale = FVector::OneVector;
+    FVector TargetLocation =
+        FVector::ZeroVector;
 
-    double LastUpdateTime = 0.0;
-    float AdaptiveInterpSpeed = 12.0f;
-    bool bInitialized = false;
+    FVector Velocity =
+        FVector::ZeroVector;
+
+    // =====================================================
+    // ROTATION
+    // =====================================================
+
+    FQuat CurrentRotation =
+        FQuat::Identity;
+
+    FQuat TargetRotation =
+        FQuat::Identity;
+
+    // =====================================================
+    // SCALE
+    // =====================================================
+
+    FVector CurrentScale =
+        FVector::OneVector;
+
+    FVector TargetScale =
+        FVector::OneVector;
+
+    // =====================================================
+    // TIMING
+    // =====================================================
+
+    double LastUpdateTime =
+        0.0;
+
+    // =====================================================
+    // INTERPOLATION
+    // =====================================================
+
+    float AdaptiveInterpSpeed =
+        12.0f;
+
+    // =====================================================
+    // STATE
+    // =====================================================
+
+    bool bInitialized =
+        false;
 };
+
+
+// =========================================================
+// PACKET HEADER
+// MUST EXACTLY MATCH BLENDER:
+// <I H Q I I
+// =========================================================
 
 #pragma pack(push, 1)
+
 struct FPacketHeader
 {
-    // =========================
-    // ORIGINAL SYSTEM (KEEP)
-    // =========================
+    // =====================================================
+    // MAGIC
+    // =====================================================
+
     uint32 Magic;
 
+    // =====================================================
+    // PROTOCOL VERSION
+    // =====================================================
+
+    uint16 Version;
+
+    // =====================================================
+    // SEQUENCE ID
+    // =====================================================
+
+    uint64 SequenceId;
+
+    // =====================================================
+    // TOTAL PACKET SIZE
+    // =====================================================
+
     uint32 PacketSize;
+
+    // =====================================================
+    // OBJECT COUNT
+    // =====================================================
+
     uint32 ObjectCount;
-
-    double Timestamp;
-
-    // =========================
-    // PHASE 3.2 ADDITIONS
-    // =========================
-    uint16 Version;        // NEW
-    uint64 SequenceId;     // NEW
 };
+
 #pragma pack(pop)
+
+
+// =========================================================
+// QUEUED NETWORK PACKET
+// =========================================================
 
 struct FLiveSyncPacket
 {
     TArray<uint8> RawData;
-    double ReceiveTime = 0.0;
+
+    double ReceiveTime =
+        0.0;
 };
 
-static constexpr uint32 LIVE_SYNC_MAGIC = 0x534E5955;
-static constexpr uint16 LIVE_SYNC_VERSION = 1;
+
+// =========================================================
+// PROTOCOL CONSTANTS
+// =========================================================
+
+static constexpr uint32
+    LIVE_SYNC_MAGIC =
+    0x4C56534D;
+
+static constexpr uint16
+    LIVE_SYNC_VERSION =
+    2;
+
+
+// =========================================================
+// OBJECT LAYOUT
+// 16 GUID
+// 12 LOCATION
+// 16 ROTATION
+// 12 SCALE
+// =========================================================
+
+static constexpr int32
+    LIVE_SYNC_OBJECT_SIZE =
+        56;
