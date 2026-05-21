@@ -1,68 +1,49 @@
 # Performance Bottleneck Analysis
 
-## Measurement Baselines
+> Analysis originally written 2026-05-20. All four identified hotspots were resolved in Phases 3.4–3.5.
 
-Before optimizing, measure these metrics:
+## Measurement Baselines
 
 ### Blender Side
 
 | Metric | How to Measure | Expected Value |
 |--------|---------------|----------------|
-| `check_updates()` duration | `time.perf_counter()` around loop | <5ms for 100 objects |
+| `check_updates()` duration | `time.perf_counter()` around loop | ~0.5-1ms (no scan when scene unchanged) |
 | `get_transform()` per object | `time.perf_counter()` per call | ~0.1ms per object |
-| `send_objects()` duration | timer around send | <1ms on localhost |
-| Objects iterated per frame | `len(bpy.data.objects)` | Depends on scene |
+| `send_objects()` duration | timer around send | <1ms on localhost (non-blocking enqueue) |
+| Objects iterated per frame | `len(tracked_objects)` | Depends on active tracked set; full `bpy.data.objects` scan on count change only |
 
 ### UE Side
 
 | Metric | How to Measure | Expected Value |
 |--------|---------------|----------------|
-| `ProcessBinaryPacket()` per object | `FScopeTimer` | <5μs per object |
+| `ProcessBinaryPacket()` per object | `FScopeTimer` | <5μs per object (direct Memcpy, no string alloc) |
 | `InterpolateTransforms()` per frame | `FScopeTimer` | <1ms for 100 actors |
-| Queue depth | `Queue.Size()` | <5 entries steady state |
-| Log write time | disable UE_LOG compare | Significant at Warning level |
+| Queue depth | `Queue.Size()` | <5 entries steady state (bounded to 128) |
+| Log write time | disable `bEnableVerboseSyncLogs` compare | Zero in production (all per-frame logs gated) |
 
 ## Known Hotspots
 
-### Hotspot 1: GUID String Parsing (UE)
+### Hotspot 1: GUID String Parsing (UE) — ✅ RESOLVED
 
-**Location**: `UELiveSyncSubsystem.cpp:489-510`
+**Status**: Fixed by V3 protocol (Phase 3.4). GUID sent as 4×uint32 LE, read directly into `FGuid` fields via `FMemory::Memcpy`. Zero string allocation.
 
-**Operations per object**:
-1. Loop 16 bytes → `FString::Printf(TEXT("%02x"))` → 16 allocations
-2. `FString::Printf` each char (16 heap allocations)
-3. `FGuid::ParseExact` parses string back to 4 uint32
+**Before**: `FString::Printf` per byte → 16 allocations → `FGuid::ParseExact` — ~3-5μs per object.
 
-**Cost**: ~3-5μs per object at 100 objects = 300-500μs per frame
+**After**: 4× `uint32` Memcpy — <0.1μs per object.
 
-**Fix**: Direct binary read into FGuid fields.
+### Hotspot 2: Per-Object Logging (UE) — ✅ RESOLVED
 
-### Hotspot 2: Per-Object Logging (UE)
+**Status**: Fixed (Phase 3.4). All per-frame/per-packet logging gated behind `bEnableVerboseSyncLogs` (default: `false`). Rate-limited to 1/300 frames via `ShouldLogVerbose()`.
 
-**Location**: `UELiveSyncSubsystem.cpp:512-518, 873-878`
+**Low-frequency events** (delete, metrics snapshots) use direct `bEnableVerboseSyncLogs` check without rate limiting.
 
-**Cost**: `UE_LOG` at Warning severity in Development build writes to disk. Each call takes ~10-50μs due to formatting + mutex + write.
+### Hotspot 3: Main thread network I/O (Blender) — ✅ RESOLVED
 
-**Impact**: 100 objects × 2 logs × 50μs = 10ms per frame. This alone can cause frame drops.
+**Status**: Fixed (Phase 3.4). `sendall()` runs on a dedicated background sender thread (`LiveSyncClient._sender_loop`). Main thread only enqueues serialized packets via `queue.Queue.put_nowait()` — guaranteed non-blocking.
 
-**Fix**: Use Verbose severity or rate-limited summary.
+### Hotspot 4: Full scene iteration (Blender) — ✅ RESOLVED
 
-### Hotspot 3: main thread network I/O (Blender)
-
-**Location**: `network.py:218`
-
-**Cost**: `socket.sendall()` blocks until data is acknowledged by receiver's TCP stack. On localhost this is fast (<1ms), but any network issue → blocks indefinitely.
-
-**Impact**: Unbounded latency on main thread.
-
-**Fix**: Background thread.
-
-### Hotspot 4: Full scene iteration (Blender)
-
-**Location**: `sync.py:177`
-
-**Cost**: `bpy.data.objects` returns all objects. For each, `matrix_world.copy()` forces Blender to evaluate the depsgraph and compute the world matrix.
-
-**Impact**: O(N) per frame with constant factor of matrix computation and Python overhead.
-
-**Fix**: Track objects with change listeners.
+**Status**: Fixed (Phase 3.5). Main loop iterates `tracked_objects` dict, not `bpy.data.objects`. Full `bpy.data.objects` scan only when:
+- Object count changes (len comparison, O(1))
+- 300-frame periodic safety net

@@ -1,69 +1,54 @@
 # Issues by Phase
 
-## Must Fix Before Production (Phase 1)
+> Status: 2026-05-21 — 13 of 18 issues resolved.
 
-| ID | Issue | Effort | Impact | Dependencies |
-|----|-------|--------|--------|-------------|
-| C1 | Main thread blocking on socket.sendall() | 1 day | UI freeze | None |
-| C2 | GUID hex-string roundtrip | 0.5 day | CPU waste | C1, protocol change |
-| C3 | UE_LOG per object per packet | 0.25 day | Frame drops | None |
-| C4 | Unbounded queue growth | 0.25 day | Memory leak | None |
-| C5 | ActorCache full rebuild | 0.5 day | Sync interruption | None |
-| H3 | No TCP_NODELAY | 0.1 day | Latency +40ms | None |
-| H6 | Timer double-registration | 0.1 day | Leaked timer | None |
-| H7 | reconnect() blocks 500ms | 0.1 day | UI freeze | C1 (fixed by same change) |
+## Phase 1 — Must Fix (All Resolved)
 
-## Should Fix (Phase 2)
+| ID | Issue | Status | Resolution |
+|----|-------|--------|------------|
+| C1 | Main thread blocking on socket.sendall() | ✅ Fixed | Background sender thread (Phase 3.4) |
+| C2 | GUID hex-string roundtrip | ✅ Fixed | V3 direct binary (Phase 3.4) |
+| C3 | UE_LOG per object per packet | ✅ Fixed | Behind `bEnableVerboseSyncLogs` (Phase 3.4) |
+| C4 | Unbounded queue growth | ✅ Fixed | `MaxQueueSize=128` (Phase 3.4) |
+| C5 | ActorCache full rebuild | ✅ Fixed | Incremental via event handlers (Phase 3.4) |
+| H3 | No TCP_NODELAY | ✅ Fixed | `SetNoDelay(true)` both sides (Phase 3.4) |
+| H6 | Timer double-registration | ✅ Fixed | `_timer_ref` guard (Phase 3.4) |
+| H7 | reconnect() blocks 500ms | ✅ Fixed | Background thread reconnect (Phase 3.4) |
 
-| ID | Issue | Effort | Impact |
-|----|-------|--------|--------|
-| C6 | ActorCache rebuild race | 0.5 day | Lost transforms |
-| H1 | Full scene iteration every 16ms | 1 day | CPU waste |
-| H2 | World-space only (no hierarchy) | 2 days | Hierarchy broken |
-| H4 | Interpolation lag | 1 day | Visual lag |
-| H5 | No dedup in process queue | 0.5 day | CPU waste |
+## Phase 2 — Should Fix (Mostly Resolved)
 
-## Nice to Have (Phase 3+)
+| ID | Issue | Status | Resolution |
+|----|-------|--------|------------|
+| C6 | ActorCache rebuild race | ✅ Fixed | No periodic rebuild exists (Phase 3.4) |
+| H1 | Full scene iteration every 16ms | ✅ Fixed | `tracked_objects` dict (Phase 3.5) |
+| H2 | World-space only (no hierarchy) | ⏳ Partial | Parent GUID sent, no UE hierarchy reconstruction |
+| H4 | Interpolation lag | ⏳ Partial | Snap at 0.5f distance added |
+| H5 | No dedup in process queue | ✅ Fixed | `SeenThisTick` TSet (Phase 3.4) |
 
-| ID | Issue | Effort |
-|----|-------|--------|
-| M1 | No heartbeat | 1 day |
-| M2 | Single connection only | 1 day |
-| M3 | No packet type field | 0.5 day |
-| M4 | Scale interpolation | 0.25 day |
-| M5 | Hardcoded thresholds | 0.5 day |
-| M6 | Silent send failure | 0.5 day |
-| M7 | TransformStates unbounded | 0.5 day |
-| L1-L5 | Various low-priority items | 0.25 day each |
+## Phase 3+ — Nice to Have (Mostly Resolved)
 
-## Timeline View
+| ID | Issue | Status | Resolution |
+|----|-------|--------|------------|
+| M1 | No heartbeat | ✅ Fixed | Time-based 5s heartbeat (Phase 3.5) |
+| M2 | Single connection only | ⏳ Open | Single-socket; reconnection works, multi-connect pending |
+| M3 | No packet type field | ✅ Fixed | V3 header `PacketType` byte (Phase 3.4) |
+| M4 | Scale interpolation | ✅ Fixed | Scale snaps directly (Phase 3.5) |
+| M5 | Hardcoded thresholds | ⏳ Open | Still hardcoded in `sync.py` and `UELiveSyncSubsystem.cpp` |
+| M6 | Silent send failure | ⏳ Open | Console-only; no UI indicator |
+| M7 | TransformStates unbounded | ✅ Fixed | 60s TTL eviction (Phase 3.5) |
+| L1–L5 | Various low items | ⏳ Open | See issues database |
 
-### Week 1: Phase 1 (Critical Fixes)
-```
-C3 (logging) ── 0.25d
-H3 (TCP_NODELAY) ── 0.1d
-H6 (timer guard) ── 0.1d
-C4 (bounded queue) ── 0.25d
-C1 + H7 (background thread + reconnect) ── 1d
-C2 (direct GUID) ── 0.5d
-C5 + C6 (incremental cache) ── 0.5d
-─── Total: ~3 days ───
-```
+## Remaining Open Items for Phase 3.6+
 
-### Week 2: Phase 2 (Performance)
-```
-H5 (dedup) ── 0.5d
-H4 (interpolation decision) ── 1d
-H1 (optimized scene iteration) ── 1d
-H2 (local transform) ── 2d
-─── Total: ~4.5 days ───
-```
-
-### Week 3+: Phase 3
-```
-M3 (packet type) ── 0.5d
-M1 (heartbeat) ── 1d
-M2 (multi-connection) ── 1d
-M4-M7, L1-L5 ── 2d
-─── Total: ~4.5 days ───
-```
+| ID | Issue | Area |
+|----|-------|------|
+| H2 | World-space only / hierarchy | Protocol + UE actor tree |
+| H4 | Interpolation lag / smoothness tuning | UE interpolation |
+| M2 | Single connection / re-accept | UE networking |
+| M5 | Hardcoded thresholds | Blender addon preferences |
+| M6 | Silent send failure / UI status | Blender addon UI |
+| L1 | Port conflict on macOS | Network config |
+| L2 | FindActorFast stale cleanup | UE cache management |
+| L3 | No initial snapshot | Protocol |
+| L4 | Preferences UI | Blender addon |
+| L5 | Error reporting operator | Blender addon |

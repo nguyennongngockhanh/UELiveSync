@@ -105,7 +105,7 @@ TMap<FGuid, FSyncTransformState> TransformStates
 - `FSyncTransformState` holds Current/Target/Velocity for loc/rot/scale
 - Adaptive interpolation speed (8–24 based on distance)
 - Prediction: Target + Velocity × 0.012s
-- Convergence snap when distance < KINDA_SMALL_NUMBER
+- Dual snap threshold: `KINDA_SMALL_NUMBER` skip (already converged) or `0.5f` distance snap
 - Cleared on disconnect/reconnect
 
 ### PacketQueue (FLiveSyncQueue)

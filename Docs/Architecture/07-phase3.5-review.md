@@ -14,7 +14,7 @@ Phase 3.5 implemented performance optimizations building on the Phase 3.4 real-t
 
 | Task | Status | Detail |
 |------|--------|--------|
-| Depsgraph-based add/remove detection | ✅ | Replaced the 100-frame `bpy.data.objects` full scan with event-driven detection. Uses `on_object_add`/`on_object_remove` handlers where available; falls back to count-based change detection for Blender 5.1. Periodic scan reduced from every 100 frames to every 300 frames as edge-case safety net. |
+| Count-based add/remove detection | ✅ | Replaced the 100-frame `bpy.data.objects` full scan with `len(bpy.data.objects)` change detection (O(1) per frame). When the object count changes, `scan_scene()` runs to detect new/stale objects. Periodic safety scan every 300 frames as edge-case net. Blender 5.1 does not expose `object_add_post`/`object_remove_pre` handlers, so count-based detection is the sole mechanism. |
 | UUID caching in tracked_objects | ✅ | `tracked_objects` now stores `(BlenderObject, UUID)` tuples, eliminating repeated `uuid.UUID(guid_str)` string parsing per changed object per frame. Avoids 1+ string-to-UUID parses per changed object per tick. |
 | O(1) stale object validation | ✅ | Replaced `obj.name not in bpy.data.objects` (O(N) name scan) with `try/except ReferenceError` (O(1)). Eliminates per-frame linear scan of `bpy.data.objects`. |
 | Time-based heartbeat | ✅ | Changed from frame-count-based (every 300 frames) to wall-clock-based (every 5 seconds). Consistent timing regardless of frame rate. |

@@ -2,6 +2,7 @@
 
 Date: 2026-05-21
 Commit: f8277aa
+> **Note**: This document was written before Phase 3.5. See `07-phase3.5-review.md` for subsequent changes. The "Remaining Issues" section below lists items that have since been addressed.
 
 ## Scope
 
