@@ -321,6 +321,25 @@ bool UUELiveSyncSubsystem::Tick(
     InterpolateTransforms(
         DeltaTime);
 
+    // =====================================================
+    // RUNTIME METRICS (every 60s in verbose mode)
+    // =====================================================
+
+    if (bEnableVerboseSyncLogs)
+    {
+        double Now =
+            FPlatformTime::Seconds();
+
+        if (Now - LastMetricsLogTime >=
+            MetricsLogInterval)
+        {
+            LastMetricsLogTime =
+                Now;
+
+            LogRuntimeMetrics();
+        }
+    }
+
     return true;
 }
 
@@ -1733,6 +1752,12 @@ HandleDeleteObject(
     AActor* Actor =
         FindActorFast(Guid);
 
+    bool bCacheHadEntry =
+        ActorCache.Find(Guid) != nullptr;
+
+    bool bTransformHadState =
+        TransformStates.Find(Guid) != nullptr;
+
     if (Actor)
     {
         Actor->Destroy();
@@ -1744,6 +1769,55 @@ HandleDeleteObject(
     TransformStates.Remove(
         Guid);
 
-    LastHeartbeatTime =
-        FPlatformTime::Seconds();
+    if (bEnableVerboseSyncLogs)
+    {
+        FString ActorName =
+            Actor
+                ? Actor->GetActorLabel()
+                : TEXT("nullptr");
+
+        UE_LOG(
+            LogTemp,
+            Log,
+            TEXT("[Delete] GUID=%s Actor=%s Removed=%d StaleCache=%d"),
+            *Guid.ToString(
+                EGuidFormats::Digits),
+            *ActorName,
+            Actor ? 1 : 0,
+            bCacheHadEntry ? 1 : 0);
+    }
+}
+
+
+// =========================================================
+// LOG RUNTIME METRICS
+// =========================================================
+
+void UUELiveSyncSubsystem::
+LogRuntimeMetrics()
+{
+    int32 StateCount =
+        TransformStates.Num();
+
+    int32 CacheCount =
+        ActorCache.Num();
+
+    int32 QueueSize =
+        PacketQueue.Size();
+
+    int32 Connected =
+        ConnectionSocket &&
+        ConnectionSocket->
+            GetConnectionState()
+            == SCS_Connected
+        ? 1 : 0;
+
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT("[Metrics] States=%d Cache=%d Queue=%d Connected=%d"),
+        StateCount,
+        CacheCount,
+        QueueSize,
+        Connected);
 }

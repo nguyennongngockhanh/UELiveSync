@@ -50,6 +50,8 @@ _scan_counter = 0
 
 _scan_interval = 300
 
+_verbose_logging = False
+
 
 # =========================================================
 # GUID SYSTEM
@@ -62,6 +64,27 @@ def ensure_guid(obj):
         obj["ue_guid"] = uuid.uuid4().hex
 
     return obj["ue_guid"]
+
+
+def ensure_unique_guid(obj, tracked):
+
+    guid = ensure_guid(obj)
+
+    if guid in tracked and tracked[guid][0] != obj:
+
+        old_guid = guid
+
+        obj["ue_guid"] = uuid.uuid4().hex
+
+        guid = obj["ue_guid"]
+
+        if _verbose_logging:
+            print(
+                f"[GUID] Regenerated {old_guid}"
+                f" -> {guid} for {obj.name}"
+            )
+
+    return guid
 
 
 def get_parent_guid(obj):
@@ -212,7 +235,7 @@ def scan_scene():
         if obj.type != 'MESH':
             continue
 
-        guid = ensure_guid(obj)
+        guid = ensure_unique_guid(obj, tracked_objects)
 
         if guid not in tracked_objects:
 
@@ -438,7 +461,7 @@ def start_sync():
 
     for obj in bpy.data.objects:
         if obj.type == 'MESH':
-            guid = ensure_guid(obj)
+            guid = ensure_unique_guid(obj, tracked_objects)
             tracked_objects[guid] = (
                 obj,
                 UUID(guid)

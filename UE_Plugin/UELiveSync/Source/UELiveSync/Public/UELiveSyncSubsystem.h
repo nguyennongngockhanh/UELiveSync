@@ -230,11 +230,17 @@ private:
         15.0;
 
     // =====================================================
-    // THREAD STATE
+    // METRICS LOGGING
     // =====================================================
 
-    bool bThreadRunning =
-        false;
+    double LastMetricsLogTime =
+        0.0;
+
+    static constexpr double
+        MetricsLogInterval =
+        60.0;
+
+    void LogRuntimeMetrics();
 
     // =====================================================
     // VERBOSE LOGGING

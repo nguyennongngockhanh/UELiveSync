@@ -53,6 +53,13 @@ public:
         }
     }
 
+    int32 Size() const
+    {
+        return Count.load(
+            std::memory_order_relaxed
+        );
+    }
+
 private:
 
     TQueue<

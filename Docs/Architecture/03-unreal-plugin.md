@@ -43,9 +43,11 @@ UE_Plugin/UELiveSync/
   1. Accept new connections if none active
   2. Check stale connection state
   3. Check for network thread exit (via `bThreadExited` flag)
-  4. Check heartbeat timeout (15s)
+  4. Check heartbeat timeout (15s) — resets `LastHeartbeatTime` on 0x07 packets
   5. `ProcessQueuedPackets()` — drain all queue entries via `ProcessBinaryPacket()`
-  6. `InterpolateTransforms()` — apply interpolation to all tracked actors
+  6. `EvictStaleTransformStates()` — remove entries older than 60s TTL
+  7. `InterpolateTransforms()` — apply interpolation to all tracked actors
+  8. `LogRuntimeMetrics()` — every 60s in verbose mode
 
 ## Data Flow
 
@@ -71,6 +73,9 @@ TCP packet arrives
           → V3: timestamp (double) + parent GUID (16 bytes)
           → HandleCreateObject if type 0x03
           → UpdateTargetTransform(Guid, Loc, Rot, Scl)
+    → EvictStaleTransformStates()
+      → 60s TTL on TransformStates entries
+      → Removes stale entries + corresponding ActorCache entries
     → InterpolateTransforms()
       → For each Guid in TransformStates
         → FindActorFast (ActorCache lookup)
@@ -78,6 +83,8 @@ TCP packet arrives
         → Compute predicted position (velocity-based)
         → VInterpTo / Slerp interpolation with adaptive speed
         → SetActorTransform(Current)
+    → LogRuntimeMetrics() [every 60s in verbose mode]
+      → States=N Cache=N Queue=N Connected=1/0
 ```
 
 ## Key Data Structures
@@ -115,9 +122,30 @@ static bool bEnableVerboseSyncLogs = false;
 int32 VerboseFrameCounter;  // increments each Tick
 bool ShouldLogVerbose() const;
 ```
-- All per-frame/per-packet diagnostic logs gated behind this flag
-- When enabled, fires at most every 300 frames (~5s at 60fps)
+- Per-frame/per-packet diagnostic logs gated behind `bEnableVerboseSyncLogs`
+- Rate-limited to at most every 300 frames for high-frequency paths (`ShouldLogVerbose()`)
+- Low-frequency events (delete, metrics) use direct `bEnableVerboseSyncLogs` check
 - Default: disabled — zero per-frame log output
+
+### Delete Lifecycle Logging
+Logged in `HandleDeleteObject()` when `bEnableVerboseSyncLogs` is true:
+```
+[Delete] GUID=... Actor=Cube Removed=1 StaleCache=0
+```
+- `Removed=1`: actor was found and destroyed; `0`: actor was already gone
+- `StaleCache=1`: stale ActorCache entry existed (cache miss already detected); `0`: clean state
+- Respects existing verbose toggle — no rate limiting (deletes are rare events)
+
+### Runtime Metrics Logging
+Logged every 60s via `LogRuntimeMetrics()` when `bEnableVerboseSyncLogs` is true:
+```
+[Metrics] States=42 Cache=40 Queue=3 Connected=1
+```
+- `States`: `TransformStates.Num()` — active tracked transforms
+- `Cache`: `ActorCache.Num()` — active cached actor references
+- `Queue`: `PacketQueue.Size()` — pending packets in bounded queue (0 typical)
+- `Connected`: 1 if socket is connected, 0 otherwise
+- Time-based interval, no allocations in hot path
 
 ## Lifecycle
 

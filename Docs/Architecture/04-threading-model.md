@@ -52,7 +52,29 @@ UNREAL ENGINE
 | Queue must be thread-safe | ✅ | `TQueue<Mpsc>` is lock-free + bounded |
 | Socket not used after thread termination | ✅ | Close socket → thread exits → WaitForCompletion → destroy |
 | No concurrent ActorCache access | ✅ | ActorCache only accessed from game thread |
+| No concurrent TransformStates access | ✅ | TransformStates only accessed from game thread (Tick) |
 | Thread exit detection | ✅ | `FThreadSafeBool bThreadExited` set in Run() epilogue |
+
+## Game Thread Call Chains
+
+All packet handlers and state mutations run on the game thread via `Tick()`:
+
+```
+Tick()
+├── Accept connection              (ListenerSocket->Accept)
+├── Stale connection check         (GetConnectionState)
+├── Thread exit detection          (bThreadExited)
+├── Heartbeat timeout              (FPlatformTime check)
+├── ProcessQueuedPackets()
+│   └── ProcessBinaryPacket()
+│       ├── HandleCreateObject()   (World->SpawnActor)
+│       ├── HandleDeleteObject()   (Actor->Destroy + cache removal)
+│       ├── UpdateTargetTransform() (TransformStates update)
+│       └── [logging]             (bEnableVerboseSyncLogs gate)
+├── EvictStaleTransformStates()    (60s TTL removal)
+├── InterpolateTransforms()        (Actor->SetActorTransform)
+└── LogRuntimeMetrics()            (every 60s, verbose only)
+```
 
 ## Critical Section: Socket Ownership
 

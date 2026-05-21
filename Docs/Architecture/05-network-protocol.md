@@ -1,5 +1,22 @@
 # Network Protocol
 
+## GUID Identity
+
+GUIDs are generated as `uuid.uuid4().hex` (32‑character hex string) on the Blender side and encoded in the packet as 4× `uint32 LE`.
+
+### Duplicate GUID Prevention
+
+When a Blender object is duplicated (via `obj.copy()`), custom properties including `ue_guid` are inherited. The addon detects this in `ensure_unique_guid()`:
+
+1. After `ensure_guid()` returns the inherited GUID, the function checks if the GUID already exists in `tracked_objects` **for a different object**
+2. If a collision is detected, the GUID is regenerated via `obj["ue_guid"] = uuid.uuid4().hex`
+3. The new object is then tracked with a fully unique identity
+
+This guarantees:
+- No two Blender objects ever share the same GUID
+- No UE actor identity overwrites from duplicate GUIDs
+- No ambiguous delete/update ownership
+
 ## Version 3 Protocol (Current)
 
 ### Packet Header (24 bytes)
