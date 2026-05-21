@@ -1,2 +1,31 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# UE Plugin Build Artifacts
+Binaries/
+Intermediate/
+*.sln
+*.vcxproj*
+*.suo
+*.opensdf
+*.sdf
+*.user
+*.log
+DerivedDataCache/
