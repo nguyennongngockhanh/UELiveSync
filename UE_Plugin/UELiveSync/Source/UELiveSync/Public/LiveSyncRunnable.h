@@ -4,9 +4,7 @@
 
 #include "HAL/Runnable.h"
 
-#include "Containers/Queue.h"
-
-#include "SyncTypes.h"
+#include "LiveSyncQueue.h"
 
 class FSocket;
 
@@ -16,9 +14,7 @@ public:
 
     FLiveSyncRunnable(
         FSocket* InSocket,
-        TQueue<
-            FLiveSyncPacket,
-            EQueueMode::Mpsc>* InQueue);
+        FLiveSyncQueue* InQueue);
 
     virtual uint32 Run() override;
 
@@ -28,9 +24,11 @@ private:
 
     FSocket* Socket;
 
-    TQueue<
-        FLiveSyncPacket,
-        EQueueMode::Mpsc>* PacketQueue;
+    FLiveSyncQueue* PacketQueue;
 
     FThreadSafeBool bRunThread;
+
+public:
+
+    FThreadSafeBool bThreadExited;
 };

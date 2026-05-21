@@ -9,6 +9,9 @@
 #include "Misc/Guid.h"
 
 #include "SyncTypes.h"
+#include "LiveSyncQueue.h"
+
+#include "Containers/Set.h"
 
 #include "UELiveSyncSubsystem.generated.h"
 
@@ -70,7 +73,8 @@ private:
 
     void ProcessBinaryPacket(
         const FLiveSyncPacket&
-        Packet);
+        Packet,
+        TSet<FGuid>* SeenThisTick = nullptr);
 
     // =====================================================
     // TRANSFORM PIPELINE
@@ -84,17 +88,49 @@ private:
 
         const FQuat& Rotation,
 
-        const FVector& Scale
+        const FVector& Scale,
+
+        const FGuid& ParentGuid = FGuid()
     );
 
     void InterpolateTransforms(
         float DeltaTime);
 
     // =====================================================
+    // PACKET TYPE HANDLERS
+    // =====================================================
+
+    void HandleCreateObject(
+
+        const FGuid& Guid,
+
+        const FVector& Location,
+
+        const FQuat& Rotation,
+
+        const FVector& Scale,
+
+        const FGuid& ParentGuid);
+
+    void HandleDeleteObject(
+        const FGuid& Guid);
+
+    // =====================================================
     // ACTOR CACHE
     // =====================================================
 
     void BuildActorCache();
+
+    void TryCacheActor(
+        AActor* Actor);
+
+    UFUNCTION()
+    void OnActorSpawned(
+        AActor* Actor);
+
+    UFUNCTION()
+    void OnActorDestroyed(
+        AActor* Actor);
 
     AActor* FindActorFast(
         const FGuid& Guid);
@@ -125,10 +161,7 @@ private:
     // THREAD → GAME QUEUE
     // =====================================================
 
-    TQueue<
-        FLiveSyncPacket,
-        EQueueMode::Mpsc>
-
+    FLiveSyncQueue
         PacketQueue;
 
     // =====================================================
@@ -174,9 +207,41 @@ private:
         0;
 
     // =====================================================
+    // ACTOR LIFECYCLE BINDING
+    // =====================================================
+
+    FDelegateHandle
+        OnActorSpawnedHandle;
+
+    FDelegateHandle
+        OnActorDestroyedHandle;
+
+    // =====================================================
+    // HEARTBEAT
+    // =====================================================
+
+    double LastHeartbeatTime =
+        0.0;
+
+    static constexpr double
+        HeartbeatTimeout =
+        15.0;
+
+    // =====================================================
     // THREAD STATE
     // =====================================================
 
     bool bThreadRunning =
         false;
+
+    // =====================================================
+    // VERBOSE LOGGING
+    // =====================================================
+
+    bool ShouldLogVerbose() const;
+
+    static bool bEnableVerboseSyncLogs;
+
+    int32 VerboseFrameCounter =
+        0;
 };

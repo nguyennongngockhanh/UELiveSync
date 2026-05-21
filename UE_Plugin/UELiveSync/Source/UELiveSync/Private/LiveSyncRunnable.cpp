@@ -6,6 +6,8 @@
 
 #include "SyncTypes.h"
 
+extern bool GEnableVerboseSyncLogs;
+
 
 // =========================================================
 // CONSTRUCTOR
@@ -15,9 +17,7 @@ FLiveSyncRunnable::FLiveSyncRunnable(
 
     FSocket* InSocket,
 
-    TQueue<
-        FLiveSyncPacket,
-        EQueueMode::Mpsc>* InQueue)
+    FLiveSyncQueue* InQueue)
 
 {
     Socket =
@@ -37,6 +37,11 @@ FLiveSyncRunnable::FLiveSyncRunnable(
 
 uint32 FLiveSyncRunnable::Run()
 {
+    uint64 ThreadStartCycles =
+        FPlatformTime::Cycles64();
+
+    uint64 LastRecvExitCycles = 0;
+
     while (bRunThread)
     {
         if (!Socket)
@@ -55,28 +60,25 @@ uint32 FLiveSyncRunnable::Run()
 
             FTimespan::
             FromMilliseconds(
-                100)))
+                10)))
         {
             continue;
         }
 
         // =================================================
-        // READ HEADER
+        // READ HEADER RAW (24 bytes for max V3 header)
         // =================================================
 
-        FPacketHeader Header;
+        uint8 HeaderBytes[
+            sizeof(FPacketHeaderV3)];
 
         int32 TotalHeaderRead =
             0;
 
-        uint8* HeaderPtr =
-
-            reinterpret_cast<uint8*>(
-                &Header);
-
         while (
             TotalHeaderRead <
-            sizeof(FPacketHeader))
+            (int32)sizeof(
+                FPacketHeaderV3))
         {
             int32 BytesRead =
                 0;
@@ -85,10 +87,10 @@ uint32 FLiveSyncRunnable::Run()
 
                 Socket->Recv(
 
-                    HeaderPtr +
+                    HeaderBytes +
                     TotalHeaderRead,
 
-                    sizeof(FPacketHeader) -
+                    sizeof(FPacketHeaderV3) -
                     TotalHeaderRead,
 
                     BytesRead);
@@ -96,6 +98,23 @@ uint32 FLiveSyncRunnable::Run()
             if (!bOk ||
                 BytesRead <= 0)
             {
+                LastRecvExitCycles =
+                    FPlatformTime::Cycles64();
+
+                double ThreadLifetimeMs =
+                    FPlatformTime::
+                    ToMilliseconds64(
+                        LastRecvExitCycles -
+                        ThreadStartCycles);
+
+                UE_LOG(
+                    LogTemp,
+                    Log,
+                    TEXT("NetworkThread: recv=0 exit after %.2fms"),
+                    ThreadLifetimeMs);
+
+                bThreadExited = true;
+
                 return 0;
             }
 
@@ -104,21 +123,99 @@ uint32 FLiveSyncRunnable::Run()
         }
 
         // =================================================
-        // DEBUG HEADER SIZE
+        // DETERMINE VERSION
         // =================================================
 
-        UE_LOG(
-            LogTemp,
-            Warning,
-            TEXT("Header Size = %d"),
-            sizeof(FPacketHeader)
-        );
+        uint16 PacketVersion;
+
+        FMemory::Memcpy(
+            &PacketVersion,
+            HeaderBytes + 4,
+            sizeof(uint16));
+
+        // =================================================
+        // PARSE HEADER BASED ON VERSION
+        // =================================================
+
+        uint32 PacketMagic;
+        uint64 PacketSequenceId;
+        int32 PacketSize;
+        int32 ObjectCount;
+        int32 HeaderSize;
+
+        if (PacketVersion >=
+            LIVE_SYNC_VERSION_V3)
+        {
+            FPacketHeaderV3* V3Hdr =
+                reinterpret_cast<
+                    FPacketHeaderV3*>(
+                    HeaderBytes);
+
+            PacketMagic =
+                V3Hdr->Magic;
+
+            PacketSequenceId =
+                V3Hdr->SequenceId;
+
+            PacketSize =
+                V3Hdr->PacketSize;
+
+            ObjectCount =
+                V3Hdr->ObjectCount;
+
+            HeaderSize =
+                sizeof(FPacketHeaderV3);
+        }
+        else
+        {
+            FPacketHeader* V2Hdr =
+                reinterpret_cast<
+                    FPacketHeader*>(
+                    HeaderBytes);
+
+            PacketMagic =
+                V2Hdr->Magic;
+
+            PacketSequenceId =
+                V2Hdr->SequenceId;
+
+            PacketSize =
+                V2Hdr->PacketSize;
+
+            ObjectCount =
+                V2Hdr->ObjectCount;
+
+            HeaderSize =
+                sizeof(FPacketHeader);
+        }
+
+        // =================================================
+        // RAW PACKET RECEIVED
+        // =================================================
+
+        if (GEnableVerboseSyncLogs)
+        {
+            static int LogRateLimit = 0;
+
+            if (++LogRateLimit % 300 == 1)
+            {
+                UE_LOG(
+                    LogTemp,
+                    Log,
+                    TEXT("Raw packet: magic=%x version=%u seq=%llu size=%d obj=%d"),
+                    PacketMagic,
+                    PacketVersion,
+                    PacketSequenceId,
+                    PacketSize,
+                    ObjectCount);
+            }
+        }
 
         // =================================================
         // VALIDATE MAGIC
         // =================================================
 
-        if (Header.Magic !=
+        if (PacketMagic !=
             LIVE_SYNC_MAGIC)
         {
             UE_LOG(
@@ -133,8 +230,10 @@ uint32 FLiveSyncRunnable::Run()
         // VALIDATE VERSION
         // =================================================
 
-        if (Header.Version !=
-            LIVE_SYNC_VERSION)
+        if (PacketVersion !=
+            LIVE_SYNC_VERSION
+            && PacketVersion !=
+            LIVE_SYNC_VERSION_V3)
         {
             UE_LOG(
                 LogTemp,
@@ -148,8 +247,8 @@ uint32 FLiveSyncRunnable::Run()
         // VALIDATE PACKET SIZE
         // =================================================
 
-        if (Header.PacketSize <
-            sizeof(FPacketHeader))
+        if (PacketSize <
+            HeaderSize)
         {
             UE_LOG(
                 LogTemp,
@@ -164,15 +263,16 @@ uint32 FLiveSyncRunnable::Run()
         // =================================================
 
         int32 PayloadSize =
-
-            Header.PacketSize -
-            sizeof(FPacketHeader);
+            PacketSize -
+            HeaderSize;
 
         // =================================================
-        // PAYLOAD ALIGNMENT CHECK
+        // PAYLOAD ALIGNMENT CHECK (V2 only)
         // =================================================
 
-        if (PayloadSize %
+        if (PacketVersion ==
+            LIVE_SYNC_VERSION
+            && PayloadSize %
             LIVE_SYNC_OBJECT_SIZE
             != 0)
         {
@@ -218,6 +318,23 @@ uint32 FLiveSyncRunnable::Run()
             if (!bOk ||
                 BytesRead <= 0)
             {
+                LastRecvExitCycles =
+                    FPlatformTime::Cycles64();
+
+                double ThreadLifetimeMs =
+                    FPlatformTime::
+                    ToMilliseconds64(
+                        LastRecvExitCycles -
+                        ThreadStartCycles);
+
+                UE_LOG(
+                    LogTemp,
+                    Log,
+                    TEXT("NetworkThread: payload recv=0 exit after %.2fms"),
+                    ThreadLifetimeMs);
+
+                bThreadExited = true;
+
                 return 0;
             }
 
@@ -233,32 +350,25 @@ uint32 FLiveSyncRunnable::Run()
 
         Packet.RawData.
             SetNumUninitialized(
-
-                Header.PacketSize);
+                PacketSize);
 
         // =================================================
-        // COPY HEADER
+        // COPY FULL RAW HEADER
         // =================================================
 
         FMemory::Memcpy(
-
             Packet.RawData.GetData(),
-
-            &Header,
-
-            sizeof(FPacketHeader));
+            HeaderBytes,
+            HeaderSize);
 
         // =================================================
         // COPY PAYLOAD
         // =================================================
 
         FMemory::Memcpy(
-
             Packet.RawData.GetData() +
-            sizeof(FPacketHeader),
-
+            HeaderSize,
             Payload.GetData(),
-
             PayloadSize);
 
         // =================================================
@@ -276,7 +386,37 @@ uint32 FLiveSyncRunnable::Run()
 
         PacketQueue->Enqueue(
             MoveTemp(Packet));
+
+        if (GEnableVerboseSyncLogs)
+        {
+            static int LogRateLimit = 0;
+
+            if (++LogRateLimit % 300 == 1)
+            {
+                UE_LOG(
+                    LogTemp,
+                    Log,
+                    TEXT("Enqueued packet"));
+            }
+        }
     }
+
+    LastRecvExitCycles =
+        FPlatformTime::Cycles64();
+
+    double ThreadLifetimeMs =
+        FPlatformTime::
+        ToMilliseconds64(
+            LastRecvExitCycles -
+            ThreadStartCycles);
+
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT("NetworkThread: clean exit after %.2fms"),
+        ThreadLifetimeMs);
+
+    bThreadExited = true;
 
     return 0;
 }
