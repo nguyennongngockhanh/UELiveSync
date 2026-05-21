@@ -6,6 +6,8 @@ from bpy.app.handlers import persistent
 
 from mathutils import Matrix
 
+from uuid import UUID
+
 try:
     from .network import (
         connect,
@@ -38,9 +40,15 @@ tracked_objects = {}
 
 _timer_ref = None
 
-_frame_count = 0
+_last_heartbeat_time = 0.0
 
-_heartbeat_interval = 300
+_heartbeat_interval = 5.0
+
+_last_object_count = 0
+
+_scan_counter = 0
+
+_scan_interval = 300
 
 
 # =========================================================
@@ -158,6 +166,67 @@ def get_transform(obj):
 
 
 # =========================================================
+# SCENE SCAN (detect new/deleted objects)
+# =========================================================
+
+def scan_scene():
+
+    global last_sent_transforms
+    global tracked_objects
+
+    current_count = len(bpy.data.objects)
+
+    stale_handled = 0
+
+    # =====================================================
+    # DETECT STALE OBJECTS (deleted outside our tracking)
+    # =====================================================
+
+    for guid in list(tracked_objects.keys()):
+
+        obj, guid_obj = (
+            tracked_objects[guid]
+        )
+
+        try:
+            _ = obj.name
+        except ReferenceError:
+            tracked_objects.pop(
+                guid, None
+            )
+
+            last_sent_transforms.pop(
+                guid, None
+            )
+
+            stale_handled += 1
+
+    # =====================================================
+    # DETECT NEW MESH OBJECTS
+    # =====================================================
+
+    new_count = 0
+
+    for obj in bpy.data.objects:
+
+        if obj.type != 'MESH':
+            continue
+
+        guid = ensure_guid(obj)
+
+        if guid not in tracked_objects:
+
+            tracked_objects[guid] = (
+                obj,
+                UUID(guid)
+            )
+
+            new_count += 1
+
+    return stale_handled, new_count
+
+
+# =========================================================
 # MAIN UPDATE LOOP
 # =========================================================
 
@@ -167,69 +236,70 @@ def check_updates():
     global timer_running
     global last_sent_transforms
     global tracked_objects
-    global _frame_count
+    global _last_heartbeat_time
+    global _last_object_count
+    global _scan_counter
 
     if not timer_running:
         return 0.016
-
-    _frame_count += 1
 
     objects_to_send = []
     create_objects = []
     deletes_to_send = []
 
     # =====================================================
-    # PERIODIC FULL SCAN (every 100 frames)
+    # SCENE SCAN (only when object count changes or
+    # periodic check for edge cases)
     # =====================================================
 
-    if _frame_count % 100 == 0:
+    current_count = (
+        len(bpy.data.objects)
+    )
 
-        current_guids = set()
+    if (current_count !=
+        _last_object_count):
 
-        for obj in bpy.data.objects:
+        _last_object_count = (
+            current_count
+        )
 
-            if obj.type != 'MESH':
-                continue
+        deletes_to_send_scan, _ = (
+            scan_scene()
+        )
 
-            guid = ensure_guid(obj)
+    else:
 
-            current_guids.add(guid)
+        deletes_to_send_scan = 0
 
-            if guid not in tracked_objects:
+    # Periodic scan to catch edge cases
+    # (object added then removed between frames)
 
-                tracked_objects[guid] = obj
+    _scan_counter += 1
 
-        stale_guids = [
-            g for g in tracked_objects
-            if g not in current_guids
-        ]
+    if _scan_counter >= _scan_interval:
 
-        for guid in stale_guids:
+        _scan_counter = 0
 
-            tracked_objects.pop(guid, None)
-
-            last_sent_transforms.pop(guid, None)
-
-            guid_obj = uuid.UUID(guid)
-
-            deletes_to_send.append(
-                serialize_delete_v3(guid_obj)
-            )
+        if current_count == (
+            _last_object_count
+        ):
+            scan_scene()
 
     # =====================================================
-    # OBJECT ITERATION (cached tracked list)
+    # OBJECT ITERATION
     # =====================================================
 
-    for guid, obj in list(
+    for guid, obj_data in list(
         tracked_objects.items()):
 
-        if not obj or obj.name not in bpy.data.objects:
+        obj, guid_obj = obj_data
 
+        try:
+            _ = obj.name
+        except ReferenceError:
             tracked_objects.pop(guid, None)
 
             last_sent_transforms.pop(guid, None)
-
-            guid_obj = uuid.UUID(guid)
 
             deletes_to_send.append(
                 serialize_delete_v3(guid_obj)
@@ -248,12 +318,10 @@ def check_updates():
             previous
         ):
 
-            guid_obj = uuid.UUID(guid)
-
             parent_guid = get_parent_guid(obj)
 
             parent_guid_obj = (
-                uuid.UUID(parent_guid)
+                UUID(parent_guid)
                 if parent_guid else None
             )
 
@@ -327,15 +395,19 @@ def check_updates():
         )
 
     # =====================================================
-    # HEARTBEAT (every 300 frames ≈ 5s)
+    # HEARTBEAT (every 5 seconds)
     # =====================================================
 
-    if _frame_count % _heartbeat_interval == 0:
+    now = time.time()
+
+    if now - _last_heartbeat_time >= _heartbeat_interval:
 
         send_objects(
             [],
             packet_type=0x07
         )
+
+        _last_heartbeat_time = now
 
     return 0.016
 
@@ -350,18 +422,27 @@ def start_sync():
     global last_sent_transforms
     global tracked_objects
     global _timer_ref
-    global _frame_count
+    global _last_heartbeat_time
+    global _last_object_count
+    global _scan_counter
 
     last_sent_transforms.clear()
 
     tracked_objects.clear()
 
-    _frame_count = 0
+    _last_heartbeat_time = time.time()
+
+    _last_object_count = len(bpy.data.objects)
+
+    _scan_counter = 0
 
     for obj in bpy.data.objects:
         if obj.type == 'MESH':
             guid = ensure_guid(obj)
-            tracked_objects[guid] = obj
+            tracked_objects[guid] = (
+                obj,
+                UUID(guid)
+            )
 
     connect()
 

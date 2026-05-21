@@ -96,6 +96,8 @@ private:
     void InterpolateTransforms(
         float DeltaTime);
 
+    void EvictStaleTransformStates();
+
     // =====================================================
     // PACKET TYPE HANDLERS
     // =====================================================

@@ -316,6 +316,8 @@ bool UUELiveSyncSubsystem::Tick(
 
     ProcessQueuedPackets();
 
+    EvictStaleTransformStates();
+
     InterpolateTransforms(
         DeltaTime);
 
@@ -731,12 +733,12 @@ ProcessBinaryPacket(
     if (Version >=
         LIVE_SYNC_VERSION_V3)
     {
-        FPacketHeaderV3* HdrV3 =
-            reinterpret_cast<FPacketHeaderV3*>(
-                const_cast<uint8*>(PacketData));
-
-        PacketType =
-            HdrV3->PacketType;
+        FMemory::Memcpy(
+            &PacketType,
+            PacketData +
+                sizeof(uint32) +
+                sizeof(uint16),
+            sizeof(uint8));
     }
 
     if (ShouldLogVerbose())
@@ -1342,14 +1344,7 @@ InterpolateTransforms(
 
         State.CurrentScale =
 
-            FMath::VInterpTo(
-
-                State.CurrentScale,
-
-                State.TargetScale,
-
-                DeltaTime,
-                12.0f);
+            State.TargetScale;
 
         Actor->SetActorTransform(
 
@@ -1378,6 +1373,60 @@ InterpolateTransforms(
         );
     }
 }
+
+
+// =========================================================
+// EVICT STALE TRANSFORM STATES (TTL)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+EvictStaleTransformStates()
+{
+    static constexpr double
+        StateTTL = 60.0;
+
+    double CurrentTime =
+        FPlatformTime::Seconds();
+
+    TArray<FGuid> StaleGuids;
+
+    for (const auto& Pair :
+        TransformStates)
+    {
+        if (CurrentTime -
+            Pair.Value.LastUpdateTime
+            > StateTTL)
+        {
+            StaleGuids.Add(
+                Pair.Key);
+        }
+    }
+
+    if (StaleGuids.Num() == 0)
+    {
+        return;
+    }
+
+    for (const FGuid& Guid :
+        StaleGuids)
+    {
+        TransformStates.Remove(
+            Guid);
+
+        ActorCache.Remove(
+            Guid);
+    }
+
+    if (ShouldLogVerbose())
+    {
+        UE_LOG(
+            LogTemp,
+            Log,
+            TEXT("Evicted %d stale transform states"),
+            StaleGuids.Num());
+    }
+}
+
 
 // =========================================================
 // BUILD ACTOR CACHE

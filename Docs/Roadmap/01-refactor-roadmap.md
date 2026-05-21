@@ -7,6 +7,7 @@
 | 0 | Diagnostics & Measurement | 1-2 days | None |
 | 1 | Quick Wins (no protocol change) | 2-3 days | Low |
 | 2 | Core Performance Fixes | 3-5 days | Medium |
+| 3.5 | Performance Optimization | 1 day | Low |
 | 3 | Hierarchy Sync (Phase 4 port) | 3-5 days | High |
 | 4 | Hardening & Polish | 2-3 days | Low |
 
