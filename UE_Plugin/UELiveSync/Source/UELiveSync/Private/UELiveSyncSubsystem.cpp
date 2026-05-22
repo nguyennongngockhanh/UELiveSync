@@ -24,6 +24,85 @@
 
 #include "Engine/StaticMesh.h"
 
+#include "HAL/IConsoleManager.h"
+
+
+// =========================================================
+// CONSOLE VARIABLES
+// =========================================================
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncPort(
+        TEXT("UE.LiveSync.Port"),
+        57000,
+        TEXT("TCP port for Blender live sync connection"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<float>
+    CVarLiveSyncHeartbeatTimeout(
+        TEXT("UE.LiveSync.HeartbeatTimeout"),
+        15.0f,
+        TEXT("Seconds without heartbeat before disconnecting"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<float>
+    CVarLiveSyncStateTTL(
+        TEXT("UE.LiveSync.StateTTL"),
+        60.0f,
+        TEXT("Seconds before inactive transform states are evicted"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncVerbose(
+        TEXT("UE.LiveSync.Verbose"),
+        0,
+        TEXT("Enable verbose sync logging (1=on, 0=off)"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncInterpMode(
+        TEXT("UE.LiveSync.InterpMode"),
+        1,
+        TEXT("Interpolation mode: 0=direct-set (zero lag), 1=smooth (default)"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<float>
+    CVarLiveSyncInterpSnap(
+        TEXT("UE.LiveSync.InterpSnap"),
+        0.1f,
+        TEXT("Distance threshold in cm for snapping to target instead of interpolating"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<float>
+    CVarLiveSyncThresholdLocation(
+        TEXT("UE.LiveSync.Threshold.Location"),
+        0.05f,
+        TEXT("Min location change in cm to trigger transform update"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<float>
+    CVarLiveSyncThresholdRotation(
+        TEXT("UE.LiveSync.Threshold.Rotation"),
+        0.002f,
+        TEXT("Min rotation change (angular distance) to trigger transform update"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<float>
+    CVarLiveSyncThresholdScale(
+        TEXT("UE.LiveSync.Threshold.Scale"),
+        0.001f,
+        TEXT("Min scale change to trigger transform update"),
+        ECVF_Default
+    );
+
 bool UUELiveSyncSubsystem::
     bEnableVerboseSyncLogs =
         false;
@@ -155,6 +234,19 @@ void UUELiveSyncSubsystem::Deinitialize()
 
 void UUELiveSyncSubsystem::StartServer()
 {
+    if (ListenerSocket)
+    {
+        return;
+    }
+
+    int32 Port =
+        CVarLiveSyncPort.GetValueOnGameThread();
+
+    if (Port < 1024 || Port > 65535)
+    {
+        Port = 57000;
+    }
+
     FIPv4Address Address;
 
     FIPv4Address::Parse(
@@ -172,7 +264,7 @@ void UUELiveSyncSubsystem::StartServer()
             Address)
 
         .BoundToPort(
-            5000)
+            Port)
 
         .Listening(8);
 
@@ -181,15 +273,18 @@ void UUELiveSyncSubsystem::StartServer()
         UE_LOG(
             LogTemp,
             Error,
-            TEXT("Failed to start TCP server"));
+            TEXT("Failed to start TCP server on port %d — "
+                 "port may be in use"),
+            Port);
 
         return;
     }
 
     UE_LOG(
         LogTemp,
-        Warning,
-        TEXT("Live Sync Listening on port 5000"));
+        Log,
+        TEXT("Live Sync Listening on port %d"),
+        Port);
 }
 
 
@@ -201,8 +296,34 @@ bool UUELiveSyncSubsystem::Tick(
     float DeltaTime)
 {
     VerboseFrameCounter++;
+
+    // =====================================================
+    // SYNC CVARS
+    // =====================================================
+
+    bEnableVerboseSyncLogs =
+        CVarLiveSyncVerbose.GetValueOnGameThread() != 0;
+
     GEnableVerboseSyncLogs =
         bEnableVerboseSyncLogs;
+
+    // =====================================================
+    // RETRY LISTENER IF PREVIOUS BIND FAILED
+    // =====================================================
+
+    if (!ListenerSocket)
+    {
+        static double LastRetryTime = 0.0;
+
+        double Now = FPlatformTime::Seconds();
+
+        if (Now - LastRetryTime >= 5.0)
+        {
+            LastRetryTime = Now;
+
+            StartServer();
+        }
+    }
 
     // =====================================================
     // ACCEPT CONNECTION
@@ -241,6 +362,8 @@ bool UUELiveSyncSubsystem::Tick(
                         LogTemp,
                         Log,
                         TEXT("Blender Connected"));
+
+                    BuildActorCache();
 
                     StartNetworkThread();
                 }
@@ -297,10 +420,14 @@ bool UUELiveSyncSubsystem::Tick(
     // HEARTBEAT TIMEOUT CHECK
     // =====================================================
 
+    float HeartbeatTimeoutVal =
+        CVarLiveSyncHeartbeatTimeout.
+            GetValueOnGameThread();
+
     if (ConnectionSocket &&
         LastHeartbeatTime > 0.0 &&
         FPlatformTime::Seconds() - LastHeartbeatTime >
-        HeartbeatTimeout)
+        HeartbeatTimeoutVal)
     {
         UE_LOG(
             LogTemp,
@@ -646,6 +773,7 @@ ProcessBinaryPacket(
     const uint8* PacketEnd = nullptr;
     uint32 ObjectCount = 0;
     uint64 SequenceId = 0;
+    uint8 PacketFlags = 0x00;
 
     if (Version >=
         LIVE_SYNC_VERSION_V3)
@@ -675,6 +803,9 @@ ProcessBinaryPacket(
         ObjectCount =
             HeaderV3.ObjectCount;
 
+        PacketFlags =
+            HeaderV3.Flags;
+
         Ptr =
             PacketData +
             sizeof(FPacketHeaderV3);
@@ -682,6 +813,32 @@ ProcessBinaryPacket(
         PacketEnd =
             PacketData +
             HeaderV3.PacketSize;
+
+        // =================================================
+        // FULL SNAPSHOT FLAG: clear stale state before
+        // processing, giving us a clean slate
+        // =================================================
+
+        if (PacketFlags &
+            PF_FullSnapshot)
+        {
+            TransformStates.Empty();
+
+            if (SeenThisTick)
+            {
+                SeenThisTick->Empty();
+            }
+
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(
+                    LogTemp,
+                    Log,
+                    TEXT(
+                        "Full snapshot: cleared"
+                        " TransformStates + SeenThisTick"));
+            }
+        }
     }
     else if (Version ==
              LIVE_SYNC_VERSION)
@@ -996,6 +1153,46 @@ ProcessBinaryPacket(
         }
 
         // =================================================
+        // LOCAL→WORLD CONVERSION FOR HIERARCHY
+        // =================================================
+
+        bool bIsLocalTransform =
+            (PacketFlags &
+             PF_HasLocalTransform) != 0;
+
+        if (bIsLocalTransform &&
+            ParentGuid.IsValid())
+        {
+            AActor* ParentActor =
+                FindActorFast(ParentGuid);
+
+            if (ParentActor)
+            {
+                FTransform ParentWorld =
+                    ParentActor->
+                    GetActorTransform();
+
+                FTransform ChildLocal(
+                    Rotation,
+                    Location,
+                    Scale);
+
+                FTransform ChildWorld =
+                    ChildLocal *
+                    ParentWorld;
+
+                Location =
+                    ChildWorld.GetLocation();
+
+                Rotation =
+                    ChildWorld.GetRotation();
+
+                Scale =
+                    ChildWorld.GetScale3D();
+            }
+        }
+
+        // =================================================
         // APPLY
         // =================================================
 
@@ -1096,6 +1293,18 @@ UpdateTargetTransform(
             true;
     }
 
+    float LocThreshold =
+        CVarLiveSyncThresholdLocation.
+            GetValueOnGameThread();
+
+    float RotThreshold =
+        CVarLiveSyncThresholdRotation.
+            GetValueOnGameThread();
+
+    float SclThreshold =
+        CVarLiveSyncThresholdScale.
+            GetValueOnGameThread();
+
     float LocationDistance =
 
         FVector::Dist(
@@ -1120,15 +1329,15 @@ UpdateTargetTransform(
 
     bool bLocationChanged =
         LocationDistance >=
-        0.05f;
+        LocThreshold;
 
     bool bRotationChanged =
         RotationDistance >=
-        0.002f;
+        RotThreshold;
 
     bool bScaleChanged =
         ScaleDistance >=
-        0.001f;
+        SclThreshold;
 
     if (!bLocationChanged &&
         !bRotationChanged &&
@@ -1142,6 +1351,17 @@ UpdateTargetTransform(
 
             State.bHasParent =
                 ParentGuid.IsValid();
+
+            if (!State.bHasParent)
+            {
+                DetachFromParent(Guid);
+            }
+            else
+            {
+                AttachToParent(
+                    Guid,
+                    ParentGuid);
+            }
         }
         else
         {
@@ -1204,6 +1424,33 @@ UpdateTargetTransform(
 
     State.LastUpdateTime =
         CurrentTime;
+
+    if (ParentGuid !=
+        State.ParentGuid)
+    {
+        State.ParentGuid =
+            ParentGuid;
+
+        State.bHasParent =
+            ParentGuid.IsValid();
+
+        if (!State.bHasParent)
+        {
+            DetachFromParent(Guid);
+        }
+        else
+        {
+            AttachToParent(
+                Guid,
+                ParentGuid);
+        }
+    }
+    else if (State.bHasParent)
+    {
+        AttachToParent(
+            Guid,
+            ParentGuid);
+    }
 }
 
 
@@ -1218,6 +1465,14 @@ InterpolateTransforms(
 {
     const float PredictionTime =
         0.012f;
+
+    int32 InterpMode =
+        CVarLiveSyncInterpMode.
+            GetValueOnGameThread();
+
+    float SnapDist =
+        CVarLiveSyncInterpSnap.
+            GetValueOnGameThread();
 
     int MissingCount = 0;
     int ConvergedCount = 0;
@@ -1276,6 +1531,37 @@ InterpolateTransforms(
             continue;
         }
 
+        // =================================================
+        // DIRECT-SET MODE (zero lag)
+        // =================================================
+
+        if (InterpMode == 0)
+        {
+            State.CurrentLocation =
+                State.TargetLocation;
+
+            State.CurrentRotation =
+                State.TargetRotation;
+
+            State.CurrentScale =
+                State.TargetScale;
+
+            Actor->SetActorTransform(
+
+                FTransform(
+                    State.CurrentRotation,
+                    State.CurrentLocation,
+                    State.CurrentScale)
+            );
+
+            InterpCount++;
+            continue;
+        }
+
+        // =================================================
+        // SNAP WHEN CLOSE
+        // =================================================
+
         float DistToTarget =
 
             FVector::Dist(
@@ -1284,7 +1570,7 @@ InterpolateTransforms(
 
                 State.TargetLocation);
 
-        if (DistToTarget < 0.5f)
+        if (DistToTarget < SnapDist)
         {
             State.CurrentLocation =
                 State.TargetLocation;
@@ -1306,6 +1592,10 @@ InterpolateTransforms(
             SnapCount++;
             continue;
         }
+
+        // =================================================
+        // SMOOTH INTERPOLATION (adaptive speed)
+        // =================================================
 
         FVector PredictedLocation =
 
@@ -1329,11 +1619,11 @@ InterpolateTransforms(
 
                 FVector2D(
                     0.0f,
-                    300.0f),
+                    100.0f),
 
                 FVector2D(
-                    8.0f,
-                    24.0f),
+                    16.0f,
+                    40.0f),
 
                 Distance);
 
@@ -1383,12 +1673,13 @@ InterpolateTransforms(
             LogTemp,
             Log,
             TEXT(
-                "Transform states: total=%d missing=%d converged=%d snap=%d interp=%d"),
+                "Transform states: total=%d missing=%d converged=%d snap=%d interp=%d interpMode=%d"),
             Total,
             MissingCount,
             ConvergedCount,
             SnapCount,
-            InterpCount
+            InterpCount,
+            InterpMode
         );
     }
 }
@@ -1401,8 +1692,9 @@ InterpolateTransforms(
 void UUELiveSyncSubsystem::
 EvictStaleTransformStates()
 {
-    static constexpr double
-        StateTTL = 60.0;
+    double StateTTL =
+        CVarLiveSyncStateTTL.
+            GetValueOnGameThread();
 
     double CurrentTime =
         FPlatformTime::Seconds();
@@ -1537,7 +1829,7 @@ TryCacheActor(
                 LogTemp,
                 Warning,
                 TEXT("TryCacheActor: %s has bad GUID tag: %s"),
-                *Actor->GetActorLabel(),
+                *Actor->GetName(),
                 *GuidString);
 
             bFoundTag = false;
@@ -1560,7 +1852,7 @@ TryCacheActor(
             Log,
             TEXT("Cached Actor %s | GUID=%s"),
 
-            *Actor->GetActorLabel(),
+            *Actor->GetName(),
 
             *Guid.ToString(EGuidFormats::Digits)
         );
@@ -1576,10 +1868,81 @@ OnActorSpawned(
     TryCacheActor(Actor);
 }
 
+FGuid UUELiveSyncSubsystem::
+FindGuidForActor(
+    AActor* Actor) const
+{
+    if (!Actor)
+    {
+        return FGuid();
+    }
+
+    FString Prefix =
+        TEXT("LiveSync_GUID=");
+
+    for (const FName& Tag :
+        Actor->Tags)
+    {
+        FString TagString =
+            Tag.ToString();
+
+        if (!TagString.
+            StartsWith(
+                Prefix))
+        {
+            continue;
+        }
+
+        FString GuidString =
+
+            TagString.RightChop(
+                Prefix.Len());
+
+        FGuid Guid;
+
+        if (FGuid::ParseExact(
+
+            GuidString,
+
+            EGuidFormats::Digits,
+
+            Guid))
+        {
+            return Guid;
+        }
+    }
+
+    return FGuid();
+}
+
+
 void UUELiveSyncSubsystem::
 OnActorDestroyed(
     AActor* Actor)
 {
+    FGuid Guid =
+        FindGuidForActor(Actor);
+
+    if (Guid.IsValid())
+    {
+        TransformStates.Remove(
+            Guid);
+
+        if (bEnableVerboseSyncLogs)
+        {
+            UE_LOG(
+                LogTemp,
+                Log,
+                TEXT(
+                    "OnActorDestroyed: removed TransformState"
+                    " for %s | GUID=%s"),
+                *Actor->GetName(),
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+        }
+    }
+
+    // Also clean ActorCache (both by pointer and by GUID)
     for (auto It =
         ActorCache.CreateIterator();
         It;
@@ -1618,6 +1981,108 @@ FindActorFast(
 
 
 // =========================================================
+// HIERARCHY — ATTACH TO PARENT
+// =========================================================
+
+void UUELiveSyncSubsystem::
+AttachToParent(
+    const FGuid& Guid,
+    const FGuid& ParentGuid)
+{
+    if (!ParentGuid.IsValid())
+    {
+        return;
+    }
+
+    AActor* Child =
+        FindActorFast(Guid);
+
+    if (!Child)
+    {
+        return;
+    }
+
+    AActor* Parent =
+        FindActorFast(
+            ParentGuid);
+
+    if (!Parent)
+    {
+        UE_LOG(
+            LogTemp,
+            Log,
+            TEXT(
+                "AttachToParent: child=%s"
+                " parent=%s not yet cached,"
+                " will retry on next update"),
+            *Guid.ToString(
+                EGuidFormats::Digits),
+            *ParentGuid.ToString(
+                EGuidFormats::Digits));
+
+        return;
+    }
+
+    // Guard: already attached to correct parent
+    if (Child->GetAttachParentActor()
+        == Parent)
+    {
+        return;
+    }
+
+    Child->AttachToActor(
+        Parent,
+        FAttachmentTransformRules::
+            KeepWorldTransform);
+
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT(
+            "Attached child=%s to parent=%s"),
+        *Guid.ToString(
+            EGuidFormats::Digits),
+        *ParentGuid.ToString(
+            EGuidFormats::Digits));
+}
+
+
+// =========================================================
+// HIERARCHY — DETACH FROM PARENT
+// =========================================================
+
+void UUELiveSyncSubsystem::
+DetachFromParent(
+    const FGuid& Guid)
+{
+    AActor* Actor =
+        FindActorFast(Guid);
+
+    if (!Actor)
+    {
+        return;
+    }
+
+    if (!Actor->GetAttachParentActor())
+    {
+        return;
+    }
+
+    Actor->DetachFromActor(
+        FDetachmentTransformRules::
+            KeepWorldTransform);
+
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT(
+            "Detached actor=%s from parent"),
+        *Guid.ToString(
+            EGuidFormats::Digits));
+}
+
+
+// =========================================================
 // HANDLE CREATE OBJECT
 // =========================================================
 
@@ -1652,7 +2117,7 @@ HandleCreateObject(
             TEXT("GUID match %s: found existing actor %s, skip spawn"),
             *Guid.ToString(
                 EGuidFormats::Digits),
-            *Existing->GetActorLabel());
+            *Existing->GetName());
 
         return;
     }
@@ -1738,6 +2203,10 @@ HandleCreateObject(
         Rotation,
         Scale,
         ParentGuid);
+
+    AttachToParent(
+        Guid,
+        ParentGuid);
 }
 
 
@@ -1773,7 +2242,7 @@ HandleDeleteObject(
     {
         FString ActorName =
             Actor
-                ? Actor->GetActorLabel()
+                ? Actor->GetName()
                 : TEXT("nullptr");
 
         UE_LOG(

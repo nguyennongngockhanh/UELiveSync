@@ -26,8 +26,8 @@ FLiveSyncRunnable::FLiveSyncRunnable(
     PacketQueue =
         InQueue;
 
-    bRunThread =
-        true;
+    bRunThread.store(
+        true);
 }
 
 
@@ -41,6 +41,8 @@ uint32 FLiveSyncRunnable::Run()
         FPlatformTime::Cycles64();
 
     uint64 LastRecvExitCycles = 0;
+
+    int32 ConsecutiveIdleWaits = 0;
 
     while (bRunThread)
     {
@@ -62,8 +64,21 @@ uint32 FLiveSyncRunnable::Run()
             FromMilliseconds(
                 10)))
         {
+            ConsecutiveIdleWaits++;
+
+            // Short-circuit: if Wait has returned false
+            // 3× in a row and thread is being asked to
+            // stop, exit immediately instead of spinning
+            if (ConsecutiveIdleWaits >= 3 &&
+                !bRunThread)
+            {
+                break;
+            }
+
             continue;
         }
+
+        ConsecutiveIdleWaits = 0;
 
         // =================================================
         // READ HEADER RAW (24 bytes for max V3 header)

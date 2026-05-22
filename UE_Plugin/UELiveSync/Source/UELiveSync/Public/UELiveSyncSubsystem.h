@@ -99,6 +99,17 @@ private:
     void EvictStaleTransformStates();
 
     // =====================================================
+    // HIERARCHY
+    // =====================================================
+
+    void AttachToParent(
+        const FGuid& Guid,
+        const FGuid& ParentGuid);
+
+    void DetachFromParent(
+        const FGuid& Guid);
+
+    // =====================================================
     // PACKET TYPE HANDLERS
     // =====================================================
 
@@ -136,6 +147,9 @@ private:
 
     AActor* FindActorFast(
         const FGuid& Guid);
+
+    FGuid FindGuidForActor(
+        AActor* Actor) const;
 
 private:
 
@@ -220,14 +234,11 @@ private:
 
     // =====================================================
     // HEARTBEAT
+    // (timeout sourced from CVar UE.LiveSync.HeartbeatTimeout)
     // =====================================================
 
     double LastHeartbeatTime =
         0.0;
-
-    static constexpr double
-        HeartbeatTimeout =
-        15.0;
 
     // =====================================================
     // METRICS LOGGING

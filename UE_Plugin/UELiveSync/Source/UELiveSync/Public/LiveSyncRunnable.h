@@ -6,6 +6,8 @@
 
 #include "LiveSyncQueue.h"
 
+#include <atomic>
+
 class FSocket;
 
 class FLiveSyncRunnable : public FRunnable
@@ -26,9 +28,9 @@ private:
 
     FLiveSyncQueue* PacketQueue;
 
-    FThreadSafeBool bRunThread;
+    std::atomic<bool> bRunThread{false};
 
 public:
 
-    FThreadSafeBool bThreadExited;
+    std::atomic<bool> bThreadExited{false};
 };

@@ -13,18 +13,30 @@ try:
         connect,
         disconnect,
         send_objects,
+        send_snapshot,
         serialize_object,
         serialize_object_v3,
-        serialize_delete_v3
+        serialize_delete_v3,
+        is_connected,
+        get_last_error,
+        get_last_error_severity,
+        get_status_detail,
+        check_reconnected,
     )
 except ImportError:
     from network import (
         connect,
         disconnect,
         send_objects,
+        send_snapshot,
         serialize_object,
         serialize_object_v3,
-        serialize_delete_v3
+        serialize_delete_v3,
+        is_connected,
+        get_last_error,
+        get_last_error_severity,
+        get_status_detail,
+        check_reconnected,
     )
 
 
@@ -51,6 +63,31 @@ _scan_counter = 0
 _scan_interval = 300
 
 _verbose_logging = False
+
+_last_critical_error = ""
+
+
+# =========================================================
+# PREFERENCES HELPER
+# =========================================================
+
+def _get_prefs():
+    import bpy
+    try:
+        return bpy.context.preferences.addons[
+            __package__
+        ].preferences
+    except Exception:
+        return None
+
+
+def _get_threshold(key, default):
+    prefs = _get_prefs()
+    if prefs is None:
+        return default
+    return getattr(
+        prefs, key, default
+    )
 
 
 # =========================================================
@@ -105,12 +142,27 @@ def transforms_different(a, b):
     if b is None:
         return True
 
+    thr_loc = _get_threshold(
+        "threshold_location",
+        0.01
+    )
+
+    thr_rot = _get_threshold(
+        "threshold_rotation",
+        0.0001
+    )
+
+    thr_scl = _get_threshold(
+        "threshold_scale",
+        0.001
+    )
+
     for i in range(3):
 
         if abs(
             a["location"][i] -
             b["location"][i]
-        ) > 0.01:
+        ) > thr_loc:
 
             return True
 
@@ -119,7 +171,7 @@ def transforms_different(a, b):
         if abs(
             a["rotation"][i] -
             b["rotation"][i]
-        ) > 0.0001:
+        ) > thr_rot:
 
             return True
 
@@ -128,7 +180,7 @@ def transforms_different(a, b):
         if abs(
             a["scale"][i] -
             b["scale"][i]
-        ) > 0.001:
+        ) > thr_scl:
 
             return True
 
@@ -141,7 +193,19 @@ def transforms_different(a, b):
 
 def get_transform(obj):
 
-    mw = obj.matrix_world.copy()
+    has_parent = (
+        obj.parent and
+        obj.parent.get("ue_guid")
+        in tracked_objects
+    )
+
+    if has_parent:
+
+        mw = obj.matrix_local.copy()
+
+    else:
+
+        mw = obj.matrix_world.copy()
 
     conversion = Matrix((
         (1,  0, 0, 0),
@@ -266,8 +330,95 @@ def check_updates():
     if not timer_running:
         return 0.016
 
+    _verbose_logging = _get_threshold(
+        "verbose_logging",
+        False
+    )
+
+    if check_reconnected():
+
+        last_sent_transforms.clear()
+
+        if _verbose_logging:
+            print(
+                "[Snapshot] Reconnect detected,"
+                " sending full snapshot"
+            )
+
+        snapshot_roots = []
+        snapshot_children = []
+
+        for guid, obj_data in list(
+            tracked_objects.items()):
+
+            obj, guid_obj = obj_data
+
+            try:
+                _ = obj.name
+            except ReferenceError:
+                continue
+
+            transform = get_transform(obj)
+
+            parent_guid = get_parent_guid(obj)
+
+            parent_guid_obj = (
+                UUID(parent_guid)
+                if parent_guid else None
+            )
+
+            timestamp = time.time()
+
+            serialized = serialize_object_v3(
+                guid_obj,
+                transform,
+                timestamp,
+                parent_guid_obj
+            )
+
+            if parent_guid_obj:
+                snapshot_children.append(serialized)
+            else:
+                snapshot_roots.append(serialized)
+
+            last_sent_transforms[guid] = {
+
+                "location":
+                    transform["location"][:],
+
+                "rotation":
+                    transform["rotation"][:],
+
+                "scale":
+                    transform["scale"][:]
+            }
+
+        if snapshot_roots:
+
+            send_objects(
+                snapshot_roots,
+                packet_type=0x03,
+                flags=0x02
+            )
+
+        if snapshot_children:
+
+            send_objects(
+                snapshot_children,
+                packet_type=0x03,
+                flags=0x02 | 0x01
+            )
+
+            if _verbose_logging:
+                print(
+                    f"[Snapshot] Sent {len(snapshot_objects)}"
+                    " objects"
+                )
+
     objects_to_send = []
     create_objects = []
+    children_to_send = []
+    children_create = []
     deletes_to_send = []
 
     # =====================================================
@@ -361,17 +512,37 @@ def check_updates():
                 previous is None
             )
 
-            if is_first_send:
+            has_parent = (
+                parent_guid_obj is not None
+            )
 
-                create_objects.append(
-                    serialized
-                )
+            if has_parent:
+
+                if is_first_send:
+
+                    children_create.append(
+                        serialized
+                    )
+
+                else:
+
+                    children_to_send.append(
+                        serialized
+                    )
 
             else:
 
-                objects_to_send.append(
-                    serialized
-                )
+                if is_first_send:
+
+                    create_objects.append(
+                        serialized
+                    )
+
+                else:
+
+                    objects_to_send.append(
+                        serialized
+                    )
 
             last_sent_transforms[guid] = {
 
@@ -397,7 +568,7 @@ def check_updates():
         )
 
     # =====================================================
-    # SEND CREATE PACKETS (first-time objects)
+    # SEND CREATE PACKETS (first-time objects, roots)
     # =====================================================
 
     if create_objects:
@@ -408,13 +579,36 @@ def check_updates():
         )
 
     # =====================================================
-    # SEND TRANSFORM PACKETS (existing objects)
+    # SEND CREATE PACKETS (first-time objects, children)
+    # =====================================================
+
+    if children_create:
+
+        send_objects(
+            children_create,
+            packet_type=0x03,
+            flags=0x01
+        )
+
+    # =====================================================
+    # SEND TRANSFORM PACKETS (existing objects, roots)
     # =====================================================
 
     if objects_to_send:
 
         send_objects(
             objects_to_send
+        )
+
+    # =====================================================
+    # SEND TRANSFORM PACKETS (existing objects, children)
+    # =====================================================
+
+    if children_to_send:
+
+        send_objects(
+            children_to_send,
+            flags=0x01
         )
 
     # =====================================================
@@ -431,6 +625,34 @@ def check_updates():
         )
 
         _last_heartbeat_time = now
+
+    # =====================================================
+    # AUTO-POPUP CRITICAL ERRORS
+    # =====================================================
+
+    global _last_critical_error
+
+    error_severity = (
+        get_last_error_severity()
+    )
+
+    if error_severity == 'CRITICAL':
+
+        error_msg = get_last_error()
+
+        if error_msg and error_msg != _last_critical_error:
+
+            _last_critical_error = error_msg
+
+            try:
+
+                bpy.ops.uelivesync.show_error(
+                    'INVOKE_DEFAULT',
+                    error_message=error_msg
+                )
+
+            except Exception:
+                pass
 
     return 0.016
 
@@ -459,6 +681,11 @@ def start_sync():
 
     _scan_counter = 0
 
+    _verbose_logging = _get_threshold(
+        "verbose_logging",
+        False
+    )
+
     for obj in bpy.data.objects:
         if obj.type == 'MESH':
             guid = ensure_unique_guid(obj, tracked_objects)
@@ -467,7 +694,12 @@ def start_sync():
                 UUID(guid)
             )
 
-    connect()
+    port = _get_threshold(
+        "server_port",
+        5000
+    )
+
+    connect(port=port)
 
     timer_running = True
 

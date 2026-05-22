@@ -1,5 +1,8 @@
 # Network Protocol
 
+> **Frozen at v3.0 — Phase 3.6 (2026-05-22)**
+> All subsequent changes MUST increment the version field in the header.
+
 ## GUID Identity
 
 GUIDs are generated as `uuid.uuid4().hex` (32‑character hex string) on the Blender side and encoded in the packet as 4× `uint32 LE`.
@@ -28,7 +31,7 @@ This guarantees:
 │ Magic       │ uint32   │ 0x4C56534D ("ULSM")           │
 │ Version     │ uint16   │ 3                             │
 │ PacketType  │ uint8    │ See packet types table         │
-│ Flags       │ uint8    │ Bitfield (reserved)            │
+│ Flags       │ uint8    │ Bitfield (see Flags table)     │
 │ SequenceId  │ uint64   │ Monotonically incrementing     │
 │ PacketSize  │ uint32   │ Total packet size (header+pay) │
 │ ObjectCount │ uint32   │ Number of objects in payload   │
@@ -37,6 +40,16 @@ This guarantees:
 
 Python format: `"<I H B B Q I I"`
 C++ struct: `FPacketHeaderV3` (packed, 24 bytes)
+
+### Flags Bitfield
+
+| Bit | Name | Description |
+|-----|------|-------------|
+| 0x01 | PF_HasLocalTransform | Object uses local-space transform (has tracked parent) |
+| 0x02 | PF_FullSnapshot     | Packet is a full-state snapshot burst (all objects re-sent) |
+| 0x04 | PF_RequestAck       | Sender requests acknowledgment (reserved) |
+
+When `PF_HasLocalTransform` is set, the UE side converts local→world by multiplying with the parent's current world transform. `PF_FullSnapshot` triggers a state-table reset on the UE side before applying.
 
 ### Packet Types
 
@@ -139,6 +152,43 @@ C++ struct: `FPacketHeader`
 - V3 GUID reads 4 × uint32 directly into `FGuid` fields (no allocation)
 - Both versions coexist; Blender can switch by changing `LIVE_SYNC_VERSION` constant
 
+## Local → World Transform Conversion
+
+When `PF_HasLocalTransform` is set on a packet:
+
+1. UE reads `ParentGUID` from the object payload
+2. Looks up `ParentGUID` in `TransformStates` map
+3. If found: `WorldTransform = ParentWorldTransform * LocalTransform`
+4. If not found (stale parent): treats child as root (world-space)
+5. The resulting world transform is applied to the UE actor
+
+Root objects (no parent) MUST send `ParentGUID = 0` (all zeros). The `PF_HasLocalTransform` flag is NOT set for root objects.
+
+## Reconnection Behavior
+
+On reconnect, the Blender addon sends a full-state snapshot:
+- `PacketType = 0x01` (TRANSFORM)
+- `Flags = PF_FullSnapshot`
+- All tracked objects are serialized in a single burst
+- Children are split into separate packets flagged with `PF_HasLocalTransform`
+- UE clears existing `TransformStates` and rebuilds from the snapshot
+
+## Runtime Configuration (CVars)
+
+The following console variables control protocol behavior without recompilation:
+
+| CVar | Default | Description |
+|------|---------|-------------|
+| `UE.LiveSync.Port` | 57000 | TCP listen port |
+| `UE.LiveSync.HeartbeatTimeout` | 15.0 | Seconds without heartbeat before disconnect |
+| `UE.LiveSync.StateTTL` | 300.0 | Seconds before orphaned transform state is pruned |
+| `UE.LiveSync.Verbose` | 0 | Enable verbose logging (1=on) |
+| `UE.LiveSync.InterpMode` | 0 | Interpolation mode (0=direct-set) |
+| `UE.LiveSync.InterpSnap` | 200.0 | Snap distance (cm) for interpolation |
+| `UE.LiveSync.Threshold.Location` | 0.01 | Minimum location change to trigger update |
+| `UE.LiveSync.Threshold.Rotation` | 0.001 | Minimum rotation change to trigger update |
+| `UE.LiveSync.Threshold.Scale` | 0.001 | Minimum scale change to trigger update |
+
 ## Protocol Constants
 
 ```cpp
@@ -149,3 +199,11 @@ static constexpr int32  LIVE_SYNC_OBJECT_SIZE      = 56;     // V2 object
 static constexpr int32  LIVE_SYNC_V3_OBJECT_SIZE    = 80;    // V3 object
 static constexpr int32  LIVE_SYNC_V3_DELETE_SIZE    = 16;    // V3 delete
 ```
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1       | 2025-Q4 | Initial V2 protocol (22-byte header, 56-byte objects, hex GUID) |
+| 2       | 2026-Q1 | V3 header (24 bytes, type+flags fields, 80-byte objects, direct uint32 GUID) |
+| 3       | 2026-05-22 | Frozen at Phase 3.6. Added PF_HasLocalTransform, PF_FullSnapshot flags, local→world conversion, heartbeat protocol, CVar configuration. Duplicate GUID section updated to reflect actual state (Blender .copy() limitation noted). |

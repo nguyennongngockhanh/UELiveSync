@@ -236,6 +236,9 @@ class LiveSyncClient:
 
         self.sock = None
         self.connected = False
+        self.last_error = ""
+        self.last_error_severity = "INFO"
+        self._status_detail = "Initializing"
 
         self._lock = threading.Lock()
 
@@ -244,6 +247,14 @@ class LiveSyncClient:
         )
 
         self._running = True
+        self._was_connected = False
+        self.reconnected = False
+
+        self._reconnect_attempts = 0
+        self._reconnect_max_delay = 10.0
+        self._reconnect_base_delay = 0.5
+        self._last_send_attempt = 0.0
+        self._idle_probe_interval = 5.0
 
         self._thread = threading.Thread(
             target=self._sender_loop,
@@ -265,11 +276,13 @@ class LiveSyncClient:
             try:
 
                 data = self._send_queue.get(
-                    timeout=0.5
+                    timeout=1.0
                 )
 
                 if data is None:
                     break
+
+                self._last_send_attempt = time.time()
 
                 print(
                     f"[SYNC-DBG] 4 Sender dequeued: {len(data)} bytes"
@@ -286,6 +299,8 @@ class LiveSyncClient:
 
                             self.sock.sendall(data)
 
+                            self._reconnect_attempts = 0
+
                             print(
                                 f"[SYNC-DBG] 5 Socket send OK: {len(data)} bytes"
                             )
@@ -298,6 +313,8 @@ class LiveSyncClient:
 
                         ) as e:
 
+                            self.last_error = str(e)
+
                             print(
                                 f"[SYNC-DBG] 5 Socket send FAILED: {e}"
                             )
@@ -305,6 +322,9 @@ class LiveSyncClient:
                             self._reconnect_internal()
 
             except queue.Empty:
+
+                self._idle_probe()
+
                 continue
 
     # =====================================================
@@ -334,13 +354,78 @@ class LiveSyncClient:
             ))
 
             self.connected = True
+            self.last_error = ""
+            self.last_error_severity = "INFO"
+            self._status_detail = (
+                f"Connected to {self.host}:{self.port}"
+            )
+
+            if self._was_connected:
+                self.reconnected = True
+
+            self._was_connected = True
 
             print("[LiveSync] Connected to UE")
+
+        except ConnectionRefusedError:
+
+            self.connected = False
+            self.sock = None
+            self.last_error = (
+                f"Connection refused — is UE listening on {self.port}?"
+            )
+            self.last_error_severity = "WARNING"
+            self._status_detail = "Connection refused"
+
+            print(
+                "[LiveSync] Connection refused:",
+                self.last_error
+            )
+
+        except socket.timeout:
+
+            self.connected = False
+            self.sock = None
+            self.last_error = (
+                f"Connection timeout — "
+                f"no response from {self.host}:{self.port}"
+            )
+            self.last_error_severity = "WARNING"
+            self._status_detail = "Connection timeout"
+
+            print(
+                "[LiveSync] Connection timeout:",
+                self.last_error
+            )
+
+        except OSError as e:
+
+            self.connected = False
+            self.sock = None
+
+            if "address already in use" in str(e).lower():
+                self.last_error = (
+                    f"Port {self.port} is already in use"
+                )
+                self.last_error_severity = "CRITICAL"
+            else:
+                self.last_error = str(e)
+                self.last_error_severity = "WARNING"
+
+            self._status_detail = f"Connection failed: {self.last_error}"
+
+            print(
+                "[LiveSync] Connection failed:",
+                e
+            )
 
         except Exception as e:
 
             self.connected = False
             self.sock = None
+            self.last_error = str(e)
+            self.last_error_severity = "WARNING"
+            self._status_detail = f"Connection failed: {self.last_error}"
 
             print(
                 "[LiveSync] Connection failed:",
@@ -351,9 +436,57 @@ class LiveSyncClient:
 
         self._close_internal()
 
-        time.sleep(0.5)
+        self._reconnect_attempts += 1
+
+        delay = min(
+            self._reconnect_base_delay *
+            (2 ** (self._reconnect_attempts - 1)),
+            self._reconnect_max_delay
+        )
+
+        self._status_detail = (
+            f"Reconnecting (attempt {self._reconnect_attempts}) "
+            f"in {delay:.0f}s..."
+        )
+
+        self.last_error = (
+            f"Reconnecting (attempt {self._reconnect_attempts})"
+        )
+        self.last_error_severity = "WARNING"
+
+        print(
+            f"[LiveSync] Reconnect attempt {self._reconnect_attempts}"
+            f" in {delay:.1f}s"
+        )
+
+        time.sleep(delay)
 
         self._connect_internal()
+
+    def _idle_probe(self):
+
+        if self.connected:
+            return
+
+        if not self._was_connected:
+            return
+
+        now = time.time()
+
+        if now - self._last_send_attempt < self._idle_probe_interval:
+            return
+
+        self._last_send_attempt = now
+
+        with self._lock:
+
+            if not self.connected or not self.sock:
+
+                print(
+                    f"[LiveSync] Idle probe — attempting reconnection"
+                )
+
+                self._reconnect_internal()
 
     def _close_internal(self):
 
@@ -368,6 +501,7 @@ class LiveSyncClient:
 
         self.sock = None
         self.connected = False
+        self._status_detail = "Disconnected"
 
     # =====================================================
     # PUBLIC API (thread-safe)
@@ -486,12 +620,14 @@ class LiveSyncClient:
     def send_packet(
         self,
         objects_data,
-        packet_type=0x01
+        packet_type=0x01,
+        flags=0x00
     ):
 
         packet = self._build_packet(
             objects_data,
-            packet_type=packet_type
+            packet_type=packet_type,
+            flags=flags
         )
 
         try:
@@ -506,6 +642,7 @@ class LiveSyncClient:
 
         except queue.Full:
 
+            self.last_error = "Send queue full"
             print("[SYNC-DBG] 3 Enqueue FAILED: queue full")
 
 
@@ -520,13 +657,79 @@ _client = None
 # PUBLIC API
 # =========================================================
 
-def connect():
+def is_connected():
+
+    global _client
+
+    return (
+        _client is not None and
+        _client.connected
+    )
+
+
+def get_last_error():
 
     global _client
 
     if _client is None:
 
-        _client = LiveSyncClient()
+        return "Not initialized"
+
+    return _client.last_error
+
+
+def get_last_error_severity():
+
+    global _client
+
+    if _client is None:
+
+        return "INFO"
+
+    return _client.last_error_severity
+
+
+def get_status_detail():
+
+    global _client
+
+    if _client is None:
+
+        return "Not started"
+
+    return _client._status_detail
+
+
+def check_reconnected():
+
+    global _client
+
+    if _client is None:
+
+        return False
+
+    with _client._lock:
+
+        val = _client.reconnected
+
+        _client.reconnected = False
+
+        return val
+
+
+def connect(
+    host="127.0.0.1",
+    port=5000
+):
+
+    global _client
+
+    if _client is None:
+
+        _client = LiveSyncClient(
+            host=host,
+            port=port
+        )
 
     elif not _client.connected:
 
@@ -546,7 +749,8 @@ def disconnect():
 
 def send_objects(
     objects_data,
-    packet_type=0x01
+    packet_type=0x01,
+    flags=0x00
 ):
 
     global _client
@@ -559,7 +763,8 @@ def send_objects(
 
         _client.send_packet(
             objects_data,
-            packet_type
+            packet_type,
+            flags
         )
 
 def send_snapshot(snapshot):
