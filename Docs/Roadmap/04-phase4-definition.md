@@ -1,6 +1,6 @@
 # Phase 4 — Production Hardening & Editor Tooling
 
-**Status**: Defined (not started) · **Estimate**: 2–3 days · **Risk**: Low
+**Status**: Phase 4A completed · Phase 4B–D pending · **Estimate**: 2–3 days · **Risk**: Low
 
 ---
 
@@ -10,72 +10,72 @@ Close all remaining gaps between the current system and production readiness. No
 
 ---
 
-## Phase 4A — Stability Core
+## Phase 4A — Stability Core ✅
 
-Foundation work: doc accuracy, port hygiene, dedicated log category, console diagnostics, throttling, overflow protection, and protocol validation. Everything in 4A can be implemented, tested, and committed independently — no cross-file dependencies between items.
+Foundation work: doc accuracy, port hygiene, dedicated log category, console diagnostics, throttling, overflow protection, and protocol validation. All items completed in commit `c5ec811`.
 
-### E1 — Fix CVar defaults in protocol doc
-
-| File(s) | What |
-|---------|------|
-| `Docs/Architecture/05-network-protocol.md` | Fix CVar defaults to match code: `StateTTL=60.0`, `InterpSnap=0.1`, `Threshold.Rotation=0.002`. Document Blender port fallback. |
-
-### E2 — Fix stale GUID invariants doc
+### ✅ E1 — Fix CVar defaults in protocol doc
 
 | File(s) | What |
 |---------|------|
-| `Docs/Architecture/08-guid-invariants.md` | Fix the stale `ensure_unique_guid` claim (it IS implemented — line 80 ref). Add port fallback note. |
+| `Docs/Architecture/05-network-protocol.md` | Fixed `StateTTL=60.0`, `InterpSnap=0.1`, `InterpMode=1`, `Threshold.Location=0.05`, `Threshold.Rotation=0.002`. Added port fallback note. |
 
-### A1 — Fix port fallback
-
-| File(s) | What |
-|---------|------|
-| `sync.py:698` | Fix port fallback from 5000→57000 (pref load failure leads to silent misconnect on wrong port) |
-
-### C1 — Dedicated log category
+### ✅ E2 — Fix stale GUID invariants doc
 
 | File(s) | What |
 |---------|------|
-| `UELiveSyncSubsystem.cpp`, `LiveSyncRunnable.cpp` | Replace all `LogTemp` → new `DEFINE_LOG_CATEGORY_STATIC(LogLiveSync, Log, All)` — clean separation from engine noise |
+| `Docs/Architecture/08-guid-invariants.md` | Fixed the stale `ensure_unique_guid` claim — confirmed implemented at `sync.py:106`. |
 
-### C2 — Console commands
-
-| File(s) | What |
-|---------|------|
-| `UELiveSyncSubsystem.cpp` | Register 3 console commands via `IConsoleManager::RegisterConsoleCommand`:
-  - `UE.LiveSync.DumpState` — print all tracked GUIDs, bound actors, last-update timestamps, queue depth
-  - `UE.LiveSync.Reset` — full teardown & restart (close socket, clear states, reinit)
-  - `UE.LiveSync.Ping` — send echo packet to Blender, measure round-trip in ms |
-
-### D1 — Per-tick rate cap
+### ✅ A1 — Fix port fallback
 
 | File(s) | What |
 |---------|------|
-| `UELiveSyncSubsystem.cpp:Tick` | `int32 PacketsProcessedThisTick = 0; if (++PacketsProcessedThisTick > MaxPacketRate) break;` with new CVar `UE.LiveSync.MaxPacketRate` (default 200). Overflow stays in queue for next tick. |
+| `sync.py:698` | Port fallback changed from 5000→57000. |
 
-### D2 — Queue overflow warning
-
-| File(s) | What |
-|---------|------|
-| `LiveSyncQueue.h` | Log `WARNING` when dropping oldest packet (currently silent). Add CVar `UE.LiveSync.QueueWarnThreshold` (default 64). |
-
-### D3 — Network thread watchdog
+### ✅ C1 — Dedicated log category
 
 | File(s) | What |
 |---------|------|
-| `LiveSyncRunnable.cpp`, `UELiveSyncSubsystem.cpp` | Thread writes `LastActivityTime` each loop iteration; `Tick()` checks `Now - LastActivityTime > 30s` → log CRITICAL, teardown & restart thread |
+| `SyncTypes.h`, `UELiveSyncSubsystem.cpp`, `LiveSyncRunnable.cpp` | Replaced all `LogTemp` → `LogLiveSync`. Declared in `SyncTypes.h` via `DECLARE_LOG_CATEGORY_EXTERN`, defined in `UELiveSyncSubsystem.cpp`. |
 
-### E3 — Packet size validation
-
-| File(s) | What |
-|---------|------|
-| `LiveSyncRunnable.cpp` | Validate `PacketSize` matches `sizeof(FPacketHeaderV3) + ObjectCount * ObjectSize` before dispatching. Log WARNING + skip on mismatch. |
-
-### E4 — Protocol type/flag validation
+### ✅ C2 — Console commands
 
 | File(s) | What |
 |---------|------|
-| `UELiveSyncSubsystem.cpp` | Add CVar `UE.LiveSync.ValidateProtocol` (default 1). Validates every packet's type byte is in `{0x01,0x03,0x04,0x07}` and flags in `{0x00,0x01,0x02,0x03}`. Log WARNING on invalid. |
+| `UELiveSyncSubsystem.cpp/.h` | Registered 3 commands via `IConsoleManager::RegisterConsoleCommand`:
+  - `UE.LiveSync.DumpState` — prints all tracked GUIDs, actors, queue depth
+  - `UE.LiveSync.Reset` — full teardown & restart
+  - `UE.LiveSync.Ping` — prints connected/queue/states counters |
+
+### ✅ D1 — Per-tick rate cap
+
+| File(s) | What |
+|---------|------|
+| `UELiveSyncSubsystem.cpp` | Added `CVarLiveSyncMaxPacketRate` (default 200). `ProcessQueuedPackets()` caps dequeue per tick; overflow stays in queue. Warning logged when cap exceeded. |
+
+### ✅ D2 — Queue overflow warning
+
+| File(s) | What |
+|---------|------|
+| `LiveSyncQueue.h`, `UELiveSyncSubsystem.cpp` | `Enqueue()` logs `WARNING` when dropping oldest packet. CVar `UE.LiveSync.QueueWarnThreshold` (default 64). |
+
+### ✅ D3 — Network thread watchdog
+
+| File(s) | What |
+|---------|------|
+| `LiveSyncRunnable.h/.cpp`, `UELiveSyncSubsystem.cpp` | `LastActivityTime` atomic updated each loop iteration. `Tick()` checks 30s inactivity → log Error + `StopNetworkThread()`. |
+
+### ✅ E3 — Packet size validation
+
+| File(s) | What |
+|---------|------|
+| `LiveSyncRunnable.cpp` | V2: exact match `PayloadSize == ObjectCount × 56`. V3: minimum `PayloadSize >= ObjectCount × 16`. Logs WARNING on mismatch, skips packet. |
+
+### ✅ E4 — Protocol type/flag validation
+
+| File(s) | What |
+|---------|------|
+| `UELiveSyncSubsystem.cpp` | `CVarLiveSyncValidateProtocol` (default 1). Validates type ∈ {0x01,0x03,0x04,0x07} and flags ∈ {0x00,0x01,0x02,0x03}. Logs WARNING + skips on invalid. |
 
 ---
 
