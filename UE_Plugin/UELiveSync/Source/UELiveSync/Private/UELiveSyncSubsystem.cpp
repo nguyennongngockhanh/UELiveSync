@@ -1,5 +1,7 @@
 #include "UELiveSyncSubsystem.h"
 
+DEFINE_LOG_CATEGORY(LogLiveSync);
+
 #include "Engine/World.h"
 
 #include "GameFramework/Actor.h"
@@ -103,6 +105,30 @@ static TAutoConsoleVariable<float>
         ECVF_Default
     );
 
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncValidateProtocol(
+        TEXT("UE.LiveSync.ValidateProtocol"),
+        1,
+        TEXT("Validate packet type and flags (1=on, 0=off)"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncQueueWarnThreshold(
+        TEXT("UE.LiveSync.QueueWarnThreshold"),
+        64,
+        TEXT("Queue depth at which a warning is logged"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncMaxPacketRate(
+        TEXT("UE.LiveSync.MaxPacketRate"),
+        200,
+        TEXT("Max packets processed per tick (overflow stays queued)"),
+        ECVF_Default
+    );
+
 bool UUELiveSyncSubsystem::
     bEnableVerboseSyncLogs =
         false;
@@ -172,9 +198,46 @@ void UUELiveSyncSubsystem::Initialize(
         );
 
     UE_LOG(
-        LogTemp,
+        LogLiveSync,
         Log,
         TEXT("UE Live Sync Started"));
+
+    // =====================================================
+    // REGISTER CONSOLE COMMANDS
+    // =====================================================
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.DumpState"),
+            TEXT("Print all tracked GUIDs, actors, and queue state"),
+            FConsoleCommandDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleDumpState),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.Reset"),
+            TEXT("Full teardown and restart of live sync"),
+            FConsoleCommandDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleReset),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.Ping"),
+            TEXT("Send test heartbeat to verify connectivity"),
+            FConsoleCommandDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsolePing),
+            ECVF_Default);
 }
 
 
@@ -271,7 +334,7 @@ void UUELiveSyncSubsystem::StartServer()
     if (!ListenerSocket)
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Error,
             TEXT("Failed to start TCP server on port %d — "
                  "port may be in use"),
@@ -281,7 +344,7 @@ void UUELiveSyncSubsystem::StartServer()
     }
 
     UE_LOG(
-        LogTemp,
+        LogLiveSync,
         Log,
         TEXT("Live Sync Listening on port %d"),
         Port);
@@ -359,7 +422,7 @@ bool UUELiveSyncSubsystem::Tick(
                         SetNoDelay(true);
 
                     UE_LOG(
-                        LogTemp,
+                        LogLiveSync,
                         Log,
                         TEXT("Blender Connected"));
 
@@ -391,7 +454,7 @@ bool UUELiveSyncSubsystem::Tick(
         != SCS_Connected)
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT("Stale Connection Removed"));
 
@@ -409,7 +472,7 @@ bool UUELiveSyncSubsystem::Tick(
         NetworkRunnable->bThreadExited)
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT("Detected thread exit, cleaning up"));
 
@@ -430,11 +493,38 @@ bool UUELiveSyncSubsystem::Tick(
         HeartbeatTimeoutVal)
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT("Heartbeat timeout: closing connection"));
 
         StopNetworkThread();
+    }
+
+    // =====================================================
+    // NETWORK THREAD WATCHDOG
+    // (detects stuck thread even if socket is open)
+    // =====================================================
+
+    if (NetworkRunnable &&
+        ConnectionSocket)
+    {
+        double ThreadActivity =
+            NetworkRunnable->
+                LastActivityTime.load(
+                    std::memory_order_relaxed);
+
+        if (ThreadActivity > 0.0 &&
+            FPlatformTime::Seconds() -
+                ThreadActivity > 30.0)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Error,
+                TEXT("Network thread watchdog: "
+                     "no activity for 30s, restarting"));
+
+            StopNetworkThread();
+        }
     }
 
     // =====================================================
@@ -485,7 +575,7 @@ StartNetworkThread()
     if (!ConnectionSocket)
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Warning,
             TEXT("StartNetworkThread: no socket"));
 
@@ -500,7 +590,7 @@ StartNetworkThread()
         NetworkRunnable)
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT("StartNetworkThread: already running, stopping old thread"));
 
@@ -511,7 +601,7 @@ StartNetworkThread()
         if (!ConnectionSocket)
         {
             UE_LOG(
-                LogTemp,
+                LogLiveSync,
                 Warning,
                 TEXT("StartNetworkThread: socket was destroyed"));
 
@@ -543,14 +633,14 @@ StartNetworkThread()
     if (NetworkThread)
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT("Network Thread Created"));
     }
     else
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Error,
             TEXT("Failed to create network thread"));
     }
@@ -667,7 +757,7 @@ StopNetworkThread()
             AfterJoinCycles);
 
     UE_LOG(
-        LogTemp,
+        LogLiveSync,
         Log,
         TEXT("StopNetworkThread: stop=%.2fms close=%.2fms join=%.2fms cleanup=%.2fms total=%.2fms"),
         StopMs2,
@@ -692,22 +782,44 @@ ProcessQueuedPackets()
 
     int32 DequeueCount = 0;
 
+    int32 MaxRate =
+        CVarLiveSyncMaxPacketRate.
+            GetValueOnGameThread();
+
     while (
         PacketQueue.Dequeue(
             Packet))
     {
         DequeueCount++;
-        PacketsThisTick.Add(
-            MoveTemp(Packet));
+
+        if (DequeueCount <=
+            MaxRate)
+        {
+            PacketsThisTick.Add(
+                MoveTemp(Packet));
+        }
     }
 
     if (DequeueCount > 0 && ShouldLogVerbose())
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
-            TEXT("Dequeued: %d packets"),
-            DequeueCount);
+            TEXT("Dequeued: %d packets (processing %d)"),
+            DequeueCount,
+            PacketsThisTick.Num());
+    }
+
+    if (DequeueCount > MaxRate)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("Packet rate exceeded: %d packets, "
+                 "capping at %d, %d deferred to next tick"),
+            DequeueCount,
+            MaxRate,
+            DequeueCount - MaxRate);
     }
 
     TSet<FGuid>
@@ -832,7 +944,7 @@ ProcessBinaryPacket(
             if (bEnableVerboseSyncLogs)
             {
                 UE_LOG(
-                    LogTemp,
+                    LogLiveSync,
                     Log,
                     TEXT(
                         "Full snapshot: cleared"
@@ -879,7 +991,7 @@ ProcessBinaryPacket(
     else
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Warning,
             TEXT("Unsupported protocol version: %u"),
             Version);
@@ -920,13 +1032,73 @@ ProcessBinaryPacket(
     if (ShouldLogVerbose())
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
-            TEXT("Header: version=%u type=0x%02x seq=%llu objects=%u"),
+            TEXT("Header: version=%u type=0x%02x flags=0x%02x "
+                 "seq=%llu objects=%u"),
             Version,
             PacketType,
+            PacketFlags,
             SequenceId,
             ObjectCount);
+    }
+
+    // =====================================================
+    // PROTOCOL VALIDATION (V3)
+    // =====================================================
+
+    if (Version >= LIVE_SYNC_VERSION_V3 &&
+        CVarLiveSyncValidateProtocol.GetValueOnGameThread())
+    {
+        static constexpr uint8 kValidTypes[] =
+            { 0x01, 0x03, 0x04, 0x07 };
+
+        static constexpr uint8 kValidFlags[] =
+            { 0x00, 0x01, 0x02, 0x03 };
+
+        bool bValidType = false;
+
+        for (int32 i = 0; i < 4; i++)
+        {
+            if (PacketType == kValidTypes[i])
+            {
+                bValidType = true;
+                break;
+            }
+        }
+
+        if (!bValidType)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("Invalid packet type 0x%02x, skipping"),
+                PacketType);
+
+            return;
+        }
+
+        bool bValidFlags = false;
+
+        for (int32 i = 0; i < 4; i++)
+        {
+            if (PacketFlags == kValidFlags[i])
+            {
+                bValidFlags = true;
+                break;
+            }
+        }
+
+        if (!bValidFlags)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("Invalid packet flags 0x%02x, skipping"),
+                PacketFlags);
+
+            return;
+        }
     }
 
     // =====================================================
@@ -1222,7 +1394,7 @@ ProcessBinaryPacket(
         if (ShouldLogVerbose())
         {
             UE_LOG(
-                LogTemp,
+                LogLiveSync,
                 Log,
                 TEXT("Processed: %s loc=%s"),
                 *Guid.ToString(
@@ -1670,7 +1842,7 @@ InterpolateTransforms(
         int Total = TransformStates.Num();
 
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT(
                 "Transform states: total=%d missing=%d converged=%d snap=%d interp=%d interpMode=%d"),
@@ -1731,7 +1903,7 @@ EvictStaleTransformStates()
     if (ShouldLogVerbose())
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT("Evicted %d stale transform states"),
             StaleGuids.Num());
@@ -1774,7 +1946,7 @@ BuildActorCache()
     }
 
     UE_LOG(
-        LogTemp,
+        LogLiveSync,
         Log,
         TEXT("BuildActorCache: scanned %d actors, found %d with GUID tags"),
         ScannedActors,
@@ -1826,7 +1998,7 @@ TryCacheActor(
             Guid))
         {
             UE_LOG(
-                LogTemp,
+                LogLiveSync,
                 Warning,
                 TEXT("TryCacheActor: %s has bad GUID tag: %s"),
                 *Actor->GetName(),
@@ -1848,7 +2020,7 @@ TryCacheActor(
             Actor);
 
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT("Cached Actor %s | GUID=%s"),
 
@@ -1931,7 +2103,7 @@ OnActorDestroyed(
         if (bEnableVerboseSyncLogs)
         {
             UE_LOG(
-                LogTemp,
+                LogLiveSync,
                 Log,
                 TEXT(
                     "OnActorDestroyed: removed TransformState"
@@ -2009,7 +2181,7 @@ AttachToParent(
     if (!Parent)
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT(
                 "AttachToParent: child=%s"
@@ -2036,7 +2208,7 @@ AttachToParent(
             KeepWorldTransform);
 
     UE_LOG(
-        LogTemp,
+        LogLiveSync,
         Log,
         TEXT(
             "Attached child=%s to parent=%s"),
@@ -2073,7 +2245,7 @@ DetachFromParent(
             KeepWorldTransform);
 
     UE_LOG(
-        LogTemp,
+        LogLiveSync,
         Log,
         TEXT(
             "Detached actor=%s from parent"),
@@ -2112,7 +2284,7 @@ HandleCreateObject(
     if (Existing)
     {
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT("GUID match %s: found existing actor %s, skip spawn"),
             *Guid.ToString(
@@ -2123,7 +2295,7 @@ HandleCreateObject(
     }
 
     UE_LOG(
-        LogTemp,
+        LogLiveSync,
         Log,
         TEXT("GUID match %s: NOT found in cache, spawning new actor"),
         *Guid.ToString(
@@ -2246,7 +2418,7 @@ HandleDeleteObject(
                 : TEXT("nullptr");
 
         UE_LOG(
-            LogTemp,
+            LogLiveSync,
             Log,
             TEXT("[Delete] GUID=%s Actor=%s Removed=%d StaleCache=%d"),
             *Guid.ToString(
@@ -2282,11 +2454,151 @@ LogRuntimeMetrics()
         ? 1 : 0;
 
     UE_LOG(
-        LogTemp,
+        LogLiveSync,
         Log,
         TEXT("[Metrics] States=%d Cache=%d Queue=%d Connected=%d"),
         StateCount,
         CacheCount,
         QueueSize,
         Connected);
+}
+
+
+// =========================================================
+// CONSOLE: DUMP STATE
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ConsoleDumpState()
+{
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("=== UE LiveSync State Dump ==="));
+
+    int32 Connected =
+        ConnectionSocket &&
+        ConnectionSocket->
+            GetConnectionState()
+            == SCS_Connected
+        ? 1 : 0;
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("Connected: %d"),
+        Connected);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("TransformStates: %d"),
+        TransformStates.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("ActorCache: %d"),
+        ActorCache.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("PacketQueue: %d"),
+        PacketQueue.Size());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("LastHeartbeatTime: %.2f"),
+        LastHeartbeatTime);
+
+    if (bEnableVerboseSyncLogs)
+    {
+        for (const auto& Pair :
+            TransformStates)
+        {
+            AActor* Actor =
+                FindActorFast(
+                    Pair.Key);
+
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("  GUID=%s Actor=%s"),
+                *Pair.Key.ToString(
+                    EGuidFormats::Digits),
+                Actor
+                    ? *Actor->GetName()
+                    : TEXT("nullptr"));
+        }
+    }
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("=== End Dump ==="));
+}
+
+
+// =========================================================
+// CONSOLE: RESET
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ConsoleReset()
+{
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("ConsoleReset: tearing down and restarting"));
+
+    StopNetworkThread();
+
+    if (ListenerSocket)
+    {
+        ListenerSocket->Close();
+
+        ISocketSubsystem::
+            Get(PLATFORM_SOCKETSUBSYSTEM)
+            ->DestroySocket(
+                ListenerSocket);
+
+        ListenerSocket =
+            nullptr;
+    }
+
+    ActorCache.Empty();
+    TransformStates.Empty();
+
+    StartServer();
+    BuildActorCache();
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("ConsoleReset: complete"));
+}
+
+
+// =========================================================
+// CONSOLE: PING
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ConsolePing()
+{
+    bool bIsConnected =
+        ConnectionSocket &&
+        ConnectionSocket->
+            GetConnectionState()
+            == SCS_Connected;
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("Ping: connected=%d queue=%d states=%d"),
+        bIsConnected ? 1 : 0,
+        PacketQueue.Size(),
+        TransformStates.Num());
 }

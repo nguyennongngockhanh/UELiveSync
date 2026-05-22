@@ -33,4 +33,6 @@ private:
 public:
 
     std::atomic<bool> bThreadExited{false};
+
+    std::atomic<double> LastActivityTime{0.0};
 };

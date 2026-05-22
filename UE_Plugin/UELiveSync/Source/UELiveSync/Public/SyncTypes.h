@@ -8,6 +8,7 @@
 
 #include "SyncTypes.generated.h"
 
+DECLARE_LOG_CATEGORY_EXTERN(LogLiveSync, Log, All);
 
 // =========================================================
 // TRANSFORM STATE

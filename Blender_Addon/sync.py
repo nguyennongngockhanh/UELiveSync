@@ -696,7 +696,7 @@ def start_sync():
 
     port = _get_threshold(
         "server_port",
-        5000
+        57000
     )
 
     connect(port=port)

@@ -177,16 +177,18 @@ On reconnect, the Blender addon sends a full-state snapshot:
 
 The following console variables control protocol behavior without recompilation:
 
+> **Note**: The Blender addon defaults to port 57000 via its addon preferences. If preferences fail to load, it falls back to 57000 (hardcoded in `sync.py:698`). The UE listener port is controlled by `UE.LiveSync.Port`.
+
 | CVar | Default | Description |
 |------|---------|-------------|
 | `UE.LiveSync.Port` | 57000 | TCP listen port |
 | `UE.LiveSync.HeartbeatTimeout` | 15.0 | Seconds without heartbeat before disconnect |
-| `UE.LiveSync.StateTTL` | 300.0 | Seconds before orphaned transform state is pruned |
+| `UE.LiveSync.StateTTL` | 60.0 | Seconds before orphaned transform state is pruned |
 | `UE.LiveSync.Verbose` | 0 | Enable verbose logging (1=on) |
-| `UE.LiveSync.InterpMode` | 0 | Interpolation mode (0=direct-set) |
-| `UE.LiveSync.InterpSnap` | 200.0 | Snap distance (cm) for interpolation |
-| `UE.LiveSync.Threshold.Location` | 0.01 | Minimum location change to trigger update |
-| `UE.LiveSync.Threshold.Rotation` | 0.001 | Minimum rotation change to trigger update |
+| `UE.LiveSync.InterpMode` | 1 | Interpolation mode (0=direct-set, 1=smooth) |
+| `UE.LiveSync.InterpSnap` | 0.1 | Snap distance (cm) for interpolation |
+| `UE.LiveSync.Threshold.Location` | 0.05 | Minimum location change in cm to trigger update |
+| `UE.LiveSync.Threshold.Rotation` | 0.002 | Minimum rotation change (angular distance) to trigger update |
 | `UE.LiveSync.Threshold.Scale` | 0.001 | Minimum scale change to trigger update |
 
 ## Protocol Constants

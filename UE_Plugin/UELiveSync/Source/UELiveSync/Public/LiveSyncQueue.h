@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Containers/Queue.h"
+#include "HAL/IConsoleManager.h"
 #include "SyncTypes.h"
 
 #include <atomic>
@@ -15,17 +16,36 @@ public:
     void Enqueue(const FLiveSyncPacket& Packet)
     {
         int32 PrevCount =
-            Count.fetch_add(
-                1);
+            Count.fetch_add(1);
 
-        if (PrevCount >=
-            MaxQueueSize)
+        if (PrevCount >= MaxQueueSize)
         {
             FLiveSyncPacket Dummy;
-
             Queue.Dequeue(Dummy);
-
             Count.fetch_sub(1);
+
+            // Log when queue depth exceeds warn threshold
+            static int32 WarnThreshold = 64;
+
+            static IConsoleVariable* WarnCVar =
+                IConsoleManager::Get().
+                FindConsoleVariable(
+                    TEXT("UE.LiveSync.QueueWarnThreshold"));
+
+            if (WarnCVar)
+            {
+                WarnThreshold =
+                    WarnCVar->GetInt();
+            }
+
+            if (PrevCount >= WarnThreshold)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("Packet queue depth %d: dropping oldest packet"),
+                    PrevCount);
+            }
         }
 
         Queue.Enqueue(Packet);

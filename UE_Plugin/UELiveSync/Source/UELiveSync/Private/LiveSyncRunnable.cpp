@@ -46,6 +46,10 @@ uint32 FLiveSyncRunnable::Run()
 
     while (bRunThread)
     {
+        LastActivityTime.store(
+            FPlatformTime::Seconds(),
+            std::memory_order_relaxed);
+
         if (!Socket)
         {
             break;
@@ -123,7 +127,7 @@ uint32 FLiveSyncRunnable::Run()
                         ThreadStartCycles);
 
                 UE_LOG(
-                    LogTemp,
+                    LogLiveSync,
                     Log,
                     TEXT("NetworkThread: recv=0 exit after %.2fms"),
                     ThreadLifetimeMs);
@@ -215,7 +219,7 @@ uint32 FLiveSyncRunnable::Run()
             if (++LogRateLimit % 300 == 1)
             {
                 UE_LOG(
-                    LogTemp,
+                    LogLiveSync,
                     Log,
                     TEXT("Raw packet: magic=%x version=%u seq=%llu size=%d obj=%d"),
                     PacketMagic,
@@ -234,7 +238,7 @@ uint32 FLiveSyncRunnable::Run()
             LIVE_SYNC_MAGIC)
         {
             UE_LOG(
-                LogTemp,
+                LogLiveSync,
                 Error,
                 TEXT("Invalid packet magic"));
 
@@ -251,7 +255,7 @@ uint32 FLiveSyncRunnable::Run()
             LIVE_SYNC_VERSION_V3)
         {
             UE_LOG(
-                LogTemp,
+                LogLiveSync,
                 Error,
                 TEXT("Protocol version mismatch"));
 
@@ -266,7 +270,7 @@ uint32 FLiveSyncRunnable::Run()
             HeaderSize)
         {
             UE_LOG(
-                LogTemp,
+                LogLiveSync,
                 Error,
                 TEXT("Invalid packet size"));
 
@@ -282,21 +286,56 @@ uint32 FLiveSyncRunnable::Run()
             HeaderSize;
 
         // =================================================
-        // PAYLOAD ALIGNMENT CHECK (V2 only)
+        // PAYLOAD SIZE VALIDATION
         // =================================================
 
         if (PacketVersion ==
-            LIVE_SYNC_VERSION
-            && PayloadSize %
-            LIVE_SYNC_OBJECT_SIZE
-            != 0)
+            LIVE_SYNC_VERSION)
         {
-            UE_LOG(
-                LogTemp,
-                Error,
-                TEXT("Payload alignment invalid"));
+            int32 ExpectedV2Size =
+                ObjectCount *
+                LIVE_SYNC_OBJECT_SIZE;
 
-            continue;
+            if (PayloadSize !=
+                ExpectedV2Size)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("V2 payload size mismatch: "
+                         "got %d, expected %d "
+                         "(%d objects × %d)"),
+                    PayloadSize,
+                    ExpectedV2Size,
+                    ObjectCount,
+                    LIVE_SYNC_OBJECT_SIZE);
+
+                continue;
+            }
+        }
+        else if (PacketVersion >=
+                 LIVE_SYNC_VERSION_V3)
+        {
+            int32 MinV3Size =
+                ObjectCount *
+                LIVE_SYNC_V3_DELETE_SIZE;
+
+            if (PayloadSize <
+                MinV3Size)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("V3 payload too small: "
+                         "got %d, need at least %d "
+                         "(%d objects × %d)"),
+                    PayloadSize,
+                    MinV3Size,
+                    ObjectCount,
+                    LIVE_SYNC_V3_DELETE_SIZE);
+
+                continue;
+            }
         }
 
         // =================================================
@@ -343,7 +382,7 @@ uint32 FLiveSyncRunnable::Run()
                         ThreadStartCycles);
 
                 UE_LOG(
-                    LogTemp,
+                    LogLiveSync,
                     Log,
                     TEXT("NetworkThread: payload recv=0 exit after %.2fms"),
                     ThreadLifetimeMs);
@@ -409,7 +448,7 @@ uint32 FLiveSyncRunnable::Run()
             if (++LogRateLimit % 300 == 1)
             {
                 UE_LOG(
-                    LogTemp,
+                    LogLiveSync,
                     Log,
                     TEXT("Enqueued packet"));
             }
@@ -426,7 +465,7 @@ uint32 FLiveSyncRunnable::Run()
             ThreadStartCycles);
 
     UE_LOG(
-        LogTemp,
+        LogLiveSync,
         Log,
         TEXT("NetworkThread: clean exit after %.2fms"),
         ThreadLifetimeMs);

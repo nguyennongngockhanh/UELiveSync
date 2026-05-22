@@ -77,7 +77,8 @@ No UE-side synthetic GUIDs. All identities originate from Blender.
 1. `obj.copy()` clones custom properties → `ue_guid` copied verbatim
 2. Collision: the new object's GUID matches the original in `tracked_objects`
 3. `ensure_unique_guid()` detects collision → regenerates new GUID
-4. **Current limitation (Phase 3.6):** `ensure_unique_guid` exists in docs but is not yet implemented in `sync.py`. Duplicated objects inherit the original GUID until the next sync cycle where collision is detected and resolved.
+
+`ensure_unique_guid()` is implemented in `sync.py:106` and runs during `scan_scene()` and `start_sync()`. Collision detection is O(1) via the `tracked_objects` dict lookup. The regenerated GUID is written back to `obj["ue_guid"]`, persisting in the `.blend` file.
 
 ## 4. Wire Encoding
 
