@@ -1,4 +1,5 @@
 import bpy
+import hashlib
 import time
 import uuid
 
@@ -26,6 +27,13 @@ try:
         get_reconnect_count,
         get_runtime_stats,
         set_critical_error,
+        PRIMITIVE_CUBE,
+        PRIMITIVE_SPHERE,
+        PRIMITIVE_CYLINDER,
+        PRIMITIVE_PLANE,
+        PRIMITIVE_EMPTY,
+        PT_BeginSnapshot,
+        PT_EndSnapshot,
     )
 except ImportError:
     from network import (
@@ -45,6 +53,13 @@ except ImportError:
         get_reconnect_count,
         get_runtime_stats,
         set_critical_error,
+        PRIMITIVE_CUBE,
+        PRIMITIVE_SPHERE,
+        PRIMITIVE_CYLINDER,
+        PRIMITIVE_PLANE,
+        PRIMITIVE_EMPTY,
+        PT_BeginSnapshot,
+        PT_EndSnapshot,
     )
 
 
@@ -101,6 +116,7 @@ _runtime_config = {
     "scan_interval": 300,
     "server_port": 57000,
     "verbose_logging": False,
+    "default_primitive": 'CUBE',
 }
 
 
@@ -260,11 +276,32 @@ def _get_threshold(key, default):
 # GUID SYSTEM
 # =========================================================
 
+def _compute_owner_hash(obj):
+
+    datablock_name = (
+        obj.data.name
+        if obj.data else ""
+    )
+
+    raw = (
+        f"{obj.name}|"
+        f"{datablock_name}"
+    )
+
+    return hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()[:16]
+
+
 def ensure_guid(obj):
 
     if "ue_guid" not in obj:
 
         obj["ue_guid"] = uuid.uuid4().hex
+
+        obj["ue_guid_owner_hash"] = (
+            _compute_owner_hash(obj)
+        )
 
     return obj["ue_guid"]
 
@@ -279,6 +316,10 @@ def ensure_unique_guid(obj, tracked):
 
         obj["ue_guid"] = uuid.uuid4().hex
 
+        obj["ue_guid_owner_hash"] = (
+            _compute_owner_hash(obj)
+        )
+
         guid = obj["ue_guid"]
 
         if _verbose_logging:
@@ -288,6 +329,96 @@ def ensure_unique_guid(obj, tracked):
             )
 
     return guid
+
+
+def _reconcile_guids_on_load():
+
+    global tracked_objects
+
+    reconciled = 0
+
+    for guid in list(
+        tracked_objects.keys()
+    ):
+
+        obj, guid_obj = (
+            tracked_objects[guid]
+        )
+
+        try:
+            _ = obj.name
+        except ReferenceError:
+            continue
+
+        stored_hash = obj.get(
+            "ue_guid_owner_hash"
+        )
+
+        if stored_hash is None:
+            obj["ue_guid_owner_hash"] = (
+                _compute_owner_hash(obj)
+            )
+            continue
+
+        current_hash = _compute_owner_hash(obj)
+
+        if current_hash != stored_hash:
+
+            old_guid = guid
+
+            obj["ue_guid"] = (
+                uuid.uuid4().hex
+            )
+
+            obj["ue_guid_owner_hash"] = (
+                _compute_owner_hash(obj)
+            )
+
+            new_guid = obj["ue_guid"]
+
+            tracked_objects.pop(guid, None)
+
+            tracked_objects[new_guid] = (
+                obj,
+                UUID(new_guid)
+            )
+
+            if _verbose_logging:
+                print(
+                    f"[GUID] Stale collision: "
+                    f"{old_guid} -> {new_guid} "
+                    f"for {obj.name}"
+                )
+
+            reconciled += 1
+
+    if reconciled > 0:
+        print(
+            f"[GUID] Reconciled "
+            f"{reconciled} stale GUID(s)"
+        )
+
+
+_PRIMITIVE_MAP = {
+    'CUBE': PRIMITIVE_CUBE,
+    'SPHERE': PRIMITIVE_SPHERE,
+    'CYLINDER': PRIMITIVE_CYLINDER,
+    'PLANE': PRIMITIVE_PLANE,
+    'EMPTY': PRIMITIVE_EMPTY,
+}
+
+
+def _get_primitive_type():
+
+    prim_str = _get_threshold(
+        "default_primitive",
+        'CUBE'
+    )
+
+    return _PRIMITIVE_MAP.get(
+        prim_str,
+        PRIMITIVE_CUBE
+    )
 
 
 def get_parent_guid(obj):
@@ -476,6 +607,10 @@ def scan_scene():
 
             new_count += 1
 
+    if new_count > 0 or stale_handled > 0:
+
+        _reconcile_guids_on_load()
+
     return stale_handled, new_count
 
 
@@ -553,7 +688,8 @@ def check_updates():
                     guid_obj,
                     transform,
                     timestamp,
-                    parent_guid_obj
+                    parent_guid_obj,
+                    primitive_type=_get_primitive_type(),
                 )
 
             except Exception as e:
@@ -697,7 +833,8 @@ def check_updates():
                     guid_obj,
                     transform,
                     timestamp,
-                    parent_guid_obj
+                    parent_guid_obj,
+                    primitive_type=_get_primitive_type(),
                 )
 
             except Exception as e:
@@ -874,6 +1011,120 @@ def get_tracked_count():
     return count
 
 
+def rebind_all():
+
+    global tracked_objects
+    global last_sent_transforms
+
+    if not tracked_objects:
+        return 0
+
+    roots = []
+    children = []
+
+    for guid, obj_data in list(
+        tracked_objects.items()
+    ):
+
+        obj, guid_obj = obj_data
+
+        try:
+            _ = obj.name
+        except ReferenceError:
+            continue
+
+        transform = get_transform(obj)
+
+        parent_guid = get_parent_guid(obj)
+
+        parent_guid_obj = (
+            UUID(parent_guid)
+            if parent_guid else None
+        )
+
+        timestamp = time.time()
+
+        try:
+
+            serialized = serialize_object_v3(
+                guid_obj,
+                transform,
+                timestamp,
+                parent_guid_obj,
+                primitive_type=(
+                    _get_primitive_type()
+                ),
+            )
+
+        except Exception as e:
+
+            print(
+                "[Rebind] Serialization failed "
+                f"for {obj.name}: {e}"
+            )
+
+            continue
+
+        if parent_guid_obj:
+            children.append(serialized)
+        else:
+            roots.append(serialized)
+
+        last_sent_transforms[guid] = {
+
+            "location":
+                transform["location"][:],
+
+            "rotation":
+                transform["rotation"][:],
+
+            "scale":
+                transform["scale"][:]
+        }
+
+    total_sent = 0
+
+    if roots or children:
+
+        send_objects(
+            [],
+            packet_type=PT_BeginSnapshot,
+        )
+
+        if roots:
+
+            send_objects(
+                roots,
+                packet_type=0x03,
+                flags=0x02,
+            )
+
+            total_sent += len(roots)
+
+        if children:
+
+            send_objects(
+                children,
+                packet_type=0x03,
+                flags=0x02 | 0x01,
+            )
+
+            total_sent += len(children)
+
+        send_objects(
+            [],
+            packet_type=PT_EndSnapshot,
+        )
+
+    if _verbose_logging:
+        print(
+            f"[Rebind] Sent {total_sent} objects "
+            f"({len(roots)} roots, {len(children)} children)"
+        )
+
+    return total_sent
+
+
 def dump_diagnostics():
 
     _update_runtime_stats()
@@ -978,6 +1229,8 @@ def start_sync():
                 obj,
                 UUID(guid)
             )
+
+    _reconcile_guids_on_load()
 
     port = _get_threshold(
         "server_port",

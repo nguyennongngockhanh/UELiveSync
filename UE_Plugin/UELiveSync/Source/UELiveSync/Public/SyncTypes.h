@@ -98,7 +98,19 @@ enum EPacketType : uint8
     PT_Delete    = 0x04,
     PT_Material  = 0x05,
     PT_Mesh      = 0x06,
-    PT_Heartbeat = 0x07
+    PT_Heartbeat = 0x07,
+    PT_BeginSnapshot = 0x09,
+    PT_EndSnapshot   = 0x0A,
+};
+
+// Primitive type constants (1 byte in CREATE packet payload)
+enum EPrimitiveType : uint8
+{
+    PRIMITIVE_Cube     = 0x00,
+    PRIMITIVE_Sphere   = 0x01,
+    PRIMITIVE_Cylinder = 0x02,
+    PRIMITIVE_Plane    = 0x03,
+    PRIMITIVE_Empty    = 0x04,
 };
 
 
@@ -206,6 +218,10 @@ static constexpr uint16
 static constexpr uint16
     LIVE_SYNC_VERSION_V3 =
     3;
+
+static constexpr uint16
+    LIVE_SYNC_VERSION_V4 =
+    4;
 
 
 // =========================================================

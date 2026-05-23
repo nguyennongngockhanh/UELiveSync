@@ -590,6 +590,40 @@ bool UUELiveSyncSubsystem::Tick(
     }
 
     // =====================================================
+    // SNAPSHOT TIMEOUT GUARD
+    // =====================================================
+
+    if (bInSnapshotBuild)
+    {
+        double Now =
+            FPlatformTime::Seconds();
+
+        bool bNoConnection =
+            !ConnectionSocket ||
+            ConnectionSocket->
+                GetConnectionState()
+                != SCS_Connected;
+
+        double Elapsed =
+            bNoConnection
+                ? 0.0
+                : (Now - SnapshotStartTime);
+
+        if (bNoConnection ||
+            Elapsed > 5.0)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("Snapshot timeout: bNoConnection=%d elapsed=%.2fs — aborting"),
+                bNoConnection ? 1 : 0,
+                Elapsed);
+
+            AbortSnapshot();
+        }
+    }
+
+    // =====================================================
     // PIPELINE
     // =====================================================
 
@@ -599,6 +633,10 @@ bool UUELiveSyncSubsystem::Tick(
 
     InterpolateTransforms(
         DeltaTime);
+
+    ResolvePendingAttachments();
+
+    RecoverMissingActors();
 
     // =====================================================
     // RUNTIME METRICS (every 60s in verbose mode)
@@ -787,6 +825,13 @@ StopNetworkThread()
     PacketQueue.Clear();
 
     TransformStates.Empty();
+
+    PendingAttachments.Empty();
+
+    MissingActorTracker.Empty();
+
+    bInSnapshotBuild = false;
+    SnapshotStartTime = 0.0;
 
     LastHeartbeatTime = 0.0;
 
@@ -1149,14 +1194,14 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x07 };
+            { 0x01, 0x03, 0x04, 0x07, 0x09, 0x0A };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
 
         bool bValidType = false;
 
-        for (int32 i = 0; i < 4; i++)
+        for (int32 i = 0; i < 6; i++)
         {
             if (PacketType == kValidTypes[i])
             {
@@ -1208,6 +1253,38 @@ ProcessBinaryPacket(
         LastHeartbeatTime =
             FPlatformTime::Seconds();
 
+        return;
+    }
+
+    // =====================================================
+    // SNAPSHOT BOUNDARY MARKERS
+    // =====================================================
+
+    if (PacketType == PT_BeginSnapshot)
+    {
+        HandleBeginSnapshot();
+        return;
+    }
+
+    if (PacketType == PT_EndSnapshot)
+    {
+        HandleEndSnapshot();
+        return;
+    }
+
+    // =====================================================
+    // UNKNOWN PACKET TYPE — skip gracefully
+    // =====================================================
+
+    if (PacketType != PT_Transform &&
+        PacketType != PT_Create &&
+        PacketType != PT_Delete)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("Unknown packet type 0x%02X — skipping"),
+            PacketType);
         return;
     }
 
@@ -1297,6 +1374,14 @@ ProcessBinaryPacket(
                     sizeof(FVector3f) +
                     sizeof(double) +
                     16;
+
+                // V4 CREATE packets have an extra primitive type byte
+                if (Version >=
+                    LIVE_SYNC_VERSION_V4 &&
+                    PacketType == 0x03)
+                {
+                    Ptr += 1;
+                }
             }
             else
             {
@@ -1463,6 +1548,22 @@ ProcessBinaryPacket(
         }
 
         // =================================================
+        // PRIMITIVE TYPE BYTE (CREATE-only, after parent GUID)
+        // =================================================
+
+        uint8 PrimitiveType = PRIMITIVE_Cube;
+
+        // Only read primitive type byte for V4+ CREATE packets.
+        // V3 CREATE packets end after parent GUID (80 bytes total).
+        if (PacketType == 0x03 &&
+            Version >= LIVE_SYNC_VERSION_V4 &&
+            Ptr < PacketEnd)
+        {
+            PrimitiveType = *Ptr;
+            Ptr += 1;
+        }
+
+        // =================================================
         // APPLY
         // =================================================
 
@@ -1473,7 +1574,8 @@ ProcessBinaryPacket(
                 Location,
                 Rotation,
                 Scale,
-                ParentGuid);
+                ParentGuid,
+                PrimitiveType);
         }
 
         UpdateTargetTransform(
@@ -1733,6 +1835,13 @@ void UUELiveSyncSubsystem::
 InterpolateTransforms(
     float DeltaTime)
 {
+    // Skip interpolation during snapshot build — all transforms
+    // will be bulk-applied when EndSnapshot is received
+    if (bInSnapshotBuild)
+    {
+        return;
+    }
+
     const float PredictionTime =
         0.012f;
 
@@ -2276,19 +2385,49 @@ AttachToParent(
         FindActorFast(
             ParentGuid);
 
-    if (!Parent)
+    if (!Parent || bInSnapshotBuild)
     {
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT(
-                "AttachToParent: child=%s"
-                " parent=%s not yet cached,"
-                " will retry on next update"),
-            *Guid.ToString(
-                EGuidFormats::Digits),
-            *ParentGuid.ToString(
-                EGuidFormats::Digits));
+        if (bInSnapshotBuild)
+        {
+            // During snapshot build, defer all attachments
+            FPendingAttachment NewEntry;
+            NewEntry.Child = Guid;
+            NewEntry.Parent = ParentGuid;
+            NewEntry.RetryFrames = 0;
+            NewEntry.CreatedTime =
+                FPlatformTime::Seconds();
+
+            PendingAttachments.Add(
+                NewEntry);
+        }
+        else if (!Parent)
+        {
+            // Push to deferred retry queue
+            FPendingAttachment NewEntry;
+            NewEntry.Child = Guid;
+            NewEntry.Parent = ParentGuid;
+            NewEntry.RetryFrames = 0;
+            NewEntry.CreatedTime =
+                FPlatformTime::Seconds();
+
+            PendingAttachments.Add(
+                NewEntry);
+
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Log,
+                    TEXT(
+                        "AttachToParent: child=%s"
+                        " parent=%s not yet cached,"
+                        " deferred"),
+                    *Guid.ToString(
+                        EGuidFormats::Digits),
+                    *ParentGuid.ToString(
+                        EGuidFormats::Digits));
+            }
+        }
 
         return;
     }
@@ -2367,7 +2506,9 @@ HandleCreateObject(
 
     const FVector& Scale,
 
-    const FGuid& ParentGuid)
+    const FGuid& ParentGuid,
+
+    uint8 PrimitiveType)
 {
     UWorld* World = GetWorld();
 
@@ -2423,6 +2564,50 @@ HandleCreateObject(
         return;
     }
 
+    // Validate primitive type
+    if (PrimitiveType > PRIMITIVE_Empty)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("Unknown primitive type 0x%02X, defaulting to Cube"),
+            PrimitiveType);
+
+        PrimitiveType =
+            PRIMITIVE_Cube;
+    }
+
+    if (PrimitiveType == PRIMITIVE_Empty)
+    {
+        // Empty actor — no mesh component, just root
+        // Tag and cache, then return immediately
+        FString TagString =
+            FString::Printf(
+                TEXT("LiveSync_GUID=%s"),
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+
+        NewActor->Tags.Add(
+            FName(*TagString));
+
+        ActorCache.Add(
+            Guid,
+            NewActor);
+
+        UpdateTargetTransform(
+            Guid,
+            Location,
+            Rotation,
+            Scale,
+            ParentGuid);
+
+        AttachToParent(
+            Guid,
+            ParentGuid);
+
+        return;
+    }
+
     UStaticMeshComponent* MeshComp =
         NewObject<UStaticMeshComponent>(
             NewActor);
@@ -2433,17 +2618,40 @@ HandleCreateObject(
     MeshComp->SetVisibility(
         true, true);
 
-    static UStaticMesh* CubeMesh =
-        LoadObject<UStaticMesh>(
-            nullptr,
-            TEXT(
-                "/Engine/BasicShapes/"
-                "Cube.Cube"));
+    UStaticMesh* PrimitiveMesh = nullptr;
 
-    if (CubeMesh)
+    switch (PrimitiveType)
+    {
+    case PRIMITIVE_Sphere:
+        PrimitiveMesh = LoadObject<UStaticMesh>(
+            nullptr,
+            TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+        break;
+
+    case PRIMITIVE_Cylinder:
+        PrimitiveMesh = LoadObject<UStaticMesh>(
+            nullptr,
+            TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+        break;
+
+    case PRIMITIVE_Plane:
+        PrimitiveMesh = LoadObject<UStaticMesh>(
+            nullptr,
+            TEXT("/Engine/BasicShapes/Plane.Plane"));
+        break;
+
+    case PRIMITIVE_Cube:
+    default:
+        PrimitiveMesh = LoadObject<UStaticMesh>(
+            nullptr,
+            TEXT("/Engine/BasicShapes/Cube.Cube"));
+        break;
+    }
+
+    if (PrimitiveMesh)
     {
         MeshComp->SetStaticMesh(
-            CubeMesh);
+            PrimitiveMesh);
     }
 
     MeshComp->SetCollisionEnabled(
@@ -2497,13 +2705,29 @@ HandleDeleteObject(
     bool bTransformHadState =
         TransformStates.Find(Guid) != nullptr;
 
-    if (Actor)
-    {
-        Actor->Destroy();
-    }
+    // Remove from pending attachments if queued
+    PendingAttachments.RemoveAll(
+        [&Guid](
+            const FPendingAttachment&
+            Entry)
+        {
+            return Entry.Child == Guid ||
+                   Entry.Parent == Guid;
+        });
 
-    ActorCache.Remove(
+    // Remove from missing actor tracker
+    MissingActorTracker.Remove(
         Guid);
+
+    if (!bInSnapshotBuild)
+    {
+        if (Actor)
+        {
+            Actor->Destroy();
+        }
+
+        ActorCache.Remove(Guid);
+    }
 
     TransformStates.Remove(
         Guid);
@@ -2524,6 +2748,302 @@ HandleDeleteObject(
             *ActorName,
             Actor ? 1 : 0,
             bCacheHadEntry ? 1 : 0);
+    }
+}
+
+
+// =========================================================
+// HANDLE BEGIN SNAPSHOT
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleBeginSnapshot()
+{
+    bInSnapshotBuild = true;
+    SnapshotStartTime =
+        FPlatformTime::Seconds();
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("Snapshot build started — entering accumulation mode"));
+}
+
+
+// =========================================================
+// ABORT SNAPSHOT
+// =========================================================
+
+void UUELiveSyncSubsystem::
+AbortSnapshot()
+{
+    if (!bInSnapshotBuild)
+    {
+        return;
+    }
+
+    bInSnapshotBuild = false;
+    SnapshotStartTime = 0.0;
+
+    int32 PendingCount =
+        PendingAttachments.Num();
+
+    PendingAttachments.Empty();
+
+    UE_LOG(
+        LogLiveSync,
+        Warning,
+        TEXT("Snapshot aborted — flushed %d pending attachments"),
+        PendingCount);
+}
+
+
+// =========================================================
+// HANDLE END SNAPSHOT
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleEndSnapshot()
+{
+    bInSnapshotBuild = false;
+
+    // Resolve all deferred hierarchy attachments
+    ResolvePendingAttachments();
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("Snapshot build ended — flushed %d pending attachments"),
+        PendingAttachments.Num());
+}
+
+
+// =========================================================
+// RESOLVE PENDING ATTACHMENTS
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ResolvePendingAttachments()
+{
+    double Now =
+        FPlatformTime::Seconds();
+
+    TArray<FPendingAttachment>
+        Remaining;
+
+    static constexpr int32
+        MaxRetries = 60;
+
+    static constexpr int32
+        FastWindow = 10;
+
+    for (const FPendingAttachment&
+        Entry : PendingAttachments)
+    {
+        int32 Retries =
+            Entry.RetryFrames + 1;
+
+        // Timeout: 60 retry attempts or 5s wall-clock
+        if (Retries >= MaxRetries ||
+            (Now - Entry.CreatedTime) > 5.0)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT(
+                    "Deferred attach timeout: "
+                    "child=%s parent=%s"),
+                *Entry.Child.ToString(
+                    EGuidFormats::Digits),
+                *Entry.Parent.ToString(
+                    EGuidFormats::Digits));
+
+            continue;
+        }
+
+        // Determine if this frame is a retry frame
+        bool bRetryFrame = (
+            Retries <= FastWindow ||
+            Retries % 5 == 0
+        );
+
+        FPendingAttachment Updated =
+            Entry;
+
+        Updated.RetryFrames = Retries;
+
+        if (bRetryFrame)
+        {
+            AActor* Parent =
+                FindActorFast(
+                    Entry.Parent);
+
+            if (Parent)
+            {
+                AActor* Child =
+                    FindActorFast(
+                        Entry.Child);
+
+                if (Child)
+                {
+                    Child->AttachToActor(
+                        Parent,
+                        FAttachmentTransformRules::
+                            KeepWorldTransform);
+
+                    if (
+                        bEnableVerboseSyncLogs
+                    )
+                    {
+                        UE_LOG(
+                            LogLiveSync,
+                            Log,
+                            TEXT(
+                                "Deferred attach: "
+                                "child=%s parent=%s"),
+                            *Entry.Child.ToString(
+                                EGuidFormats::Digits),
+                            *Entry.Parent.ToString(
+                                EGuidFormats::Digits));
+                    }
+
+                    // Resolved — don't requeue
+                    continue;
+                }
+            }
+        }
+
+        // Not resolved yet — keep for next frame
+        Remaining.Add(Updated);
+    }
+
+    PendingAttachments =
+        MoveTemp(Remaining);
+}
+
+
+// =========================================================
+// RECOVER MISSING ACTORS
+// =========================================================
+
+void UUELiveSyncSubsystem::
+RecoverMissingActors()
+{
+    double Now =
+        FPlatformTime::Seconds();
+
+    static constexpr int32
+        MaxRecoveryAttempts = 3;
+
+    TArray<FGuid> Resolved;
+
+    for (auto& Pair :
+        MissingActorTracker)
+    {
+        const FGuid& Guid =
+            Pair.Key;
+
+        FMissingActorState&
+            State =
+            Pair.Value;
+
+        AActor* Existing =
+            FindActorFast(Guid);
+
+        if (Existing)
+        {
+            // Actor reappeared naturally
+            Resolved.Add(Guid);
+            continue;
+        }
+
+        FSyncTransformState*
+            TransformState =
+            TransformStates.Find(
+                Guid);
+
+        if (!TransformState)
+        {
+            // No transform state — nothing to recover
+            Resolved.Add(Guid);
+            continue;
+        }
+
+        State.MissingFrames++;
+
+        if (State.MissingFrames >= 10 &&
+            (Now - State.LastWarningTime) > 30.0)
+        {
+            State.LastWarningTime = Now;
+
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("Missing actor GUID=%s — %d frames"),
+                *Guid.ToString(
+                    EGuidFormats::Digits),
+                State.MissingFrames);
+        }
+
+        if (State.MissingFrames >= 30 &&
+            !State.bRecoveryAttempted &&
+            State.RecoveryAttempts < MaxRecoveryAttempts)
+        {
+            State.bRecoveryAttempted = true;
+            State.RecoveryAttempts++;
+
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("Recovering missing actor GUID=%s (attempt %d/%d)"),
+                *Guid.ToString(
+                    EGuidFormats::Digits),
+                State.RecoveryAttempts,
+                MaxRecoveryAttempts);
+
+            HandleCreateObject(
+                Guid,
+                TransformState->TargetLocation,
+                TransformState->TargetRotation,
+                TransformState->TargetScale,
+                TransformState->ParentGuid);
+        }
+        else if (State.MissingFrames >= 30 &&
+                 State.RecoveryAttempts >= MaxRecoveryAttempts)
+        {
+            // Suppress repeated warning logs — only log once per frame
+            if (State.MissingFrames == 30)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("Missing actor GUID=%s — max recovery attempts (%d) reached, giving up"),
+                    *Guid.ToString(
+                        EGuidFormats::Digits),
+                    MaxRecoveryAttempts);
+            }
+        }
+
+        if (State.MissingFrames > 60)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("Giving up recovery for GUID=%s — evicting"),
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+
+            TransformStates.Remove(Guid);
+
+            Resolved.Add(Guid);
+        }
+    }
+
+    for (const FGuid& Guid :
+        Resolved)
+    {
+        MissingActorTracker.Remove(
+            Guid);
     }
 }
 
@@ -2960,6 +3480,11 @@ ConsoleReset()
 
     ActorCache.Empty();
     TransformStates.Empty();
+    PendingAttachments.Empty();
+    MissingActorTracker.Empty();
+
+    bInSnapshotBuild = false;
+    SnapshotStartTime = 0.0;
 
     WatchdogRestartCount = 0;
     LastWatchdogRestartTime = 0.0;

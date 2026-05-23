@@ -13,6 +13,17 @@ LIVE_SYNC_MAGIC = 0x4C56534D
 LIVE_SYNC_VERSION = 2
 LIVE_SYNC_VERSION_V3 = 3
 
+# Primitive type constants (1 byte, appended to CREATE packets only)
+PRIMITIVE_CUBE = 0x00
+PRIMITIVE_SPHERE = 0x01
+PRIMITIVE_CYLINDER = 0x02
+PRIMITIVE_PLANE = 0x03
+PRIMITIVE_EMPTY = 0x04
+
+# Packet type constants (beyond V3 base)
+PT_BeginSnapshot = 0x09
+PT_EndSnapshot = 0x0A
+
 
 # =========================================================
 # GLOBAL STATE
@@ -78,7 +89,7 @@ def serialize_object(guid_hex, transform):
     return payload
 
 
-def serialize_object_v3(guid_obj, transform, timestamp, parent_guid_obj=None):
+def serialize_object_v3(guid_obj, transform, timestamp, parent_guid_obj=None, primitive_type=None):
 
     payload = bytearray()
 
@@ -190,6 +201,18 @@ def serialize_object_v3(guid_obj, transform, timestamp, parent_guid_obj=None):
             "<IIII",
             0, 0, 0, 0
         ))
+
+    # =====================================================
+    # PRIMITIVE TYPE (1 byte, CREATE-only, 0x00 = Cube)
+    # =====================================================
+
+    if primitive_type is None:
+        primitive_type = PRIMITIVE_CUBE
+
+    payload.extend(struct.pack(
+        "<B",
+        primitive_type
+    ))
 
     return payload
 
@@ -601,7 +624,7 @@ class LiveSyncClient:
     def _build_packet(
         self,
         objects_data,
-        version=LIVE_SYNC_VERSION_V3,
+        version=LIVE_SYNC_VERSION_V4,
         packet_type=0x01,
         flags=0x00
     ):

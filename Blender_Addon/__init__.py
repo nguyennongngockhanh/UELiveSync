@@ -14,6 +14,7 @@ from bpy.props import (
     FloatProperty,
     BoolProperty,
     StringProperty,
+    EnumProperty,
 )
 
 from . import sync
@@ -79,6 +80,19 @@ class UELIVESYNC_AP_preferences(
         description="Enable verbose sync logs",
     )
 
+    default_primitive: EnumProperty(
+        name="Default Primitive",
+        items=[
+            ('CUBE', "Cube", "/Engine/BasicShapes/Cube"),
+            ('SPHERE', "Sphere", "/Engine/BasicShapes/Sphere"),
+            ('CYLINDER', "Cylinder", "/Engine/BasicShapes/Cylinder"),
+            ('PLANE', "Plane", "/Engine/BasicShapes/Plane"),
+            ('EMPTY', "Empty", "No mesh — root-only actor"),
+        ],
+        default='CUBE',
+        description="Default mesh primitive for actors spawned in UE",
+    )
+
     heartbeat_interval: FloatProperty(
         name="Heartbeat Interval",
         default=5.0,
@@ -138,6 +152,17 @@ class UELIVESYNC_AP_preferences(
 
         box.prop(
             self, "scan_interval"
+        )
+
+        layout.separator()
+
+        box = layout.box()
+        box.label(
+            text="Actor Spawn Settings"
+        )
+
+        box.prop(
+            self, "default_primitive"
         )
 
         layout.separator()
@@ -229,6 +254,26 @@ class UELIVESYNC_OT_stop(
     def execute(self, context):
 
         sync.stop_sync()
+
+        return {'FINISHED'}
+
+
+class UELIVESYNC_OT_rebind_all(
+    bpy.types.Operator
+):
+    bl_idname = \
+        "uelivesync.rebind_all"
+
+    bl_label = "Rebind All"
+
+    def execute(self, context):
+
+        count = sync.rebind_all()
+
+        self.report(
+            {'INFO'},
+            f"Rebound {count} objects"
+        )
 
         return {'FINISHED'}
 
@@ -402,6 +447,11 @@ class UELIVESYNC_PT_panel(
             icon='CONSOLE',
         )
 
+        layout.operator(
+            "uelivesync.rebind_all",
+            icon='UV_SYNC_SELECT',
+        )
+
         layout.separator()
 
         # Preferences shortcut
@@ -426,6 +476,7 @@ classes = (
     UELIVESYNC_OT_show_error,
     UELIVESYNC_OT_start,
     UELIVESYNC_OT_stop,
+    UELIVESYNC_OT_rebind_all,
     UELIVESYNC_OT_dump_diagnostics,
     UELIVESYNC_PT_panel,
 )

@@ -139,10 +139,18 @@ private:
 
         const FVector& Scale,
 
-        const FGuid& ParentGuid);
+        const FGuid& ParentGuid,
+
+        uint8 PrimitiveType = PRIMITIVE_Cube);
 
     void HandleDeleteObject(
         const FGuid& Guid);
+
+    void HandleBeginSnapshot();
+
+    void HandleEndSnapshot();
+
+    void AbortSnapshot();
 
     // =====================================================
     // ACTOR CACHE
@@ -292,6 +300,50 @@ private:
     void ConsolePing();
 
     void ConsoleStats();
+
+    // =====================================================
+    // DEFERRED ATTACHMENTS
+    // =====================================================
+
+    struct FPendingAttachment
+    {
+        FGuid Child;
+        FGuid Parent;
+        int32 RetryFrames = 0;
+        double CreatedTime = 0.0;
+    };
+
+    void ResolvePendingAttachments();
+
+    TArray<FPendingAttachment>
+        PendingAttachments;
+
+    // =====================================================
+    // MISSING ACTOR RECOVERY
+    // =====================================================
+
+    struct FMissingActorState
+    {
+        int32 MissingFrames = 0;
+        bool bRecoveryAttempted = false;
+        double LastWarningTime = 0.0;
+        int32 RecoveryAttempts = 0;
+    };
+
+    void RecoverMissingActors();
+
+    TMap<
+        FGuid,
+        FMissingActorState>
+        MissingActorTracker;
+
+    // =====================================================
+    // SNAPSHOT BATCHING
+    // =====================================================
+
+    bool bInSnapshotBuild = false;
+
+    double SnapshotStartTime = 0.0;
 
     // =====================================================
     // VERBOSE LOGGING
