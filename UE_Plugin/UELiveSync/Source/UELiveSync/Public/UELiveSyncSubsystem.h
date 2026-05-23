@@ -53,6 +53,22 @@ public:
     bool Tick(
         float DeltaTime);
 
+#if WITH_EDITOR
+    // =====================================================
+    // EDITOR STATE (polled by Slate widget)
+    // =====================================================
+
+    FText GetConnectionStatusText() const;
+
+    FText GetUptimeText() const;
+
+    FText GetObjectsTrackedText() const;
+
+    FText GetQueueDepthText() const;
+
+    FText GetLastPacketTimeText() const;
+#endif
+
 private:
 
     // =====================================================
@@ -241,8 +257,10 @@ private:
         0.0;
 
     // =====================================================
-    // METRICS LOGGING
+    // METRICS
     // =====================================================
+
+    FLiveSyncStats Stats;
 
     double LastMetricsLogTime =
         0.0;
@@ -252,6 +270,16 @@ private:
         60.0;
 
     void LogRuntimeMetrics();
+
+    // Rate tracking state
+    double LastRateSampleTime =
+        0.0;
+
+    int64 LastRateSampleBytes =
+        0;
+
+    int32 LastRateSamplePackets =
+        0;
 
     // =====================================================
     // CONSOLE COMMANDS
@@ -263,6 +291,8 @@ private:
 
     void ConsolePing();
 
+    void ConsoleStats();
+
     // =====================================================
     // VERBOSE LOGGING
     // =====================================================
@@ -273,4 +303,20 @@ private:
 
     int32 VerboseFrameCounter =
         0;
+
+    // =====================================================
+    // WATCHDOG RESTART BACKOFF
+    // =====================================================
+
+    int32 WatchdogRestartCount =
+        0;
+
+    double LastWatchdogRestartTime =
+        0.0;
+
+    static constexpr double
+        WatchdogBackoffDelays[5] =
+            { 1.0, 2.0, 5.0, 10.0, 30.0 };
+
+    double GetWatchdogBackoff() const;
 };

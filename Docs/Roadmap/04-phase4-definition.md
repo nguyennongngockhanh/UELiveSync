@@ -1,6 +1,6 @@
 # Phase 4 — Production Hardening & Editor Tooling
 
-**Status**: Phase 4A completed · Phase 4B–D pending · **Estimate**: 2–3 days · **Risk**: Low
+**Status**: Phase 4A completed · Phase 4B completed · Phase 4C–D pending · **Estimate**: 2–3 days · **Risk**: Low
 
 ---
 
@@ -79,33 +79,36 @@ Foundation work: doc accuracy, port hygiene, dedicated log category, console dia
 
 ---
 
-## Phase 4B — Runtime Controls
+## Phase 4B — Runtime Controls ✅
 
 User-facing addon configuration and diagnostics. Depends on 4A for stable log category and console infrastructure.
 
-### A2 — Expose heartbeat/scan intervals as prefs
+### ✅ A2 — Expose heartbeat/scan intervals as prefs
 
 | File(s) | What |
 |---------|------|
-| `__init__.py` (prefs), `sync.py:57,63` | Expose `heartbeat_interval` and `scan_interval` as addon `IntProperty`/`FloatProperty` (currently hardcoded globals). Read from prefs in the tick loop. |
+| `__init__.py` (prefs), `sync.py` | Expose `heartbeat_interval` (FloatProperty, default 5.0) and `scan_interval` (IntProperty, default 300) as addon preferences. Removed hardcoded globals from sync.py. Read from prefs via `_get_threshold()` each tick. |
 
-### A3 — Sidebar panel counters
-
-| File(s) | What |
-|---------|------|
-| `__init__.py:196–304` | Add sidebar counters: tracked object count, packets queued, reconnection count, uptime. Bubbled up from `sync.py`/`network.py` state. |
-
-### A4 — Expand CRITICAL severity triggers
+### ✅ A3 — Sidebar panel counters
 
 | File(s) | What |
 |---------|------|
-| `network.py:406–410` | Expand beyond "port in use": add protocol mismatch, deserialization failure, persistent reconnect failure (>30s). |
+| `__init__.py` (panel), `sync.py`, `network.py` | Added counters in the Connected status box: tracked object count, queue depth, reconnection count, uptime (mm:ss). Bubbled up via `get_tracked_count()`, `get_queue_depth()`, `get_reconnect_count()`, `get_uptime()`. |
 
-### C4 — Blender diagnostic dump
+### ✅ A4 — Expand CRITICAL severity triggers
 
 | File(s) | What |
 |---------|------|
-| `sync.py`, `__init__.py` | Add operator that prints `tracked_objects` count, reconnect stats, queue depth to Blender console. |
+| `network.py` | Added `_reconnect_start_time` tracking. `_reconnect_internal()` escalates to CRITICAL severity after 30s of persistent failure. Added `set_critical_error()` public function. |
+| `sync.py` | Wrapped `serialize_object_v3()` calls in try/except → `set_critical_error()` on failure. |
+| `network.py` | Wrapped `_build_packet()` in try/except → CRITICAL on build failure. |
+
+### ✅ C4 — Blender diagnostic dump
+
+| File(s) | What |
+|---------|------|
+| `sync.py` | Added `dump_diagnostics()` — prints timer/connection/tracked/queue/reconnect/uptime/error/scan state to Blender console. |
+| `__init__.py` | Added `UELIVESYNC_OT_dump_diagnostics` operator (`uelivesync.dump_diagnostics`) with "Dump Diagnostics" button in sidebar panel. |
 
 ---
 

@@ -238,6 +238,17 @@ void UUELiveSyncSubsystem::Initialize(
                     &UUELiveSyncSubsystem::
                         ConsolePing),
             ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.Stats"),
+            TEXT("Print runtime metrics"),
+            FConsoleCommandDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleStats),
+            ECVF_Default);
 }
 
 
@@ -426,6 +437,9 @@ bool UUELiveSyncSubsystem::Tick(
                         Log,
                         TEXT("Blender Connected"));
 
+                    WatchdogRestartCount = 0;
+                    LastWatchdogRestartTime = 0.0;
+
                     BuildActorCache();
 
                     StartNetworkThread();
@@ -502,28 +516,76 @@ bool UUELiveSyncSubsystem::Tick(
 
     // =====================================================
     // NETWORK THREAD WATCHDOG
-    // (detects stuck thread even if socket is open)
+    // Three distinct signals:
+    //   1. Socket starvation — no packets received
+    //   2. Thread stall — no thread loop iteration
+    //   3. Idle-but-healthy — packets received but no data
     // =====================================================
 
     if (NetworkRunnable &&
         ConnectionSocket)
     {
-        double ThreadActivity =
+        double Now =
+            FPlatformTime::Seconds();
+
+        double ThreadLoopTime =
             NetworkRunnable->
-                LastActivityTime.load(
+                LastThreadLoopTime.load(
                     std::memory_order_relaxed);
 
-        if (ThreadActivity > 0.0 &&
-            FPlatformTime::Seconds() -
-                ThreadActivity > 30.0)
-        {
-            UE_LOG(
-                LogLiveSync,
-                Error,
-                TEXT("Network thread watchdog: "
-                     "no activity for 30s, restarting"));
+        double PacketRecvTime =
+            NetworkRunnable->
+                LastPacketReceiveTime.load(
+                    std::memory_order_relaxed);
 
-            StopNetworkThread();
+        bool bStarvation = false;
+        bool bStall = false;
+
+        if (PacketRecvTime > 0.0 &&
+            Now - PacketRecvTime > 30.0)
+        {
+            bStarvation = true;
+        }
+
+        if (ThreadLoopTime > 0.0 &&
+            Now - ThreadLoopTime > 35.0)
+        {
+            bStall = true;
+        }
+
+        if (bStall || bStarvation)
+        {
+            double BackoffDelay =
+                GetWatchdogBackoff();
+
+            double TimeSinceLastRestart =
+                Now - LastWatchdogRestartTime;
+
+            if (TimeSinceLastRestart >=
+                BackoffDelay)
+            {
+                WatchdogRestartCount++;
+
+                LastWatchdogRestartTime =
+                    Now;
+
+                UE_LOG(
+                    LogLiveSync,
+                    Error,
+                    TEXT("Network thread watchdog: "
+                         "starvation=%d stall=%d "
+                         "restartCount=%d backoff=%.1fs"),
+                    bStarvation ? 1 : 0,
+                    bStall ? 1 : 0,
+                    WatchdogRestartCount,
+                    BackoffDelay);
+
+                Stats.ReconnectCount.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+
+                StopNetworkThread();
+            }
         }
     }
 
@@ -620,6 +682,12 @@ StartNetworkThread()
 
             &PacketQueue
         );
+
+    NetworkRunnable->SetStats(
+        &Stats);
+
+    PacketQueue.SetStats(
+        &Stats);
 
     NetworkThread =
 
@@ -786,6 +854,9 @@ ProcessQueuedPackets()
         CVarLiveSyncMaxPacketRate.
             GetValueOnGameThread();
 
+    uint64 ProcessStartCycles =
+        FPlatformTime::Cycles64();
+
     while (
         PacketQueue.Dequeue(
             Packet))
@@ -832,6 +903,33 @@ ProcessQueuedPackets()
             Pkt,
             &SeenThisTick);
     }
+
+    // Track processing stats
+    int32 Processed =
+        PacketsThisTick.Num();
+
+    if (Processed > 0)
+    {
+        Stats.PacketsProcessed.fetch_add(
+            Processed,
+            std::memory_order_relaxed);
+
+        uint64 ProcessEndCycles =
+            FPlatformTime::Cycles64();
+
+        double ProcessTimeMs =
+            FPlatformTime::
+            ToMilliseconds64(
+                ProcessEndCycles -
+                ProcessStartCycles);
+
+        Stats.AvgProcessTimeMs =
+            ProcessTimeMs /
+            (double)Processed;
+    }
+
+    Stats.LastPacketTime =
+        FPlatformTime::Seconds();
 }
 
 
@@ -2453,14 +2551,220 @@ LogRuntimeMetrics()
             == SCS_Connected
         ? 1 : 0;
 
+    int32 PacketsRecv =
+        Stats.PacketsReceived.load(
+            std::memory_order_relaxed);
+
+    int32 PacketsProc =
+        Stats.PacketsProcessed.load(
+            std::memory_order_relaxed);
+
+    int32 PacketsDrop =
+        Stats.PacketsDropped.load(
+            std::memory_order_relaxed);
+
+    int32 Malformed =
+        Stats.MalformedPackets.load(
+            std::memory_order_relaxed);
+
+    int64 BytesRecv =
+        Stats.TotalBytesReceived.load(
+            std::memory_order_relaxed);
+
+    // Compute rates since last sample
+    double Now =
+        FPlatformTime::Seconds();
+
+    double Elapsed =
+        Now - LastRateSampleTime;
+
+    if (LastRateSampleTime > 0.0 &&
+        Elapsed > 0.001)
+    {
+        Stats.AvgPacketsPerSecond =
+            (double)(PacketsRecv -
+                LastRateSamplePackets) /
+            Elapsed;
+
+        Stats.AvgBytesPerSecond =
+            (double)(BytesRecv -
+                LastRateSampleBytes) /
+            Elapsed;
+    }
+
+    LastRateSampleTime = Now;
+    LastRateSamplePackets = PacketsRecv;
+    LastRateSampleBytes = BytesRecv;
+
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("[Metrics] States=%d Cache=%d Queue=%d Connected=%d"),
+        TEXT("[Metrics] States=%d Cache=%d Queue=%d "
+             "Connected=%d Recv=%d Proc=%d Drop=%d "
+             "Malformed=%d Bytes=%lld "
+             "Pkt/s=%.1f B/s=%.1f Process=%.2fms"),
         StateCount,
         CacheCount,
         QueueSize,
-        Connected);
+        Connected,
+        PacketsRecv,
+        PacketsProc,
+        PacketsDrop,
+        Malformed,
+        BytesRecv,
+        Stats.AvgPacketsPerSecond,
+        Stats.AvgBytesPerSecond,
+        Stats.AvgProcessTimeMs);
+}
+
+
+// =========================================================
+// WATCHDOG BACKOFF
+// =========================================================
+
+double UUELiveSyncSubsystem::
+GetWatchdogBackoff() const
+{
+    int32 Index =
+        FMath::Clamp(
+            WatchdogRestartCount,
+            0,
+            4);
+
+    return
+        WatchdogBackoffDelays[Index];
+}
+
+
+// =========================================================
+// CONSOLE: STATS
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ConsoleStats()
+{
+    int32 PacketsRecv =
+        Stats.PacketsReceived.load(
+            std::memory_order_relaxed);
+
+    int32 PacketsProc =
+        Stats.PacketsProcessed.load(
+            std::memory_order_relaxed);
+
+    int32 PacketsDrop =
+        Stats.PacketsDropped.load(
+            std::memory_order_relaxed);
+
+    int32 Malformed =
+        Stats.MalformedPackets.load(
+            std::memory_order_relaxed);
+
+    int64 BytesRecv =
+        Stats.TotalBytesReceived.load(
+            std::memory_order_relaxed);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("=== UE LiveSync Stats ==="));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  [Pipeline]"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  PacketsReceived:     %d"),
+        PacketsRecv);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  PacketsProcessed:    %d"),
+        PacketsProc);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  PacketsDropped:      %d"),
+        PacketsDrop);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MalformedPackets:    %d"),
+        Malformed);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  BytesReceived:       %lld"),
+        BytesRecv);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  [Queue]"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  QueueDepthCurrent:   %d"),
+        Stats.QueueDepthCurrent);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  QueueDepthPeak:      %d"),
+        Stats.QueueDepthPeak);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  [Performance]"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  AvgPacketsPerSecond: %.1f"),
+        Stats.AvgPacketsPerSecond);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  AvgBytesPerSecond:   %.1f"),
+        Stats.AvgBytesPerSecond);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  AvgProcessTimeMs:    %.2f"),
+        Stats.AvgProcessTimeMs);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  [Watchdog]"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  ReconnectCount:      %d"),
+        Stats.ReconnectCount.load(
+            std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  WatchdogRestartCount: %d"),
+        WatchdogRestartCount);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("=== End Stats ==="));
 }
 
 
@@ -2476,6 +2780,15 @@ ConsoleDumpState()
         Log,
         TEXT("=== UE LiveSync State Dump ==="));
 
+    // =====================================================
+    // CONNECTION
+    // =====================================================
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  [Connection]"));
+
     int32 Connected =
         ConnectionSocket &&
         ConnectionSocket->
@@ -2486,35 +2799,112 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("Connected: %d"),
+        TEXT("  Connected:           %d"),
         Connected);
 
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("TransformStates: %d"),
+        TEXT("  HasListener:         %d"),
+        ListenerSocket ? 1 : 0);
+
+    double ThreadLoopTime =
+        NetworkRunnable
+            ? NetworkRunnable->
+                LastThreadLoopTime.load(
+                    std::memory_order_relaxed)
+            : 0.0;
+
+    double PacketRecvTime =
+        NetworkRunnable
+            ? NetworkRunnable->
+                LastPacketReceiveTime.load(
+                    std::memory_order_relaxed)
+            : 0.0;
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastThreadLoop:      %.2f"),
+        ThreadLoopTime);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastPacketRecv:      %.2f"),
+        PacketRecvTime);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastHeartbeatTime:   %.2f"),
+        LastHeartbeatTime);
+
+    // =====================================================
+    // STATE
+    // =====================================================
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  [State]"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TransformStates:     %d"),
         TransformStates.Num());
 
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("ActorCache: %d"),
+        TEXT("  ActorCache:          %d"),
         ActorCache.Num());
 
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("PacketQueue: %d"),
+        TEXT("  PacketQueue:         %d"),
         PacketQueue.Size());
 
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("LastHeartbeatTime: %.2f"),
-        LastHeartbeatTime);
+        TEXT("  SeqId:               %llu"),
+        LastSequenceId);
+
+    // =====================================================
+    // WATCHDOG
+    // =====================================================
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  [Watchdog]"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  RestartCount:        %d"),
+        WatchdogRestartCount);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastRestartTime:     %.2f"),
+        LastWatchdogRestartTime);
+
+    // =====================================================
+    // VERBOSE: PER-GUID
+    // =====================================================
 
     if (bEnableVerboseSyncLogs)
     {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("  [Objects]"));
+
         for (const auto& Pair :
             TransformStates)
         {
@@ -2525,13 +2915,20 @@ ConsoleDumpState()
             UE_LOG(
                 LogLiveSync,
                 Log,
-                TEXT("  GUID=%s Actor=%s"),
+                TEXT("    GUID=%s Actor=%s"),
                 *Pair.Key.ToString(
                     EGuidFormats::Digits),
                 Actor
                     ? *Actor->GetName()
                     : TEXT("nullptr"));
         }
+    }
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("=== End Dump ==="));
+}
     }
 
     UE_LOG(
@@ -2571,6 +2968,9 @@ ConsoleReset()
     ActorCache.Empty();
     TransformStates.Empty();
 
+    WatchdogRestartCount = 0;
+    LastWatchdogRestartTime = 0.0;
+
     StartServer();
     BuildActorCache();
 
@@ -2602,3 +3002,127 @@ ConsolePing()
         PacketQueue.Size(),
         TransformStates.Num());
 }
+
+
+#if WITH_EDITOR
+
+#define LOCTEXT_NAMESPACE "UELiveSyncSubsystem"
+
+// =========================================================
+// EDITOR STATE ACCESSORS
+// =========================================================
+
+FText UUELiveSyncSubsystem::
+GetConnectionStatusText() const
+{
+    bool bConnected =
+        ConnectionSocket &&
+        ConnectionSocket->
+            GetConnectionState()
+            == SCS_Connected;
+
+    if (bConnected)
+    {
+        return
+            FText::FromString(
+                TEXT("Connected"));
+    }
+
+    return
+        FText::FromString(
+            TEXT("Disconnected"));
+}
+
+
+FText UUELiveSyncSubsystem::
+GetUptimeText() const
+{
+    if (LastHeartbeatTime <= 0.0)
+    {
+        return
+            FText::FromString(
+                TEXT("\u2014"));
+    }
+
+    double UptimeSeconds =
+        FPlatformTime::Seconds() -
+        LastHeartbeatTime;
+
+    int32 Minutes =
+        (int32)UptimeSeconds / 60;
+
+    int32 Seconds =
+        (int32)UptimeSeconds % 60;
+
+    return
+        FText::Format(
+            LOCTEXT(
+                "UptimeFormat",
+                "{0}m{1:02d}s"),
+            Minutes,
+            Seconds);
+}
+
+
+FText UUELiveSyncSubsystem::
+GetObjectsTrackedText() const
+{
+    int32 Count =
+        TransformStates.Num();
+
+    return
+        FText::AsNumber(Count);
+}
+
+
+FText UUELiveSyncSubsystem::
+GetQueueDepthText() const
+{
+    int32 Depth =
+        PacketQueue.Size();
+
+    return
+        FText::AsNumber(Depth);
+}
+
+
+FText UUELiveSyncSubsystem::
+GetLastPacketTimeText() const
+{
+    double RecvTime =
+        NetworkRunnable
+            ? NetworkRunnable->
+                LastPacketReceiveTime.load(
+                    std::memory_order_relaxed)
+            : 0.0;
+
+    if (RecvTime <= 0.0)
+    {
+        return
+            FText::FromString(
+                TEXT("\u2014"));
+    }
+
+    double SecondsAgo =
+        FPlatformTime::Seconds() -
+        RecvTime;
+
+    if (SecondsAgo < 1.0)
+    {
+        return
+            FText::FromString(
+                TEXT("now"));
+    }
+
+    return
+        FText::Format(
+            LOCTEXT(
+                "LastPacketFormat",
+                "{0}s ago"),
+            FText::AsNumber(
+                (int32)SecondsAgo));
+}
+
+#undef LOCTEXT_NAMESPACE
+
+#endif

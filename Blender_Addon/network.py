@@ -253,8 +253,22 @@ class LiveSyncClient:
         self._reconnect_attempts = 0
         self._reconnect_max_delay = 10.0
         self._reconnect_base_delay = 0.5
+        self._reconnect_start_time = 0.0
         self._last_send_attempt = 0.0
         self._idle_probe_interval = 5.0
+
+        self._runtime_stats = {
+            "queue_depth": 0,
+            "reconnect_count": 0,
+            "last_error": "",
+            "last_error_severity": "INFO",
+            "last_send_time": 0.0,
+            "dropped_packets": 0,
+            "packets_sent": 0,
+            "bytes_sent": 0,
+            "uptime": 0.0,
+            "start_time": 0.0,
+        }
 
         self._thread = threading.Thread(
             target=self._sender_loop,
@@ -284,8 +298,10 @@ class LiveSyncClient:
 
                 self._last_send_attempt = time.time()
 
+                data_len = len(data)
+
                 print(
-                    f"[SYNC-DBG] 4 Sender dequeued: {len(data)} bytes"
+                    f"[SYNC-DBG] 4 Sender dequeued: {data_len} bytes"
                 )
 
                 with self._lock:
@@ -301,8 +317,14 @@ class LiveSyncClient:
 
                             self._reconnect_attempts = 0
 
+                            self._runtime_stats["last_send_time"] = time.time()
+                            self._runtime_stats["packets_sent"] += 1
+                            self._runtime_stats["bytes_sent"] += data_len
+
+                            self._runtime_stats["reconnect_count"] = self._reconnect_attempts
+
                             print(
-                                f"[SYNC-DBG] 5 Socket send OK: {len(data)} bytes"
+                                f"[SYNC-DBG] 5 Socket send OK: {data_len} bytes"
                             )
 
                         except (
@@ -359,6 +381,12 @@ class LiveSyncClient:
             self._status_detail = (
                 f"Connected to {self.host}:{self.port}"
             )
+
+            self._reconnect_attempts = 0
+            self._reconnect_start_time = 0.0
+
+            self._runtime_stats["start_time"] = time.time()
+            self._runtime_stats["reconnect_count"] = 0
 
             if self._was_connected:
                 self.reconnected = True
@@ -438,10 +466,22 @@ class LiveSyncClient:
 
         self._reconnect_attempts += 1
 
+        self._runtime_stats["reconnect_count"] = (
+            self._reconnect_attempts
+        )
+
+        if self._reconnect_start_time == 0.0:
+            self._reconnect_start_time = time.time()
+
         delay = min(
             self._reconnect_base_delay *
             (2 ** (self._reconnect_attempts - 1)),
             self._reconnect_max_delay
+        )
+
+        reconnect_elapsed = (
+            time.time() -
+            self._reconnect_start_time
         )
 
         self._status_detail = (
@@ -449,15 +489,32 @@ class LiveSyncClient:
             f"in {delay:.0f}s..."
         )
 
-        self.last_error = (
-            f"Reconnecting (attempt {self._reconnect_attempts})"
-        )
-        self.last_error_severity = "WARNING"
+        if reconnect_elapsed > 30.0:
 
-        print(
-            f"[LiveSync] Reconnect attempt {self._reconnect_attempts}"
-            f" in {delay:.1f}s"
-        )
+            self.last_error = (
+                f"Reconnect failed after {reconnect_elapsed:.0f}s "
+                f"({self._reconnect_attempts} attempts)"
+            )
+            self.last_error_severity = "CRITICAL"
+
+            print(
+                "[LiveSync] CRITICAL: "
+                f"persistent reconnect failure "
+                f"({reconnect_elapsed:.0f}s, "
+                f"{self._reconnect_attempts} attempts)"
+            )
+
+        else:
+
+            self.last_error = (
+                f"Reconnecting (attempt {self._reconnect_attempts})"
+            )
+            self.last_error_severity = "WARNING"
+
+            print(
+                f"[LiveSync] Reconnect attempt {self._reconnect_attempts}"
+                f" in {delay:.1f}s"
+            )
 
         time.sleep(delay)
 
@@ -624,11 +681,27 @@ class LiveSyncClient:
         flags=0x00
     ):
 
-        packet = self._build_packet(
-            objects_data,
-            packet_type=packet_type,
-            flags=flags
-        )
+        try:
+
+            packet = self._build_packet(
+                objects_data,
+                packet_type=packet_type,
+                flags=flags
+            )
+
+        except Exception as e:
+
+            self.last_error = (
+                f"Packet build failed: {e}"
+            )
+            self.last_error_severity = "CRITICAL"
+
+            print(
+                "[LiveSync] CRITICAL: "
+                f"Packet build failed: {e}"
+            )
+
+            return
 
         try:
 
@@ -643,7 +716,23 @@ class LiveSyncClient:
         except queue.Full:
 
             self.last_error = "Send queue full"
-            print("[SYNC-DBG] 3 Enqueue FAILED: queue full")
+
+            self._runtime_stats["dropped_packets"] += 1
+
+            # Log cooldown: at most once per 5s
+            _now = time.time()
+
+            if not hasattr(
+                self,
+                "_last_queue_full_log"
+            ) or _now - self._last_queue_full_log > 5.0:
+
+                self._last_queue_full_log = _now
+
+                print(
+                    "[SYNC-DBG] 3 Enqueue FAILED: "
+                    f"queue full ({self._runtime_stats['dropped_packets']} dropped)"
+                )
 
 
 # =========================================================
@@ -675,6 +764,11 @@ def get_last_error():
 
         return "Not initialized"
 
+    # Sync to runtime_stats
+    _client._runtime_stats["last_error"] = (
+        _client.last_error
+    )
+
     return _client.last_error
 
 
@@ -685,6 +779,11 @@ def get_last_error_severity():
     if _client is None:
 
         return "INFO"
+
+    # Sync to runtime_stats
+    _client._runtime_stats["last_error_severity"] = (
+        _client.last_error_severity
+    )
 
     return _client.last_error_severity
 
@@ -779,4 +878,78 @@ def send_snapshot(snapshot):
 
     send_objects(
         objects_data
+    )
+
+
+def get_queue_depth():
+
+    global _client
+
+    if _client is None:
+
+        return 0
+
+    depth = _client._send_queue.qsize()
+
+    _client._runtime_stats["queue_depth"] = (
+        depth
+    )
+
+    return depth
+
+
+def get_reconnect_count():
+
+    global _client
+
+    if _client is None:
+
+        return 0
+
+    return _client._runtime_stats.get(
+        "reconnect_count", 0
+    )
+
+
+def get_runtime_stats():
+
+    global _client
+
+    if _client is None:
+
+        return {}
+
+    # Snapshot live values into stats dict
+    get_queue_depth()
+
+    stats = dict(
+        _client._runtime_stats
+    )
+
+    if stats["start_time"] > 0.0:
+
+        stats["uptime"] = (
+            time.time() -
+            stats["start_time"]
+        )
+
+    return stats
+
+
+def set_critical_error(message):
+
+    global _client
+
+    if _client is None:
+
+        return
+
+    _client.last_error = message
+    _client.last_error_severity = "CRITICAL"
+
+    _client._runtime_stats["last_error"] = message
+    _client._runtime_stats["last_error_severity"] = "CRITICAL"
+
+    print(
+        f"[LiveSync] CRITICAL: {message}"
     )

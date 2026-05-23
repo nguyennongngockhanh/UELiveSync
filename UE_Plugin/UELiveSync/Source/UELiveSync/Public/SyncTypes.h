@@ -8,6 +8,8 @@
 
 #include "SyncTypes.generated.h"
 
+#include <atomic>
+
 DECLARE_LOG_CATEGORY_EXTERN(LogLiveSync, Log, All);
 
 // =========================================================
@@ -152,6 +154,28 @@ struct FPacketHeaderV3
 };
 
 #pragma pack(pop)
+
+
+// =========================================================
+// RUNTIME METRICS (lock-free, atomics)
+// =========================================================
+
+struct FLiveSyncStats
+{
+    std::atomic<int32> PacketsReceived{0};
+    std::atomic<int32> PacketsProcessed{0};
+    std::atomic<int32> PacketsDropped{0};
+    std::atomic<int32> MalformedPackets{0};
+    int32 QueueDepthCurrent = 0;
+    int32 QueueDepthPeak = 0;
+    std::atomic<int32> ReconnectCount{0};
+    double LastPacketTime = 0.0;
+    double LastThreadLoopTime = 0.0;
+    double AvgPacketsPerSecond = 0.0;
+    double AvgBytesPerSecond = 0.0;
+    double AvgProcessTimeMs = 0.0;
+    std::atomic<int64> TotalBytesReceived{0};
+};
 
 
 // =========================================================

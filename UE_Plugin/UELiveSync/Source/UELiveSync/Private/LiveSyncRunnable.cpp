@@ -13,6 +13,14 @@ extern bool GEnableVerboseSyncLogs;
 // CONSTRUCTOR
 // =========================================================
 
+void FLiveSyncRunnable::SetStats(
+    FLiveSyncStats* InStats)
+{
+    StatsRef =
+        InStats;
+}
+
+
 FLiveSyncRunnable::FLiveSyncRunnable(
 
     FSocket* InSocket,
@@ -46,7 +54,7 @@ uint32 FLiveSyncRunnable::Run()
 
     while (bRunThread)
     {
-        LastActivityTime.store(
+        LastThreadLoopTime.store(
             FPlatformTime::Seconds(),
             std::memory_order_relaxed);
 
@@ -242,6 +250,13 @@ uint32 FLiveSyncRunnable::Run()
                 Error,
                 TEXT("Invalid packet magic"));
 
+            if (StatsRef)
+            {
+                StatsRef->MalformedPackets.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+            }
+
             continue;
         }
 
@@ -259,6 +274,13 @@ uint32 FLiveSyncRunnable::Run()
                 Error,
                 TEXT("Protocol version mismatch"));
 
+            if (StatsRef)
+            {
+                StatsRef->MalformedPackets.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+            }
+
             continue;
         }
 
@@ -273,6 +295,13 @@ uint32 FLiveSyncRunnable::Run()
                 LogLiveSync,
                 Error,
                 TEXT("Invalid packet size"));
+
+            if (StatsRef)
+            {
+                StatsRef->MalformedPackets.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+            }
 
             continue;
         }
@@ -310,6 +339,13 @@ uint32 FLiveSyncRunnable::Run()
                     ObjectCount,
                     LIVE_SYNC_OBJECT_SIZE);
 
+                if (StatsRef)
+                {
+                    StatsRef->MalformedPackets.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                }
+
                 continue;
             }
         }
@@ -333,6 +369,13 @@ uint32 FLiveSyncRunnable::Run()
                     MinV3Size,
                     ObjectCount,
                     LIVE_SYNC_V3_DELETE_SIZE);
+
+                if (StatsRef)
+                {
+                    StatsRef->MalformedPackets.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                }
 
                 continue;
             }
@@ -440,6 +483,21 @@ uint32 FLiveSyncRunnable::Run()
 
         PacketQueue->Enqueue(
             MoveTemp(Packet));
+
+        LastPacketReceiveTime.store(
+            FPlatformTime::Seconds(),
+            std::memory_order_relaxed);
+
+        if (StatsRef)
+        {
+            StatsRef->PacketsReceived.fetch_add(
+                1,
+                std::memory_order_relaxed);
+
+            StatsRef->TotalBytesReceived.fetch_add(
+                PacketSize,
+                std::memory_order_relaxed);
+        }
 
         if (GEnableVerboseSyncLogs)
         {

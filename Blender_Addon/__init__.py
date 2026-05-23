@@ -20,6 +20,16 @@ from . import sync
 
 
 # =========================================================
+# PREFERENCE CHANGE CALLBACKS
+# =========================================================
+
+def _on_timing_update(self, context):
+
+    # Sync cached config when user changes timing prefs
+    sync._sync_runtime_config()
+
+
+# =========================================================
 # ADDON PREFERENCES
 # =========================================================
 
@@ -69,6 +79,25 @@ class UELIVESYNC_AP_preferences(
         description="Enable verbose sync logs",
     )
 
+    heartbeat_interval: FloatProperty(
+        name="Heartbeat Interval",
+        default=5.0,
+        min=1.0,
+        max=60.0,
+        precision=1,
+        description="Seconds between heartbeat packets",
+        update=_on_timing_update,
+    )
+
+    scan_interval: IntProperty(
+        name="Scan Interval",
+        default=300,
+        min=30,
+        max=3000,
+        description="Frames between periodic scene safety scans",
+        update=_on_timing_update,
+    )
+
     def draw(self, context):
 
         layout = self.layout
@@ -94,6 +123,21 @@ class UELIVESYNC_AP_preferences(
 
         box.prop(
             self, "threshold_scale"
+        )
+
+        layout.separator()
+
+        box = layout.box()
+        box.label(
+            text="Timing"
+        )
+
+        box.prop(
+            self, "heartbeat_interval"
+        )
+
+        box.prop(
+            self, "scan_interval"
         )
 
         layout.separator()
@@ -189,6 +233,26 @@ class UELIVESYNC_OT_stop(
         return {'FINISHED'}
 
 
+class UELIVESYNC_OT_dump_diagnostics(
+    bpy.types.Operator
+):
+    bl_idname = \
+        "uelivesync.dump_diagnostics"
+
+    bl_label = "Dump Diagnostics"
+
+    def execute(self, context):
+
+        sync.dump_diagnostics()
+
+        self.report(
+            {'INFO'},
+            "Diagnostics printed to Blender console"
+        )
+
+        return {'FINISHED'}
+
+
 # =========================================================
 # CONNECTION STATUS PANEL
 # =========================================================
@@ -248,6 +312,47 @@ class UELIVESYNC_PT_panel(
                     icon='INFO',
                 )
 
+            box.separator()
+
+            tracked = \
+                sync.get_tracked_count()
+
+            queue_depth = \
+                sync.get_queue_depth()
+
+            reconnect_count = \
+                sync.get_reconnect_count()
+
+            uptime = \
+                sync.get_uptime()
+
+            uptime_min = int(uptime // 60)
+            uptime_sec = int(uptime % 60)
+
+            row = box.row()
+            row.label(
+                text=f"Objects: {tracked}",
+                icon='OBJECT_DATA',
+            )
+
+            row = box.row()
+            row.label(
+                text=f"Queue: {queue_depth}",
+                icon='CONSOLE',
+            )
+
+            row = box.row()
+            row.label(
+                text=f"Reconnects: {reconnect_count}",
+                icon='ERROR',
+            )
+
+            row = box.row()
+            row.label(
+                text=f"Uptime: {uptime_min}m{uptime_sec:02d}s",
+                icon='TIME',
+            )
+
         else:
 
             box = layout.box()
@@ -290,6 +395,15 @@ class UELIVESYNC_PT_panel(
 
         layout.separator()
 
+        # Diagnostics
+
+        layout.operator(
+            "uelivesync.dump_diagnostics",
+            icon='CONSOLE',
+        )
+
+        layout.separator()
+
         # Preferences shortcut
 
         layout.label(
@@ -312,6 +426,7 @@ classes = (
     UELIVESYNC_OT_show_error,
     UELIVESYNC_OT_start,
     UELIVESYNC_OT_stop,
+    UELIVESYNC_OT_dump_diagnostics,
     UELIVESYNC_PT_panel,
 )
 

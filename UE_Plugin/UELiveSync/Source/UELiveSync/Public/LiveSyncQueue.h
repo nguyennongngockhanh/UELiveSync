@@ -13,6 +13,12 @@ public:
 
     static constexpr int32 MaxQueueSize = 128;
 
+    void SetStats(
+        FLiveSyncStats* InStats)
+    {
+        Stats = InStats;
+    }
+
     void Enqueue(const FLiveSyncPacket& Packet)
     {
         int32 PrevCount =
@@ -24,31 +30,66 @@ public:
             Queue.Dequeue(Dummy);
             Count.fetch_sub(1);
 
-            // Log when queue depth exceeds warn threshold
-            static int32 WarnThreshold = 64;
-
-            static IConsoleVariable* WarnCVar =
-                IConsoleManager::Get().
-                FindConsoleVariable(
-                    TEXT("UE.LiveSync.QueueWarnThreshold"));
-
-            if (WarnCVar)
+            // Track drop
+            if (Stats)
             {
-                WarnThreshold =
-                    WarnCVar->GetInt();
+                Stats->PacketsDropped.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
             }
 
-            if (PrevCount >= WarnThreshold)
+            // Log when queue depth exceeds warn threshold
+            // with cooldown to avoid log spam
+            static double LastWarnLogTime = 0.0;
+            double Now = FPlatformTime::Seconds();
+
+            if (Now - LastWarnLogTime > 5.0)
             {
-                UE_LOG(
-                    LogLiveSync,
-                    Warning,
-                    TEXT("Packet queue depth %d: dropping oldest packet"),
-                    PrevCount);
+                LastWarnLogTime = Now;
+
+                static int32 WarnThreshold = 64;
+
+                static IConsoleVariable* WarnCVar =
+                    IConsoleManager::Get().
+                    FindConsoleVariable(
+                        TEXT("UE.LiveSync.QueueWarnThreshold"));
+
+                if (WarnCVar)
+                {
+                    WarnThreshold =
+                        WarnCVar->GetInt();
+                }
+
+                if (PrevCount >= WarnThreshold)
+                {
+                    UE_LOG(
+                        LogLiveSync,
+                        Warning,
+                        TEXT("Packet queue depth %d: dropping oldest packet"),
+                        PrevCount);
+                }
             }
         }
 
         Queue.Enqueue(Packet);
+
+        // Track peak queue depth
+        if (Stats)
+        {
+            int32 CurrentSize =
+                Count.load(
+                    std::memory_order_relaxed);
+
+            Stats->QueueDepthCurrent =
+                CurrentSize;
+
+            if (CurrentSize >
+                Stats->QueueDepthPeak)
+            {
+                Stats->QueueDepthPeak =
+                    CurrentSize;
+            }
+        }
     }
 
     bool Dequeue(FLiveSyncPacket& OutPacket)
@@ -90,4 +131,6 @@ private:
 
     std::atomic<int32>
         Count{0};
+
+    FLiveSyncStats* Stats = nullptr;
 };
