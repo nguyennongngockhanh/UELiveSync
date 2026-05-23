@@ -6,9 +6,9 @@
 
 #include "Misc/Guid.h"
 
-#include "SyncTypes.generated.h"
-
 #include <atomic>
+
+#include "SyncTypes.generated.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogLiveSync, Log, All);
 

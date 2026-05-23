@@ -4,7 +4,6 @@
 
 #include "Editor.h"
 #include "LevelEditor.h"
-#include "StatusBarSubsystem.h"
 
 #include "Framework/Docking/TabManager.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -56,25 +55,6 @@ StartupModule()
         .SetMenuType(
             ETabSpawnerMenuType::
                 Enabled);
-
-    // Add to status bar
-    if (GEditor)
-    {
-        UStatusBarSubsystem*
-            StatusBar =
-            GEditor->
-            GetEditorSubsystem<
-                UStatusBarSubsystem>();
-
-        if (StatusBar)
-        {
-            StatusBar->
-                AddStatusBarWidget(
-                    TEXT("LiveSyncStatus"),
-                    SNew(
-                        SLiveSyncStatusWidget));
-        }
-    }
 }
 
 
@@ -84,22 +64,6 @@ ShutdownModule()
     FGlobalTabmanager::Get()
         ->UnregisterNomadTabSpawner(
             LiveSyncStatusTabName);
-
-    if (GEditor)
-    {
-        UStatusBarSubsystem*
-            StatusBar =
-            GEditor->
-            GetEditorSubsystem<
-                UStatusBarSubsystem>();
-
-        if (StatusBar)
-        {
-            StatusBar->
-                RemoveStatusBarWidget(
-                    TEXT("LiveSyncStatus"));
-        }
-    }
 }
 
 

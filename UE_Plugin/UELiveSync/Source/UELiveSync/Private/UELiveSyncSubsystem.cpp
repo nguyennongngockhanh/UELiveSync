@@ -2929,13 +2929,6 @@ ConsoleDumpState()
         Log,
         TEXT("=== End Dump ==="));
 }
-    }
-
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT("=== End Dump ==="));
-}
 
 
 // =========================================================

@@ -29,3 +29,12 @@ Intermediate/
 *.user
 *.log
 DerivedDataCache/
+
+# opencode skills (local only)
+.opencode/skills/
+
+# project-level dev instructions (local only)
+AGENTS.md
+
+# tests (local only)
+tests/
