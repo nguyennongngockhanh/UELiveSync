@@ -1,5 +1,8 @@
 # Issues by Phase
 
+> **ARCHIVED**: Superseded by `Docs/Roadmap/00-consolidated-roadmap.md` and subsequent phase implementations.
+> Preserved for historical reference only.
+
 > Status: 2026-05-21 — 13 of 18 issues resolved.
 
 ## Phase 1 — Must Fix (All Resolved)

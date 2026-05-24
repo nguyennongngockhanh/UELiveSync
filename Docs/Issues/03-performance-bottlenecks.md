@@ -1,5 +1,8 @@
 # Performance Bottleneck Analysis
 
+> **ARCHIVED**: All identified hotspots were resolved in Phases 3.4–3.5.
+> Preserved for historical reference only.
+
 > Analysis originally written 2026-05-20. All four identified hotspots were resolved in Phases 3.4–3.5.
 
 ## Measurement Baselines

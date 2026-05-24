@@ -1,5 +1,9 @@
 # Phase 4 — Production Hardening & Editor Tooling
 
+> **DEPRECATED**: This file is superseded by `00-consolidated-roadmap.md` (v1.1, 2026-05-24).
+> The consolidated roadmap covers all phases from current state through Phase 10.
+> This file is preserved for historical reference only.
+
 **Status**: Phase 4A completed · Phase 4B completed · Phase 4C–D pending · **Estimate**: 2–3 days · **Risk**: Low
 
 ---

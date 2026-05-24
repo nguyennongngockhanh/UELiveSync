@@ -1,5 +1,10 @@
 # Issues Database
 
+> **ARCHIVED**: This document was created during the Phase 3.4 architecture review (2026-05-20).
+> All issues have been resolved or superseded by subsequent phases (Phases 4–6A).
+> See `Docs/Roadmap/00-consolidated-roadmap.md` for current architectural status.
+> Preserved for historical reference only.
+
 > All issues identified during architecture review (2026-05-20).
 > Status updated 2026-05-21 — 13 of 18 issues resolved in Phases 3.4–3.5.
 
