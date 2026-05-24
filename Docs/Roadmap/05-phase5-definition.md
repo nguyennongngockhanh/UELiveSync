@@ -1,5 +1,9 @@
 # Phase 5 — Feature Completeness & Production Polish
 
+> **DEPRECATED**: This file is superseded by `00-consolidated-roadmap.md` (v1.0, 2026-05-24).
+> The consolidated roadmap covers all phases from current state through Phase 10.
+> This file is preserved for historical reference only.
+
 **Status**: Planning · **Estimate**: 6–8 days · **Risk**: Medium
 **Depends on**: Phase 4 (production hardening) is committed and compiling against UE5.7.
 
