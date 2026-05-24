@@ -22,37 +22,127 @@ struct FSyncTransformState
     GENERATED_BODY()
 
     // =====================================================
-    // LOCATION
+    // WORLD-SPACE CURRENT STATE (root actors)
     // =====================================================
+    // NON-AUTHORITATIVE for attached children.
+    // Derived debug/fallback world-space cache only.
+    // May become stale after parent movement.
 
     FVector CurrentLocation =
         FVector::ZeroVector;
 
+    // =====================================================
+    // WORLD-SPACE TARGET STATE (root actors)
+    // =====================================================
+    // NON-AUTHORITATIVE for attached children.
+    // Derived debug/fallback world-space cache only.
+    // May become stale after parent movement.
+
     FVector TargetLocation =
         FVector::ZeroVector;
 
+    // World-space velocity for root prediction only.
+    // Unused for attached children.
     FVector Velocity =
         FVector::ZeroVector;
 
     // =====================================================
-    // ROTATION
+    // WORLD-SPACE CURRENT ROTATION (root actors)
     // =====================================================
+    // NON-AUTHORITATIVE for attached children.
+    // Derived debug/fallback world-space cache only.
+    // May become stale after parent movement.
 
     FQuat CurrentRotation =
         FQuat::Identity;
+
+    // =====================================================
+    // WORLD-SPACE TARGET ROTATION (root actors)
+    // =====================================================
+    // NON-AUTHORITATIVE for attached children.
+    // Derived debug/fallback world-space cache only.
+    // May become stale after parent movement.
 
     FQuat TargetRotation =
         FQuat::Identity;
 
     // =====================================================
-    // SCALE
+    // WORLD-SPACE CURRENT SCALE (root actors)
     // =====================================================
+    // NON-AUTHORITATIVE for attached children.
+    // Derived debug/fallback world-space cache only.
+    // May become stale after parent movement.
 
     FVector CurrentScale =
         FVector::OneVector;
 
+    // =====================================================
+    // WORLD-SPACE TARGET SCALE (root actors)
+    // =====================================================
+    // NON-AUTHORITATIVE for attached children.
+    // Derived debug/fallback world-space cache only.
+    // May become stale after parent movement.
+
     FVector TargetScale =
         FVector::OneVector;
+
+    // =====================================================
+    // LOCAL-SPACE CURRENT STATE (attached children only)
+    // =====================================================
+    // Authoritative interpolation state for attached children.
+    // Local-space: relative to parent's world transform.
+    // Root actors do not use these fields.
+
+    FVector CurrentLocalLocation =
+        FVector::ZeroVector;
+
+    FQuat CurrentLocalRotation =
+        FQuat::Identity;
+
+    // Assumes stable mostly-uniform hierarchical scale behavior.
+    // Correct non-uniform hierarchical scale propagation is deferred.
+    FVector CurrentLocalScale =
+        FVector::OneVector;
+
+    // =====================================================
+    // LOCAL-SPACE TARGET STATE (attached children only)
+    // =====================================================
+
+    FVector LocalTargetLocation =
+        FVector::ZeroVector;
+
+    FQuat LocalTargetRotation =
+        FQuat::Identity;
+
+    // Assumes stable mostly-uniform hierarchical scale behavior.
+    // Correct non-uniform hierarchical scale propagation is deferred.
+    FVector LocalTargetScale =
+        FVector::OneVector;
+
+    // True when LocalTarget* fields hold valid authoritative target.
+    bool bHasLocalTarget =
+        false;
+
+    // =====================================================
+    // SCENE GRAPH WRITE PENDING FLAG
+    // =====================================================
+    // SET when:
+    //   - meaningful transform target change received
+    //   - parent relationship changes
+    //   - deferred attachment successfully resolves
+    //   - initialization requires first world push
+    //
+    // CLEAR when:
+    //   - world-space scene graph mutation succeeds
+    //   - attachment transition completes successfully
+    //
+    // Do NOT clear merely because:
+    //   - interpolation advanced internally
+    //   - CurrentLocal* changed
+    //   - actor tick executed
+
+    bool bPendingSceneGraphWrite =
+        false;
 
     // =====================================================
     // PARENT GUID
@@ -68,14 +158,14 @@ struct FSyncTransformState
     // =====================================================
 
     double LastUpdateTime =
-        0.0;
+         0.0;
 
     // =====================================================
     // INTERPOLATION
     // =====================================================
 
     float AdaptiveInterpSpeed =
-        12.0f;
+         12.0f;
 
     // =====================================================
     // STATE
@@ -104,13 +194,13 @@ enum EPacketType : uint8
 };
 
 // Primitive type constants (1 byte in CREATE packet payload)
-enum EPrimitiveType : uint8
+enum ELiveSyncPrimitiveType : uint8
 {
-    PRIMITIVE_Cube     = 0x00,
-    PRIMITIVE_Sphere   = 0x01,
-    PRIMITIVE_Cylinder = 0x02,
-    PRIMITIVE_Plane    = 0x03,
-    PRIMITIVE_Empty    = 0x04,
+    LSP_Cube     = 0x00,
+    LSP_Sphere   = 0x01,
+    LSP_Cylinder = 0x02,
+    LSP_Plane    = 0x03,
+    LSP_Empty    = 0x04,
 };
 
 

@@ -129,6 +129,14 @@ static TAutoConsoleVariable<int32>
         ECVF_Default
     );
 
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncMaxDepth(
+        TEXT("UE.LiveSync.MaxHierarchyDepth"),
+        64,
+        TEXT("Maximum hierarchy depth safeguard (0=disabled)"),
+        ECVF_Cheat
+    );
+
 bool UUELiveSyncSubsystem::
     bEnableVerboseSyncLogs =
         false;
@@ -1508,12 +1516,30 @@ ProcessBinaryPacket(
         }
 
         // =================================================
-        // LOCAL→WORLD CONVERSION FOR HIERARCHY
+        // LOCAL → WORLD — CHILD SPAWN POSITION ONLY
         // =================================================
+        // Phase 5B: do NOT convert local transforms to world
+        // at ingestion time. Keep original values and pass
+        // bIsLocalTransform downstream so UpdateTargetTransform
+        // stores local-space values directly.
+        //
+        // For HandleCreateObject, compute world spawn position
+        // separately so the actor starts at the correct world
+        // location.
 
         bool bIsLocalTransform =
             (PacketFlags &
              PF_HasLocalTransform) != 0;
+
+        // Save original values for UpdateTargetTransform
+        FVector OriginalLocation = Location;
+        FQuat OriginalRotation   = Rotation;
+        FVector OriginalScale     = Scale;
+
+        // Compute world spawn position for HandleCreateObject
+        FVector SpawnLocation = Location;
+        FQuat SpawnRotation   = Rotation;
+        FVector SpawnScale     = Scale;
 
         if (bIsLocalTransform &&
             ParentGuid.IsValid())
@@ -1523,26 +1549,26 @@ ProcessBinaryPacket(
 
             if (ParentActor)
             {
+                FTransform ChildLocal(
+                    OriginalRotation,
+                    OriginalLocation,
+                    OriginalScale);
+
                 FTransform ParentWorld =
                     ParentActor->
                     GetActorTransform();
-
-                FTransform ChildLocal(
-                    Rotation,
-                    Location,
-                    Scale);
 
                 FTransform ChildWorld =
                     ChildLocal *
                     ParentWorld;
 
-                Location =
+                SpawnLocation =
                     ChildWorld.GetLocation();
 
-                Rotation =
+                SpawnRotation =
                     ChildWorld.GetRotation();
 
-                Scale =
+                SpawnScale =
                     ChildWorld.GetScale3D();
             }
         }
@@ -1551,7 +1577,7 @@ ProcessBinaryPacket(
         // PRIMITIVE TYPE BYTE (CREATE-only, after parent GUID)
         // =================================================
 
-        uint8 PrimitiveType = PRIMITIVE_Cube;
+        uint8 PrimitiveType = LSP_Cube;
 
         // Only read primitive type byte for V4+ CREATE packets.
         // V3 CREATE packets end after parent GUID (80 bytes total).
@@ -1571,24 +1597,27 @@ ProcessBinaryPacket(
         {
             HandleCreateObject(
                 Guid,
-                Location,
-                Rotation,
-                Scale,
+                SpawnLocation,
+                SpawnRotation,
+                SpawnScale,
                 ParentGuid,
-                PrimitiveType);
+                PrimitiveType,
+                bIsLocalTransform);
         }
 
         UpdateTargetTransform(
 
             Guid,
 
-            Location,
+            OriginalLocation,
 
-            Rotation,
+            OriginalRotation,
 
-            Scale,
+            OriginalScale,
 
-            ParentGuid
+            ParentGuid,
+
+            bIsLocalTransform
         );
 
         if (ShouldLogVerbose())
@@ -1620,7 +1649,9 @@ UpdateTargetTransform(
 
     const FVector& Scale,
 
-    const FGuid& ParentGuid)
+    const FGuid& ParentGuid,
+
+    bool bIsLocalTransform)
 {
     FSyncTransformState& State =
 
@@ -1632,25 +1663,114 @@ UpdateTargetTransform(
         FPlatformTime::
         Seconds();
 
+    // Save parent-change before overwriting
+    bool bParentChanged =
+        ParentGuid !=
+        State.ParentGuid;
+
     if (!State.bInitialized)
     {
-        State.CurrentLocation =
-            Location;
+        if (bIsLocalTransform &&
+            ParentGuid.IsValid())
+        {
+            // Attached child: initialize local-space state
+            State.CurrentLocalLocation =
+                Location;
 
-        State.TargetLocation =
-            Location;
+            State.CurrentLocalRotation =
+                Rotation;
 
-        State.CurrentRotation =
-            Rotation;
+            State.CurrentLocalScale =
+                Scale;
 
-        State.TargetRotation =
-            Rotation;
+            State.LocalTargetLocation =
+                Location;
 
-        State.CurrentScale =
-            Scale;
+            State.LocalTargetRotation =
+                Rotation;
 
-        State.TargetScale =
-            Scale;
+            State.LocalTargetScale =
+                Scale;
+
+            State.bHasLocalTarget =
+                true;
+
+            // NON-AUTHORITATIVE
+            // World-space current state for attached actors
+            // is informational only.
+            // Attached interpolation authority remains
+            // local-space.
+
+            AActor* Parent =
+                FindActorFast(ParentGuid);
+
+            if (Parent)
+            {
+                FTransform LocalXForm(
+                    Rotation,
+                    Location,
+                    Scale);
+
+                FTransform ParentWorld =
+                    Parent->
+                    GetActorTransform();
+
+                FTransform WorldXForm =
+                    LocalXForm *
+                    ParentWorld;
+
+                State.CurrentLocation =
+                    WorldXForm.
+                    GetLocation();
+
+                State.CurrentRotation =
+                    WorldXForm.
+                    GetRotation();
+
+                State.CurrentScale =
+                    WorldXForm.
+                    GetScale3D();
+            }
+        }
+        else
+        {
+            // Root actor: initialize world-space state
+            State.CurrentLocation =
+                Location;
+
+            State.CurrentRotation =
+                Rotation;
+
+            State.CurrentScale =
+                Scale;
+
+            State.bHasLocalTarget =
+                false;
+        }
+
+        // Target* mirrors current for initial state
+        if (State.bHasLocalTarget)
+        {
+            State.TargetLocation =
+                State.CurrentLocation;
+
+            State.TargetRotation =
+                State.CurrentRotation;
+
+            State.TargetScale =
+                State.CurrentScale;
+        }
+        else
+        {
+            State.TargetLocation =
+                Location;
+
+            State.TargetRotation =
+                Rotation;
+
+            State.TargetScale =
+                Scale;
+        }
 
         State.ParentGuid =
             ParentGuid;
@@ -1663,7 +1783,17 @@ UpdateTargetTransform(
 
         State.bInitialized =
             true;
+
+        State.bPendingSceneGraphWrite =
+            true;
     }
+
+    // =====================================================
+    // THRESHOLD CHANGE DETECTION
+    // =====================================================
+    // Compare against authoritative target:
+    //   children → LocalTarget* (local space)
+    //   roots    → Target* (world space)
 
     float LocThreshold =
         CVarLiveSyncThresholdLocation.
@@ -1677,27 +1807,46 @@ UpdateTargetTransform(
         CVarLiveSyncThresholdScale.
             GetValueOnGameThread();
 
-    float LocationDistance =
+    float LocationDistance;
 
-        FVector::Dist(
+    float RotationDistance;
 
-            State.TargetLocation,
+    float ScaleDistance;
 
-            Location);
+    if (State.bHasLocalTarget)
+    {
+        LocationDistance =
+            FVector::Dist(
+                State.LocalTargetLocation,
+                Location);
 
-    float RotationDistance =
+        RotationDistance =
+            State.LocalTargetRotation.
+            AngularDistance(
+                Rotation);
 
-        State.TargetRotation.
-        AngularDistance(
-            Rotation);
+        ScaleDistance =
+            FVector::Dist(
+                State.LocalTargetScale,
+                Scale);
+    }
+    else
+    {
+        LocationDistance =
+            FVector::Dist(
+                State.TargetLocation,
+                Location);
 
-    float ScaleDistance =
+        RotationDistance =
+            State.TargetRotation.
+            AngularDistance(
+                Rotation);
 
-        FVector::Dist(
-
-            State.TargetScale,
-
-            Scale);
+        ScaleDistance =
+            FVector::Dist(
+                State.TargetScale,
+                Scale);
+    }
 
     bool bLocationChanged =
         LocationDistance >=
@@ -1715,8 +1864,7 @@ UpdateTargetTransform(
         !bRotationChanged &&
         !bScaleChanged)
     {
-        if (ParentGuid !=
-            State.ParentGuid)
+        if (bParentChanged)
         {
             State.ParentGuid =
                 ParentGuid;
@@ -1734,49 +1882,116 @@ UpdateTargetTransform(
                     Guid,
                     ParentGuid);
             }
+
+            State.bPendingSceneGraphWrite =
+                true;
         }
-        else
+
+        return;
+    }
+
+    // =====================================================
+    // VELOCITY (root prediction only)
+    // =====================================================
+
+    if (!State.bHasLocalTarget)
+    {
+        double DeltaTime =
+            CurrentTime -
+            State.LastUpdateTime;
+
+        if (bLocationChanged &&
+            DeltaTime >
+            SMALL_NUMBER)
         {
-            return;
+            FVector DeltaLocation =
+                Location -
+                State.TargetLocation;
+
+            FVector NewVelocity =
+                DeltaLocation /
+                DeltaTime;
+
+            State.Velocity =
+                FMath::VInterpTo(
+                    State.Velocity,
+                    NewVelocity,
+                    DeltaTime,
+                    8.0f);
+
+            State.Velocity =
+                State.Velocity.
+                GetClampedToMaxSize(
+                    5000.0f);
         }
     }
 
-    double DeltaTime =
+    // =====================================================
+    // STORE AUTHORITATIVE TARGET
+    // =====================================================
 
-        CurrentTime -
-        State.LastUpdateTime;
-
-    if (bLocationChanged &&
-        DeltaTime >
-        SMALL_NUMBER)
+    if (State.bHasLocalTarget)
     {
-        FVector DeltaLocation =
+        // Attached child: store local target (authoritative)
 
-            Location -
-            State.TargetLocation;
+        State.LocalTargetLocation =
+            Location;
 
-        FVector NewVelocity =
+        State.LocalTargetRotation =
+            Rotation;
 
-            DeltaLocation /
-            DeltaTime;
+        State.LocalTargetScale =
+            Scale;
 
-        State.Velocity =
+        // NON-AUTHORITATIVE
+        // Derived debug/fallback world-space cache only.
+        // May become stale after parent movement.
 
-            FMath::VInterpTo(
+        {
+            AActor* Parent =
+                FindActorFast(ParentGuid);
 
-                State.Velocity,
+            if (Parent)
+            {
+                FTransform LocalXForm(
+                    Rotation,
+                    Location,
+                    Scale);
 
-                NewVelocity,
+                FTransform ParentWorld =
+                    Parent->
+                    GetActorTransform();
 
-                DeltaTime,
+                FTransform WorldXForm =
+                    LocalXForm *
+                    ParentWorld;
 
-                8.0f);
+                State.TargetLocation =
+                    WorldXForm.
+                    GetLocation();
 
-        State.Velocity =
+                State.TargetRotation =
+                    WorldXForm.
+                    GetRotation();
 
-            State.Velocity.
-            GetClampedToMaxSize(
-                5000.0f);
+                State.TargetScale =
+                    WorldXForm.
+                    GetScale3D();
+            }
+        }
+    }
+    else
+    {
+        // Root actor: store world-space target
+
+        State.TargetLocation =
+            Location;
+
+        State.TargetRotation =
+            Rotation;
+
+        State.TargetScale =
+            Scale;
     }
 
     State.ParentGuid =
@@ -1785,27 +2000,19 @@ UpdateTargetTransform(
     State.bHasParent =
         ParentGuid.IsValid();
 
-    State.TargetLocation =
-        Location;
-
-    State.TargetRotation =
-        Rotation;
-
-    State.TargetScale =
-        Scale;
-
     State.LastUpdateTime =
         CurrentTime;
 
-    if (ParentGuid !=
-        State.ParentGuid)
+    State.bPendingSceneGraphWrite =
+        true;
+
+    // =====================================================
+    // HANDLE PARENT CHANGE
+    // =====================================================
+    // Uses bParentChanged saved before State was modified.
+
+    if (bParentChanged)
     {
-        State.ParentGuid =
-            ParentGuid;
-
-        State.bHasParent =
-            ParentGuid.IsValid();
-
         if (!State.bHasParent)
         {
             DetachFromParent(Guid);
@@ -1817,11 +2024,41 @@ UpdateTargetTransform(
                 ParentGuid);
         }
     }
-    else if (State.bHasParent)
+    // NOTE: unconditional AttachToParent on every tick
+    // for bHasParent actors is REMOVED.
+    // AttachToParent is only called on parent change.
+    // Idempotency is maintained by AttachToParent's
+    // internal guard against same-parent re-attach.
+
+    // =====================================================
+    // VERBOSE AUTHORITY-PATH LOGGING
+    // =====================================================
+
+    if (bEnableVerboseSyncLogs)
     {
-        AttachToParent(
-            Guid,
-            ParentGuid);
+        if (State.bHasLocalTarget &&
+            State.bHasParent)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT(
+                    "Authority: child=%s"
+                    " local target updated"),
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+        }
+        else
+        {
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT(
+                    "Authority: root=%s"
+                    " world target updated"),
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+        }
     }
 }
 
@@ -1884,23 +2121,56 @@ InterpolateTransforms(
         AActor* Actor =
             ActorPtr->Get();
 
-        bool bLocationConverged =
-            FVector::Dist(
-                State.CurrentLocation,
-                State.TargetLocation)
-            < KINDA_SMALL_NUMBER;
+        // ---------------------------------------------------
+        // CONVERGENCE CHECK
+        // ---------------------------------------------------
 
-        bool bRotationConverged =
-            State.CurrentRotation.
-                Equals(
-                    State.TargetRotation,
-                    0.01f);
+        bool bLocationConverged;
+        bool bRotationConverged;
+        bool bScaleConverged;
 
-        bool bScaleConverged =
-            FVector::Dist(
-                State.CurrentScale,
-                State.TargetScale)
-            < KINDA_SMALL_NUMBER;
+        if (State.bHasLocalTarget && State.bHasParent)
+        {
+            // Attached child: check local-space convergence
+            bLocationConverged =
+                FVector::Dist(
+                    State.CurrentLocalLocation,
+                    State.LocalTargetLocation)
+                < KINDA_SMALL_NUMBER;
+
+            bRotationConverged =
+                State.CurrentLocalRotation.
+                    Equals(
+                        State.LocalTargetRotation,
+                        0.01f);
+
+            bScaleConverged =
+                FVector::Dist(
+                    State.CurrentLocalScale,
+                    State.LocalTargetScale)
+                < KINDA_SMALL_NUMBER;
+        }
+        else
+        {
+            // Root actor: check world-space convergence
+            bLocationConverged =
+                FVector::Dist(
+                    State.CurrentLocation,
+                    State.TargetLocation)
+                < KINDA_SMALL_NUMBER;
+
+            bRotationConverged =
+                State.CurrentRotation.
+                    Equals(
+                        State.TargetRotation,
+                        0.01f);
+
+            bScaleConverged =
+                FVector::Dist(
+                    State.CurrentScale,
+                    State.TargetScale)
+                < KINDA_SMALL_NUMBER;
+        }
 
         if (bLocationConverged &&
             bRotationConverged &&
@@ -1909,6 +2179,177 @@ InterpolateTransforms(
             ConvergedCount++;
             continue;
         }
+
+        // ---------------------------------------------------
+        // ATTACHED ACTOR PATH
+        // ---------------------------------------------------
+        // Attached actors never continuously drive world-space
+        // transforms. UE attachment propagation owns child world
+        // motion. Local-space interpolation updates internal
+        // state only.
+
+        if (State.bHasLocalTarget && State.bHasParent)
+        {
+            if (InterpMode == 0)
+            {
+                // Direct-set: snap local state to target
+                State.CurrentLocalLocation =
+                    State.LocalTargetLocation;
+
+                State.CurrentLocalRotation =
+                    State.LocalTargetRotation;
+
+                State.CurrentLocalScale =
+                    State.LocalTargetScale;
+            }
+            else if (FVector::Dist(
+                State.CurrentLocalLocation,
+                State.LocalTargetLocation) < SnapDist)
+            {
+                // Snap when close
+                State.CurrentLocalLocation =
+                    State.LocalTargetLocation;
+
+                State.CurrentLocalRotation =
+                    State.LocalTargetRotation;
+
+                State.CurrentLocalScale =
+                    State.LocalTargetScale;
+
+                SnapCount++;
+            }
+            else
+            {
+                // Smooth interpolation in local space
+                State.CurrentLocalLocation =
+                    FMath::VInterpTo(
+                        State.CurrentLocalLocation,
+                        State.LocalTargetLocation,
+                        DeltaTime,
+                        State.AdaptiveInterpSpeed);
+
+                // Patch 3: Normalize after Slerp to prevent
+                // quaternion drift across long-running sessions.
+                State.CurrentLocalRotation =
+                    FQuat::Slerp(
+                        State.CurrentLocalRotation,
+                        State.LocalTargetRotation,
+                        DeltaTime * 12.0f).
+                    GetNormalized();
+
+                // Assumes stable mostly-uniform hierarchical
+                // scale behavior. Correct non-uniform
+                // hierarchical scale propagation is deferred.
+                State.CurrentLocalScale =
+                    State.LocalTargetScale;
+
+                InterpCount++;
+            }
+
+            // Scene graph write only when pending
+            if (State.bPendingSceneGraphWrite)
+            {
+                AActor* Parent =
+                    FindActorFast(
+                        State.ParentGuid);
+
+                if (Parent)
+                {
+                    FTransform LocalXForm(
+                        State.CurrentLocalRotation,
+                        State.CurrentLocalLocation,
+                        State.CurrentLocalScale);
+
+                    FTransform WorldXForm =
+                        LocalXForm *
+                        Parent->
+                        GetActorTransform();
+
+                    Actor->SetActorTransform(
+                        WorldXForm);
+
+                    // NON-AUTHORITATIVE
+                    // Update debug world cache for diagnostics
+                    State.CurrentLocation =
+                        WorldXForm.GetLocation();
+
+                    State.CurrentRotation =
+                        WorldXForm.GetRotation();
+
+                    State.CurrentScale =
+                        WorldXForm.GetScale3D();
+                }
+
+                State.bPendingSceneGraphWrite =
+                    false;
+
+                InterpCount++;
+            }
+
+            // =================================================
+            // DRIFT DIAGNOSTICS (verbose-only, thresholded)
+            // =================================================
+
+            if (bEnableVerboseSyncLogs)
+            {
+                AActor* Parent =
+                    FindActorFast(
+                        State.ParentGuid);
+
+                if (Parent)
+                {
+                    FTransform LocalXForm(
+                        State.CurrentLocalRotation,
+                        State.CurrentLocalLocation,
+                        State.CurrentLocalScale);
+
+                    FTransform ExpectedWorld =
+                        LocalXForm *
+                        Parent->
+                        GetActorTransform();
+
+                    double Err =
+                        FVector::Dist(
+                            Actor->
+                            GetActorLocation(),
+                            ExpectedWorld.
+                            GetLocation());
+
+                    if (Err > 0.01)
+                    {
+                        UE_LOG(
+                            LogLiveSync,
+                            Verbose,
+                            TEXT(
+                                "Drift: child=%s"
+                                " err=%.4f"),
+                            *Guid.ToString(
+                                EGuidFormats::
+                                Digits),
+                            Err);
+                    }
+
+                    if (Err >
+                        HierarchyDiag.
+                        MaxWorldErrorDistance)
+                    {
+                        HierarchyDiag.
+                        MaxWorldErrorDistance =
+                            Err;
+                    }
+
+                    HierarchyDiag.
+                        WorldErrorDistance =
+                            Err;
+                }
+            }
+
+            continue;
+        }
+
+        // ---------------------------------------------------
+        // ROOT ACTOR PATH
+        // ---------------------------------------------------
 
         // =================================================
         // DIRECT-SET MODE (zero lag)
@@ -2019,6 +2460,8 @@ InterpolateTransforms(
                 State.
                 AdaptiveInterpSpeed);
 
+        // Patch 3: Normalize after Slerp to prevent
+        // quaternion drift across long-running sessions.
         State.CurrentRotation =
 
             FQuat::Slerp(
@@ -2028,7 +2471,8 @@ InterpolateTransforms(
                 State.TargetRotation,
 
                 DeltaTime *
-                12.0f);
+                12.0f).
+            GetNormalized();
 
         State.CurrentScale =
 
@@ -2373,6 +2817,23 @@ AttachToParent(
         return;
     }
 
+    // =====================================================
+    // Self-parent rejection
+    // =====================================================
+
+    if (Guid == ParentGuid)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT(
+                "Self-parent rejection:"
+                " child=parent=%s"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
+        return;
+    }
+
     AActor* Child =
         FindActorFast(Guid);
 
@@ -2436,13 +2897,89 @@ AttachToParent(
     if (Child->GetAttachParentActor()
         == Parent)
     {
+        // Attached while already attached to same parent = churn
+        HierarchyDiag.AttachmentChurnCount++;
         return;
+    }
+
+    // =====================================================
+    // Max hierarchy depth walk with cycle detection
+    // =====================================================
+
+    int32 MaxDepth =
+        CVarLiveSyncMaxDepth.
+            GetValueOnGameThread();
+
+    if (MaxDepth > 0)
+    {
+        int32 Depth = 0;
+        AActor* Probe = Parent;
+
+        while (Probe)
+        {
+            // Patch 4: Explicit cycle detection.
+            // Avoid relying solely on depth overflow.
+            if (Probe == Child)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT(
+                        "Hierarchy cycle detected:"
+                        " child=%s parent=%s"),
+                    *Guid.ToString(
+                        EGuidFormats::Digits),
+                    *ParentGuid.ToString(
+                        EGuidFormats::Digits));
+                return;
+            }
+
+            Depth++;
+
+            if (Depth > MaxDepth)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT(
+                        "Exceeded max hierarchy depth"
+                        " %d: child=%s parent=%s"),
+                    MaxDepth,
+                    *Guid.ToString(
+                        EGuidFormats::Digits),
+                    *ParentGuid.ToString(
+                        EGuidFormats::Digits));
+                return;
+            }
+
+            Probe =
+                Probe->
+                GetAttachParentActor();
+        }
     }
 
     Child->AttachToActor(
         Parent,
         FAttachmentTransformRules::
             KeepWorldTransform);
+
+    // Verbose authority transition log
+    if (bEnableVerboseSyncLogs)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT(
+                "Authority: child=%s"
+                " entering local mode"
+                " parent=%s"),
+            *Guid.ToString(
+                EGuidFormats::Digits),
+            *ParentGuid.ToString(
+                EGuidFormats::Digits));
+    }
+
+    HierarchyDiag.ReattachCount++;
 
     UE_LOG(
         LogLiveSync,
@@ -2481,6 +3018,36 @@ DetachFromParent(
         FDetachmentTransformRules::
             KeepWorldTransform);
 
+    // Patch 2: Child -> root transition.
+    // Local-authority interpolation no longer valid.
+    if (FSyncTransformState* State =
+        TransformStates.Find(Guid))
+    {
+        State->bHasLocalTarget =
+            false;
+
+        // Re-seed authoritative world state from actor.
+        // Prevents frozen transforms after detach.
+        if (AActor* DetachedActor =
+            FindActorFast(Guid))
+        {
+            State->CurrentLocation =
+                DetachedActor->
+                GetActorLocation();
+
+            State->CurrentRotation =
+                DetachedActor->
+                GetActorQuat();
+
+            State->CurrentScale =
+                DetachedActor->
+                GetActorScale3D();
+        }
+
+        State->bPendingSceneGraphWrite =
+            true;
+    }
+
     UE_LOG(
         LogLiveSync,
         Log,
@@ -2508,7 +3075,9 @@ HandleCreateObject(
 
     const FGuid& ParentGuid,
 
-    uint8 PrimitiveType)
+    uint8 PrimitiveType,
+
+    bool bIsLocalTransform)
 {
     UWorld* World = GetWorld();
 
@@ -2546,6 +3115,12 @@ HandleCreateObject(
         ESpawnActorCollisionHandlingMethod::
             AlwaysSpawn;
 
+    // =====================================================
+    // Step 1: Spawn actor at world position.
+    // Location/Rotation/Scale are already world-space
+    // (ProcessBinaryPacket computed world for children).
+    // =====================================================
+
     AActor* NewActor =
 
         World->SpawnActor<AActor>(
@@ -2564,8 +3139,39 @@ HandleCreateObject(
         return;
     }
 
+    // =====================================================
+    // Tag and cache
+    // =====================================================
+
+    FString TagString =
+        FString::Printf(
+            TEXT("LiveSync_GUID=%s"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
+
+    NewActor->Tags.Add(
+        FName(*TagString));
+
+    ActorCache.Add(
+        Guid,
+        NewActor);
+
+    // =====================================================
+    // Step 2: Attach to parent (initial attach).
+    // Attach BEFORE initializing local state so attachment
+    // is established before the first interpolation tick.
+    // KeepWorldTransform preserves the initial world pose.
+    // =====================================================
+
+    AttachToParent(
+        Guid,
+        ParentGuid);
+
+    // =====================================================
     // Validate primitive type
-    if (PrimitiveType > PRIMITIVE_Empty)
+    // =====================================================
+
+    if (PrimitiveType > LSP_Empty)
     {
         UE_LOG(
             LogLiveSync,
@@ -2574,36 +3180,16 @@ HandleCreateObject(
             PrimitiveType);
 
         PrimitiveType =
-            PRIMITIVE_Cube;
+            LSP_Cube;
     }
 
-    if (PrimitiveType == PRIMITIVE_Empty)
+    if (PrimitiveType == LSP_Empty)
     {
-        // Empty actor — no mesh component, just root
-        // Tag and cache, then return immediately
-        FString TagString =
-            FString::Printf(
-                TEXT("LiveSync_GUID=%s"),
-                *Guid.ToString(
-                    EGuidFormats::Digits));
-
-        NewActor->Tags.Add(
-            FName(*TagString));
-
-        ActorCache.Add(
-            Guid,
-            NewActor);
-
-        UpdateTargetTransform(
-            Guid,
-            Location,
-            Rotation,
-            Scale,
-            ParentGuid);
-
-        AttachToParent(
-            Guid,
-            ParentGuid);
+        // NOTE: State initialization is handled by the caller
+        // (ProcessBinaryPacket or RecoverMissingActors) via
+        // an explicit UpdateTargetTransform call with correct
+        // (possibly local-space) transform values.
+        // This avoids passing world-spawn values as local targets.
 
         return;
     }
@@ -2622,25 +3208,25 @@ HandleCreateObject(
 
     switch (PrimitiveType)
     {
-    case PRIMITIVE_Sphere:
+    case LSP_Sphere:
         PrimitiveMesh = LoadObject<UStaticMesh>(
             nullptr,
             TEXT("/Engine/BasicShapes/Sphere.Sphere"));
         break;
 
-    case PRIMITIVE_Cylinder:
+    case LSP_Cylinder:
         PrimitiveMesh = LoadObject<UStaticMesh>(
             nullptr,
             TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
         break;
 
-    case PRIMITIVE_Plane:
+    case LSP_Plane:
         PrimitiveMesh = LoadObject<UStaticMesh>(
             nullptr,
             TEXT("/Engine/BasicShapes/Plane.Plane"));
         break;
 
-    case PRIMITIVE_Cube:
+    case LSP_Cube:
     default:
         PrimitiveMesh = LoadObject<UStaticMesh>(
             nullptr,
@@ -2662,29 +3248,11 @@ HandleCreateObject(
 
     MeshComp->RegisterComponent();
 
-    FString TagString =
-        FString::Printf(
-            TEXT("LiveSync_GUID=%s"),
-            *Guid.ToString(
-                EGuidFormats::Digits));
-
-    NewActor->Tags.Add(
-        FName(*TagString));
-
-    ActorCache.Add(
-        Guid,
-        NewActor);
-
-    UpdateTargetTransform(
-        Guid,
-        Location,
-        Rotation,
-        Scale,
-        ParentGuid);
-
-    AttachToParent(
-        Guid,
-        ParentGuid);
+    // NOTE: State initialization is handled by the caller
+    // (ProcessBinaryPacket or RecoverMissingActors) via
+    // an explicit UpdateTargetTransform call with correct
+    // (possibly local-space) transform values.
+    // This avoids passing world-spawn values as local targets.
 }
 
 
@@ -2891,6 +3459,20 @@ ResolvePendingAttachments()
                         FAttachmentTransformRules::
                             KeepWorldTransform);
 
+                    // Patch 1: Force one world-space recompute
+                    // on next interp tick. Child may have
+                    // advanced local interpolation while waiting
+                    // for parent resolution.
+                    if (FSyncTransformState*
+                        State =
+                        TransformStates.Find(
+                            Entry.Child))
+                    {
+                        State->
+                            bPendingSceneGraphWrite =
+                            true;
+                    }
+
                     if (
                         bEnableVerboseSyncLogs
                     )
@@ -2899,8 +3481,9 @@ ResolvePendingAttachments()
                             LogLiveSync,
                             Log,
                             TEXT(
-                                "Deferred attach: "
-                                "child=%s parent=%s"),
+                                "Authority: deferred"
+                                " attach resolved"
+                                " child=%s parent=%s"),
                             *Entry.Child.ToString(
                                 EGuidFormats::Digits),
                             *Entry.Parent.ToString(
@@ -3001,12 +3584,62 @@ RecoverMissingActors()
                 State.RecoveryAttempts,
                 MaxRecoveryAttempts);
 
-            HandleCreateObject(
-                Guid,
-                TransformState->TargetLocation,
-                TransformState->TargetRotation,
-                TransformState->TargetScale,
-                TransformState->ParentGuid);
+            if (TransformState->bHasLocalTarget &&
+                TransformState->ParentGuid.IsValid())
+            {
+                // Child recovery: pass local values directly.
+                // HandleCreateObject computes world for spawn.
+                HandleCreateObject(
+                    Guid,
+                    TransformState->
+                        LocalTargetLocation,
+                    TransformState->
+                        LocalTargetRotation,
+                    TransformState->
+                        LocalTargetScale,
+                    TransformState->ParentGuid,
+                    LSP_Cube,
+                    true);
+
+                // Initialize state with stored local values
+                UpdateTargetTransform(
+                    Guid,
+                    TransformState->
+                        LocalTargetLocation,
+                    TransformState->
+                        LocalTargetRotation,
+                    TransformState->
+                        LocalTargetScale,
+                    TransformState->ParentGuid,
+                    true);
+            }
+            else
+            {
+                // Root recovery: pass world-space values.
+                HandleCreateObject(
+                    Guid,
+                    TransformState->
+                        TargetLocation,
+                    TransformState->
+                        TargetRotation,
+                    TransformState->
+                        TargetScale,
+                    TransformState->ParentGuid,
+                    LSP_Cube,
+                    false);
+
+                // Initialize state with stored world values
+                UpdateTargetTransform(
+                    Guid,
+                    TransformState->
+                        TargetLocation,
+                    TransformState->
+                        TargetRotation,
+                    TransformState->
+                        TargetScale,
+                    TransformState->ParentGuid,
+                    false);
+            }
         }
         else if (State.MissingFrames >= 30 &&
                  State.RecoveryAttempts >= MaxRecoveryAttempts)

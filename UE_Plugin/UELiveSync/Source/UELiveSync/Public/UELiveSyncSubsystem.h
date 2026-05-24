@@ -106,7 +106,9 @@ private:
 
         const FVector& Scale,
 
-        const FGuid& ParentGuid = FGuid()
+        const FGuid& ParentGuid = FGuid(),
+
+        bool bIsLocalTransform = false
     );
 
     void InterpolateTransforms(
@@ -141,7 +143,9 @@ private:
 
         const FGuid& ParentGuid,
 
-        uint8 PrimitiveType = PRIMITIVE_Cube);
+        uint8 PrimitiveType = LSP_Cube,
+
+        bool bIsLocalTransform = false);
 
     void HandleDeleteObject(
         const FGuid& Guid);
@@ -300,6 +304,37 @@ private:
     void ConsolePing();
 
     void ConsoleStats();
+
+    // =====================================================
+    // HIERARCHY DIAGNOSTICS (verbose-only, temporary)
+    // =====================================================
+
+    struct FHierarchyDiagnostics
+    {
+        // Current and peak world-space error for attached children
+        double WorldErrorDistance = 0.0;
+        double MaxWorldErrorDistance = 0.0;
+
+        // Current and peak local-space error for attached children
+        double RelativeErrorDistance = 0.0;
+        double MaxRelativeErrorDistance = 0.0;
+
+        // Incremented when AttachToActor() called while actor is
+        // already attached to the SAME parent.
+        // NOT incremented for:
+        //   - valid first attachment
+        //   - valid reparent
+        //   - deferred attach resolution
+        int32 AttachmentChurnCount = 0;
+
+        // Incremented on every valid reparent operation
+        int32 ReattachCount = 0;
+
+        // Incremented when stored ParentGuid != actor's actual parent
+        int32 ParentMismatchCount = 0;
+    };
+
+    FHierarchyDiagnostics HierarchyDiag;
 
     // =====================================================
     // DEFERRED ATTACHMENTS

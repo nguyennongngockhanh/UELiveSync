@@ -84,7 +84,24 @@ no engine cost. Scene graph mutation triggers physics, rendering, and
 blueprint events. Decoupling the two allows smooth internal advancement
 without unnecessary engine work.
 
-### 1.5 Attachment Operations Must Be Idempotent
+### 1.6 Authoritative Transforms Must Never Flow World→Local→World Across Frames
+
+**Rule**: Authoritative transforms must not repeatedly flow
+`world → local → world` across multiple runtime frames.
+
+**Rationale**: Repeated reconstruction loops are a primary
+source of drift accumulation and hierarchy instability in
+realtime scene graph systems.
+
+**Acceptable single conversion**:
+- Incoming local transform → multiply by parent world → write world once
+
+**Forbidden**:
+- Read actor world → convert to local by subtracting parent world →
+  store → next frame: read stored local → convert back to world →
+  write → next frame: read world again → convert to local → etc.
+
+### 1.7 Attachment Operations Must Be Idempotent
 
 **Rule**: `AttachToActor()` must only be called when the parent
 relationship actually changes (guid diff), not every tick.
@@ -376,6 +393,23 @@ Note: Between detach and next packet, the actor's world position
 is held constant (KeepWorldTransform on detach). No drift occurs.
 ```
 
+### 4.6 Initialization Order for Attached Children
+
+Every newly created attached child MUST follow this exact order:
+
+1. **Apply initial world transform once**
+   - Spawn actor at world position computed from `local × parent_world`
+2. **AttachToActor(KeepWorldTransform)**
+   - Parent-child relationship established before any interpolation runs
+3. **Switch to local-authority interpolation mode**
+   - `UpdateTargetTransform` initializes local-space state
+
+**Rationale**: Attaching before initial world placement may cause UE
+to recompute incorrect relative transforms. Placing the world
+transform first ensures the initial pose is correct. `KeepWorldTransform`
+on `AttachToActor` preserves this pose while establishing the
+parent-child relationship for future propagation.
+
 ---
 
 ## Section 5 — Validation Priority Order
@@ -552,34 +586,36 @@ The following are explicitly **out of scope for Phase 5B**:
 
 ---
 
-## Appendix A — Current Code Issues Identified
+## Appendix A — Phase 5B Fixes Applied
 
-These are specific code problems in the current Phase 5A implementation
-that will be addressed in Phase 5B:
+The following fixes from Appendix A in the Phase 5B planning document
+have been implemented:
 
-1. **`InterpolateTransforms` unconditional `SetActorTransform`**
-   - File: `UELiveSyncSubsystem.cpp` lines 1928, 1963, 2037
-   - Issue: Every non-converged actor gets world transform set, including attached children
-   - Fix: Skip `SetActorTransform` for `bHasParent && !bTargetJustChanged`
+1. **`InterpolateTransforms` — attached child guard**
+   - Attached actors no longer continuously drive world-space transforms.
+   - Local-space interpolation updates internal state only.
+   - Scene graph write only when `bPendingSceneGraphWrite` is set.
 
-2. **`UpdateTargetTransform` calls `AttachToParent` every packet**
-   - File: `UELiveSyncSubsystem.cpp` lines 1820–1824
-   - Issue: `AttachToParent` called even when `ParentGuid` matches existing state
-   - Fix: Only call `AttachToParent` on ParentGuid change, not every update
+2. **`UpdateTargetTransform` — unconditional `AttachToParent` removed**
+   - Parent-change detection now uses a pre-overwrite snapshot.
+   - `AttachToParent` is only called on actual parent GUID change.
+   - Old unconditional `else if (State.bHasParent)` path deleted.
 
-3. **World-space storage for all actors**
-   - File: `UELiveSyncSubsystem.cpp` lines 1788–1795
-   - Issue: `TargetLocation/Rotation/Scale` are stored as world even for children
-   - Fix: Convert to local at ingestion time for attached children; store local target separately
+3. **Local-space storage for attached children**
+   - `LocalTargetLocation/Rotation/Scale` store authoritative local values.
+   - `CurrentLocalLocation/Rotation/Scale` store advancing local state.
+   - `bHasLocalTarget` discriminates child vs root interpolation path.
+   - World-space fields are marked `NON-AUTHORITATIVE` for children.
 
-4. **No `bTargetJustChanged` flag**
-   - Issue: Interpolation loop can't distinguish "new data arrived this frame" from "still converging"
-   - Fix: Add per-state dirty flag set by `UpdateTargetTransform`, cleared after scene graph write
+4. **`bPendingSceneGraphWrite` flag**
+   - Per-state flag set by `UpdateTargetTransform` on meaningful change.
+   - Cleared only after successful scene graph write or attachment transition.
+   - Lifecycle rules documented in `SyncTypes.h`.
 
-5. **`PF_HasLocalTransform` flag exists but is inconsistently used**
-   - File: `UELiveSyncSubsystem.cpp` lines 1506–1540
-   - Issue: Local→world conversion happens in packet parser but the interpolator doesn't know if the stored target is local or world
-   - Fix: Store a `bIsLocal` flag in `FSyncTransformState`; use it in interpolation
+5. **`PF_HasLocalTransform` passed as parameter**
+   - No longer converted to world at ingestion time.
+   - `bIsLocalTransform` passed to `HandleCreateObject` and `UpdateTargetTransform`.
+   - Local values stored directly; world computed on-demand for scene graph writes.
 
 ---
 
@@ -604,3 +640,4 @@ that will be addressed in Phase 5B:
 | Date | Version | Author | Changes |
 |------|---------|--------|---------|
 | 2026-05-23 | 1.0 | Phase 5B planning | Initial architectural contract document |
+| 2026-05-24 | 2.0 | Phase 5B implementation | Implemented: local-space storage, attached-child guard, idempotent attachment, hierarchy safety (self-parent, depth limit, cycle detection), drift diagnostics, quaternion normalization, deferred world rewrite, detach re-seed |
