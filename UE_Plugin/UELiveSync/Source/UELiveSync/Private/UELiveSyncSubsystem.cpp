@@ -2,6 +2,7 @@
 
 DEFINE_LOG_CATEGORY(LogLiveSync);
 
+#include "Engine/Engine.h"
 #include "Engine/World.h"
 
 #include "GameFramework/Actor.h"
@@ -27,6 +28,47 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Engine/StaticMesh.h"
 
 #include "HAL/IConsoleManager.h"
+
+
+// =========================================================
+// STATIC HELPERS
+// =========================================================
+
+static UStaticMesh*
+GetPrimitiveMesh(uint8 PrimitiveType)
+{
+    switch (PrimitiveType)
+    {
+    case LSP_Sphere:
+        return LoadObject<UStaticMesh>(
+            nullptr,
+            TEXT(
+            "/Engine/BasicShapes/"
+            "Sphere.Sphere"));
+
+    case LSP_Cylinder:
+        return LoadObject<UStaticMesh>(
+            nullptr,
+            TEXT(
+            "/Engine/BasicShapes/"
+            "Cylinder.Cylinder"));
+
+    case LSP_Plane:
+        return LoadObject<UStaticMesh>(
+            nullptr,
+            TEXT(
+            "/Engine/BasicShapes/"
+            "Plane.Plane"));
+
+    case LSP_Cube:
+    default:
+        return LoadObject<UStaticMesh>(
+            nullptr,
+            TEXT(
+            "/Engine/BasicShapes/"
+            "Cube.Cube"));
+    }
+}
 
 
 // =========================================================
@@ -106,6 +148,23 @@ static TAutoConsoleVariable<float>
     );
 
 static TAutoConsoleVariable<int32>
+    CVarLiveSyncVerboseSyncLogs(
+        TEXT("UE.LiveSync.VerboseSyncLogs"),
+        0,
+        TEXT("Enable verbose sync log messages (1=on, 0=off). "
+             "Overrides UE.LiveSync.Verbose for log-message granularity."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncDebugDraw(
+        TEXT("UE.LiveSync.DebugDraw"),
+        0,
+        TEXT("Enable debug visualization overlay (1=on, 0=off)"),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
     CVarLiveSyncValidateProtocol(
         TEXT("UE.LiveSync.ValidateProtocol"),
         1,
@@ -143,6 +202,10 @@ bool UUELiveSyncSubsystem::
 
 bool GEnableVerboseSyncLogs =
     false;
+
+bool UUELiveSyncSubsystem::
+    bEnableDebugDraw =
+        false;
 
 bool UUELiveSyncSubsystem::
 ShouldLogVerbose() const
@@ -389,6 +452,9 @@ bool UUELiveSyncSubsystem::Tick(
     GEnableVerboseSyncLogs =
         bEnableVerboseSyncLogs;
 
+    bEnableDebugDraw =
+        CVarLiveSyncDebugDraw.GetValueOnGameThread() != 0;
+
     // =====================================================
     // RETRY LISTENER IF PREVIOUS BIND FAILED
     // =====================================================
@@ -592,6 +658,19 @@ bool UUELiveSyncSubsystem::Tick(
                     1,
                     std::memory_order_relaxed);
 
+                FReconnectEvent Evt;
+                Evt.Timestamp =
+                    FPlatformTime::Seconds();
+                Evt.AttemptNumber =
+                    WatchdogRestartCount;
+                ReconnectHistory.Insert(Evt, 0);
+                if (ReconnectHistory.Num() >
+                    MAX_RECONNECT_HISTORY)
+                {
+                    ReconnectHistory.SetNum(
+                        MAX_RECONNECT_HISTORY);
+                }
+
                 StopNetworkThread();
             }
         }
@@ -646,6 +725,20 @@ bool UUELiveSyncSubsystem::Tick(
 
     RecoverMissingActors();
 
+    ResolvePendingAssets();
+
+    // =====================================================
+    // ROLLING METRICS (EMA, every tick)
+    // =====================================================
+
+    TickMetrics(DeltaTime);
+
+    // =====================================================
+    // SAFETY MONITORS (flood detection, queue pressure)
+    // =====================================================
+
+    TickSafetyMonitors(DeltaTime);
+
     // =====================================================
     // RUNTIME METRICS (every 60s in verbose mode)
     // =====================================================
@@ -655,14 +748,25 @@ bool UUELiveSyncSubsystem::Tick(
         double Now =
             FPlatformTime::Seconds();
 
-        if (Now - LastMetricsLogTime >=
-            MetricsLogInterval)
+        if (Now - Stats.LastMetricsLogTime >=
+            60.0)
         {
-            LastMetricsLogTime =
+            Stats.LastMetricsLogTime =
                 Now;
 
             LogRuntimeMetrics();
         }
+    }
+
+    // =====================================================
+    // DEBUG DRAW OVERLAY (editor only, off by default)
+    // =====================================================
+
+    if (bEnableDebugDraw)
+    {
+#if WITH_EDITOR
+        DrawDebugOverlay();
+#endif
     }
 
     return true;
@@ -909,6 +1013,29 @@ ProcessQueuedPackets()
 
     uint64 ProcessStartCycles =
         FPlatformTime::Cycles64();
+
+    // Detect new drops since last tick → record overflow event
+    int32 CurrentDrops =
+        Stats.PacketsDropped.load(
+            std::memory_order_relaxed);
+
+    if (CurrentDrops > LastReportedDrops)
+    {
+        FOverflowEvent Evt;
+        Evt.Timestamp =
+            FPlatformTime::Seconds();
+        Evt.QueueDepth =
+            Stats.QueueDepthCurrent;
+        OverflowHistory.Insert(Evt, 0);
+        if (OverflowHistory.Num() >
+            MAX_OVERFLOW_HISTORY)
+        {
+            OverflowHistory.SetNum(
+                MAX_OVERFLOW_HISTORY);
+        }
+
+        LastReportedDrops = CurrentDrops;
+    }
 
     while (
         PacketQueue.Dequeue(
@@ -1277,6 +1404,66 @@ ProcessBinaryPacket(
     if (PacketType == PT_EndSnapshot)
     {
         HandleEndSnapshot();
+        return;
+    }
+
+    // =====================================================
+    // PT_AssetDef (V5) — batch-handle all objects
+    // =====================================================
+
+    if (PacketType == PT_AssetDef)
+    {
+        Stats.AssetDefsReceived.fetch_add(
+            ObjectCount,
+            std::memory_order_relaxed);
+
+        for (uint32 i = 0;
+             i < ObjectCount;
+             i++)
+        {
+            if (Ptr + LIVE_SYNC_V5_ASSET_DEF_SIZE
+                > PacketEnd)
+            {
+                return;
+            }
+
+            FGuid Guid;
+            FMemory::Memcpy(
+                &Guid,
+                Ptr,
+                sizeof(FGuid));
+            Ptr += sizeof(FGuid);
+
+            uint64 IdentityHigh;
+            uint64 IdentityLow;
+            FMemory::Memcpy(
+                &IdentityLow,
+                Ptr,
+                sizeof(uint64));
+            Ptr += sizeof(uint64);
+            FMemory::Memcpy(
+                &IdentityHigh,
+                Ptr,
+                sizeof(uint64));
+            Ptr += sizeof(uint64);
+
+            uint8 PrimitiveFallback;
+            FMemory::Memcpy(
+                &PrimitiveFallback,
+                Ptr,
+                sizeof(uint8));
+            Ptr += sizeof(uint8);
+
+            HandleAssetDef(
+                Guid,
+                IdentityHigh,
+                IdentityLow,
+                PrimitiveFallback);
+        }
+
+        Stats.PacketsProcessed.fetch_add(
+            1,
+            std::memory_order_relaxed);
         return;
     }
 
@@ -3204,35 +3391,8 @@ HandleCreateObject(
     MeshComp->SetVisibility(
         true, true);
 
-    UStaticMesh* PrimitiveMesh = nullptr;
-
-    switch (PrimitiveType)
-    {
-    case LSP_Sphere:
-        PrimitiveMesh = LoadObject<UStaticMesh>(
-            nullptr,
-            TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-        break;
-
-    case LSP_Cylinder:
-        PrimitiveMesh = LoadObject<UStaticMesh>(
-            nullptr,
-            TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-        break;
-
-    case LSP_Plane:
-        PrimitiveMesh = LoadObject<UStaticMesh>(
-            nullptr,
-            TEXT("/Engine/BasicShapes/Plane.Plane"));
-        break;
-
-    case LSP_Cube:
-    default:
-        PrimitiveMesh = LoadObject<UStaticMesh>(
-            nullptr,
-            TEXT("/Engine/BasicShapes/Cube.Cube"));
-        break;
-    }
+    UStaticMesh* PrimitiveMesh =
+        GetPrimitiveMesh(PrimitiveType);
 
     if (PrimitiveMesh)
     {
@@ -3316,6 +3476,344 @@ HandleDeleteObject(
             *ActorName,
             Actor ? 1 : 0,
             bCacheHadEntry ? 1 : 0);
+    }
+
+    // Remove asset metadata and pending resolution
+    if (AssetMetadata.Remove(Guid))
+    {
+        PendingAssetQueue.Remove(Guid);
+    }
+}
+
+
+// =========================================================
+// HANDLE ASSET DEF (V5)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleAssetDef(
+    const FGuid& Guid,
+    uint64 IdentityHigh,
+    uint64 IdentityLow,
+    uint8 PrimitiveFallback)
+{
+    FAssetIdentityRef Identity;
+    Identity.High = IdentityHigh;
+    Identity.Low  = IdentityLow;
+
+    if (!Identity.IsValid())
+    {
+        Stats.AssetDefsSkipped.fetch_add(
+            1,
+            std::memory_order_relaxed);
+        return;
+    }
+
+    FAssetMetadata& Meta =
+        AssetMetadata.FindOrAdd(Guid);
+
+    if (Meta.bResolved &&
+        Meta.Identity == Identity)
+    {
+        return;
+    }
+
+    Meta.Identity = Identity;
+    Meta.PrimitiveFallback =
+        PrimitiveFallback;
+    Meta.RetryCount = 0;
+    Meta.NextRetryTime = 0.0;
+    Meta.RetryInterval =
+        ASSET_RETRY_INTERVAL_INITIAL;
+    Meta.bResolved = false;
+    Meta.bFallbackAssigned = false;
+
+    PendingAssetQueue.Enqueue(Guid);
+
+    if (bEnableVerboseSyncLogs)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("[AssetDef] GUID=%s Identity=0x%llx%llx "
+                 "Fallback=%d"),
+            *Guid.ToString(
+                EGuidFormats::Digits),
+            Identity.High,
+            Identity.Low,
+            PrimitiveFallback);
+    }
+}
+
+
+// =========================================================
+// RESOLVE PENDING ASSETS
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ResolvePendingAssets()
+{
+    double Now =
+        FPlatformTime::Seconds();
+    int32 ResolvedThisTick = 0;
+
+    FGuid Guid;
+
+    while (
+        ResolvedThisTick <
+            MAX_ASSET_RESOLUTIONS_PER_TICK &&
+        PendingAssetQueue.Dequeue(Guid))
+    {
+        FAssetMetadata* Meta =
+            AssetMetadata.Find(Guid);
+
+        if (!Meta)
+        {
+            continue;
+        }
+
+        if (Meta->bResolved)
+        {
+            continue;
+        }
+
+        if (Now < Meta->NextRetryTime)
+        {
+            PendingAssetQueue.Enqueue(Guid);
+            continue;
+        }
+
+        FSoftObjectPath*
+            CachedPath =
+                AssetPathCache.Find(
+                    Meta->Identity);
+
+        if (!CachedPath ||
+            CachedPath->IsNull())
+        {
+            Stats.AssetLookupsAttempted.fetch_add(
+    1,
+    std::memory_order_relaxed);
+
+            Meta->RetryCount++;
+            Meta->RetryInterval =
+                FMath::Min(
+                    Meta->RetryInterval * 2.0,
+                    ASSET_RETRY_INTERVAL_MAX);
+            Meta->NextRetryTime =
+                Now + Meta->RetryInterval;
+
+            if (Meta->RetryCount <
+                MAX_ASSET_RETRY_ATTEMPTS)
+            {
+                PendingAssetQueue.Enqueue(Guid);
+            }
+            else
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("[Asset] Resolution failed "
+                         "for GUID=%s after %d retries "
+                         "\u2014 using fallback primitive"),
+                    *Guid.ToString(
+                        EGuidFormats::Digits),
+                    MAX_ASSET_RETRY_ATTEMPTS);
+
+                Stats.AssetLookupsFailed.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+                AssignFallbackPrimitive(
+                    Guid,
+                    Meta->PrimitiveFallback);
+                Meta->bResolved = true;
+                Meta->bFallbackAssigned = true;
+            }
+
+            continue;
+        }
+
+        AssignStaticMesh(Guid, *CachedPath);
+        Meta->bResolved = true;
+        Stats.AssetAssignmentsSucceeded.fetch_add(
+            1,
+            std::memory_order_relaxed);
+        ResolvedThisTick++;
+    }
+}
+
+
+// =========================================================
+// ASSIGN STATIC MESH
+// =========================================================
+
+void UUELiveSyncSubsystem::
+AssignStaticMesh(
+    const FGuid& Guid,
+    const FSoftObjectPath& Path)
+{
+    AActor* Actor =
+        FindActorFast(Guid).Get();
+
+    if (!Actor)
+    {
+        if (bEnableVerboseSyncLogs)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Verbose,
+                TEXT("[Asset] Assign deferred \u2014 "
+                     "actor not yet created for GUID=%s"),
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+        }
+
+        PendingAssetQueue.Enqueue(Guid);
+        return;
+    }
+
+    UStaticMesh* Mesh =
+        Cast<UStaticMesh>(
+            StaticLoadObject(
+                UStaticMesh::StaticClass(),
+                nullptr,
+                *Path.ToString()));
+
+    if (!Mesh)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("[Asset] Failed to load mesh for "
+                 "GUID=%s: %s"),
+            *Guid.ToString(
+                EGuidFormats::Digits),
+            *Path.ToString());
+
+        Stats.AssetAssignmentsFailed.fetch_add(
+            1,
+            std::memory_order_relaxed);
+        return;
+    }
+
+    UStaticMeshComponent* MeshComp =
+        Actor->FindComponentByClass<
+            UStaticMeshComponent>();
+
+    if (!MeshComp)
+    {
+        MeshComp =
+            NewObject<
+                UStaticMeshComponent>(
+                    Actor);
+
+        if (Actor->GetRootComponent())
+        {
+            MeshComp->SetupAttachment(
+                Actor->GetRootComponent());
+        }
+        else
+        {
+            Actor->SetRootComponent(
+                MeshComp);
+        }
+    }
+
+    MeshComp->SetStaticMesh(Mesh);
+    MeshComp->SetMobility(
+        EComponentMobility::Movable);
+
+    if (!MeshComp->IsRegistered())
+    {
+        MeshComp->RegisterComponent();
+    }
+
+    Stats.AssetAssignmentsSucceeded.fetch_add(
+        1,
+        std::memory_order_relaxed);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("[Asset] Assigned mesh %s to GUID=%s"),
+        *Path.ToString(),
+        *Guid.ToString(
+            EGuidFormats::Digits));
+}
+
+
+// =========================================================
+// ASSIGN FALLBACK PRIMITIVE
+// =========================================================
+
+void UUELiveSyncSubsystem::
+AssignFallbackPrimitive(
+    const FGuid& Guid,
+    uint8 PrimitiveType)
+{
+    AActor* Actor =
+        FindActorFast(Guid).Get();
+
+    if (!Actor)
+    {
+        return;
+    }
+
+    UStaticMeshComponent* MeshComp =
+        Actor->FindComponentByClass<
+            UStaticMeshComponent>();
+
+    if (!MeshComp)
+    {
+        MeshComp =
+            NewObject<
+                UStaticMeshComponent>(
+                    Actor);
+
+        if (Actor->GetRootComponent())
+        {
+            MeshComp->SetupAttachment(
+                Actor->GetRootComponent());
+        }
+        else
+        {
+            Actor->SetRootComponent(
+                MeshComp);
+        }
+    }
+
+    UStaticMesh* Mesh =
+        GetPrimitiveMesh(PrimitiveType);
+
+    if (Mesh)
+    {
+        MeshComp->SetStaticMesh(Mesh);
+        MeshComp->SetMobility(
+            EComponentMobility::Movable);
+
+        if (!MeshComp->IsRegistered())
+        {
+            MeshComp->RegisterComponent();
+        }
+    }
+}
+
+
+// =========================================================
+// CACHE ASSET PATH
+// =========================================================
+
+void UUELiveSyncSubsystem::
+CacheAssetPath(
+    const FAssetIdentityRef& Identity,
+    const FSoftObjectPath& Path)
+{
+    if (Identity.IsValid() &&
+        !Path.IsNull())
+    {
+        AssetPathCache.Add(
+            Identity,
+            Path);
     }
 }
 
@@ -3682,6 +4180,455 @@ RecoverMissingActors()
 
 
 // =========================================================
+// ROLLING METRICS (EMA-based, called every tick)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+TickMetrics(float DeltaTime)
+{
+    if (DeltaTime <= 0.0f)
+        return;
+
+    double Now =
+        FPlatformTime::Seconds();
+
+    double Elapsed =
+        Now - LastRateSampleTime;
+
+    // Compute instantaneous rate every ~1s
+    if (LastRateSampleTime > 0.0 &&
+        Elapsed >= 1.0)
+    {
+        int32 PacketsRecv =
+            Stats.PacketsReceived.load(
+                std::memory_order_relaxed);
+
+        int64 BytesRecv =
+            Stats.TotalBytesReceived.load(
+                std::memory_order_relaxed);
+
+        double InstantPktPerSec =
+            (double)(PacketsRecv -
+                LastRateSamplePackets) /
+            Elapsed;
+
+        double InstantBytesPerSec =
+            (double)(BytesRecv -
+                LastRateSampleBytes) /
+            Elapsed;
+
+        // EMA smoothing factor (≈ 4-second half-life)
+        const double Alpha = 0.15;
+
+        if (Stats.PacketsPerSecondEMA == 0.0)
+        {
+            Stats.PacketsPerSecondEMA =
+                InstantPktPerSec;
+        }
+        else
+        {
+            Stats.PacketsPerSecondEMA =
+                Alpha * InstantPktPerSec +
+                (1.0 - Alpha) *
+                    Stats.PacketsPerSecondEMA;
+        }
+
+        if (Stats.BytesPerSecondEMA == 0.0)
+        {
+            Stats.BytesPerSecondEMA =
+                InstantBytesPerSec;
+        }
+        else
+        {
+            Stats.BytesPerSecondEMA =
+                Alpha * InstantBytesPerSec +
+                (1.0 - Alpha) *
+                    Stats.BytesPerSecondEMA;
+        }
+
+        // Track peaks
+        if (Stats.PacketsPerSecondEMA >
+            Stats.PeakPacketsPerSecond)
+        {
+            Stats.PeakPacketsPerSecond =
+                Stats.PacketsPerSecondEMA;
+        }
+
+        if (Stats.BytesPerSecondEMA >
+            Stats.PeakBytesPerSecond)
+        {
+            Stats.PeakBytesPerSecond =
+                Stats.BytesPerSecondEMA;
+        }
+
+        // Update process time EMA
+        double ProcessMs =
+            Stats.AvgProcessTimeMs;
+
+        if (Stats.ProcessTimeMsEMA == 0.0)
+        {
+            Stats.ProcessTimeMsEMA = ProcessMs;
+        }
+        else
+        {
+            Stats.ProcessTimeMsEMA =
+                Alpha * ProcessMs +
+                (1.0 - Alpha) *
+                    Stats.ProcessTimeMsEMA;
+        }
+
+        if (Stats.AvgProcessTimeMs >
+            Stats.PeakProcessTimeMs)
+        {
+            Stats.PeakProcessTimeMs =
+                Stats.AvgProcessTimeMs;
+        }
+
+        LastRateSampleTime = Now;
+        LastRateSamplePackets = PacketsRecv;
+        LastRateSampleBytes = BytesRecv;
+    }
+}
+
+
+// =========================================================
+// SAFETY MONITORS (flood detection, queue pressure)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+TickSafetyMonitors(float DeltaTime)
+{
+    double Now =
+        FPlatformTime::Seconds();
+
+    // --- Flood detection ---
+    if (FloodWindowStart == 0.0)
+    {
+        FloodWindowStart = Now;
+    }
+
+    double WindowElapsed =
+        Now - FloodWindowStart;
+
+    if (WindowElapsed >=
+        FloodDetectionWindow)
+    {
+        int32 PacketsInWindow =
+            Stats.PacketsReceived.load(
+                std::memory_order_relaxed) -
+            FloodPacketCount;
+
+        double RatePerSec =
+            (double)PacketsInWindow /
+            WindowElapsed;
+
+        if (RatePerSec >
+            FloodThresholdPacketsPerSec)
+        {
+            Stats.FloodWarnings++;
+
+            Stats.LastFloodWarningTime =
+                Now;
+
+            if (ShouldLogVerbose())
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("[Safety] Flood detected: "
+                         "%.0f pkt/s (threshold %d)"),
+                    RatePerSec,
+                    (int32)
+                        FloodThresholdPacketsPerSec);
+            }
+        }
+
+        FloodPacketCount =
+            Stats.PacketsReceived.load(
+                std::memory_order_relaxed);
+
+        FloodWindowStart = Now;
+    }
+
+    // --- Queue pressure ---
+    if (Stats.QueueDepthCurrent >= 0)
+    {
+        QueuePressureAccumulator +=
+            (double)Stats.QueueDepthCurrent *
+            DeltaTime;
+
+        double AvgDepth =
+            QueuePressureAccumulator /
+            (Now - FloodWindowStart +
+             0.001);
+
+        if (AvgDepth >
+            QueuePressureThreshold)
+        {
+            Stats.QueuePressureWarnings++;
+
+            Stats.LastQueuePressureTime =
+                Now;
+
+            if (ShouldLogVerbose())
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("[Safety] Queue pressure: "
+                         "avg depth %.0f/%d"),
+                    AvgDepth,
+                    (int32)
+                        QueuePressureThreshold);
+            }
+        }
+    }
+}
+
+
+// =========================================================
+// SET QUEUE DEPTH PEAK (called from LiveSyncQueue)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+SetQueueDepthPeak(int32 Depth)
+{
+    if (Depth >
+        Stats.QueueDepthPeak)
+    {
+        Stats.QueueDepthPeak = Depth;
+    }
+}
+
+
+#if WITH_EDITOR
+// =========================================================
+// DEBUG DRAW OVERLAY
+// =========================================================
+
+void UUELiveSyncSubsystem::
+DrawDebugOverlay()
+{
+    UWorld* World =
+        GetWorld();
+
+    if (!World)
+        return;
+
+    // Build a compact one-line status string
+    FString Status;
+
+    bool bConnected =
+        ConnectionSocket &&
+        ConnectionSocket->
+            GetConnectionState()
+            == SCS_Connected;
+
+    Status +=
+        bConnected
+            ? TEXT("Connected")
+            : TEXT("Disconnected");
+
+    Status +=
+        FString::Printf(
+            TEXT(" | Queue:%d/%d"),
+            Stats.QueueDepthCurrent,
+            Stats.QueueDepthPeak);
+
+    Status +=
+        FString::Printf(
+            TEXT(" | Pkt/s:%.0f"),
+            Stats.PacketsPerSecondEMA);
+
+    Status +=
+        FString::Printf(
+            TEXT(" | Recv:%d Drp:%d"),
+            Stats.PacketsReceived.load(
+                std::memory_order_relaxed),
+            Stats.PacketsDropped.load(
+                std::memory_order_relaxed));
+
+    int32 PendingAssets = 0;
+    int32 Unused = 0;
+    PendingAssetQueue.GetDiagnostics(
+        PendingAssets, Unused);
+
+    if (PendingAssets > 0)
+    {
+        Status +=
+            FString::Printf(
+                TEXT(" | Assets:%d"),
+                PendingAssets);
+    }
+
+    GEngine->AddOnScreenDebugMessage(
+        984531,                    // unique key
+        0.0f,                      // duration (0=persistent)
+        bConnected
+            ? FColor::Green
+            : FColor::Red,
+        TEXT("LiveSync: ") + Status);
+}
+
+
+// =========================================================
+// DIAGNOSTICS TEXT (polled by Slate widget)
+// =========================================================
+
+FText UUELiveSyncSubsystem::
+GetDiagnosticsText() const
+{
+    FString Report;
+
+    bool bConnected =
+        ConnectionSocket &&
+        ConnectionSocket->
+            GetConnectionState()
+            == SCS_Connected;
+
+    // Connection
+    Report +=
+        FString::Printf(
+            TEXT("Connection: %s\n"),
+            bConnected
+                ? TEXT("Connected")
+                : TEXT("Disconnected"));
+
+    if (bConnected)
+    {
+        Report +=
+            FString::Printf(
+                TEXT("  Uptime: %s\n"),
+                *GetUptimeText().ToString());
+    }
+
+    // Objects
+    Report +=
+        FString::Printf(
+            TEXT("Objects Tracked: %d\n"),
+            TransformStates.Num());
+
+    // Queue
+    Report +=
+        FString::Printf(
+            TEXT("Queue: %d current / %d peak\n"),
+            Stats.QueueDepthCurrent,
+            Stats.QueueDepthPeak);
+
+    // Pipeline counters
+    Report +=
+        FString::Printf(
+            TEXT("Packets: %d recv / %d proc / %d drop / %d malformed\n"),
+            Stats.PacketsReceived.load(
+                std::memory_order_relaxed),
+            Stats.PacketsProcessed.load(
+                std::memory_order_relaxed),
+            Stats.PacketsDropped.load(
+                std::memory_order_relaxed),
+            Stats.MalformedPackets.load(
+                std::memory_order_relaxed));
+
+    Report +=
+        FString::Printf(
+            TEXT("Bytes: %lld recv\n"),
+            Stats.TotalBytesReceived.load(
+                std::memory_order_relaxed));
+
+    // Performance (EMA)
+    Report +=
+        FString::Printf(
+            TEXT("Performance (EMA):\n"));
+
+    Report +=
+        FString::Printf(
+            TEXT("  %.0f pkt/s (peak %.0f)\n"),
+            Stats.PacketsPerSecondEMA,
+            Stats.PeakPacketsPerSecond);
+
+    Report +=
+        FString::Printf(
+            TEXT("  %.0f B/s (peak %.0f)\n"),
+            Stats.BytesPerSecondEMA,
+            Stats.PeakBytesPerSecond);
+
+    Report +=
+        FString::Printf(
+            TEXT("  %.2f ms/pkt (peak %.2f)\n"),
+            Stats.ProcessTimeMsEMA,
+            Stats.PeakProcessTimeMs);
+
+    // Event history summaries
+    Report +=
+        FString::Printf(
+            TEXT("Events: %d reconnects, %d overflow events\n"),
+            Stats.ReconnectCount.load(
+                std::memory_order_relaxed),
+            OverflowHistory.Num());
+
+    // Safety
+    if (Stats.FloodWarnings > 0 ||
+        Stats.QueuePressureWarnings > 0)
+    {
+        Report +=
+            FString::Printf(
+                TEXT("Safety: %d flood warnings, %d queue pressure\n"),
+                Stats.FloodWarnings,
+                Stats.QueuePressureWarnings);
+    }
+
+    // Asset resolution (Phase 6A)
+    int32 PendingAssets = 0;
+    int32 UnresolvedAssets = 0;
+    PendingAssetQueue.GetDiagnostics(
+        PendingAssets,
+        UnresolvedAssets);
+
+    Stats.PendingAssetCount = PendingAssets;
+    if (PendingAssets > Stats.PendingAssetPeak)
+    {
+        Stats.PendingAssetPeak = PendingAssets;
+    }
+
+    Report +=
+        FString::Printf(
+            TEXT("Asset:\n"));
+
+    Report +=
+        FString::Printf(
+            TEXT("  Defs Received: %d (skipped %d)\n"),
+            Stats.AssetDefsReceived.load(
+                std::memory_order_relaxed),
+            Stats.AssetDefsSkipped.load(
+                std::memory_order_relaxed));
+
+    Report +=
+        FString::Printf(
+            TEXT("  Assignments: %d ok / %d fail\n"),
+            Stats.AssetAssignmentsSucceeded.load(
+                std::memory_order_relaxed),
+            Stats.AssetAssignmentsFailed.load(
+                std::memory_order_relaxed));
+
+    Report +=
+        FString::Printf(
+            TEXT("  Lookups: %d attempt / %d fail\n"),
+            Stats.AssetLookupsAttempted.load(
+                std::memory_order_relaxed),
+            Stats.AssetLookupsFailed.load(
+                std::memory_order_relaxed));
+
+    Report +=
+        FString::Printf(
+            TEXT("  Pending: %d resolved (queue: %d)\n"),
+            AssetMetadata.Num() - PendingAssets,
+            PendingAssets);
+
+    return FText::FromString(Report);
+}
+#endif
+
+
+// =========================================================
 // LOG RUNTIME METRICS
 // =========================================================
 
@@ -3724,38 +4671,17 @@ LogRuntimeMetrics()
         Stats.TotalBytesReceived.load(
             std::memory_order_relaxed);
 
-    // Compute rates since last sample
-    double Now =
-        FPlatformTime::Seconds();
-
-    double Elapsed =
-        Now - LastRateSampleTime;
-
-    if (LastRateSampleTime > 0.0 &&
-        Elapsed > 0.001)
-    {
-        Stats.AvgPacketsPerSecond =
-            (double)(PacketsRecv -
-                LastRateSamplePackets) /
-            Elapsed;
-
-        Stats.AvgBytesPerSecond =
-            (double)(BytesRecv -
-                LastRateSampleBytes) /
-            Elapsed;
-    }
-
-    LastRateSampleTime = Now;
-    LastRateSamplePackets = PacketsRecv;
-    LastRateSampleBytes = BytesRecv;
-
     UE_LOG(
         LogLiveSync,
         Log,
         TEXT("[Metrics] States=%d Cache=%d Queue=%d "
              "Connected=%d Recv=%d Proc=%d Drop=%d "
              "Malformed=%d Bytes=%lld "
-             "Pkt/s=%.1f B/s=%.1f Process=%.2fms"),
+             "Pkt/s=%.0f(EMA) pk=%.0f "
+             "B/s=%.0f(EMA) pk=%.0f "
+             "Process=%.2fms(EMA) pk=%.2f "
+             "FloodW=%d QPress=%d "
+             "Reconn=%d Overflows=%d"),
         StateCount,
         CacheCount,
         QueueSize,
@@ -3765,9 +4691,43 @@ LogRuntimeMetrics()
         PacketsDrop,
         Malformed,
         BytesRecv,
-        Stats.AvgPacketsPerSecond,
-        Stats.AvgBytesPerSecond,
-        Stats.AvgProcessTimeMs);
+        Stats.PacketsPerSecondEMA,
+        Stats.PeakPacketsPerSecond,
+        Stats.BytesPerSecondEMA,
+        Stats.PeakBytesPerSecond,
+        Stats.ProcessTimeMsEMA,
+        Stats.PeakProcessTimeMs,
+        Stats.FloodWarnings,
+        Stats.QueuePressureWarnings,
+        Stats.ReconnectCount.load(
+            std::memory_order_relaxed),
+        OverflowHistory.Num());
+
+    int32 PendingAssets = 0;
+    int32 Unused = 0;
+    PendingAssetQueue.GetDiagnostics(
+        PendingAssets, Unused);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("[Metrics-Asset] Defs=%d Skip=%d "
+             "Asgn=%dok/%dfail Lkup=%datm/%dfail "
+             "Pending=%d Stale=%d"),
+        Stats.AssetDefsReceived.load(
+            std::memory_order_relaxed),
+        Stats.AssetDefsSkipped.load(
+            std::memory_order_relaxed),
+        Stats.AssetAssignmentsSucceeded.load(
+            std::memory_order_relaxed),
+        Stats.AssetAssignmentsFailed.load(
+            std::memory_order_relaxed),
+        Stats.AssetLookupsAttempted.load(
+            std::memory_order_relaxed),
+        Stats.AssetLookupsFailed.load(
+            std::memory_order_relaxed),
+        PendingAssets,
+        Stats.StaleEvictions);
 }
 
 
@@ -3876,25 +4836,60 @@ ConsoleStats()
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("  [Performance]"));
+        TEXT("  [Performance (EMA)]"));
 
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("  AvgPacketsPerSecond: %.1f"),
-        Stats.AvgPacketsPerSecond);
+        TEXT("  PacketsPerSecond:    %.0f"),
+        Stats.PacketsPerSecondEMA);
 
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("  AvgBytesPerSecond:   %.1f"),
-        Stats.AvgBytesPerSecond);
+        TEXT("  PeakPacketsPerSecond:%.0f"),
+        Stats.PeakPacketsPerSecond);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  BytesPerSecond:      %.0f"),
+        Stats.BytesPerSecondEMA);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  PeakBytesPerSecond:  %.0f"),
+        Stats.PeakBytesPerSecond);
 
     UE_LOG(
         LogLiveSync,
         Log,
         TEXT("  AvgProcessTimeMs:    %.2f"),
-        Stats.AvgProcessTimeMs);
+        Stats.ProcessTimeMsEMA);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  PeakProcessTimeMs:   %.2f"),
+        Stats.PeakProcessTimeMs);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  [Safety]"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  FloodWarnings:       %d"),
+        Stats.FloodWarnings);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  QueuePressureWarnings:%d"),
+        Stats.QueuePressureWarnings);
 
     UE_LOG(
         LogLiveSync,
@@ -3913,6 +4908,67 @@ ConsoleStats()
         Log,
         TEXT("  WatchdogRestartCount: %d"),
         WatchdogRestartCount);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  Event History:"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    ReconnectEvents:   %d"),
+        ReconnectHistory.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    OverflowEvents:    %d"),
+        OverflowHistory.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  [Asset] (Phase 6A)"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    AssetDefsReceived: %d"),
+        Stats.AssetDefsReceived.load(
+            std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    AssetDefsSkipped:  %d"),
+        Stats.AssetDefsSkipped.load(
+            std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    Assignments:       %d ok / %d fail"),
+        Stats.AssetAssignmentsSucceeded.load(
+            std::memory_order_relaxed),
+        Stats.AssetAssignmentsFailed.load(
+            std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    Lookups:           %d attempt / %d fail"),
+        Stats.AssetLookupsAttempted.load(
+            std::memory_order_relaxed),
+        Stats.AssetLookupsFailed.load(
+            std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    Pending:           %d / %d peak"),
+        Stats.PendingAssetCount,
+        Stats.PendingAssetPeak);
 
     UE_LOG(
         LogLiveSync,
@@ -4121,6 +5177,55 @@ ConsoleReset()
 
     WatchdogRestartCount = 0;
     LastWatchdogRestartTime = 0.0;
+
+    // Reset metrics
+    Stats.PacketsReceived.store(0, std::memory_order_relaxed);
+    Stats.PacketsProcessed.store(0, std::memory_order_relaxed);
+    Stats.PacketsDropped.store(0, std::memory_order_relaxed);
+    Stats.MalformedPackets.store(0, std::memory_order_relaxed);
+    Stats.ReconnectCount.store(0, std::memory_order_relaxed);
+    Stats.TotalBytesReceived.store(0, std::memory_order_relaxed);
+    Stats.QueueDepthCurrent = 0;
+    Stats.QueueDepthPeak = 0;
+    Stats.PacketsPerSecondEMA = 0.0;
+    Stats.BytesPerSecondEMA = 0.0;
+    Stats.ProcessTimeMsEMA = 0.0;
+    Stats.PeakProcessTimeMs = 0.0;
+    Stats.PeakPacketsPerSecond = 0.0;
+    Stats.PeakBytesPerSecond = 0.0;
+    Stats.FloodWarnings = 0;
+    Stats.QueuePressureWarnings = 0;
+    Stats.LastFloodWarningTime = 0.0;
+    Stats.LastQueuePressureTime = 0.0;
+    Stats.LastMetricsLogTime = 0.0;
+    Stats.LastPacketTime = 0.0;
+    Stats.LastThreadLoopTime = 0.0;
+    Stats.AvgProcessTimeMs = 0.0;
+    LastRateSampleTime = 0.0;
+    LastRateSamplePackets = 0;
+    LastRateSampleBytes = 0;
+    FloodAccumulator = 0.0;
+    FloodPacketCount = 0;
+    FloodWindowStart = 0.0;
+    QueuePressureAccumulator = 0.0;
+    // Asset diagnostics reset (Phase 6A)
+    Stats.AssetDefsReceived.store(0, std::memory_order_relaxed);
+    Stats.AssetDefsSkipped.store(0, std::memory_order_relaxed);
+    Stats.AssetAssignmentsSucceeded.store(0, std::memory_order_relaxed);
+    Stats.AssetAssignmentsFailed.store(0, std::memory_order_relaxed);
+    Stats.AssetLookupsAttempted.store(0, std::memory_order_relaxed);
+    Stats.AssetLookupsFailed.store(0, std::memory_order_relaxed);
+    Stats.PendingAssetCount = 0;
+    Stats.PendingAssetPeak = 0;
+    Stats.StaleEvictions = 0;
+
+    AssetMetadata.Empty();
+    AssetPathCache.Empty();
+    PendingAssetQueue.Empty();
+
+    ReconnectHistory.Empty();
+    OverflowHistory.Empty();
+    LastReportedDrops = 0;
 
     StartServer();
     BuildActorCache();

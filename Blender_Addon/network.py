@@ -23,6 +23,150 @@ PRIMITIVE_EMPTY = 0x04
 # Packet type constants (beyond V3 base)
 PT_BeginSnapshot = 0x09
 PT_EndSnapshot = 0x0A
+PT_AssetDef = 0x08
+
+# V5 protocol version
+LIVE_SYNC_VERSION_V5 = 5
+
+
+# =========================================================
+# XXHASH64 (pure Python, deterministic, fast)
+# =========================================================
+
+_XXH_PRIME64_1 = 0x9E3779B185EBCA87
+_XXH_PRIME64_2 = 0xC2B2AE3D27D4EB4F
+_XXH_PRIME64_3 = 0x165667B19E3779F9
+_XXH_PRIME64_4 = 0x85EBCA77C2B2AE63
+_XXH_PRIME64_5 = 0x27D4EB2F165667C5
+
+
+def _xxh64_round(acc, seed):
+    acc += seed * _XXH_PRIME64_2
+    acc = ((acc << 31) | (acc >> 33))
+    acc *= _XXH_PRIME64_1
+    return acc & 0xFFFFFFFFFFFFFFFF
+
+
+def _xxh64_merge_round(acc, val):
+    acc = ((acc ^ _xxh64_round(0, val)) * _XXH_PRIME64_1) + _XXH_PRIME64_4
+    return acc & 0xFFFFFFFFFFFFFFFF
+
+
+def xxh64(data, seed=0):
+    length = len(data)
+    remaining_length = length
+    acc = seed + _XXH_PRIME64_5 + _XXH_PRIME64_5
+
+    if length >= 32:
+        v1 = seed + _XXH_PRIME64_1 + _XXH_PRIME64_2
+        v2 = seed + _XXH_PRIME64_2
+        v3 = seed
+        v4 = seed - _XXH_PRIME64_1
+
+        limit = length - 32
+        offset = 0
+
+        while offset <= limit:
+            v1 = _xxh64_round(v1, struct.unpack_from("<Q", data, offset)[0])
+            v2 = _xxh64_round(v2, struct.unpack_from("<Q", data, offset + 8)[0])
+            v3 = _xxh64_round(v3, struct.unpack_from("<Q", data, offset + 16)[0])
+            v4 = _xxh64_round(v4, struct.unpack_from("<Q", data, offset + 24)[0])
+            offset += 32
+
+        acc = ((v1 << 1) | (v1 >> 63))
+        acc = _xxh64_merge_round(acc, v2)
+        acc = _xxh64_merge_round(acc, v3)
+        acc = _xxh64_merge_round(acc, v4)
+
+        remaining_length = length - offset
+    else:
+        acc += _XXH_PRIME64_5
+
+    offset = length - remaining_length
+    while remaining_length >= 8:
+        val = struct.unpack_from("<Q", data, offset)[0]
+        acc = ((acc ^ _xxh64_round(0, val)) * _XXH_PRIME64_1) + _XXH_PRIME64_4
+        acc &= 0xFFFFFFFFFFFFFFFF
+        offset += 8
+        remaining_length -= 8
+
+    while remaining_length >= 4:
+        val = struct.unpack_from("<I", data, offset)[0]
+        acc = ((acc ^ (val * _XXH_PRIME64_1)) * _XXH_PRIME64_3) + _XXH_PRIME64_5
+        acc &= 0xFFFFFFFFFFFFFFFF
+        offset += 4
+        remaining_length -= 4
+
+    while remaining_length > 0:
+        val = data[offset]
+        acc = ((acc ^ (val * _XXH_PRIME64_5)) * _XXH_PRIME64_3) + _XXH_PRIME64_5
+        acc &= 0xFFFFFFFFFFFFFFFF
+        offset += 1
+        remaining_length -= 1
+
+    # Final avalanche
+    acc ^= acc >> 37
+    acc = (acc * _XXH_PRIME64_3) + _XXH_PRIME64_5
+    acc ^= acc >> 37
+    acc = (acc * _XXH_PRIME64_4) + _XXH_PRIME64_5
+    acc ^= acc >> 37
+
+    return acc & 0xFFFFFFFFFFFFFFFF
+
+
+# =========================================================
+# ASSET IDENTITY HELPERS (Phase 6A)
+# =========================================================
+
+def get_mesh_identity_hash(obj):
+    """Return (low: int, high: int, primitive_type: int).
+
+    xxHash64 of the Blender mesh datablock name.
+    Deterministic across sessions and duplicated object instances.
+    NOT stable across datablock renames.
+
+    If obj is not a MESH or has no data, returns (0, 0, PRIMITIVE_EMPTY).
+    """
+    if obj.type != 'MESH' or obj.data is None:
+        return (0, 0, PRIMITIVE_EMPTY)
+
+    name_bytes = obj.data.name.encode("utf-8")
+    hash_value = xxh64(name_bytes)
+
+    low = hash_value & 0xFFFFFFFFFFFFFFFF
+    high = (hash_value >> 64) & 0xFFFFFFFFFFFFFFFF
+
+    # Get the configured primitive type as fallback
+    try:
+        from . import sync
+        primitive = sync._get_primitive_type()
+    except (ImportError, AttributeError):
+        primitive = PRIMITIVE_CUBE
+
+    return (low, high, primitive if primitive is not None else PRIMITIVE_CUBE)
+
+
+def serialize_asset_identity(guid_obj, identity_low, identity_high, primitive_type):
+    """33 bytes per object: GUID(16) + IdentityHash(16) + PrimitiveFallback(1).
+
+    PT_AssetDef (V5) payload format.
+    """
+    payload = bytearray()
+
+    # GUID (4 × uint32 LE) — same decomposition as serialize_object_v3
+    a = guid_obj.time_low
+    b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
+    c = (guid_obj.clock_seq_hi_variant << 24) | (guid_obj.clock_seq_low << 16) | ((guid_obj.node >> 32) & 0xFFFF)
+    d = guid_obj.node & 0xFFFFFFFF
+    payload.extend(struct.pack("<IIII", a, b, c, d))
+
+    # Identity hash (2 × uint64 LE)
+    payload.extend(struct.pack("<QQ", identity_low & 0xFFFFFFFFFFFFFFFF, identity_high & 0xFFFFFFFFFFFFFFFF))
+
+    # Primitive fallback (1 byte)
+    payload.extend(struct.pack("<B", primitive_type))
+
+    return bytes(payload)
 
 
 # =========================================================
@@ -701,7 +845,8 @@ class LiveSyncClient:
         self,
         objects_data,
         packet_type=0x01,
-        flags=0x00
+        flags=0x00,
+        version=None
     ):
 
         try:
@@ -709,7 +854,12 @@ class LiveSyncClient:
             packet = self._build_packet(
                 objects_data,
                 packet_type=packet_type,
-                flags=flags
+                flags=flags,
+                version=(
+                    version if version
+                    is not None
+                    else LIVE_SYNC_VERSION_V4
+                )
             )
 
         except Exception as e:
@@ -872,7 +1022,8 @@ def disconnect():
 def send_objects(
     objects_data,
     packet_type=0x01,
-    flags=0x00
+    flags=0x00,
+    version=None
 ):
 
     global _client
@@ -886,7 +1037,8 @@ def send_objects(
         _client.send_packet(
             objects_data,
             packet_type,
-            flags
+            flags,
+            version
         )
 
 def send_snapshot(snapshot):

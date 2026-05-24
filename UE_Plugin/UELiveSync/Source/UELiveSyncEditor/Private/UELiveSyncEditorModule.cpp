@@ -1,6 +1,7 @@
 #include "UELiveSyncEditorModule.h"
 
 #include "SLiveSyncStatusWidget.h"
+#include "SLiveSyncDiagnosticsWidget.h"
 
 #include "Editor.h"
 #include "LevelEditor.h"
@@ -15,6 +16,10 @@
 static const FName
     LiveSyncStatusTabName =
     TEXT("LiveSyncStatus");
+
+static const FName
+    LiveSyncDiagnosticsTabName =
+    TEXT("LiveSyncDiagnostics");
 
 
 TSharedRef<SDockTab>
@@ -35,10 +40,28 @@ CreateLiveSyncStatusTab(
 }
 
 
+TSharedRef<SDockTab>
+CreateLiveSyncDiagnosticsTab(
+    const FSpawnTabArgs&)
+{
+    return
+        SNew(SDockTab)
+        .TabRole(
+            ETabRole::NomadTab)
+        [
+            SNew(SBox)
+            .Padding(4.0f)
+            [
+                SNew(SLiveSyncDiagnosticsWidget)
+            ]
+        ];
+}
+
+
 void FUELiveSyncEditorModule::
 StartupModule()
 {
-    // Register nomad tab spawner
+    // Register status tab
     FGlobalTabmanager::Get()
         ->RegisterNomadTabSpawner(
             LiveSyncStatusTabName,
@@ -55,6 +78,24 @@ StartupModule()
         .SetMenuType(
             ETabSpawnerMenuType::
                 Enabled);
+
+    // Register diagnostics tab
+    FGlobalTabmanager::Get()
+        ->RegisterNomadTabSpawner(
+            LiveSyncDiagnosticsTabName,
+            FOnSpawnTab::CreateStatic(
+                &CreateLiveSyncDiagnosticsTab))
+        .SetDisplayName(
+            LOCTEXT(
+                "LiveSyncDiagnosticsTabTitle",
+                "Live Sync Diagnostics"))
+        .SetTooltipText(
+            LOCTEXT(
+                "LiveSyncDiagnosticsTooltip",
+                "Open UE Live Sync runtime diagnostics panel"))
+        .SetMenuType(
+            ETabSpawnerMenuType::
+                Enabled);
 }
 
 
@@ -64,6 +105,10 @@ ShutdownModule()
     FGlobalTabmanager::Get()
         ->UnregisterNomadTabSpawner(
             LiveSyncStatusTabName);
+
+    FGlobalTabmanager::Get()
+        ->UnregisterNomadTabSpawner(
+            LiveSyncDiagnosticsTabName);
 }
 
 

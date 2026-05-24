@@ -1,6 +1,6 @@
 # UELiveSync — Consolidated Roadmap
 
-**Document Version**: 1.0  
+**Document Version**: 1.1  
 **Last Updated**: 2026-05-24  
 **Status**: Living document — updated as phases complete
 
@@ -12,6 +12,7 @@
 2. [Completed Phases](#2-completed-phases)
 3. [Phase 5C — Diagnostics & Editor UX](#3-phase-5c--diagnostics--editor-ux)
 4. [Phase 6 — Asset & Scene Replication](#4-phase-6--asset--scene-replication)
+   - [6A — Asset Identity & Static Mesh Resolution](#41-6a--asset-identity--static-mesh-resolution)
 5. [Phase 7 — Live Editing System](#5-phase-7--live-editing-system)
 6. [Phase 8 — Animation & Sequencer Sync](#6-phase-8--animation--sequencer-sync)
 7. [Phase 9 — High Performance Streaming](#7-phase-9--high-performance-streaming)
@@ -47,14 +48,21 @@ UELiveSync is a **lightweight realtime state replication framework** for Blender
 | Overflow Protection | Bounded 128-entry MPSC queue, drop-oldest | Production-stable |
 | Watchdog | Lifecycle monitoring with restart backoff | Production-stable |
 | Diagnostics | Status widget, runtime metrics, hierarchy diagnostics | Phase 4 baseline |
-| Protocol Versioning | V2/V3/V4 coexistence, version mismatch detection, unknown-type skipping | Production-stable |
+| Protocol Versioning | V2/V3/V4/V5 coexistence, version mismatch detection, unknown-type skipping | Production-stable |
 | Primitive Type | 1-byte enum in CREATE payload (Cube/Sphere/Cylinder/Plane/Empty) | Production-stable |
 | GUID Hardening | Owner hashing for stale-GUID detection across .blend load cycles | Production-stable |
+| Asset Identity | xxHash64 of datablock name, POD identity, bounded pending queue | Phase 6A |
+| Static Mesh Assignment | Non-blocking deferred resolution, live-swap, exponential backoff retry | Phase 6A |
+| Fallback Primitives | Temporary mesh assignment, replaceable on late resolution | Phase 6A |
 
 ### Current Metrics
 
 - **Protocol overhead**: 24-byte header + 80-byte transform record (104 bytes per object per tick)
+- **Asset def overhead**: 33 bytes per object (one-time + on mesh change)
 - **Queue capacity**: 128 packets (bounded MPSC)
+- **Asset pending queue capacity**: 2048 entries (bounded FIFO)
+- **Asset resolution throttle**: 8 resolves per game tick
+- **Asset retry policy**: 5 attempts max, exponential backoff (1s→2s→4s→8s→16s)
 - **Default hierarchy depth limit**: 64 levels (configurable via CVar)
 - **Interpolation modes**: Direct-set (0), smooth adaptive (1), snap-when-close (2)
 - **Drift detection threshold**: 0.01 cm (verbose logging)
@@ -105,11 +113,15 @@ Core changes:
 - **`InterpolateTransforms`**: `.GetNormalized()` on all `FQuat::Slerp` calls, thresholded drift diagnostics at >0.01 cm, attached-child guard before root paths
 - **`ELiveSyncPrimitiveType`**: renamed from `EPrimitiveType` to resolve UE `RHIDefinitions.h` conflict
 
+### Phase 5C — Diagnostics & Editor UX (Done)
+
+Diagnostics panel with full hierarchy and metrics sections, CVar-controlled debug overlay (`UE.LiveSync.DebugOverlay`), Blender addon status panel with connection/object/sync-rate indicators and manual reconnect/rebind buttons, CVar-controlled logging levels (Error/Warning/Log/Verbose/VeryVerbose), Blender-side diagnostics log (`_log_diagnostics()`), and fail-safe protections (reconnect throttle, send watchdog, max queue cap, device loss emergency off).
+
 ---
 
 ## 3. Phase 5C — Diagnostics & Editor UX
 
-**Status**: Planning · **Estimate**: 4–6 days · **Risk**: Low  
+**Status**: Complete (2026-05-24) · **Risk**: Low  
 **Depends on**: Phase 5B (hierarchy model is the final runtime subsystem)
 
 ### 3C.1 — UE Diagnostics Panel
@@ -206,36 +218,53 @@ def _log_diagnostics():
 
 ## 4. Phase 6 — Asset & Scene Replication
 
-**Status**: Planning · **Estimate**: 10–14 days · **Risk**: Medium-High  
+**Status**: Phase 6A In Progress (2026-05-24) · **Risk**: Medium  
 **Depends on**: Phase 5C (diagnostics needed for asset health monitoring)
 
-### 4.1 — Static Mesh Assignment
+Phase 6 is organized into three subphases to manage complexity and risk:
 
-Add mesh path to the CREATE packet payload (V5 protocol extension):
+### 4.1 — 6A: Asset Identity & Static Mesh Resolution
 
-**Current**: Primitive type byte selects from `/Engine/BasicShapes/{Cube,Sphere,Cylinder,Plane}`.
+**Status**: In Progress (2026-05-24)  
+**Protocol**: V5 (`PT_AssetDef = 0x08`)
 
-**Change**: Optional mesh asset path string appended after the primitive type byte:
+**Architecture decision**: Asset identity is transmitted as a fixed-size 33-byte payload per object, separate from the transform/CREATE packets. This decouples asset resolution from the realtime transform pipeline — missing assets never block transform replication.
 
-| Packet Section | Bytes | Description |
-|---------------|-------|-------------|
-| Header | 24 | Standard V4 header with new V5 version byte |
-| GUID | 16 | Standard 128-bit object GUID |
-| Transform | 12+16+12+8+16 | Standard transform record |
-| Primitive Type | 1 | 0x00–0x04 for primitives, 0xFF for custom mesh |
-| Mesh Path Length | 2 | uint16 length of following path string |
-| Mesh Path | N | UTF-8 encoded asset path string |
-| **Total** | **109+N** | Variable-length payload |
+**Key components**:
 
-**Behavior**:
-- If `PrimitiveType == 0xFF`: read `MeshPathLength` + `MeshPath`, load the specified mesh asset
-- If `PrimitiveType != 0xFF`: use existing `/Engine/BasicShapes/<Type>` logic (backward compatible)
-- If `MeshPath` is empty or asset not found: fall back to Cube with warning
-- Blender exports mesh path via operator selection: user chooses a UE asset path in addon prefs
+| Component | Location | Description |
+|-----------|----------|-------------|
+| `FAssetIdentityRef` | `AssetIdentityTypes.h` | 16B POD: `uint64 High/Low` — hot-path safe, no FString |
+| `FAssetMetadata` | `AssetIdentityTypes.h` | Full metadata (identity, fallback, retry count, timestamps) — cold path |
+| `PendingAssetQueue` | `PendingAssetQueue.h` | Bounded 2048-entry FIFO with O(1) Contains/Remove |
+| `HandleAssetDef` | `UELiveSyncSubsystem.cpp` | Reads 33 bytes per object; stores metadata, enqueues for resolution |
+| `ResolvePendingAssets` | `UELiveSyncSubsystem.cpp` | Game-thread throttled at 8/tick; exponential backoff (1s→16s, max 5) |
+| `AssignStaticMesh` | `UELiveSyncSubsystem.cpp` | Live-swap mesh on existing actor — preserves transform, hierarchy |
+| `AssignFallbackPrimitive` | `UELiveSyncSubsystem.cpp` | Temporary fallback via `GetPrimitiveMesh()` helper |
+| `GetPrimitiveMesh()` | `UELiveSyncSubsystem.cpp` | Static helper refactored from `HandleCreateObject` |
+| `get_mesh_identity_hash()` | `network.py` | Pure-Python xxHash64 of datablock name |
+| `serialize_asset_identity()` | `network.py` | Serializes PT_AssetDef payload (33 bytes) |
 
-**No FBX pipeline integration yet** — Phase 6 is asset *assignment*, not asset *creation*. FBX export/import is Phase 6.3.
+**Identity model**:
+- Blender side: xxHash64 of `obj.data.name` (datablock name, not object name)
+- Deterministic across sessions and duplicated instances
+- NOT stable across datablock renames — documented limitation
+- UE side: stored in `TMap<FAssetIdentityRef, FSoftObjectPath>` (path cache)
 
-### 4.2 — Material Assignment
+**Fallback lifecycle**:
+1. On CREATE → actor spawned with primitive mesh (existing behavior)
+2. On PT_AssetDef → metadata stored, resolution queued
+3. During resolution → actor keeps primitive mesh
+4. On successful resolution → static mesh live-swapped in-place
+5. On resolution failure after 5 retries → fallback becomes permanent
+6. Late resolution still replaces fallback
+
+**Validation tests**: `tests/phase6_validation_A_asset_identity.py`
+
+### 4.2 — 6B: Material Assignment & Cache Persistence
+
+**Status**: Planning · **Estimate**: 5–7 days · **Risk**: Medium  
+**Depends on**: Phase 6A (asset identity infrastructure)
 
 **Scope limitation**: Assign UE materials to mesh components. No shader graph creation, no material instance generation.
 
@@ -258,7 +287,10 @@ Add mesh path to the CREATE packet payload (V5 protocol extension):
 - Sets material at slot index via `SetMaterial(SlotIndex, LoadObject<UMaterialInterface>(Path))`
 - Caches material path per GUID to avoid redundant assignments
 
-### 4.3 — FBX Mesh Push Pipeline
+### 4.3 — 6C: FBX Mesh Push Pipeline
+
+**Status**: Planning · **Estimate**: 7–10 days · **Risk**: High  
+**Depends on**: Phase 6A (asset identity), Phase 6B (material cache)
 
 Blender exports each mesh as FBX → writes to a known project path → UE auto-reimports via directory watcher.
 
@@ -289,6 +321,8 @@ Blender exports each mesh as FBX → writes to a known project path → UE auto-
 
 ### 4.4 — Missing Asset Recovery
 
+**Status**: Partially implemented in 6A · Remaining in backlog
+
 When a referenced mesh or material asset path cannot be loaded:
 
 | Threshold | Action |
@@ -298,6 +332,8 @@ When a referenced mesh or material asset path cannot be loaded:
 | After 60 frames | Mark as permanently missing, log error once |
 
 ### 4.5 — Asset Dependency Tracking
+
+**Status**: Backlog · **Depends on**: Phase 6A–6C
 
 Track GUID → asset relationships for orphan detection and health monitoring:
 
@@ -314,16 +350,32 @@ Console command `UE.LiveSync.AssetHealth` prints:
 - Stale (hash mismatch)
 - Missing (GUID exists but asset path fails to load)
 
-### Files
+### Files (Phase 6A)
 
 | File | What |
 |------|------|
-| `SyncTypes.h` | V5 version constant, `PT_MaterialAssign = 0x0B`, mesh path length fields |
-| `network.py` | `serialize_mesh_assign()`, `serialize_material_assign()` |
-| `sync.py` | `collect_material_name()`, `export_mesh_fbx()`, change-detection for meshes |
-| `UELiveSyncSubsystem.cpp` | `HandleMeshAssign()`, `HandleMaterialAssign()`, async reimport queue |
-| `UELiveSyncSubsystem.h` | Asset tracker member, `AssetHealth` command |
-| `__init__.py` | Asset path config in prefs, export path field |
+| `SyncTypes.h` | V5 version constant, `PT_AssetDef = 0x08`, `LIVE_SYNC_V5_ASSET_DEF_SIZE = 33`, asset stats counters |
+| `AssetIdentityTypes.h` | `FAssetIdentityRef` (16B POD), `FAssetMetadata`, `FAssetDiagnostics`, resolution constants |
+| `PendingAssetQueue.h` | Bounded 2048-entry FIFO with `FCriticalSection`, O(1) Contains/Remove |
+| `network.py` | `xxh64()`, `get_mesh_identity_hash()`, `serialize_asset_identity()`, V5 constants |
+| `sync.py` | `_last_mesh_identity` change tracking, PT_AssetDef sent after CREATE and on mesh change |
+| `UELiveSyncSubsystem.cpp` | `HandleAssetDef`, `ResolvePendingAssets`, `AssignStaticMesh`, `AssignFallbackPrimitive`, `GetPrimitiveMesh()` |
+| `UELiveSyncSubsystem.h` | Asset metadata/identity maps, pending queue, resolution methods |
+| `LiveSyncRunnable.cpp` | V5 header parsing support |
+| `tests/phase6_validation_A_asset_identity.py` | Phase 6A validation suite |
+| `tests/run_phase6_all.py` | Phase 6 test runner |
+| `Docs/Protocol/live_sync_v5.md` | V5 protocol documentation |
+| `Docs/Architecture/09-asset-identity.md` | Asset identity architecture documentation |
+
+### Files (Phase 6B–6C backlog)
+
+| File | What |
+|------|------|
+| `network.py` | `serialize_material_assign()` (6B) |
+| `sync.py` | `collect_material_name()`, `export_mesh_fbx()` (6B–6C) |
+| `UELiveSyncSubsystem.cpp` | `HandleMaterialAssign()`, async reimport queue (6B–6C) |
+| `UELiveSyncSubsystem.h` | `AssetHealth` command (6B) |
+| `__init__.py` | Asset path config in prefs, export path field (6C) |
 
 ---
 
@@ -914,15 +966,15 @@ Simultaneous animation from Blender and UE Sequencer creates conflicting authori
 
 **Mitigations**: Strict threading model (documented in `AGENTS.md` and `04-threading-model.md`). No UObject access from network thread. Bounded queues for cross-thread communication. Editor async tasks for asset operations.
 
-### 11.7 — Remaining Concern: Protocol V5/V6 String Fields
+### 11.7 — Remaining Concern: Variable-Length Protocol Fields (Phase 6B+)
 
-Variable-length strings in the protocol (mesh paths, material paths, names) add parsing complexity:
+Variable-length strings in the protocol (mesh paths, material paths, names) will add parsing complexity when introduced in future subphases:
 
 - Buffer over-read risk if length field is corrupted
 - UTF-8 encoding requires validation
 - String comparison for change detection is slower than `memcmp` on fixed structs
 
-**Mitigation**: Length-prefixed strings with max length check (4096 bytes). UTF-8 validation on receive. String comparison throttled to hash-based comparison when possible.
+**Mitigation**: Phase 6A avoids this entirely with fixed-size 33B PT_AssetDef payload. Phase 6B+ will use length-prefixed strings with max length check (4096 bytes). UTF-8 validation on receive.
 
 ---
 
@@ -933,7 +985,7 @@ Variable-length strings in the protocol (mesh paths, material paths, names) add 
 | V2 | Legacy (preserved) | 22-byte header, hex GUID, port 5000 |
 | V3 | Production-stable | 24-byte header, binary GUID, packet types, parent field, port 57000 |
 | V4 | Production-stable | `PF_HasLocalTransform` flag, `PF_FullSnapshot` flag, snapshot batching (`PT_BeginSnapshot`/`PT_EndSnapshot`), primitive type byte |
-| V5 | Phase 6 (planned) | Variable-length fields (mesh paths, material paths, names), `PF_Compressed` flag |
+| V5 | Phase 6A (active) | xxHash64-based identity, fixed-size 33B PT_AssetDef payload, backward compatible with V3/V4 |
 | V6 | Research (future) | Delta serialization, change masks, keyframe payloads |
 
 ### Packet Type Registry
@@ -947,7 +999,7 @@ Variable-length strings in the protocol (mesh paths, material paths, names) add 
 | 0x05 | PT_Material | 3 | Reserved (original stub) |
 | 0x06 | PT_Mesh | 3 | Reserved (original stub) |
 | 0x07 | PT_Heartbeat | 3 | Production-stable |
-| 0x08 | (unused) | — | Available |
+| 0x08 | PT_AssetDef | 6A | Active |
 | 0x09 | PT_BeginSnapshot | 5A | Production-stable |
 | 0x0A | PT_EndSnapshot | 5A | Production-stable |
 | 0x0B | PT_MaterialAssign | 6 | Planned |
@@ -970,4 +1022,4 @@ Variable-length strings in the protocol (mesh paths, material paths, names) add 
 
 ---
 
-*End of consolidated roadmap. Updated 2026-05-24.*
+*End of consolidated roadmap. Updated 2026-05-24 (Phase 6A in progress).*

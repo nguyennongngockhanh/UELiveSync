@@ -359,14 +359,19 @@ class UELIVESYNC_PT_panel(
 
             box.separator()
 
+            stats = \
+                sync.get_runtime_stats()
+
             tracked = \
                 sync.get_tracked_count()
 
             queue_depth = \
-                sync.get_queue_depth()
+                stats.get(
+                    "queue_depth", 0)
 
             reconnect_count = \
-                sync.get_reconnect_count()
+                stats.get(
+                    "reconnect_count", 0)
 
             uptime = \
                 sync.get_uptime()
@@ -374,6 +379,19 @@ class UELIVESYNC_PT_panel(
             uptime_min = int(uptime // 60)
             uptime_sec = int(uptime % 60)
 
+            packets_sent = \
+                stats.get(
+                    "packets_sent", 0)
+
+            bytes_sent = \
+                stats.get(
+                    "bytes_sent", 0)
+
+            dropped = \
+                stats.get(
+                    "dropped_packets", 0)
+
+            # --- Core stats ---
             row = box.row()
             row.label(
                 text=f"Objects: {tracked}",
@@ -382,20 +400,35 @@ class UELIVESYNC_PT_panel(
 
             row = box.row()
             row.label(
+                text=f"Uptime: {uptime_min}m{uptime_sec:02d}s",
+                icon='TIME',
+            )
+
+            box.separator()
+
+            # --- Network stats ---
+            row = box.row()
+            row.label(
                 text=f"Queue: {queue_depth}",
                 icon='CONSOLE',
             )
 
             row = box.row()
             row.label(
-                text=f"Reconnects: {reconnect_count}",
+                text=f"Sent: {packets_sent} pkt / {bytes_sent} B",
+                icon='NETWORK_DRIVE',
+            )
+
+            row = box.row()
+            row.label(
+                text=f"Dropped: {dropped}",
                 icon='ERROR',
             )
 
             row = box.row()
             row.label(
-                text=f"Uptime: {uptime_min}m{uptime_sec:02d}s",
-                icon='TIME',
+                text=f"Reconnects: {reconnect_count}",
+                icon='ERROR',
             )
 
         else:

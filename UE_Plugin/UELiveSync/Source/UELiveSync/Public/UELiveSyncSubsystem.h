@@ -10,6 +10,7 @@
 
 #include "SyncTypes.h"
 #include "LiveSyncQueue.h"
+#include "PendingAssetQueue.h"
 
 #include "Containers/Set.h"
 
@@ -157,6 +158,30 @@ private:
     void AbortSnapshot();
 
     // =====================================================
+    // ASSET RESOLUTION (Phase 6A)
+    // =====================================================
+
+    void HandleAssetDef(
+        const FGuid& Guid,
+        uint64 IdentityHigh,
+        uint64 IdentityLow,
+        uint8 PrimitiveFallback);
+
+    void ResolvePendingAssets();
+
+    void AssignStaticMesh(
+        const FGuid& Guid,
+        const FSoftObjectPath& Path);
+
+    void AssignFallbackPrimitive(
+        const FGuid& Guid,
+        uint8 PrimitiveType);
+
+    void CacheAssetPath(
+        const FAssetIdentityRef& Identity,
+        const FSoftObjectPath& Path);
+
+    // =====================================================
     // ACTOR CACHE
     // =====================================================
 
@@ -274,13 +299,6 @@ private:
 
     FLiveSyncStats Stats;
 
-    double LastMetricsLogTime =
-        0.0;
-
-    static constexpr double
-        MetricsLogInterval =
-        60.0;
-
     void LogRuntimeMetrics();
 
     // Rate tracking state
@@ -304,6 +322,19 @@ private:
     void ConsolePing();
 
     void ConsoleStats();
+
+    // =====================================================
+    // ASSET RESOLUTION DATA (Phase 6A)
+    // =====================================================
+
+    // Per-object asset metadata (outside hot transform path)
+    TMap<FGuid, FAssetMetadata> AssetMetadata;
+
+    // Asset identity → resolved path cache (dedup)
+    TMap<FAssetIdentityRef, FSoftObjectPath> AssetPathCache;
+
+    // Pending resolution queue
+    FPendingAssetQueue PendingAssetQueue;
 
     // =====================================================
     // HIERARCHY DIAGNOSTICS (verbose-only, temporary)
@@ -386,6 +417,23 @@ private:
 
     bool ShouldLogVerbose() const;
 
+    void TickMetrics(float DeltaTime);
+
+    void TickSafetyMonitors(float DeltaTime);
+
+    #if WITH_EDITOR
+    FText GetDiagnosticsText() const;
+    #endif
+
+    void SetQueueDepthPeak(int32 Depth);
+
+    // Event histories
+    TArray<FReconnectEvent> ReconnectHistory;
+    TArray<FOverflowEvent> OverflowHistory;
+
+    // Overflow tracking helper
+    int32 LastReportedDrops = 0;
+
     static bool bEnableVerboseSyncLogs;
 
     int32 VerboseFrameCounter =
@@ -404,6 +452,36 @@ private:
     static constexpr double
         WatchdogBackoffDelays[5] =
             { 1.0, 2.0, 5.0, 10.0, 30.0 };
-
     double GetWatchdogBackoff() const;
+
+    // =====================================================
+    // SAFETY MONITORS (Phase 5C)
+    // =====================================================
+
+    // Flood detection: rate in packets/sec over a 2-second window
+    static constexpr double
+        FloodDetectionWindow = 2.0;
+
+    static constexpr int32
+        FloodThresholdPacketsPerSec = 500;
+
+    double FloodAccumulator = 0.0;
+    int32 FloodPacketCount = 0;
+    double FloodWindowStart = 0.0;
+
+    // Queue pressure: running average depth trigger
+    static constexpr double
+        QueuePressureThreshold = 96.0;  // 75% of capacity (128)
+
+    double QueuePressureAccumulator = 0.0;
+
+    // Visualization
+    static bool bEnableDebugDraw;
+
+#if WITH_EDITOR
+    void DrawDebugOverlay();
+#endif
 };
+
+// Extern for global verbose flag (read by LiveSyncRunnable.cpp)
+extern bool GEnableVerboseSyncLogs;

@@ -34,6 +34,10 @@ try:
         PRIMITIVE_EMPTY,
         PT_BeginSnapshot,
         PT_EndSnapshot,
+        PT_AssetDef,
+        LIVE_SYNC_VERSION_V5,
+        get_mesh_identity_hash,
+        serialize_asset_identity,
     )
 except ImportError:
     from network import (
@@ -60,6 +64,10 @@ except ImportError:
         PRIMITIVE_EMPTY,
         PT_BeginSnapshot,
         PT_EndSnapshot,
+        PT_AssetDef,
+        LIVE_SYNC_VERSION_V5,
+        get_mesh_identity_hash,
+        serialize_asset_identity,
     )
 
 
@@ -70,6 +78,10 @@ except ImportError:
 timer_running = False
 
 last_sent_transforms = {}
+
+# Phase 6A: Per-GUID last mesh identity for change detection
+# Stores (identity_low, identity_high, mesh_name)
+_last_mesh_identity = {}
 
 tracked_objects = {}
 
@@ -746,6 +758,7 @@ def check_updates():
     children_to_send = []
     children_create = []
     deletes_to_send = []
+    asset_defs_to_send = []
 
     # =====================================================
     # SCENE SCAN (only when object count changes or
@@ -800,6 +813,8 @@ def check_updates():
             tracked_objects.pop(guid, None)
 
             last_sent_transforms.pop(guid, None)
+
+            _last_mesh_identity.pop(guid, None)
 
             deletes_to_send.append(
                 serialize_delete_v3(guid_obj)
@@ -895,6 +910,38 @@ def check_updates():
                     transform["scale"][:]
             }
 
+            # Phase 6A: Asset identity tracking
+            mesh_low, mesh_high, mesh_prim = (
+                get_mesh_identity_hash(obj)
+            )
+
+            if mesh_low != 0 or mesh_high != 0:
+
+                prev_identity = (
+                    _last_mesh_identity.get(guid)
+                )
+
+                # Send PT_AssetDef on first detection or mesh change
+                if is_first_send or (
+                    prev_identity is not None and
+                    (prev_identity[0] != mesh_low or
+                     prev_identity[1] != mesh_high)
+                ):
+                    asset_defs_to_send.append(
+                        serialize_asset_identity(
+                            guid_obj,
+                            mesh_low,
+                            mesh_high,
+                            mesh_prim
+                        )
+                    )
+
+                _last_mesh_identity[guid] = (
+                    mesh_low,
+                    mesh_high,
+                    obj.data.name if obj.data else ""
+                )
+
     # =====================================================
     # SEND DELETE PACKETS
     # =====================================================
@@ -927,6 +974,19 @@ def check_updates():
             children_create,
             packet_type=0x03,
             flags=0x01
+        )
+
+    # =====================================================
+    # SEND ASSET DEF PACKETS (Phase 6A: V5 PT_AssetDef)
+    # Sent after CREATE, before TRANSFORM — non-blocking
+    # =====================================================
+
+    if asset_defs_to_send:
+
+        send_objects(
+            asset_defs_to_send,
+            packet_type=PT_AssetDef,
+            version=LIVE_SYNC_VERSION_V5
         )
 
     # =====================================================

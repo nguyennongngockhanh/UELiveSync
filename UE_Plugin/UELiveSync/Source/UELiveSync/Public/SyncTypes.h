@@ -12,6 +12,8 @@
 
 DECLARE_LOG_CATEGORY_EXTERN(LogLiveSync, Log, All);
 
+#include "AssetIdentityTypes.h"
+
 // =========================================================
 // TRANSFORM STATE
 // =========================================================
@@ -189,6 +191,7 @@ enum EPacketType : uint8
     PT_Material  = 0x05,
     PT_Mesh      = 0x06,
     PT_Heartbeat = 0x07,
+    PT_AssetDef  = 0x08,  // V5: asset identity definition
     PT_BeginSnapshot = 0x09,
     PT_EndSnapshot   = 0x0A,
 };
@@ -264,20 +267,73 @@ struct FPacketHeaderV3
 
 struct FLiveSyncStats
 {
+    // --- Raw counters (atomics, written by any thread) ---
     std::atomic<int32> PacketsReceived{0};
     std::atomic<int32> PacketsProcessed{0};
     std::atomic<int32> PacketsDropped{0};
     std::atomic<int32> MalformedPackets{0};
+    std::atomic<int32> ReconnectCount{0};
+    std::atomic<int64> TotalBytesReceived{0};
+
+    // --- Queue state (written by game thread only) ---
     int32 QueueDepthCurrent = 0;
     int32 QueueDepthPeak = 0;
-    std::atomic<int32> ReconnectCount{0};
+
+    // --- Asset diagnostics (written by game thread) ---
+    std::atomic<int32> AssetDefsReceived{0};
+    std::atomic<int32> AssetDefsSkipped{0};
+    std::atomic<int32> AssetAssignmentsSucceeded{0};
+    std::atomic<int32> AssetAssignmentsFailed{0};
+    std::atomic<int32> AssetLookupsAttempted{0};
+    std::atomic<int32> AssetLookupsFailed{0};
+    int32 PendingAssetCount   = 0;
+    int32 PendingAssetPeak    = 0;
+    int32 StaleEvictions      = 0;
+
+    // --- Per-frame timing (written by game thread) ---
     double LastPacketTime = 0.0;
     double LastThreadLoopTime = 0.0;
-    double AvgPacketsPerSecond = 0.0;
-    double AvgBytesPerSecond = 0.0;
-    double AvgProcessTimeMs = 0.0;
-    std::atomic<int64> TotalBytesReceived{0};
+    double AvgProcessTimeMs = 0.0;    // instantaneous per-packet, feeds EMA
+
+    // --- Rolling averages (EMA, updated by game thread tick) ---
+    double PacketsPerSecondEMA = 0.0;
+    double BytesPerSecondEMA = 0.0;
+    double ProcessTimeMsEMA = 0.0;
+
+    // --- Peak tracking (game thread) ---
+    double PeakProcessTimeMs = 0.0;
+    double PeakPacketsPerSecond = 0.0;
+    double PeakBytesPerSecond = 0.0;
+
+    // --- Safety monitors (game thread) ---
+    int32 FloodWarnings = 0;
+    int32 QueuePressureWarnings = 0;
+    double LastFloodWarningTime = 0.0;
+    double LastQueuePressureTime = 0.0;
+    double LastMetricsLogTime = 0.0;
 };
+
+// =========================================================
+// METRICS HELPER — Event history ring buffers
+// =========================================================
+
+struct FReconnectEvent
+{
+    double Timestamp = 0.0;
+    int32 AttemptNumber = 0;
+};
+
+struct FOverflowEvent
+{
+    double Timestamp = 0.0;
+    int32 QueueDepth = 0;
+};
+
+static constexpr int32
+    MAX_RECONNECT_HISTORY = 32;
+
+static constexpr int32
+    MAX_OVERFLOW_HISTORY = 32;
 
 
 // =========================================================
@@ -313,6 +369,10 @@ static constexpr uint16
     LIVE_SYNC_VERSION_V4 =
     4;
 
+static constexpr uint16
+    LIVE_SYNC_VERSION_V5 =
+    5;
+
 
 // =========================================================
 // V2 OBJECT LAYOUT
@@ -344,3 +404,14 @@ static constexpr int32
 static constexpr int32
     LIVE_SYNC_V3_DELETE_SIZE =
         16;
+
+// =========================================================
+// V5 ASSET DEF OBJECT LAYOUT
+// 16 GUID
+// 16 IDENTITY HASH (2 × uint64)
+//  1 PRIMITIVE FALLBACK (uint8)
+// =========================================================
+
+static constexpr int32
+    LIVE_SYNC_V5_ASSET_DEF_SIZE =
+        33;
