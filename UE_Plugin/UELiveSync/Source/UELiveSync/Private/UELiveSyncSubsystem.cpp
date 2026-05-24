@@ -29,6 +29,23 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 
 #include "HAL/IConsoleManager.h"
 
+#include "HAL/PlatformProcess.h"
+
+#include "HAL/PlatformTLS.h"
+
+#include "ProfilingDebugging/Trace.h"
+
+
+// =========================================================
+// THREAD IDENTITY MACROS
+// =========================================================
+
+#define CHECK_GAME_THREAD() \
+    check(IsInGameThread())
+
+#define CHECK_NONGAME_THREAD() \
+    check(!IsInGameThread())
+
 
 // =========================================================
 // STATIC HELPERS
@@ -196,6 +213,39 @@ static TAutoConsoleVariable<int32>
         ECVF_Cheat
     );
 
+// =====================================================
+// SUBSYSTEM ISOLATION CVARS
+// Temporarily disable subsystems to narrow freeze root cause.
+// Set to 1 to skip the corresponding subsystem entirely.
+// =====================================================
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncDisableSpawning(
+        TEXT("UE.LiveSync.DisableSpawning"),
+        0,
+        TEXT("Skip HandleCreateObject actor spawn (1=on, 0=off). "
+             "Set to 1 to test if actor creation causes freeze."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncDisableTransformApply(
+        TEXT("UE.LiveSync.DisableTransformApply"),
+        0,
+        TEXT("Skip SetActorTransform in InterpolateTransforms (1=on, 0=off). "
+             "Set to 1 to test if transform application causes freeze."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncDisableAttachment(
+        TEXT("UE.LiveSync.DisableAttachment"),
+        0,
+        TEXT("Skip AttachToActor calls (1=on, 0=off). "
+             "Set to 1 to test if attachment logic causes freeze."),
+        ECVF_Default
+    );
+
 bool UUELiveSyncSubsystem::
     bEnableVerboseSyncLogs =
         false;
@@ -329,11 +379,14 @@ void UUELiveSyncSubsystem::Initialize(
 
 void UUELiveSyncSubsystem::Deinitialize()
 {
-    StopNetworkThread();
-
+    // Remove ticker first to prevent any re-entrant
+    // Tick() call during teardown
     FTSTicker::GetCoreTicker().
         RemoveTicker(
             TickHandle);
+
+    // Shutdown network thread (closes connection socket)
+    StopNetworkThread();
 
     UWorld* World = GetWorld();
 
@@ -356,8 +409,19 @@ void UUELiveSyncSubsystem::Deinitialize()
         }
     }
 
+    // Shutdown listener socket
     if (ListenerSocket)
     {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("Deinitialize: closing listener socket"));
+
+        // Shutdown before Close to unblock any pending
+        // accept() or poll() on the listener
+        ListenerSocket->Shutdown(
+            ESocketShutdownMode::ReadWrite);
+
         ListenerSocket->Close();
 
         ISocketSubsystem::
@@ -398,6 +462,13 @@ void UUELiveSyncSubsystem::StartServer()
         TEXT("0.0.0.0"),
         Address);
 
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("StartServer: creating TCP listener on %s:%d"),
+        *Address.ToString(),
+        Port);
+
     ListenerSocket =
 
         FTcpSocketBuilder(
@@ -418,8 +489,10 @@ void UUELiveSyncSubsystem::StartServer()
         UE_LOG(
             LogLiveSync,
             Error,
-            TEXT("Failed to start TCP server on port %d — "
-                 "port may be in use"),
+            TEXT("StartServer: FAILED to create listener on "
+                 "%s:%d — port may be in use, thread may "
+                 "have failed, or socket limit reached"),
+            *Address.ToString(),
             Port);
 
         return;
@@ -428,7 +501,9 @@ void UUELiveSyncSubsystem::StartServer()
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("Live Sync Listening on port %d"),
+        TEXT("StartServer: listening on %s:%d (backlog=8, "
+             "reuse=true)"),
+        *Address.ToString(),
         Port);
 }
 
@@ -440,6 +515,7 @@ void UUELiveSyncSubsystem::StartServer()
 bool UUELiveSyncSubsystem::Tick(
     float DeltaTime)
 {
+    CHECK_GAME_THREAD();
     VerboseFrameCounter++;
 
     // =====================================================
@@ -483,6 +559,21 @@ bool UUELiveSyncSubsystem::Tick(
         bool bPending =
             false;
 
+        // Log periodic "waiting" status every ~600 ticks (10s)
+        {
+            static int32 AcceptPollCounter = 0;
+
+            if (++AcceptPollCounter % 600 == 1)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Log,
+                    TEXT("Accept: waiting for connection on "
+                         "port %d"),
+                    CVarLiveSyncPort.GetValueOnGameThread());
+            }
+        }
+
         if (ListenerSocket->
             HasPendingConnection(
                 bPending)
@@ -500,16 +591,46 @@ bool UUELiveSyncSubsystem::Tick(
                     GetConnectionState()
                     == SCS_Connected)
                 {
+                    // Log remote address
+                    TSharedRef<
+                        FInternetAddr>
+                    RemoteAddr =
+                        ISocketSubsystem::
+                            Get(
+                                PLATFORM_SOCKETSUBSYSTEM)
+                            ->CreateInternetAddr();
+
+                    bool bGotPeerAddr =
+                        NewSocket->
+                            GetPeerAddress(
+                                *RemoteAddr);
+
+                    if (bGotPeerAddr)
+                    {
+                        UE_LOG(
+                            LogLiveSync,
+                            Log,
+                            TEXT("Accept: Blender connected "
+                                 "from %s:%d"),
+                            *RemoteAddr->
+                                ToString(false),
+                            RemoteAddr->
+                                GetPort());
+                    }
+                    else
+                    {
+                        UE_LOG(
+                            LogLiveSync,
+                            Log,
+                            TEXT("Accept: Blender connected "
+                                 "(unknown remote address)"));
+                    }
+
                     ConnectionSocket =
                         NewSocket;
 
                     ConnectionSocket->
                         SetNoDelay(true);
-
-                    UE_LOG(
-                        LogLiveSync,
-                        Log,
-                        TEXT("Blender Connected"));
 
                     WatchdogRestartCount = 0;
                     LastWatchdogRestartTime = 0.0;
@@ -520,6 +641,15 @@ bool UUELiveSyncSubsystem::Tick(
                 }
                 else
                 {
+                    UE_LOG(
+                        LogLiveSync,
+                        Warning,
+                        TEXT("Accept: connection rejected "
+                             "(state=%d)"),
+                        static_cast<int32>(
+                            NewSocket->
+                                GetConnectionState()));
+
                     NewSocket->Close();
 
                     ISocketSubsystem::
@@ -527,9 +657,9 @@ bool UUELiveSyncSubsystem::Tick(
                             PLATFORM_SOCKETSUBSYSTEM)
                         ->DestroySocket(
                             NewSocket);
-                }
-            }
         }
+    }
+    }
     }
 
     // =====================================================
@@ -551,8 +681,6 @@ bool UUELiveSyncSubsystem::Tick(
 
     // =====================================================
     // DETECT NETWORK THREAD EXIT
-    // (fires immediately when peer disconnects — no
-    //  need to wait for heartbeat timeout)
     // =====================================================
 
     if (ConnectionSocket &&
@@ -590,10 +718,6 @@ bool UUELiveSyncSubsystem::Tick(
 
     // =====================================================
     // NETWORK THREAD WATCHDOG
-    // Three distinct signals:
-    //   1. Socket starvation — no packets received
-    //   2. Thread stall — no thread loop iteration
-    //   3. Idle-but-healthy — packets received but no data
     // =====================================================
 
     if (NetworkRunnable &&
@@ -713,19 +837,67 @@ bool UUELiveSyncSubsystem::Tick(
     // =====================================================
     // PIPELINE
     // =====================================================
+    //
+    // CRITICAL:
+    // The network thread ONLY enqueues packets.
+    // ALL runtime processing occurs in the Tick pipeline below.
+    // Removing or bypassing these stages will stall the entire sync system.
+    // Do not reorder/remove without updating runtime lifecycle assumptions.
+    //
+    // Pipeline stages:
+    //   1. ProcessQueuedPackets   — parse binary packets → update TransformStates
+    //   2. EvictStaleTransformStates — TTL-based cleanup of unused state
+    //   3. InterpolateTransforms  — drive actor transforms toward targets
+    //   4. ResolvePendingAttachments — deferred parent-child attachment retry
+    //   5. RecoverMissingActors   — re-spawn actors lost to desync
+    //   6. ResolvePendingAssets   — late-binding asset mesh resolution
+    // =====================================================
 
-    ProcessQueuedPackets();
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_TickPipeline);
 
-    EvictStaleTransformStates();
+        {
+            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessQueuedPackets);
+            ProcessQueuedPackets();
+        }
 
-    InterpolateTransforms(
-        DeltaTime);
+        EvictStaleTransformStates();
 
-    ResolvePendingAttachments();
+        {
+            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_InterpolateTransforms);
+            InterpolateTransforms(DeltaTime);
+        }
 
-    RecoverMissingActors();
+        {
+            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAttachments);
+            ResolvePendingAttachments();
+        }
 
-    ResolvePendingAssets();
+        {
+            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_RecoverMissingActors);
+            RecoverMissingActors();
+        }
+
+        {
+            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAssets);
+            ResolvePendingAssets();
+        }
+    }
+
+    // =====================================================
+    // HIERARCHY SAFETY VALIDATION
+    // =====================================================
+    // Periodic check for self-parenting, circular chains, invalid GUIDs.
+    // Runs every ~300 ticks (~5s at 60fps) when connected.
+    // =====================================================
+
+    if (ConnectionSocket && VerboseFrameCounter % 300 == 0)
+    {
+        {
+            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ValidateHierarchy);
+            ValidateHierarchy();
+        }
+    }
 
     // =====================================================
     // ROLLING METRICS (EMA, every tick)
@@ -740,7 +912,7 @@ bool UUELiveSyncSubsystem::Tick(
     TickSafetyMonitors(DeltaTime);
 
     // =====================================================
-    // RUNTIME METRICS (every 60s in verbose mode)
+    // RUNTIME METRICS (every 30s in verbose mode)
     // =====================================================
 
     if (bEnableVerboseSyncLogs)
@@ -749,12 +921,12 @@ bool UUELiveSyncSubsystem::Tick(
             FPlatformTime::Seconds();
 
         if (Now - Stats.LastMetricsLogTime >=
-            60.0)
+            30.0)
         {
             Stats.LastMetricsLogTime =
                 Now;
 
-            LogRuntimeMetrics();
+            LogRuntimeMetricsVerbose();
         }
     }
 
@@ -854,6 +1026,24 @@ StartNetworkThread()
             LogLiveSync,
             Log,
             TEXT("Network Thread Created"));
+
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("Protocol: sig=0x%08X "
+                 "magic=0x%08X LE "
+                 "header=%d(V3)/%d(V2) "
+                 "obj=%d(V3)/%d(V4+)/%d(del)/%d(asset) "
+                 "max_packet=%d"),
+            LIVE_SYNC_PROTOCOL_SIG,
+            LIVE_SYNC_MAGIC,
+            int32(sizeof(FPacketHeaderV3)),
+            int32(sizeof(FPacketHeader)),
+            LIVE_SYNC_V3_OBJECT_SIZE,
+            LIVE_SYNC_V4_OBJECT_SIZE,
+            LIVE_SYNC_V3_DELETE_SIZE,
+            LIVE_SYNC_V5_ASSET_DEF_SIZE,
+            LIVE_SYNC_MAX_PACKET_SIZE);
     }
     else
     {
@@ -889,8 +1079,24 @@ StopNetworkThread()
     uint64 AfterStopCycles =
         FPlatformTime::Cycles64();
 
-    // Close socket FIRST to unblock Wait()/Recv()
-    // so the network thread exits immediately
+    // CRITICAL: Shutdown BEFORE Close.
+    //
+    // On Linux, close() does NOT wake a blocked recv()/poll()
+    // in another thread — the kernel keeps the socket alive
+    // until all fd references are dropped.
+    //
+    // shutdown(SHUT_RDWR) sends TCP FIN/RST which unblocks
+    // any blocked Wait() or Recv() with an error or EOF,
+    // allowing the network thread to exit immediately.
+    //
+    // Without this, WaitForCompletion() below will DEADLOCK
+    // the game thread.
+    if (ConnectionSocket)
+    {
+        ConnectionSocket->Shutdown(
+            ESocketShutdownMode::ReadWrite);
+    }
+
     if (ConnectionSocket)
     {
         ConnectionSocket->Close();
@@ -1000,6 +1206,8 @@ StopNetworkThread()
 void UUELiveSyncSubsystem::
 ProcessQueuedPackets()
 {
+    CHECK_GAME_THREAD();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessQueuedPackets);
     FLiveSyncPacket Packet;
 
     TArray<FLiveSyncPacket>
@@ -1076,12 +1284,90 @@ ProcessQueuedPackets()
     TSet<FGuid>
         SeenThisTick;
 
+    // Per-packet instrumentation counter
+    static uint64 PacketProcessCounter = 0;
+
     for (const FLiveSyncPacket&
         Pkt : PacketsThisTick)
     {
+        PacketProcessCounter++;
+
+        // Inline-read header fields for diagnostics
+        int32 PktSize =
+            Pkt.RawData.Num();
+
+        uint32 PktMagic = 0;
+        uint16 PktVersion = 0;
+        uint8 PktType = 0;
+        int32 PktObjCount = 0;
+
+        if (PktSize >= 8)
+        {
+            FMemory::Memcpy(
+                &PktMagic,
+                Pkt.RawData.GetData(),
+                sizeof(uint32));
+            FMemory::Memcpy(
+                &PktVersion,
+                Pkt.RawData.GetData() + 4,
+                sizeof(uint16));
+        }
+
+        if (PktSize >= 24)
+        {
+            PktType = *(
+                Pkt.RawData.GetData() + 6);
+
+            FMemory::Memcpy(
+                &PktObjCount,
+                Pkt.RawData.GetData() + 20,
+                sizeof(int32));
+        }
+
+        uint64 PktBeginCycles =
+            FPlatformTime::Cycles64();
+
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("BEGIN packet #%llu: magic=0x%08X "
+                 "ver=%u type=0x%02X objs=%d size=%d"),
+            PacketProcessCounter,
+            PktMagic,
+            PktVersion,
+            PktType,
+            PktObjCount,
+            PktSize);
+
         ProcessBinaryPacket(
             Pkt,
             &SeenThisTick);
+
+        double PktElapsedMs =
+            FPlatformTime::
+            ToMilliseconds64(
+                FPlatformTime::Cycles64() -
+                PktBeginCycles);
+
+        if (PktElapsedMs > 100.0)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("STALL: ProcessBinaryPacket took "
+                     "%.1fms for packet #%llu"),
+                PktElapsedMs,
+                PacketProcessCounter);
+        }
+        else
+        {
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("END packet #%llu: %.1fms"),
+                PacketProcessCounter,
+                PktElapsedMs);
+        }
     }
 
     // Track processing stats
@@ -1123,6 +1409,8 @@ ProcessBinaryPacket(
     Packet,
     TSet<FGuid>* SeenThisTick)
 {
+    CHECK_GAME_THREAD();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessBinaryPacket);
     if (Packet.RawData.Num() <
         sizeof(FPacketHeader))
     {
@@ -1329,14 +1617,14 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x07, 0x09, 0x0A };
+            { 0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
 
         bool bValidType = false;
 
-        for (int32 i = 0; i < 6; i++)
+        for (int32 i = 0; i < 7; i++)
         {
             if (PacketType == kValidTypes[i])
             {
@@ -1409,6 +1697,16 @@ ProcessBinaryPacket(
 
     // =====================================================
     // PT_AssetDef (V5) — batch-handle all objects
+    //
+    // LAYOUT (33 bytes per object):
+    //   0-15  GUID (4×uint32 LE)
+    //   16-23 Identity Low  (uint64 LE, xxHash64 low)
+    //   24-31 Identity High (uint64 LE, xxHash64 high)
+    //   32    PrimitiveFallback (uint8)
+    //
+    // This is a SEPARATE wire format from V3+ transform objects.
+    // The 1-byte primitive at offset 32 is part of this 33-byte
+    // structure, NOT the V4+ extra byte. Do NOT mix these.
     // =====================================================
 
     if (PacketType == PT_AssetDef)
@@ -1484,16 +1782,110 @@ ProcessBinaryPacket(
     }
 
     // =====================================================
-    // OBJECT LOOP
+    // OBJECT LOOP (with freeze guard)
     // =====================================================
+
+    const uint8* LoopStartPtr = Ptr;
+
+    uint64 LoopEntryTime =
+        FPlatformTime::Cycles64();
 
     for (uint32 i = 0;
          i < ObjectCount;
          i++)
     {
-        if (Ptr + 16 >
-            PacketEnd)
+        // =================================================
+        // FREEZE GUARD: detect non-advancing pointer
+        // =================================================
+
+        if (i > 0 && Ptr <= LoopStartPtr)
         {
+            UE_LOG(
+                LogLiveSync,
+                Error,
+                TEXT("FREEZE GUARD: non-advancing pointer "
+                     "at obj=%u/%u — Ptr=%p LoopStart=%p "
+                     "type=0x%02X — aborting packet"),
+                i,
+                ObjectCount,
+                (void*)Ptr,
+                (void*)LoopStartPtr,
+                PacketType);
+
+            return;
+        }
+
+        LoopStartPtr = Ptr;
+
+        // =================================================
+        // STALL WATCHDOG: abort if loop runs > 5s
+        // =================================================
+
+        if (i % 100 == 0)
+        {
+            uint64 ElapsedCycles =
+                FPlatformTime::Cycles64() -
+                LoopEntryTime;
+
+            double ElapsedMs =
+                FPlatformTime::
+                ToMilliseconds64(
+                    ElapsedCycles);
+
+            if (ElapsedMs > 5000.0)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Error,
+                    TEXT("FREEZE GUARD: object loop "
+                         "exceeded 5s at obj=%u/%u "
+                         "type=0x%02X — aborting packet"),
+                    i,
+                    ObjectCount,
+                    PacketType);
+
+                // Stack trace capture for stall root cause analysis
+                ensureMsgf(false,
+                    TEXT("STALL: object loop froze for %.0fms "
+                         "at obj=%u/%u type=0x%02X"),
+                    ElapsedMs,
+                    i,
+                    ObjectCount,
+                    PacketType);
+
+                return;
+            }
+        }
+
+        int32 Remaining =
+            static_cast<int32>(
+                PacketEnd - Ptr);
+
+        // =====================================================
+        // WARNING: V4+ object layout is 81 bytes (80 V3 + 1 prim).
+        // Blender always includes the primitive type byte.
+        // Changing field order breaks wire compatibility.
+        // Blender and UE layouts MUST remain byte-identical.
+        // =====================================================
+
+        if (Ptr + 16 > PacketEnd)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("Parse failure at obj=%u/%.0f%% "
+                     "offset=%d remaining=%d "
+                     "type=0x%02X ver=%u — "
+                     "cannot read GUID (need 16 bytes)"),
+                i,
+                ObjectCount > 0
+                    ? 100.0 * i / ObjectCount
+                    : 0.0,
+                static_cast<int32>(
+                    Ptr - PacketData),
+                Remaining,
+                PacketType,
+                Version);
             return;
         }
 
@@ -1528,13 +1920,18 @@ ProcessBinaryPacket(
             }
 
             if (!FGuid::ParseExact(
-
                 GuidHex,
-
                 EGuidFormats::Digits,
-
                 Guid))
             {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("Parse failure at obj=%u "
+                         "offset=%d — invalid V2 GUID hex"),
+                    i,
+                    static_cast<int32>(
+                        Ptr - PacketData));
                 return;
             }
         }
@@ -1548,17 +1945,18 @@ ProcessBinaryPacket(
         if (PacketType == 0x04)
         {
             HandleDeleteObject(Guid);
-
             continue;
         }
 
-        // =================================================
+        // =====================================================
         // DEDUP: skip if already processed this tick
-        // =================================================
+        // =====================================================
+        // IMPORTANT: skip distance must match V4+ object size
+        // including the primitive type byte (81 bytes total).
+        // =====================================================
 
         if (SeenThisTick &&
-            SeenThisTick->Contains(
-                Guid))
+            SeenThisTick->Contains(Guid))
         {
             if (Version >=
                 LIVE_SYNC_VERSION_V3)
@@ -1570,10 +1968,9 @@ ProcessBinaryPacket(
                     sizeof(double) +
                     16;
 
-                // V4 CREATE packets have an extra primitive type byte
+                // V4+: primitive type byte for ALL packet types
                 if (Version >=
-                    LIVE_SYNC_VERSION_V4 &&
-                    PacketType == 0x03)
+                    LIVE_SYNC_VERSION_V4)
                 {
                     Ptr += 1;
                 }
@@ -1591,17 +1988,31 @@ ProcessBinaryPacket(
 
         if (SeenThisTick)
         {
-            SeenThisTick->Add(
-                Guid);
+            SeenThisTick->Add(Guid);
         }
 
         // =================================================
-        // LOCATION
+        // LOCATION (12 bytes)
         // =================================================
+
+        Remaining = static_cast<int32>(
+            PacketEnd - Ptr);
 
         if (Ptr + sizeof(FVector3f) >
             PacketEnd)
         {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("Parse failure at obj=%u "
+                     "offset=%d remaining=%d "
+                     "type=0x%02X — "
+                     "cannot read Location"),
+                i,
+                static_cast<int32>(
+                    Ptr - PacketData),
+                Remaining,
+                PacketType);
             return;
         }
 
@@ -1618,12 +2029,27 @@ ProcessBinaryPacket(
             LocationFloat);
 
         // =================================================
-        // ROTATION
+        // ROTATION (16 bytes)
         // =================================================
+
+        Remaining = static_cast<int32>(
+            PacketEnd - Ptr);
 
         if (Ptr + sizeof(FQuat4f) >
             PacketEnd)
         {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("Parse failure at obj=%u "
+                     "offset=%d remaining=%d "
+                     "type=0x%02X — "
+                     "cannot read Rotation"),
+                i,
+                static_cast<int32>(
+                    Ptr - PacketData),
+                Remaining,
+                PacketType);
             return;
         }
 
@@ -1642,12 +2068,27 @@ ProcessBinaryPacket(
         Rotation.Normalize();
 
         // =================================================
-        // SCALE
+        // SCALE (12 bytes)
         // =================================================
+
+        Remaining = static_cast<int32>(
+            PacketEnd - Ptr);
 
         if (Ptr + sizeof(FVector3f) >
             PacketEnd)
         {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("Parse failure at obj=%u "
+                     "offset=%d remaining=%d "
+                     "type=0x%02X — "
+                     "cannot read Scale"),
+                i,
+                static_cast<int32>(
+                    Ptr - PacketData),
+                Remaining,
+                PacketType);
             return;
         }
 
@@ -1664,7 +2105,7 @@ ProcessBinaryPacket(
             ScaleFloat);
 
         // =================================================
-        // V3: Timestamp + Parent GUID
+        // V3: Timestamp (8 bytes) + Parent GUID (16 bytes)
         // =================================================
 
         FGuid ParentGuid;
@@ -1672,17 +2113,47 @@ ProcessBinaryPacket(
         if (Version >=
             LIVE_SYNC_VERSION_V3)
         {
+            Remaining = static_cast<int32>(
+                PacketEnd - Ptr);
+
             if (Ptr + sizeof(double) >
                 PacketEnd)
             {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("Parse failure at obj=%u "
+                         "offset=%d remaining=%d "
+                         "type=0x%02X — "
+                         "cannot read Timestamp"),
+                    i,
+                    static_cast<int32>(
+                        Ptr - PacketData),
+                    Remaining,
+                    PacketType);
                 return;
             }
 
             Ptr += sizeof(double);
 
+            Remaining = static_cast<int32>(
+                PacketEnd - Ptr);
+
             if (Ptr + 16 >
                 PacketEnd)
             {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("Parse failure at obj=%u "
+                         "offset=%d remaining=%d "
+                         "type=0x%02X — "
+                         "cannot read Parent GUID"),
+                    i,
+                    static_cast<int32>(
+                        Ptr - PacketData),
+                    Remaining,
+                    PacketType);
                 return;
             }
 
@@ -1766,10 +2237,9 @@ ProcessBinaryPacket(
 
         uint8 PrimitiveType = LSP_Cube;
 
-        // Only read primitive type byte for V4+ CREATE packets.
-        // V3 CREATE packets end after parent GUID (80 bytes total).
-        if (PacketType == 0x03 &&
-            Version >= LIVE_SYNC_VERSION_V4 &&
+        // V4+: read primitive type byte for all packets.
+        // Blender always includes it for V4+ (CREATE, TRANSFORM, etc).
+        if (Version >= LIVE_SYNC_VERSION_V4 &&
             Ptr < PacketEnd)
         {
             PrimitiveType = *Ptr;
@@ -1840,6 +2310,16 @@ UpdateTargetTransform(
 
     bool bIsLocalTransform)
 {
+    CHECK_GAME_THREAD();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_UpdateTargetTransform);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("BEGIN TRACE: UpdateTargetTransform guid=%s"),
+        *Guid.ToString(
+            EGuidFormats::Digits));
+
     FSyncTransformState& State =
 
         TransformStates.
@@ -2074,6 +2554,13 @@ UpdateTargetTransform(
                 true;
         }
 
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("END TRACE: UpdateTargetTransform guid=%s (unchanged)"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
+
         return;
     }
 
@@ -2235,20 +2722,15 @@ UpdateTargetTransform(
                 *Guid.ToString(
                     EGuidFormats::Digits));
         }
-        else
-        {
-            UE_LOG(
-                LogLiveSync,
-                Log,
-                TEXT(
-                    "Authority: root=%s"
-                    " world target updated"),
-                *Guid.ToString(
-                    EGuidFormats::Digits));
-        }
     }
-}
 
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("END TRACE: UpdateTargetTransform guid=%s"),
+        *Guid.ToString(
+            EGuidFormats::Digits));
+}
 
 
 // =========================================================
@@ -2259,9 +2741,20 @@ void UUELiveSyncSubsystem::
 InterpolateTransforms(
     float DeltaTime)
 {
+    CHECK_GAME_THREAD();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_InterpolateTransforms);
     // Skip interpolation during snapshot build — all transforms
     // will be bulk-applied when EndSnapshot is received
     if (bInSnapshotBuild)
+    {
+        return;
+    }
+
+    // =====================================================
+    // ISOLATION: Skip transform application if disabled
+    // =====================================================
+
+    if (CVarLiveSyncDisableTransformApply.GetValueOnGameThread())
     {
         return;
     }
@@ -2282,9 +2775,47 @@ InterpolateTransforms(
     int SnapCount = 0;
     int InterpCount = 0;
 
+    uint64 InterpLoopEntryCycles =
+        FPlatformTime::Cycles64();
+
+    int32 InterpIterationIndex = 0;
+
     for (auto& Pair :
         TransformStates)
     {
+        InterpIterationIndex++;
+
+        // =================================================
+        // WATCHDOG: abort if InterpolateTransforms runs > 5s
+        // =================================================
+
+        if (InterpIterationIndex % 100 == 0)
+        {
+            double InterpElapsedMs =
+                FPlatformTime::
+                ToMilliseconds64(
+                    FPlatformTime::Cycles64() -
+                    InterpLoopEntryCycles);
+
+            if (InterpElapsedMs > 5000.0)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Error,
+                    TEXT("FREEZE GUARD: InterpolateTransforms"
+                         " exceeded 5s at iter=%d — aborting"),
+                    InterpIterationIndex);
+
+                ensureMsgf(false,
+                    TEXT("STALL: InterpolateTransforms froze"
+                         " for %.0fms at iter=%d"),
+                    InterpElapsedMs,
+                    InterpIterationIndex);
+
+                return;
+            }
+        }
+
         const FGuid& Guid =
             Pair.Key;
 
@@ -2756,6 +3287,7 @@ EvictStaleTransformStates()
 void UUELiveSyncSubsystem::
 BuildActorCache()
 {
+    CHECK_GAME_THREAD();
     UWorld* World =
         GetWorld();
 
@@ -2999,7 +3531,27 @@ AttachToParent(
     const FGuid& Guid,
     const FGuid& ParentGuid)
 {
+    CHECK_GAME_THREAD();
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("BEGIN TRACE: AttachToParent child=%s parent=%s"),
+        *Guid.ToString(
+            EGuidFormats::Digits),
+        *ParentGuid.ToString(
+            EGuidFormats::Digits));
+
     if (!ParentGuid.IsValid())
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("END TRACE: AttachToParent child=%s (no parent)"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
+        return;
+    }
     {
         return;
     }
@@ -3010,22 +3562,46 @@ AttachToParent(
 
     if (Guid == ParentGuid)
     {
+    UE_LOG(
+        LogLiveSync,
+        Warning,
+        TEXT(
+            "Self-parent rejection:"
+            " child=parent=%s"),
+        *Guid.ToString(
+            EGuidFormats::Digits));
+    return;
+}
+
+    // =====================================================
+    // ISOLATION: Skip attachment if DisableAttachment is set
+    // =====================================================
+
+    if (CVarLiveSyncDisableAttachment.GetValueOnGameThread())
+    {
         UE_LOG(
             LogLiveSync,
-            Warning,
-            TEXT(
-                "Self-parent rejection:"
-                " child=parent=%s"),
+            Log,
+            TEXT("AttachToParent: DISABLED via CVar "
+                 "for child=%s parent=%s"),
             *Guid.ToString(
+                EGuidFormats::Digits),
+            *ParentGuid.ToString(
                 EGuidFormats::Digits));
         return;
     }
 
-    AActor* Child =
-        FindActorFast(Guid);
+AActor* Child =
+    FindActorFast(Guid);
 
     if (!Child)
     {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("END TRACE: AttachToParent child=%s (child not found)"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
         return;
     }
 
@@ -3077,6 +3653,12 @@ AttachToParent(
             }
         }
 
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("END TRACE: AttachToParent child=%s (deferred)"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
         return;
     }
 
@@ -3086,6 +3668,12 @@ AttachToParent(
     {
         // Attached while already attached to same parent = churn
         HierarchyDiag.AttachmentChurnCount++;
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("END TRACE: AttachToParent child=%s (already attached)"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
         return;
     }
 
@@ -3108,36 +3696,48 @@ AttachToParent(
             // Avoid relying solely on depth overflow.
             if (Probe == Child)
             {
-                UE_LOG(
-                    LogLiveSync,
-                    Warning,
-                    TEXT(
-                        "Hierarchy cycle detected:"
-                        " child=%s parent=%s"),
-                    *Guid.ToString(
-                        EGuidFormats::Digits),
-                    *ParentGuid.ToString(
-                        EGuidFormats::Digits));
-                return;
-            }
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT(
+                "Hierarchy cycle detected:"
+                " child=%s parent=%s"),
+            *Guid.ToString(
+                EGuidFormats::Digits),
+            *ParentGuid.ToString(
+                EGuidFormats::Digits));
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("END TRACE: AttachToParent child=%s (cycle detected)"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
+        return;
+    }
 
             Depth++;
 
             if (Depth > MaxDepth)
             {
-                UE_LOG(
-                    LogLiveSync,
-                    Warning,
-                    TEXT(
-                        "Exceeded max hierarchy depth"
-                        " %d: child=%s parent=%s"),
-                    MaxDepth,
-                    *Guid.ToString(
-                        EGuidFormats::Digits),
-                    *ParentGuid.ToString(
-                        EGuidFormats::Digits));
-                return;
-            }
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT(
+                "Exceeded max hierarchy depth"
+                " %d: child=%s parent=%s"),
+            MaxDepth,
+            *Guid.ToString(
+                EGuidFormats::Digits),
+            *ParentGuid.ToString(
+                EGuidFormats::Digits));
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("END TRACE: AttachToParent child=%s (depth exceeded)"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
+        return;
+    }
 
             Probe =
                 Probe->
@@ -3177,6 +3777,15 @@ AttachToParent(
             EGuidFormats::Digits),
         *ParentGuid.ToString(
             EGuidFormats::Digits));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("END TRACE: AttachToParent child=%s parent=%s"),
+        *Guid.ToString(
+            EGuidFormats::Digits),
+        *ParentGuid.ToString(
+            EGuidFormats::Digits));
 }
 
 
@@ -3188,6 +3797,7 @@ void UUELiveSyncSubsystem::
 DetachFromParent(
     const FGuid& Guid)
 {
+    CHECK_GAME_THREAD();
     AActor* Actor =
         FindActorFast(Guid);
 
@@ -3266,6 +3876,8 @@ HandleCreateObject(
 
     bool bIsLocalTransform)
 {
+    CHECK_GAME_THREAD();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleCreateObject);
     UWorld* World = GetWorld();
 
     if (!World)
@@ -3296,6 +3908,30 @@ HandleCreateObject(
         *Guid.ToString(
             EGuidFormats::Digits));
 
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("BEGIN TRACE: HandleCreateObject guid=%s"),
+        *Guid.ToString(
+            EGuidFormats::Digits));
+
+    // =====================================================
+    // ISOLATION: Skip spawn if DisableSpawning is set
+    // =====================================================
+
+    if (CVarLiveSyncDisableSpawning.GetValueOnGameThread())
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("HandleCreateObject: spawn DISABLED via CVar "
+                 "for GUID=%s (location=%s)"),
+            *Guid.ToString(
+                EGuidFormats::Digits),
+            *Location.ToString());
+        return;
+    }
+
     FActorSpawnParameters SpawnParams;
 
     SpawnParams.SpawnCollisionHandlingOverride =
@@ -3307,6 +3943,9 @@ HandleCreateObject(
     // Location/Rotation/Scale are already world-space
     // (ProcessBinaryPacket computed world for children).
     // =====================================================
+
+    uint64 SpawnBeginCycles =
+        FPlatformTime::Cycles64();
 
     AActor* NewActor =
 
@@ -3321,9 +3960,36 @@ HandleCreateObject(
 
             SpawnParams);
 
+    double SpawnMs =
+        FPlatformTime::
+        ToMilliseconds64(
+            FPlatformTime::Cycles64() -
+            SpawnBeginCycles);
+
     if (!NewActor)
     {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("HandleCreate: SpawnActor FAILED "
+                 "for GUID=%s (spawn took %.1fms)"),
+            *Guid.ToString(
+                EGuidFormats::Digits),
+            SpawnMs);
+
         return;
+    }
+
+    if (SpawnMs > 50.0)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("STALL: SpawnActor took %.1fms "
+                 "for GUID=%s"),
+            SpawnMs,
+            *Guid.ToString(
+                EGuidFormats::Digits));
     }
 
     // =====================================================
@@ -3378,8 +4044,22 @@ HandleCreateObject(
         // (possibly local-space) transform values.
         // This avoids passing world-spawn values as local targets.
 
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("END TRACE: HandleCreateObject guid=%s (empty, no mesh)"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
+
         return;
     }
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("BEGIN TRACE: HandleCreateObject::RegisterComponent guid=%s"),
+        *Guid.ToString(
+            EGuidFormats::Digits));
 
     UStaticMeshComponent* MeshComp =
         NewObject<UStaticMeshComponent>(
@@ -3406,13 +4086,49 @@ HandleCreateObject(
     NewActor->SetRootComponent(
         MeshComp);
 
+    uint64 RegisterBeginCycles =
+        FPlatformTime::Cycles64();
+
     MeshComp->RegisterComponent();
+
+    double RegisterMs =
+        FPlatformTime::
+        ToMilliseconds64(
+            FPlatformTime::Cycles64() -
+            RegisterBeginCycles);
+
+    if (RegisterMs > 50.0)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("STALL: RegisterComponent took %.1fms "
+                 "for GUID=%s"),
+            RegisterMs,
+            *Guid.ToString(
+                EGuidFormats::Digits));
+    }
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("END TRACE: HandleCreateObject::RegisterComponent guid=%s (%.1fms)"),
+        *Guid.ToString(
+            EGuidFormats::Digits),
+        RegisterMs);
 
     // NOTE: State initialization is handled by the caller
     // (ProcessBinaryPacket or RecoverMissingActors) via
     // an explicit UpdateTargetTransform call with correct
     // (possibly local-space) transform values.
     // This avoids passing world-spawn values as local targets.
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("END TRACE: HandleCreateObject guid=%s"),
+        *Guid.ToString(
+            EGuidFormats::Digits));
 }
 
 
@@ -3424,6 +4140,7 @@ void UUELiveSyncSubsystem::
 HandleDeleteObject(
     const FGuid& Guid)
 {
+    CHECK_GAME_THREAD();
     AActor* Actor =
         FindActorFast(Guid);
 
@@ -3497,6 +4214,7 @@ HandleAssetDef(
     uint64 IdentityLow,
     uint8 PrimitiveFallback)
 {
+    CHECK_GAME_THREAD();
     FAssetIdentityRef Identity;
     Identity.High = IdentityHigh;
     Identity.Low  = IdentityLow;
@@ -3553,6 +4271,7 @@ HandleAssetDef(
 void UUELiveSyncSubsystem::
 ResolvePendingAssets()
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAssets);
     double Now =
         FPlatformTime::Seconds();
     int32 ResolvedThisTick = 0;
@@ -3653,7 +4372,7 @@ AssignStaticMesh(
     const FSoftObjectPath& Path)
 {
     AActor* Actor =
-        FindActorFast(Guid).Get();
+        FindActorFast(Guid);
 
     if (!Actor)
     {
@@ -3672,73 +4391,26 @@ AssignStaticMesh(
         return;
     }
 
-    UStaticMesh* Mesh =
-        Cast<UStaticMesh>(
-            StaticLoadObject(
-                UStaticMesh::StaticClass(),
-                nullptr,
-                *Path.ToString()));
-
-    if (!Mesh)
-    {
-        UE_LOG(
-            LogLiveSync,
-            Warning,
-            TEXT("[Asset] Failed to load mesh for "
-                 "GUID=%s: %s"),
-            *Guid.ToString(
-                EGuidFormats::Digits),
-            *Path.ToString());
-
-        Stats.AssetAssignmentsFailed.fetch_add(
-            1,
-            std::memory_order_relaxed);
-        return;
-    }
-
     UStaticMeshComponent* MeshComp =
         Actor->FindComponentByClass<
             UStaticMeshComponent>();
 
     if (!MeshComp)
     {
-        MeshComp =
-            NewObject<
-                UStaticMeshComponent>(
-                    Actor);
+        return;
+    }
 
-        if (Actor->GetRootComponent())
-        {
-            MeshComp->SetupAttachment(
-                Actor->GetRootComponent());
-        }
-        else
-        {
-            Actor->SetRootComponent(
-                MeshComp);
-        }
+    UStaticMesh* Mesh = Cast<UStaticMesh>(
+        Path.TryLoad());
+
+    if (!Mesh)
+    {
+        return;
     }
 
     MeshComp->SetStaticMesh(Mesh);
-    MeshComp->SetMobility(
-        EComponentMobility::Movable);
 
-    if (!MeshComp->IsRegistered())
-    {
-        MeshComp->RegisterComponent();
-    }
-
-    Stats.AssetAssignmentsSucceeded.fetch_add(
-        1,
-        std::memory_order_relaxed);
-
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT("[Asset] Assigned mesh %s to GUID=%s"),
-        *Path.ToString(),
-        *Guid.ToString(
-            EGuidFormats::Digits));
+    Stats.AssetAssignmentsSucceeded++;
 }
 
 
@@ -3752,7 +4424,7 @@ AssignFallbackPrimitive(
     uint8 PrimitiveType)
 {
     AActor* Actor =
-        FindActorFast(Guid).Get();
+        FindActorFast(Guid);
 
     if (!Actor)
     {
@@ -3891,6 +4563,7 @@ HandleEndSnapshot()
 void UUELiveSyncSubsystem::
 ResolvePendingAttachments()
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAttachments);
     double Now =
         FPlatformTime::Seconds();
 
@@ -4010,6 +4683,7 @@ ResolvePendingAttachments()
 void UUELiveSyncSubsystem::
 RecoverMissingActors()
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_RecoverMissingActors);
     double Now =
         FPlatformTime::Seconds();
 
@@ -4383,6 +5057,81 @@ TickSafetyMonitors(float DeltaTime)
             }
         }
     }
+
+    // --- Packet age watchdog ---
+    // Warn if packets are sitting in the queue too long
+    // (indicates Tick pipeline is not keeping up).
+    {
+        int32 QueueDepth =
+            PacketQueue.Size();
+
+        if (QueueDepth > 0)
+        {
+            double AgeEstimate =
+                (double)QueueDepth *
+                (Stats.AvgProcessTimeMs / 1000.0 + 0.016);
+
+            if (AgeEstimate > PacketAgeWarnThreshold &&
+                Now - LastPacketAgeWarnTime > 10.0)
+            {
+                LastPacketAgeWarnTime = Now;
+
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("[Safety] Packet age watchdog: "
+                         "%d queued, estimated oldest age %.1fs "
+                         "(threshold %.1fs)"),
+                    QueueDepth,
+                    AgeEstimate,
+                    PacketAgeWarnThreshold);
+            }
+
+            if (AgeEstimate > PacketAgeHardLimit)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Error,
+                    TEXT("[Safety] Packet age HARD LIMIT: "
+                         "%d queued, estimated oldest age %.1fs "
+                         "(limit %.1fs) — flushing queue"),
+                    QueueDepth,
+                    AgeEstimate,
+                    PacketAgeHardLimit);
+
+                PacketQueue.Clear();
+
+                Stats.PacketsDropped.fetch_add(
+                    QueueDepth,
+                    std::memory_order_relaxed);
+            }
+        }
+    }
+
+    // --- Queue depth spike warning ---
+    {
+        int32 QueueDepth =
+            PacketQueue.Size();
+
+        if (QueueDepth >=
+            FLiveSyncQueue::MaxQueueSize * 0.9)
+        {
+            static double LastSpikeWarnTime = 0.0;
+
+            if (Now - LastSpikeWarnTime > 5.0)
+            {
+                LastSpikeWarnTime = Now;
+
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("[Safety] Queue depth spike: %d/%d "
+                         "(90%% capacity) — processing may be saturated"),
+                    QueueDepth,
+                    FLiveSyncQueue::MaxQueueSize);
+            }
+        }
+    }
 }
 
 
@@ -4476,7 +5225,7 @@ DrawDebugOverlay()
 // =========================================================
 
 FText UUELiveSyncSubsystem::
-GetDiagnosticsText() const
+GetDiagnosticsText()
 {
     FString Report;
 
@@ -4576,7 +5325,7 @@ GetDiagnosticsText() const
                 Stats.QueuePressureWarnings);
     }
 
-    // Asset resolution (Phase 6A)
+    // Asset resolution (Phase 5D)
     int32 PendingAssets = 0;
     int32 UnresolvedAssets = 0;
     PendingAssetQueue.GetDiagnostics(
@@ -4728,6 +5477,257 @@ LogRuntimeMetrics()
             std::memory_order_relaxed),
         PendingAssets,
         Stats.StaleEvictions);
+}
+
+
+// =========================================================
+// RUNTIME METRICS DASHBOARD (compact verbose diagnostics)
+// =========================================================
+// Logs a one-line LiveSync Stats summary every 30s when verbose is enabled.
+// Designed for quick health assessment in the UE Output Log.
+// =========================================================
+
+void UUELiveSyncSubsystem::
+LogRuntimeMetricsVerbose()
+{
+    int32 StateCount =
+        TransformStates.Num();
+
+    int32 QueueSize =
+        PacketQueue.Size();
+
+    int32 Connected =
+        ConnectionSocket &&
+        ConnectionSocket->
+            GetConnectionState()
+            == SCS_Connected
+        ? 1 : 0;
+
+    int32 PacketsRecv =
+        Stats.PacketsReceived.load(
+            std::memory_order_relaxed);
+
+    int32 PacketsProc =
+        Stats.PacketsProcessed.load(
+            std::memory_order_relaxed);
+
+    int32 PacketsDrop =
+        Stats.PacketsDropped.load(
+            std::memory_order_relaxed);
+
+    int32 Malformed =
+        Stats.MalformedPackets.load(
+            std::memory_order_relaxed);
+
+    int32 Reconnects =
+        Stats.ReconnectCount.load(
+            std::memory_order_relaxed);
+
+    int32 PendingAssets = 0;
+    int32 Unused = 0;
+    PendingAssetQueue.GetDiagnostics(
+        PendingAssets, Unused);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("=== LiveSync Stats Dashboard ==="));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  Connection: %s | Objects: %d | Queue: %d/%d | Assets: %d"),
+        Connected ? TEXT("Connected") : TEXT("Disconnected"),
+        StateCount,
+        QueueSize,
+        FLiveSyncQueue::MaxQueueSize,
+        PendingAssets);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  Packets: %d recv / %d proc / %d drop / %d malformed"),
+        PacketsRecv,
+        PacketsProc,
+        PacketsDrop,
+        Malformed);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  Rates: %.0f pkt/s (peak %.0f) | %.2f ms/pkt (peak %.2f) | %.0f B/s"),
+        Stats.PacketsPerSecondEMA,
+        Stats.PeakPacketsPerSecond,
+        Stats.ProcessTimeMsEMA,
+        Stats.PeakProcessTimeMs,
+        Stats.BytesPerSecondEMA);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  Safety: FloodW=%d QPress=%d Reconn=%d Overflows=%d"),
+        Stats.FloodWarnings,
+        Stats.QueuePressureWarnings,
+        Reconnects,
+        OverflowHistory.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("=== End Dashboard ==="));
+}
+
+
+// =========================================================
+// HIERARCHY SAFETY VALIDATION
+// =========================================================
+// Runs periodically to detect:
+//   - Self-parenting (child == parent)
+//   - Circular attachment chains (parent is descendant of child)
+//   - Invalid parent GUID (parent Guid.IsValid() but no actor exists)
+//   - Orphaned pending attachments (parent never appeared)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ValidateHierarchy()
+{
+    for (const auto& Pair :
+        TransformStates)
+    {
+        const FGuid& Guid =
+            Pair.Key;
+
+        const FSyncTransformState&
+            State =
+            Pair.Value;
+
+        if (!State.bHasParent)
+        {
+            continue;
+        }
+
+        const FGuid& ParentGuid =
+            State.ParentGuid;
+
+        // =====================================================
+        // SELF-PARENT CHECK
+        // =====================================================
+
+        if (Guid == ParentGuid)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("[HierarchySafety] Self-parent detected: "
+                     "GUID=%s is its own parent — detaching"),
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+
+            DetachFromParent(Guid);
+            continue;
+        }
+
+        // =====================================================
+        // PARENT VALIDITY CHECK
+        // =====================================================
+
+        if (!ParentGuid.IsValid())
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("[HierarchySafety] Invalid parent GUID: "
+                     "GUID=%s has invalid parent — detaching"),
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+
+            DetachFromParent(Guid);
+            continue;
+        }
+
+        // =====================================================
+        // PARENT EXISTS IN CACHE CHECK
+        // =====================================================
+
+        AActor* ParentActor =
+            FindActorFast(ParentGuid);
+
+        if (!ParentActor)
+        {
+            // This is normal during deferred attachment —
+            // only warn if pending for a long time
+            continue;
+        }
+
+        AActor* ChildActor =
+            FindActorFast(Guid);
+
+        if (!ChildActor)
+        {
+            continue;
+        }
+
+        // =====================================================
+        // CIRCULAR CHAIN DETECTION
+        // =====================================================
+        // Walk up the parent chain and verify we never
+        // encounter the child as an ancestor.
+
+        int32 Depth = 0;
+        AActor* Probe =
+            ParentActor;
+
+        while (Probe && Depth < 128)
+        {
+            if (Probe == ChildActor)
+            {
+                FGuid ProbeGuid =
+                    FindGuidForActor(Probe);
+
+                UE_LOG(
+                    LogLiveSync,
+                    Error,
+                    TEXT("[HierarchySafety] Circular chain detected: "
+                         "GUID=%s -> parent=%s chain contains child"),
+                    *Guid.ToString(
+                        EGuidFormats::Digits),
+                    ProbeGuid.IsValid()
+                        ? *ProbeGuid.ToString(
+                            EGuidFormats::Digits)
+                        : TEXT("unknown"));
+
+                UE_LOG(
+                    LogLiveSync,
+                    Log,
+                    TEXT("[HierarchySafety] Aborting attachment "
+                         "for GUID=%s to prevent recursion stall"),
+                    *Guid.ToString(
+                        EGuidFormats::Digits));
+
+                DetachFromParent(Guid);
+                break;
+            }
+
+            Probe =
+                Probe->
+                GetAttachParentActor();
+            Depth++;
+        }
+
+        if (Depth >= 128)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Error,
+                TEXT("[HierarchySafety] Excessive hierarchy depth "
+                     "(%d levels) for GUID=%s — detaching"),
+                Depth,
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+
+            DetachFromParent(Guid);
+        }
+    }
 }
 
 
@@ -4929,7 +5929,7 @@ ConsoleStats()
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("  [Asset] (Phase 6A)"));
+        TEXT("  [Asset] (Phase 5D)"));
 
     UE_LOG(
         LogLiveSync,
@@ -5208,7 +6208,7 @@ ConsoleReset()
     FloodPacketCount = 0;
     FloodWindowStart = 0.0;
     QueuePressureAccumulator = 0.0;
-    // Asset diagnostics reset (Phase 6A)
+    // Asset diagnostics reset (Phase 5D)
     Stats.AssetDefsReceived.store(0, std::memory_order_relaxed);
     Stats.AssetDefsSkipped.store(0, std::memory_order_relaxed);
     Stats.AssetAssignmentsSucceeded.store(0, std::memory_order_relaxed);

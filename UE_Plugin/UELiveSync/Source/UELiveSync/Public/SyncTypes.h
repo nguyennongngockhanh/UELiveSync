@@ -8,11 +8,11 @@
 
 #include <atomic>
 
-#include "SyncTypes.generated.h"
-
 DECLARE_LOG_CATEGORY_EXTERN(LogLiveSync, Log, All);
 
 #include "AssetIdentityTypes.h"
+
+#include "SyncTypes.generated.h"
 
 // =========================================================
 // TRANSFORM STATE
@@ -221,6 +221,43 @@ enum EPacketFlags : uint8
 
 
 // =========================================================
+// BINARY PROTOCOL LAYOUT (single source of truth)
+// =========================================================
+// All values little-endian. All structs packed (no padding).
+//
+// V3+ HEADER (24 bytes):
+//   offset  size  field          Python struct
+//   0       4     Magic (0x4C56534D)  I
+//   4       2     Version              H
+//   6       1     PacketType           B
+//   7       1     Flags                B
+//   8       8     SequenceId           Q
+//   16      4     PacketSize           I
+//   20      4     ObjectCount          I
+//
+// V2 HEADER (22 bytes, legacy):
+//   0       4     Magic                I
+//   4       2     Version              H
+//   6       8     SequenceId           Q
+//   14      4     PacketSize           I
+//   18      4     ObjectCount          I
+//
+// V3+ TRANSFORM OBJECT (80 bytes):
+//   0       16    GUID (4×uint32)      IIII
+//   16      12    Location (3×float)   fff
+//   28      16    Rotation (4×float)   ffff
+//   44      12    Scale (3×float)      fff
+//   56      8     Timestamp (double)   d
+//   64      16    Parent GUID          IIII
+//
+// V4+ adds 1-byte PrimitiveType after Parent GUID (81 bytes total)
+// for ALL packet types (Blender always includes it).
+//
+// V3 DELETE (16 bytes): just GUID (IIII)
+// V5 ASSET DEF (33 bytes): IIII QQ B
+// =========================================================
+
+// =========================================================
 // V2 HEADER (legacy)
 // MUST EXACTLY MATCH BLENDER:
 // <I H Q I I
@@ -401,6 +438,11 @@ static constexpr int32
     LIVE_SYNC_V3_OBJECT_SIZE =
         80;
 
+// V4+ object size: 80 (V3) + 1 (primitive type byte) = 81
+static constexpr int32
+    LIVE_SYNC_V4_OBJECT_SIZE =
+        81;
+
 static constexpr int32
     LIVE_SYNC_V3_DELETE_SIZE =
         16;
@@ -415,3 +457,97 @@ static constexpr int32
 static constexpr int32
     LIVE_SYNC_V5_ASSET_DEF_SIZE =
         33;
+
+// Maximum total packet size (header + payload) — 512 KB
+static constexpr int32
+    LIVE_SYNC_MAX_PACKET_SIZE =
+        512 * 1024;
+
+// =========================================================
+// PROTOCOL SIGNATURE
+// =========================================================
+// Deterministic FNV-1a hash of protocol constants.
+// Logged at startup on both Blender and UE.
+// If Blender and UE show different signatures, the protocol
+// has drifted and binary compatibility is broken.
+// =========================================================
+
+static constexpr uint32
+    LIVE_SYNC_PROTOCOL_SIG =
+        []() constexpr -> uint32
+{
+    // FNV-1a 32-bit
+    constexpr uint32 FNV_OFFSET = 2166136261u;
+    constexpr uint32 FNV_PRIME  = 16777619u;
+
+    auto fnv = [](uint32 h, uint8 b) constexpr
+    {
+        return (h ^ b) * FNV_PRIME;
+    };
+
+    auto fnv_u32 = [&](uint32 h, uint32 v) constexpr
+    {
+        h = fnv(h,  v        & 0xFF);
+        h = fnv(h, (v >>  8) & 0xFF);
+        h = fnv(h, (v >> 16) & 0xFF);
+        h = fnv(h, (v >> 24) & 0xFF);
+        return h;
+    };
+
+    auto fnv_u16 = [&](uint32 h, uint16 v) constexpr
+    {
+        h = fnv(h,  v        & 0xFF);
+        h = fnv(h, (v >>  8) & 0xFF);
+        return h;
+    };
+
+    uint32 H = FNV_OFFSET;
+
+    // Magic
+    H = fnv_u32(H, 0x4C56534D);
+    // Versions
+    H = fnv_u16(H, 2); H = fnv_u16(H, 3);
+    H = fnv_u16(H, 4); H = fnv_u16(H, 5);
+    // Header sizes
+    H = fnv(H, 24); H = fnv(H, 22);
+    // Object sizes
+    H = fnv(H, 80); H = fnv(H, 81);
+    H = fnv(H, 16); H = fnv(H, 33);
+    // Packet types
+    H = fnv(H, 0x01); H = fnv(H, 0x03);
+    H = fnv(H, 0x04); H = fnv(H, 0x07);
+    H = fnv(H, 0x08); H = fnv(H, 0x09);
+    H = fnv(H, 0x0A);
+
+    return H;
+}();
+
+// Compile-time size checks for packet headers
+static_assert(
+    sizeof(FPacketHeader) == 22,
+    "FPacketHeader must be exactly 22 bytes (V2 layout)");
+
+static_assert(
+    sizeof(FPacketHeaderV3) == 24,
+    "FPacketHeaderV3 must be exactly 24 bytes (V3+ layout)");
+
+// Object size checks
+static_assert(
+    LIVE_SYNC_OBJECT_SIZE == 56,
+    "V2 object must be exactly 56 bytes");
+
+static_assert(
+    LIVE_SYNC_V3_OBJECT_SIZE == 80,
+    "V3 object must be exactly 80 bytes (without V4+ prim type)");
+
+static_assert(
+    LIVE_SYNC_V4_OBJECT_SIZE == 81,
+    "V4+ object must be exactly 81 bytes (80 V3 + 1 prim type)");
+
+static_assert(
+    LIVE_SYNC_V3_DELETE_SIZE == 16,
+    "V3 delete must be exactly 16 bytes");
+
+static_assert(
+    LIVE_SYNC_V5_ASSET_DEF_SIZE == 33,
+    "V5 asset def must be exactly 33 bytes");

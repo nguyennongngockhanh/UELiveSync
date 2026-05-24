@@ -27,6 +27,7 @@ try:
         get_reconnect_count,
         get_runtime_stats,
         set_critical_error,
+        set_verbose as _network_set_verbose,
         PRIMITIVE_CUBE,
         PRIMITIVE_SPHERE,
         PRIMITIVE_CYLINDER,
@@ -57,6 +58,7 @@ except ImportError:
         get_reconnect_count,
         get_runtime_stats,
         set_critical_error,
+        set_verbose as _network_set_verbose,
         PRIMITIVE_CUBE,
         PRIMITIVE_SPHERE,
         PRIMITIVE_CYLINDER,
@@ -648,6 +650,10 @@ def check_updates():
     _verbose_logging = _get_threshold(
         "verbose_logging",
         False
+    )
+
+    _network_set_verbose(
+        _verbose_logging
     )
 
     _heartbeat_interval = _get_threshold(
@@ -1280,6 +1286,10 @@ def start_sync():
     _verbose_logging = _get_threshold(
         "verbose_logging",
         False
+    )
+
+    _network_set_verbose(
+        _verbose_logging
     )
 
     for obj in bpy.data.objects:

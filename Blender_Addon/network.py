@@ -13,6 +13,43 @@ LIVE_SYNC_MAGIC = 0x4C56534D
 LIVE_SYNC_VERSION = 2
 LIVE_SYNC_VERSION_V3 = 3
 
+# =========================================================
+# PROTOCOL SIGNATURE (FNV-1a 32-bit)
+# Must match UE LIVE_SYNC_PROTOCOL_SIG in SyncTypes.h.
+# Logged at startup; mismatch = binary protocol drift.
+# =========================================================
+
+def _compute_protocol_signature():
+    FNV_OFFSET = 2166136261
+    FNV_PRIME = 16777619
+
+    def _fnv(h, b):
+        return ((h ^ b) * FNV_PRIME) & 0xFFFFFFFF
+
+    h = FNV_OFFSET
+    h = _fnv(h, LIVE_SYNC_MAGIC & 0xFF)
+    h = _fnv(h, (LIVE_SYNC_MAGIC >> 8) & 0xFF)
+    h = _fnv(h, (LIVE_SYNC_MAGIC >> 16) & 0xFF)
+    h = _fnv(h, (LIVE_SYNC_MAGIC >> 24) & 0xFF)
+    for v in (2, 3, 4, 5):
+        h = _fnv(h, v & 0xFF)
+        h = _fnv(h, (v >> 8) & 0xFF)
+    import struct as _s
+    for size in (24, 22, 80, 81, 16, 33):
+        h = _fnv(h, size)
+    for pt in (0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A):
+        h = _fnv(h, pt)
+    return h
+
+LIVE_SYNC_PROTOCOL_SIG = _compute_protocol_signature()
+
+# Verbose logging flag (set by sync.py from addon prefs)
+_network_verbose = False
+
+def set_verbose(enabled):
+    global _network_verbose
+    _network_verbose = enabled
+
 # Primitive type constants (1 byte, appended to CREATE packets only)
 PRIMITIVE_CUBE = 0x00
 PRIMITIVE_SPHERE = 0x01
@@ -24,6 +61,9 @@ PRIMITIVE_EMPTY = 0x04
 PT_BeginSnapshot = 0x09
 PT_EndSnapshot = 0x0A
 PT_AssetDef = 0x08
+
+# V4 protocol version
+LIVE_SYNC_VERSION_V4 = 4
 
 # V5 protocol version
 LIVE_SYNC_VERSION_V5 = 5
@@ -560,7 +600,22 @@ class LiveSyncClient:
 
             self._was_connected = True
 
-            print("[LiveSync] Connected to UE")
+            print(
+                f"[LiveSync] Connected to UE  "
+                f"[sig=0x{LIVE_SYNC_PROTOCOL_SIG:08X}]"
+            )
+
+            import struct as _pstruct
+            print(
+                f"[Protocol] "
+                f"magic=0x{LIVE_SYNC_MAGIC:08X} LE "
+                f"hdr_v3={_pstruct.calcsize('<I H B B Q I I')} "
+                f"hdr_v2={_pstruct.calcsize('<I H Q I I')} "
+                f"obj_v3={_pstruct.calcsize('<IIIIfff ffff fff d IIII B') - 1} "
+                f"obj_v4={_pstruct.calcsize('<IIIIfff ffff fff d IIII B')} "
+                f"obj_del={_pstruct.calcsize('<IIII')} "
+                f"obj_asset={_pstruct.calcsize('<IIII QQ B')}"
+            )
 
         except ConnectionRefusedError:
 
@@ -833,6 +888,23 @@ class LiveSyncClient:
                 seq_id,
                 packet_size,
                 object_count
+            )
+
+        if _network_verbose:
+
+            hex_dump = " ".join(
+                f"{b:02x}"
+                for b in header[:24]
+            )
+
+            print(
+                f"[Packet] ver={version} "
+                f"type=0x{packet_type:02x} "
+                f"flags=0x{flags:02x} "
+                f"seq={seq_id} "
+                f"size={packet_size} "
+                f"objs={object_count}  "
+                f"hdr: {hex_dump}"
             )
 
         return header + payload

@@ -6,6 +6,11 @@
 
 #include "SyncTypes.h"
 
+#include "HAL/PlatformProcess.h"
+
+#define CHECK_NONGAME_THREAD() \
+    check(!IsInGameThread())
+
 extern bool GEnableVerboseSyncLogs;
 
 
@@ -52,6 +57,14 @@ uint32 FLiveSyncRunnable::Run()
 
     int32 ConsecutiveIdleWaits = 0;
 
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("NetworkThread: started"));
+
+    // Thread identity assertion: this MUST NOT be the game thread
+    CHECK_NONGAME_THREAD();
+
     while (bRunThread)
     {
         LastThreadLoopTime.store(
@@ -60,6 +73,11 @@ uint32 FLiveSyncRunnable::Run()
 
         if (!Socket)
         {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("NetworkThread: Socket became null, exiting"));
+
             break;
         }
 
@@ -77,6 +95,17 @@ uint32 FLiveSyncRunnable::Run()
                 10)))
         {
             ConsecutiveIdleWaits++;
+
+            // Log periodic idle status every ~1000 waits (10s)
+            if (ConsecutiveIdleWaits % 1000 == 1)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Log,
+                    TEXT("NetworkThread: waiting for data "
+                         "(idleWaits=%d)"),
+                    ConsecutiveIdleWaits);
+            }
 
             // Short-circuit: if Wait has returned false
             // 3× in a row and thread is being asked to
@@ -107,6 +136,17 @@ uint32 FLiveSyncRunnable::Run()
             (int32)sizeof(
                 FPacketHeaderV3))
         {
+            if (!bRunThread)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Log,
+                    TEXT("NetworkThread: header read interrupted "
+                         "by stop signal"));
+                bThreadExited = true;
+                return 0;
+            }
+
             int32 BytesRead =
                 0;
 
@@ -134,11 +174,27 @@ uint32 FLiveSyncRunnable::Run()
                         LastRecvExitCycles -
                         ThreadStartCycles);
 
-                UE_LOG(
-                    LogLiveSync,
-                    Log,
-                    TEXT("NetworkThread: recv=0 exit after %.2fms"),
-                    ThreadLifetimeMs);
+                if (BytesRead == 0)
+                {
+                    UE_LOG(
+                        LogLiveSync,
+                        Log,
+                        TEXT("NetworkThread: peer disconnected "
+                             "(recv=0) after %.2fms"),
+                        ThreadLifetimeMs);
+                }
+                else
+                {
+                    UE_LOG(
+                        LogLiveSync,
+                        Warning,
+                        TEXT("NetworkThread: socket error during "
+                             "header recv (ok=%d bytes=%d) "
+                             "after %.2fms"),
+                        bOk ? 1 : 0,
+                        BytesRead,
+                        ThreadLifetimeMs);
+                }
 
                 bThreadExited = true;
 
@@ -222,20 +278,29 @@ uint32 FLiveSyncRunnable::Run()
 
         if (GEnableVerboseSyncLogs)
         {
-            static int LogRateLimit = 0;
-
-            if (++LogRateLimit % 300 == 1)
+            FString HexDump;
+            for (int32 i = 0; i < HeaderSize; i++)
             {
-                UE_LOG(
-                    LogLiveSync,
-                    Log,
-                    TEXT("Raw packet: magic=%x version=%u seq=%llu size=%d obj=%d"),
-                    PacketMagic,
-                    PacketVersion,
-                    PacketSequenceId,
-                    PacketSize,
-                    ObjectCount);
+                HexDump += FString::Printf(
+                    TEXT("%02x "), HeaderBytes[i]);
             }
+
+            UE_LOG(
+                LogLiveSync,
+                Verbose,
+                TEXT("Header: %s"), *HexDump);
+
+            UE_LOG(
+                LogLiveSync,
+                Verbose,
+                TEXT("Parsed: magic=0x%08x version=%u "
+                     "seq=%llu size=%d obj=%d hdr=%d"),
+                PacketMagic,
+                PacketVersion,
+                PacketSequenceId,
+                PacketSize,
+                ObjectCount,
+                HeaderSize);
         }
 
         // =================================================
@@ -267,12 +332,22 @@ uint32 FLiveSyncRunnable::Run()
         if (PacketVersion !=
             LIVE_SYNC_VERSION
             && PacketVersion !=
-            LIVE_SYNC_VERSION_V3)
+            LIVE_SYNC_VERSION_V3
+            && PacketVersion !=
+            LIVE_SYNC_VERSION_V4
+            && PacketVersion !=
+            LIVE_SYNC_VERSION_V5)
         {
             UE_LOG(
                 LogLiveSync,
                 Error,
-                TEXT("Protocol version mismatch"));
+                TEXT("Protocol version mismatch: "
+                     "got %u, expected %u/%u/%u/%u"),
+                PacketVersion,
+                LIVE_SYNC_VERSION,
+                LIVE_SYNC_VERSION_V3,
+                LIVE_SYNC_VERSION_V4,
+                LIVE_SYNC_VERSION_V5);
 
             if (StatsRef)
             {
@@ -294,7 +369,31 @@ uint32 FLiveSyncRunnable::Run()
             UE_LOG(
                 LogLiveSync,
                 Error,
-                TEXT("Invalid packet size"));
+                TEXT("Invalid packet size: "
+                     "got %d, min %d"),
+                PacketSize,
+                HeaderSize);
+
+            if (StatsRef)
+            {
+                StatsRef->MalformedPackets.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+            }
+
+            continue;
+        }
+
+        if (PacketSize >
+            LIVE_SYNC_MAX_PACKET_SIZE)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Error,
+                TEXT("Packet too large: "
+                     "%d > %d"),
+                PacketSize,
+                LIVE_SYNC_MAX_PACKET_SIZE);
 
             if (StatsRef)
             {
@@ -397,6 +496,17 @@ uint32 FLiveSyncRunnable::Run()
             TotalPayloadRead <
             PayloadSize)
         {
+            if (!bRunThread)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Log,
+                    TEXT("NetworkThread: payload read interrupted "
+                         "by stop signal"));
+                bThreadExited = true;
+                return 0;
+            }
+
             int32 BytesRead =
                 0;
 
@@ -424,11 +534,27 @@ uint32 FLiveSyncRunnable::Run()
                         LastRecvExitCycles -
                         ThreadStartCycles);
 
-                UE_LOG(
-                    LogLiveSync,
-                    Log,
-                    TEXT("NetworkThread: payload recv=0 exit after %.2fms"),
-                    ThreadLifetimeMs);
+                if (BytesRead == 0)
+                {
+                    UE_LOG(
+                        LogLiveSync,
+                        Log,
+                        TEXT("NetworkThread: peer disconnected "
+                             "(recv=0) during payload after %.2fms"),
+                        ThreadLifetimeMs);
+                }
+                else
+                {
+                    UE_LOG(
+                        LogLiveSync,
+                        Warning,
+                        TEXT("NetworkThread: socket error during "
+                             "payload recv (ok=%d bytes=%d) "
+                             "after %.2fms"),
+                        bOk ? 1 : 0,
+                        BytesRead,
+                        ThreadLifetimeMs);
+                }
 
                 bThreadExited = true;
 
@@ -469,6 +595,36 @@ uint32 FLiveSyncRunnable::Run()
             PayloadSize);
 
         // =================================================
+        // VERBOSE PAYLOAD DUMP
+        // =================================================
+
+        if (GEnableVerboseSyncLogs)
+        {
+            int32 DumpLen = FMath::Min(
+                PayloadSize, 64);
+
+            FString PayloadHex;
+
+            for (int32 i = 0;
+                 i < DumpLen; i++)
+            {
+                PayloadHex +=
+                    FString::Printf(
+                        TEXT("%02x "),
+                        Payload[i]);
+            }
+
+            UE_LOG(
+                LogLiveSync,
+                Verbose,
+                TEXT("Payload (%d bytes, "
+                     "showing %d): %s"),
+                PayloadSize,
+                DumpLen,
+                *PayloadHex);
+        }
+
+        // =================================================
         // RECEIVE TIME
         // =================================================
 
@@ -499,17 +655,23 @@ uint32 FLiveSyncRunnable::Run()
                 std::memory_order_relaxed);
         }
 
-        if (GEnableVerboseSyncLogs)
-        {
-            static int LogRateLimit = 0;
+        // Log first packet and then every 300th packet
+        static int PacketLogCounter = 0;
 
-            if (++LogRateLimit % 300 == 1)
-            {
-                UE_LOG(
-                    LogLiveSync,
-                    Log,
-                    TEXT("Enqueued packet"));
-            }
+        if (++PacketLogCounter <= 3 ||
+            PacketLogCounter % 300 == 1)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("NetworkThread: enqueued packet "
+                     "(#%d, type=0x%02X, ver=%u, "
+                     "size=%d, objs=%d)"),
+                PacketLogCounter,
+                *((uint8*)(HeaderBytes + 6)),
+                PacketVersion,
+                PacketSize,
+                ObjectCount);
         }
     }
 

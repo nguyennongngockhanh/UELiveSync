@@ -44,22 +44,32 @@ Flags are validated against known values. Unknown flag bits cause the packet to 
 
 ### B.1 PT_Transform (0x01)
 
-**Payload**: N × transform object records (80 bytes each)
+**Payload**: N × transform object records
 **Version requirement**: V3+
 
+| Version | Per-object size | Layout |
+|---------|----------------|--------|
+| V3      | 80 bytes       | GUID(16) + Loc(12) + Rot(16) + Scl(12) + TS(8) + Parent(16) |
+| V4+     | 81 bytes       | V3 fields + PrimitiveType(1) appended at offset 80 |
+
+**V3 layout (80 bytes)**:
 ```
 Offset  Size  Field        Type     Description
 ------  ----  -----        ----     -----------
- 0      16    Guid         uint32×4 Object GUID (§H)
-16      12    Location     float×3  World-space X, Y, Z (UE centimeters)
-28      16    Rotation     float×4  Quaternion W, X, Y, Z (normalized)
-44      12    Scale        float×3  X, Y, Z scale factors
-56       8    Timestamp    double   Seconds since epoch
-64      16    ParentGuid   uint32×4 Parent GUID (zero if root)
+  0      16    Guid         uint32×4 Object GUID (§H)
+ 16      12    Location     float×3  World-space X, Y, Z (UE centimeters)
+ 28      16    Rotation     float×4  Quaternion W, X, Y, Z (normalized)
+ 44      12    Scale        float×3  X, Y, Z scale factors
+ 56       8    Timestamp    double   Seconds since epoch
+ 64      16    ParentGuid   uint32×4 Parent GUID (zero if root)
 ```
 
-**Total**: 80 bytes per object.
-**No primitive byte** — TRANSFORM packets carry no type information.
+**V4+ layout (81 bytes)**: Same as V3 with an additional byte at offset 80:
+```
+ 80       1    PrimitiveType uint8   See §C (always present in V4+ payloads)
+```
+
+**Important**: In V4+, ALL object payloads (TRANSFORM and CREATE) are always 81 bytes. The primitive type byte is always present in V4+ wire format regardless of packet type. V3 TRANSFORM packets remain 80 bytes per object.
 
 ### B.2 PT_Create (0x03)
 
@@ -139,7 +149,7 @@ Offset  Size  Field   Type      Description
 
 ## C. Primitive Type Enum
 
-Single-byte field appended to V4 CREATE packets only.
+Single-byte field appended at offset 80 in all V4+ object payloads (both TRANSFORM and CREATE).
 
 | Value | Name              | UE Behavior                                                     |
 |-------|-------------------|-----------------------------------------------------------------|
@@ -153,7 +163,9 @@ Single-byte field appended to V4 CREATE packets only.
 
 - Values 0x00–0x04 are valid.
 - Values > 0x04 (including 0xFF) are clamped to PRIMITIVE_Cube with a warning log.
-- The primitive byte is only read for `Version >= 4`. V3 CREATE packets (80 bytes) have no primitive byte and default to Cube.
+- The primitive byte is only present in V4+ wire format. V3 packets have no primitive byte.
+  - V4+ always reads 81 bytes per object; the byte at offset 80 is always the primitive type.
+  - V3 always reads 80 bytes per object; no primitive type is read.
 - Invalid values never cause a crash — the unknown value is logged and Cubed.
 
 ---
@@ -334,13 +346,15 @@ A zero GUID (`{00000000-0000-0000-0000-000000000000}`) is used to indicate "no p
 
 | Packet Type | Header | Per-Object | Example: 100 objects |
 |-------------|--------|------------|----------------------|
-| PT_Transform (V3/V4) | 24 | 80 | 8,024 bytes |
-| PT_Create (V4) | 24 | 81 | 8,124 bytes |
+| PT_Transform (V3) | 24 | 80 | 8,024 bytes |
+| PT_Transform (V4+) | 24 | 81 | 8,124 bytes |
 | PT_Create (V3) | 24 | 80 | 8,024 bytes |
+| PT_Create (V4+) | 24 | 81 | 8,124 bytes |
 | PT_Delete (V3/V4) | 24 | 16 | 1,624 bytes |
 | PT_Heartbeat | 24 | 0 | 24 bytes |
 | PT_BeginSnapshot | 24 | 0 | 24 bytes |
 | PT_EndSnapshot | 24 | 0 | 24 bytes |
+| PT_AssetDef (V5) | 24 | 33 | 3,324 bytes |
 
 ---
 
@@ -353,7 +367,8 @@ LIVE_SYNC_MAGIC      = 0x4C56534D
 # Wire versions
 LIVE_SYNC_VERSION     = 2   # backward compat alias
 LIVE_SYNC_VERSION_V3  = 3
-LIVE_SYNC_VERSION_V4  = 4   # current
+LIVE_SYNC_VERSION_V4  = 4   # current default
+LIVE_SYNC_VERSION_V5  = 5   # adds AssetDef support
 
 # Packet types
 PT_Transform         = 0x01
@@ -362,10 +377,11 @@ PT_Delete            = 0x04
 PT_MaterialParams    = 0x05  # reserved
 PT_MeshUpdate        = 0x06  # reserved
 PT_Heartbeat         = 0x07
+PT_AssetDef          = 0x08  # V5+ asset identity delta
 PT_BeginSnapshot     = 0x09
 PT_EndSnapshot       = 0x0A
 
-# Primitive types (CREATE-only, V4+)
+# Primitive types (V4+ always present at offset 80)
 PRIMITIVE_Cube       = 0x00
 PRIMITIVE_Sphere     = 0x01
 PRIMITIVE_Cylinder   = 0x02
@@ -380,8 +396,12 @@ PF_RequestAck        = 0x04  # reserved
 
 # Object sizes (bytes)
 V3_OBJECT_SIZE       = 80   # GUID(16) + Loc(12) + Rot(16) + Scl(12) + TS(8) + Parent(16)
-V4_CREATE_EXT_SIZE   = 1    # primitive type byte appended to V3_OBJECT_SIZE
+V4_OBJECT_SIZE       = 81   # V3 + primitive type byte (appended to ALL V4+ object payloads)
 V3_DELETE_SIZE       = 16   # GUID only
+V5_ASSET_DEF_SIZE    = 33   # GUID(16) + HashLo(8) + HashHi(8) + Prim(1)
+
+# Max packet size guard
+LIVE_SYNC_MAX_PACKET_SIZE = 512 * 1024  # 512 KiB rejection threshold
 ```
 
 ---
@@ -391,3 +411,4 @@ V3_DELETE_SIZE       = 16   # GUID only
 | Date       | Version | Author | Changes |
 |------------|---------|--------|---------|
 | 2026-05-23 | 1.0     | Phase 5A | Initial V4 protocol freeze after Phase 5A implementation |
+| 2026-05-24 | 1.1     | Phase 6B | Correct TRANSFORM payload size: V4+ always 81 bytes (prim byte present in ALL V4+ object payloads, not just CREATE). Added V5/PT_AssetDef/V4_OBJECT_SIZE/V5_ASSET_DEF_SIZE/LIVE_SYNC_MAX_PACKET_SIZE constants. |

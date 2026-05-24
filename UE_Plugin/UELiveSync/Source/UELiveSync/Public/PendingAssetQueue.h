@@ -47,7 +47,7 @@ public:
         }
 
         OutGuid = Entries[0];
-        Entries.RemoveAt(0, 1, false);
+        Entries.RemoveAt(0, 1, EAllowShrinking::No);
         EntrySet.Remove(OutGuid);
         return true;
     }

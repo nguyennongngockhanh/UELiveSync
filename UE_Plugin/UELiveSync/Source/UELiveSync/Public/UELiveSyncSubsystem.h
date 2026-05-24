@@ -68,6 +68,8 @@ public:
     FText GetQueueDepthText() const;
 
     FText GetLastPacketTimeText() const;
+
+    FText GetDiagnosticsText();
 #endif
 
 private:
@@ -158,7 +160,7 @@ private:
     void AbortSnapshot();
 
     // =====================================================
-    // ASSET RESOLUTION (Phase 6A)
+    // ASSET RESOLUTION (Phase 5D)
     // =====================================================
 
     void HandleAssetDef(
@@ -301,6 +303,8 @@ private:
 
     void LogRuntimeMetrics();
 
+    void LogRuntimeMetricsVerbose();
+
     // Rate tracking state
     double LastRateSampleTime =
         0.0;
@@ -324,7 +328,7 @@ private:
     void ConsoleStats();
 
     // =====================================================
-    // ASSET RESOLUTION DATA (Phase 6A)
+    // ASSET RESOLUTION DATA (Phase 5D)
     // =====================================================
 
     // Per-object asset metadata (outside hot transform path)
@@ -421,10 +425,6 @@ private:
 
     void TickSafetyMonitors(float DeltaTime);
 
-    #if WITH_EDITOR
-    FText GetDiagnosticsText() const;
-    #endif
-
     void SetQueueDepthPeak(int32 Depth);
 
     // Event histories
@@ -455,6 +455,12 @@ private:
     double GetWatchdogBackoff() const;
 
     // =====================================================
+    // HIERARCHY SAFETY VALIDATION
+    // =====================================================
+
+    void ValidateHierarchy();
+
+    // =====================================================
     // SAFETY MONITORS (Phase 5C)
     // =====================================================
 
@@ -472,6 +478,16 @@ private:
     // Queue pressure: running average depth trigger
     static constexpr double
         QueuePressureThreshold = 96.0;  // 75% of capacity (128)
+
+    // Packet age watchdog: warn if oldest queued packet exceeds this (seconds)
+    static constexpr double
+        PacketAgeWarnThreshold = 5.0;
+
+    // Packet age watchdog: max allowed packet age before forced flush (seconds)
+    static constexpr double
+        PacketAgeHardLimit = 30.0;
+
+    double LastPacketAgeWarnTime = 0.0;
 
     double QueuePressureAccumulator = 0.0;
 
