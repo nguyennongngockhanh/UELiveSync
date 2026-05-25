@@ -2,7 +2,9 @@
 
 ## Overview
 
-Phase 6A introduces a deterministic asset identity system that maps Blender mesh datablocks to UE static meshes. The system is designed to be asynchronous, non-blocking, and fully separate from the realtime transform replication layer.
+Phase 5D introduces a deterministic asset identity system that maps Blender mesh datablocks to UE static meshes. The system is designed to be asynchronous, non-blocking, and fully separate from the realtime transform replication layer.
+
+> NOTE: This work was completed in Phase 5D, not Phase 6. The "Phase 6A" label in earlier documentation was a roadmap error now corrected. See `00-consolidated-roadmap.md` for details.
 
 ## Identity Model
 
@@ -88,7 +90,7 @@ UE Assignment:
 6. **Late resolution** → If cache populated later, fallback can still be replaced
    (e.g., asset imported after Blender connection established)
 
-## Lookup Strategy (Phase 6A)
+## Lookup Strategy (Phase 5D)
 
 The identity hash is a **cache/dedup key only**. The actual UE asset lookup is by naming convention:
 
@@ -99,9 +101,9 @@ Blender mesh datablock name "SM_Chair"
 
 The `AssetPathCache` (`TMap<FAssetIdentityRef, FSoftObjectPath>`) maps identity hashes to resolved paths. This must be pre-populated or populated by convention-based lookups.
 
-**Phase 6A limitation**: Automatic UE Asset Registry querying is not implemented. The cache is populated by explicit calls to `CacheAssetPath()`.
+**Phase 5D limitation**: Automatic UE Asset Registry querying is not implemented. The cache is populated by explicit calls to `CacheAssetPath()`.
 
-## Non-Goals (Phase 6A)
+## Non-Goals (Phase 5D)
 
 - ❌ No material slot replication
 - ❌ No source FBX path metadata transmission

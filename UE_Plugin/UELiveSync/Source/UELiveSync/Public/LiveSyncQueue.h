@@ -1,5 +1,22 @@
 #pragma once
 
+// =========================================================
+// LiveSyncQueue.h — Bounded MPSC Transform Queue
+// =========================================================
+// PHASE 5 COMPLETE — RUNTIME CORE FROZEN
+//
+// Bounded (128 entry) multi-producer single-consumer queue
+// bridging network receive thread → game thread.  Drop-oldest
+// on overflow.  STABLE and FROZEN as of v0.5.0-stabilized.
+//
+// Thread ownership: Enqueue from network thread; DequeueBatch
+// from game thread only.  Queue size and overflow behaviour are
+// validated invariants — changing either requires CVar/visibility
+// gate and protocol-version awareness.
+//
+// See Docs/Architecture/12-core-runtime-invariants.md
+// =========================================================
+
 #include "CoreMinimal.h"
 #include "Containers/Queue.h"
 #include "HAL/IConsoleManager.h"

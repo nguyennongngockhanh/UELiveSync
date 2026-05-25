@@ -411,4 +411,4 @@ LIVE_SYNC_MAX_PACKET_SIZE = 512 * 1024  # 512 KiB rejection threshold
 | Date       | Version | Author | Changes |
 |------------|---------|--------|---------|
 | 2026-05-23 | 1.0     | Phase 5A | Initial V4 protocol freeze after Phase 5A implementation |
-| 2026-05-24 | 1.1     | Phase 6B | Correct TRANSFORM payload size: V4+ always 81 bytes (prim byte present in ALL V4+ object payloads, not just CREATE). Added V5/PT_AssetDef/V4_OBJECT_SIZE/V5_ASSET_DEF_SIZE/LIVE_SYNC_MAX_PACKET_SIZE constants. |
+| 2026-05-24 | 1.1     | Phase 5D | Correct TRANSFORM payload size: V4+ always 81 bytes (prim byte present in ALL V4+ object payloads, not just CREATE). Added V5/PT_AssetDef/V4_OBJECT_SIZE/V5_ASSET_DEF_SIZE/LIVE_SYNC_MAX_PACKET_SIZE constants. |

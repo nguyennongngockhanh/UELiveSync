@@ -10,13 +10,13 @@
 
 1. [Current Architecture State](#1-current-architecture-state)
 2. [Completed Phases](#2-completed-phases)
-3. [Phase 5C — Diagnostics & Editor UX](#3-phase-5c--diagnostics--editor-ux)
-4. [Phase 6 — Asset & Scene Replication](#4-phase-6--asset--scene-replication)
-   - [6A — Asset Identity & Static Mesh Resolution](#41-6a--asset-identity--static-mesh-resolution)
-5. [Phase 7 — Live Editing System](#5-phase-7--live-editing-system)
-6. [Phase 8 — Animation & Sequencer Sync](#6-phase-8--animation--sequencer-sync)
-7. [Phase 9 — High Performance Streaming](#7-phase-9--high-performance-streaming)
-8. [Phase 10 — Production Ecosystem](#8-phase-10--production-ecosystem)
+3. [Phase 5 — Protocol Evolution & Runtime Stabilization](#3-phase-5--protocol-evolution--runtime-stabilization)
+   - [5D — Asset Identity & Static Mesh Resolution](#31-5d--asset-identity--static-mesh-resolution)
+   - [5E — Stress Testing & Observability](#32-5e--stress-testing--observability)
+4. [Phase 6 — Live Editing System](#4-phase-6--live-editing-system)
+5. [Phase 7 — Animation & Sequencer Sync](#5-phase-7--animation--sequencer-sync)
+6. [Phase 8 — High Performance Streaming](#6-phase-8--high-performance-streaming)
+7. [Phase 9 — Production Ecosystem](#7-phase-9--production-ecosystem)
 9. [Architectural Identity](#9-architectural-identity)
 10. [Non-Goals / Scope Boundaries](#10-non-goals--scope-boundaries)
 11. [Technical Debt & Future Risks](#11-technical-debt--future-risks)
@@ -51,9 +51,9 @@ UELiveSync is a **lightweight realtime state replication framework** for Blender
 | Protocol Versioning | V2/V3/V4/V5 coexistence, version mismatch detection, unknown-type skipping | Production-stable |
 | Primitive Type | 1-byte enum in CREATE payload (Cube/Sphere/Cylinder/Plane/Empty) | Production-stable |
 | GUID Hardening | Owner hashing for stale-GUID detection across .blend load cycles | Production-stable |
-| Asset Identity | xxHash64 of datablock name, POD identity, bounded pending queue | Phase 6A |
-| Static Mesh Assignment | Non-blocking deferred resolution, live-swap, exponential backoff retry | Phase 6A |
-| Fallback Primitives | Temporary mesh assignment, replaceable on late resolution | Phase 6A |
+| Asset Identity | xxHash64 of datablock name, POD identity, bounded pending queue | Phase 5D |
+| Static Mesh Assignment | Non-blocking deferred resolution, live-swap, exponential backoff retry | Phase 5D |
+| Fallback Primitives | Temporary mesh assignment, replaceable on late resolution | Phase 5D |
 
 ### Current Metrics
 
@@ -119,12 +119,53 @@ Diagnostics panel with full hierarchy and metrics sections, CVar-controlled debu
 
 ---
 
-## 3. Phase 5C — Diagnostics & Editor UX
+### Phase 5D — Asset Identity & Static Mesh Resolution (Done)
 
-**Status**: Complete (2026-05-24) · **Risk**: Low  
-**Depends on**: Phase 5B (hierarchy model is the final runtime subsystem)
+**Phase 5D work**: xxHash64 deterministic datablock identity (`FAssetIdentityRef`,
+16B POD), V5 protocol (`PT_AssetDef = 0x08`, 33B fixed payload), `PendingAssetQueue`
+(bounded 2048-entry FIFO), `ResolvePendingAssets` (8/tick, exponential backoff
+1s→2s→4s→8s→16s, max 5 retries), `AssignStaticMesh` (live-swap on existing actors),
+`AssignFallbackPrimitive` (temporary mesh, replaced on late resolution), `AssetMetadata`
+TMap in cold path.
 
-### 3C.1 — UE Diagnostics Panel
+Crash investigation: original "editor freeze" identified as SIGABRT in
+`FPendingAssetQueue::Dequeue` → `TSet::Remove` (SparseSet assertion). Fixed with
+`Contains()` guard. Secondary infinite-loop risk in `ResolvePendingAssets` fixed
+by moving `ResolvedThisTick++` to top of while body.
+
+### Phase 5E — Stress Testing & Observability (Done)
+
+**Phase 5E work**: Long-duration stress test (30+ min), large-scene stress test
+(1000+ objects + 1500 hierarchy), reconnect storm test (50 rapid cycles), malformed
+packet injection, Unreal Insights `TRACE_CPUPROFILER_EVENT_SCOPE` at every pipeline
+stage, runtime metrics dashboard, queue age watchdog, hierarchy validation every 300
+ticks, 5-isolation CVars (`DisableInterpolation`, `DisableAttachmentResolution`,
+`DisableAssetResolution`, `DisableRecovery`, `BypassSetActorTransform`).
+
+Final freeze root-cause documentation: plugin pipeline confirmed stable (46,400 Tick
+frames, 232K balanced BEGIN/END, 14K SetActorTransform calls, 6h38m runtime).
+Remaining issue is Linux CEF/Vulkan GPU subprocess instability — external to plugin.
+
+---
+
+## 3. Phase 5 — Protocol Evolution & Runtime Stabilization
+
+**Status**: Complete (2026-05-25) · **Risk**: Low  
+**Phase 5 milestones**: 5A (Snapshot), 5B (Hierarchy), 5C (Diagnostics),
+5D (Asset Identity), 5E (Stress/Observability)
+
+### 5A — Snapshot Foundations
+
+Protocol-level begin/end snapshot markers, deferred hierarchy during bulk load,
+snapshot timeout (5s auto-abort), full-snapshot flag handling.
+
+### 5B — Hierarchy Authority Model
+
+Local-space interpolation for attached children, UE attachment ownership,
+parent-change detection, attachment cycle protection, deferred world-space
+rewrite after successful attach.
+
+### 5C — Diagnostics Panel & Editor UX
 
 Convert the existing `SLiveSyncStatusWidget` from Phase 4 into a full diagnostics panel:
 
@@ -216,59 +257,29 @@ def _log_diagnostics():
 
 ---
 
-## 4. Phase 6 — Asset & Scene Replication
+## 4. Phase 6 — Live Editing System
 
-**Status**: Phase 6A In Progress (2026-05-24) · **Risk**: Medium  
-**Depends on**: Phase 5C (diagnostics needed for asset health monitoring)
+**Status**: NOT STARTED  
+**Phase 6 begins when** these editor-side workflows start implementation:
+- Rename replication (Blender → UE object name sync)
+- Collection/folder structure sync  
+- Visibility/hidden state sync
+- Duplicate detection and handling
+- Object create/delete lifecycle management from editor
 
-Phase 6 is organized into three subphases to manage complexity and risk:
+All protocol parsing, queue safety, reconnect handling, asset identity,
+stress infrastructure, and runtime stabilization work was completed in
+Phase 5 (5A–5E) and is NOT Phase 6.
 
-### 4.1 — 6A: Asset Identity & Static Mesh Resolution
+**Note**: Asset identity (xxHash64, PT_AssetDef, PendingAssetQueue, V5 protocol) was implemented in **Phase 5D** and completed as part of Phase 5. It is NOT Phase 6. See `Docs/Architecture/09-asset-identity.md` and `Docs/Protocol/live_sync_v5.md`.
 
-**Status**: In Progress (2026-05-24)  
-**Protocol**: V5 (`PT_AssetDef = 0x08`)
+### 4.1 — Material Assignment & Cache Persistence (Phase 6)
 
-**Architecture decision**: Asset identity is transmitted as a fixed-size 33-byte payload per object, separate from the transform/CREATE packets. This decouples asset resolution from the realtime transform pipeline — missing assets never block transform replication.
+**Status**: Backlog · **Depends on**: Phase 5D (asset identity)
 
-**Key components**:
+Assign UE materials to mesh components. No shader graph creation, no material instance generation.
 
-| Component | Location | Description |
-|-----------|----------|-------------|
-| `FAssetIdentityRef` | `AssetIdentityTypes.h` | 16B POD: `uint64 High/Low` — hot-path safe, no FString |
-| `FAssetMetadata` | `AssetIdentityTypes.h` | Full metadata (identity, fallback, retry count, timestamps) — cold path |
-| `PendingAssetQueue` | `PendingAssetQueue.h` | Bounded 2048-entry FIFO with O(1) Contains/Remove |
-| `HandleAssetDef` | `UELiveSyncSubsystem.cpp` | Reads 33 bytes per object; stores metadata, enqueues for resolution |
-| `ResolvePendingAssets` | `UELiveSyncSubsystem.cpp` | Game-thread throttled at 8/tick; exponential backoff (1s→16s, max 5) |
-| `AssignStaticMesh` | `UELiveSyncSubsystem.cpp` | Live-swap mesh on existing actor — preserves transform, hierarchy |
-| `AssignFallbackPrimitive` | `UELiveSyncSubsystem.cpp` | Temporary fallback via `GetPrimitiveMesh()` helper |
-| `GetPrimitiveMesh()` | `UELiveSyncSubsystem.cpp` | Static helper refactored from `HandleCreateObject` |
-| `get_mesh_identity_hash()` | `network.py` | Pure-Python xxHash64 of datablock name |
-| `serialize_asset_identity()` | `network.py` | Serializes PT_AssetDef payload (33 bytes) |
-
-**Identity model**:
-- Blender side: xxHash64 of `obj.data.name` (datablock name, not object name)
-- Deterministic across sessions and duplicated instances
-- NOT stable across datablock renames — documented limitation
-- UE side: stored in `TMap<FAssetIdentityRef, FSoftObjectPath>` (path cache)
-
-**Fallback lifecycle**:
-1. On CREATE → actor spawned with primitive mesh (existing behavior)
-2. On PT_AssetDef → metadata stored, resolution queued
-3. During resolution → actor keeps primitive mesh
-4. On successful resolution → static mesh live-swapped in-place
-5. On resolution failure after 5 retries → fallback becomes permanent
-6. Late resolution still replaces fallback
-
-**Validation tests**: `tests/phase6_validation_A_asset_identity.py`
-
-### 4.2 — 6B: Material Assignment & Cache Persistence
-
-**Status**: Planning · **Estimate**: 5–7 days · **Risk**: Medium  
-**Depends on**: Phase 6A (asset identity infrastructure)
-
-**Scope limitation**: Assign UE materials to mesh components. No shader graph creation, no material instance generation.
-
-**Packet type**: `PT_MaterialAssign = 0x0B`
+**Packet type**: `PT_MaterialAssign = 0x0B` (proposed)
 
 | Section | Bytes | Description |
 |---------|-------|-------------|
@@ -287,10 +298,9 @@ Phase 6 is organized into three subphases to manage complexity and risk:
 - Sets material at slot index via `SetMaterial(SlotIndex, LoadObject<UMaterialInterface>(Path))`
 - Caches material path per GUID to avoid redundant assignments
 
-### 4.3 — 6C: FBX Mesh Push Pipeline
+### 4.2 — FBX Mesh Push Pipeline (Phase 6)
 
-**Status**: Planning · **Estimate**: 7–10 days · **Risk**: High  
-**Depends on**: Phase 6A (asset identity), Phase 6B (material cache)
+**Status**: Backlog · **Depends on**: Phase 5D (asset identity), Phase 6 material assignment
 
 Blender exports each mesh as FBX → writes to a known project path → UE auto-reimports via directory watcher.
 
@@ -307,6 +317,8 @@ Blender exports each mesh as FBX → writes to a known project path → UE auto-
 | Avoid duplicate asset generation | One asset per GUID |
 | Handle renames | GUID is stable; name changes don't affect paths |
 
+
+
 **Blender side** (`sync.py`):
 - `export_mesh_fbx(obj, output_dir)` — exports FBX with embedded textures, triangulate, scale = 100
 - Called when mesh is first tracked or when `obj.data` polygon count changes
@@ -319,21 +331,21 @@ Blender exports each mesh as FBX → writes to a known project path → UE auto-
 
 **Threading**: FBX import runs on `EAsyncExecution::TaskGraphMainThread` to avoid blocking game thread.
 
-### 4.4 — Missing Asset Recovery
+### 4.3 — Missing Asset Recovery (Phase 6)
 
-**Status**: Partially implemented in 6A · Remaining in backlog
+**Status**: Backlog — partial resolution (retry + fallback) completed in Phase 5D
 
 When a referenced mesh or material asset path cannot be loaded:
 
 | Threshold | Action |
 |-----------|--------|
-| Immediate | Log warning, fall back to Cube with material override |
+| Immediate | Log warning, fall back to Cube (Phase 5D) |
 | First recovery | Re-query asset after 30 frames (async asset registry query) |
 | After 60 frames | Mark as permanently missing, log error once |
 
-### 4.5 — Asset Dependency Tracking
+### 4.4 — Asset Dependency Tracking (Phase 6)
 
-**Status**: Backlog · **Depends on**: Phase 6A–6C
+**Status**: Backlog
 
 Track GUID → asset relationships for orphan detection and health monitoring:
 
@@ -350,7 +362,7 @@ Console command `UE.LiveSync.AssetHealth` prints:
 - Stale (hash mismatch)
 - Missing (GUID exists but asset path fails to load)
 
-### Files (Phase 6A)
+### Files (Phase 5D — Asset Identity, completed)
 
 | File | What |
 |------|------|
@@ -362,24 +374,24 @@ Console command `UE.LiveSync.AssetHealth` prints:
 | `UELiveSyncSubsystem.cpp` | `HandleAssetDef`, `ResolvePendingAssets`, `AssignStaticMesh`, `AssignFallbackPrimitive`, `GetPrimitiveMesh()` |
 | `UELiveSyncSubsystem.h` | Asset metadata/identity maps, pending queue, resolution methods |
 | `LiveSyncRunnable.cpp` | V5 header parsing support |
-| `tests/phase6_validation_A_asset_identity.py` | Phase 6A validation suite |
-| `tests/run_phase6_all.py` | Phase 6 test runner |
+| `tests/phase5d_validation_A_asset_identity.py` | Phase 5D validation suite |
+| `tests/run_phase5_all.py` | Phase 5 test runner |
 | `Docs/Protocol/live_sync_v5.md` | V5 protocol documentation |
 | `Docs/Architecture/09-asset-identity.md` | Asset identity architecture documentation |
 
-### Files (Phase 6B–6C backlog)
+### Files (Phase 6 backlog)
 
 | File | What |
 |------|------|
-| `network.py` | `serialize_material_assign()` (6B) |
-| `sync.py` | `collect_material_name()`, `export_mesh_fbx()` (6B–6C) |
-| `UELiveSyncSubsystem.cpp` | `HandleMaterialAssign()`, async reimport queue (6B–6C) |
+| `network.py` | `serialize_material_assign()` (material assignment) |
+| `sync.py` | `collect_material_name()`, `export_mesh_fbx()` (material + FBX push) |
+| `UELiveSyncSubsystem.cpp` | `HandleMaterialAssign()`, async reimport queue (material + FBX) |
 | `UELiveSyncSubsystem.h` | `AssetHealth` command (6B) |
 | `__init__.py` | Asset path config in prefs, export path field (6C) |
 
 ---
 
-## 5. Phase 7 — Live Editing System
+## 5. Phase 7 — Animation & Sequencer Sync
 
 **Status**: Planning · **Estimate**: 8–12 days · **Risk**: High  
 **Depends on**: Phase 6 (asset identity before editing operations)
@@ -985,7 +997,7 @@ Variable-length strings in the protocol (mesh paths, material paths, names) will
 | V2 | Legacy (preserved) | 22-byte header, hex GUID, port 5000 |
 | V3 | Production-stable | 24-byte header, binary GUID, packet types, parent field, port 57000 |
 | V4 | Production-stable | `PF_HasLocalTransform` flag, `PF_FullSnapshot` flag, snapshot batching (`PT_BeginSnapshot`/`PT_EndSnapshot`), primitive type byte |
-| V5 | Phase 6A (active) | xxHash64-based identity, fixed-size 33B PT_AssetDef payload, backward compatible with V3/V4 |
+| V5 | Phase 5D (stable) | xxHash64-based identity, fixed-size 33B PT_AssetDef payload, backward compatible with V3/V4 |
 | V6 | Research (future) | Delta serialization, change masks, keyframe payloads |
 
 ### Packet Type Registry
@@ -1022,4 +1034,4 @@ Variable-length strings in the protocol (mesh paths, material paths, names) will
 
 ---
 
-*End of consolidated roadmap. Updated 2026-05-24 (Phase 6A in progress).*
+*End of consolidated roadmap. Updated 2026-05-25 (Phase 5E complete, Phase 6 NOT STARTED).*

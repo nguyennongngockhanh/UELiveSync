@@ -1,10 +1,25 @@
 # UELiveSync — Current State
 
-**Generated**: 2026-05-24  
+**Generated**: 2026-05-25  
 **Branch**: `main`  
-**Phase**: 6A — Asset Identity & Static Mesh Resolution (in progress)
+**Phase**: Late Phase 5E — Stress Testing & Observability (COMPLETE)
 
 ---
+
+## Phase 5 Pre-Phase-6 Preparation (2026-05-25)
+
+Before Phase 6 begins, the Phase 5 runtime foundation has been formally frozen:
+
+- **Release tag**: `v0.5.0-stabilized` created locally
+- **Core runtime frozen**: Freeze banners added to `UELiveSyncSubsystem.cpp`, `PendingAssetQueue.h`, `LiveSyncQueue.h`, `SyncTypes.h`, `LiveSyncRunnable.h`
+- **Architecture docs created**:
+  - `12-core-runtime-invariants.md` — packet lifecycle, thread/queue ownership, Tick ordering, parser invariants
+  - `13-phase6-design-constraints.md` — unresolved authority questions for rename, visibility, collections, duplicate detection
+  - `14-editor-sync-safety.md` — replication suppression rules, feedback loop prevention, rename storm prevention
+  - `15-architecture-decision-records.md` — 15 ADRs covering protocol, threading, queue, pipeline, shutdown
+  - `16-known-safe-modification-zones.md` — SAFE/CAUTION/HIGH-RISK/FROZEN modification zones
+  - `17-phase6-readiness.md` — 14/14 readiness conditions complete
+- **Profiling/debug infrastructure**: TRACE_CPUPROFILER_EVENT_SCOPE and BEGIN/END tracing explicitly documented as INTENTIONALLY RETAINED
 
 ## Completed Phases
 
@@ -18,46 +33,26 @@
 | 5A | Workflow: primitive UI, full-snapshot flag, DumpState/Ping/Stats/Reset | Done |
 | 5B | Hierarchy authority model: local-space interpolation, attachment lifecycle | Done |
 | 5C | Diagnostics & Editor UX: runtime metrics, debug overlay, Blender status UI | Done |
+| 5D | Runtime stability: Asset Identity/V5 protocol, PendingAssetQueue, freeze investigation | Done |
+| 5E | Stress testing: long-duration, large-scene, reconnect storm, malformed packet, observability | Done |
 
 ## Active Work
 
-### Phase 6A — Asset Identity & Static Mesh Resolution
+### Phase 6 — NOT STARTED
 
-**Goal**: Deferred static mesh assignment via xxHash64 identity, independent from transform pipeline.
+Phase 6 (Live Editing System) has not begun. The Asset Identity
+and V5 protocol work listed below belongs to Phase 5D (Runtime
+Stability & Freeze Fixes) — it is protocol/transport work, not
+editor-side live editing.
 
-**Protocol**: V5 (`PT_AssetDef = 0x08`, 33 bytes per object, fixed-size)
-
-**Blender side**:
-- `xxh64()` pure-python hash of `obj.data.name`
-- `get_mesh_identity_hash()`, `serialize_asset_identity()`
-- `_last_mesh_identity` change tracking per GUID
-- PT_AssetDef sent after CREATE and on mesh datablock change
-
-**UE side**:
-- `FAssetIdentityRef` (16B POD: `uint64 High/Low`)
-- `FAssetMetadata`, `FAssetDiagnostics` in `TMap<FGuid, FAssetMetadata>` (cold path)
-- `PendingAssetQueue` bounded at 2048 entries
-- `HandleAssetDef` → `ResolvePendingAssets` (8/tick, exp. backoff 1s→16s, max 5 retries)
-- `AssignStaticMesh` live-swaps mesh on existing actor (preserves transform/hierarchy)
-- `AssignFallbackPrimitive` via `GetPrimitiveMesh()` static helper
-
-**Key constraints**:
-- `FSyncTransformState` remains POD-only (no FString)
-- No dedicated resolution thread (game-thread only)
-- No variable-length protocol fields in 6A
-- Fallback is TEMPORARY — late resolution replaces in-place
-
-### Documentation Added
-- `Docs/Protocol/live_sync_v5.md` — V5 protocol spec
-- `Docs/Architecture/09-asset-identity.md` — Identity model & data flow
-- AGENTS.md updated with Phase 6A files, CVars, and invariants
-
-### Test Infrastructure
-- `tests/phase6_validation_A_asset_identity.py` — automated validation suite
-- `tests/run_phase6_all.py` — Phase 6 test runner
-
-### Roadmap Updated
-- `Docs/Roadmap/00-consolidated-roadmap.md` — Phase 6 → 6A/6B/6C subphase split
+Per canonical roadmap:
+- **Phase 5**: Protocol Evolution & Runtime Stabilization ← COMPLETE
+- **Phase 6**: Live Editing System ← NOT STARTED
+  - Rename replication
+  - Collection/folder structure sync
+  - Visibility/hidden state sync
+  - Duplicate detection
+  - Object create/delete lifecycle management from editor
 
 ---
 
@@ -91,6 +86,7 @@ Blender Daemon Thread                                                      │
 | V3 | Stable | 24-byte header, binary GUID, packet types |
 | V4 | Stable | Snapshot batching, local-transform flag |
 | V5 | Active | PT_AssetDef (0x08), xxHash64 identity, 33B fixed payload |
+| V4+ | Stable | V4+ objects always 81 bytes (primitive type byte at offset 80 for ALL V4+ payloads) |
 
 ---
 
@@ -105,10 +101,16 @@ Blender Daemon Thread                                                      │
 | `UE_Plugin/.../LiveSyncRunnable.cpp/h` | Dedicated network receive thread |
 | `UE_Plugin/.../LiveSyncQueue.h` | Bounded MPSC packet buffer (128 entries) |
 | `UE_Plugin/.../SyncTypes.h` | Structs, protocol constants, log category, FLiveSyncStats |
-| `UE_Plugin/.../AssetIdentityTypes.h` | FAssetIdentityRef, FAssetMetadata (Phase 6A) |
-| `UE_Plugin/.../PendingAssetQueue.h` | Bounded (2048) pending resolution queue (Phase 6A) |
+| `UE_Plugin/.../AssetIdentityTypes.h` | FAssetIdentityRef, FAssetMetadata (Phase 5D) |
+| `UE_Plugin/.../PendingAssetQueue.h` | Bounded (2048) pending resolution queue (Phase 5D) |
 | `UE_Plugin/.../SLiveSyncStatusWidget.cpp/h` | Compact status indicator panel |
 | `UE_Plugin/.../SLiveSyncDiagnosticsWidget.cpp/h` | Full diagnostics panel |
+| `Docs/Architecture/12-core-runtime-invariants.md` | Core runtime invariants (Phase 5 freeze) |
+| `Docs/Architecture/13-phase6-design-constraints.md` | Phase 6 authority model constraints |
+| `Docs/Architecture/14-editor-sync-safety.md` | Editor synchronization safety rules |
+| `Docs/Architecture/15-architecture-decision-records.md` | 15 ADRs for major Phase 5 choices |
+| `Docs/Architecture/16-known-safe-modification-zones.md` | SAFE/HIGH-RISK/FROZEN modification zones |
+| `Docs/Architecture/17-phase6-readiness.md` | Phase 6 readiness checklist |
 
 ---
 
@@ -116,9 +118,7 @@ Blender Daemon Thread                                                      │
 
 | Phase | Description | Est. |
 |-------|-------------|------|
-| 6B | Material assignment + cache persistence | 5–7d |
-| 6C | FBX mesh push pipeline | 7–10d |
-| 7 | Live editing: create/delete/rename/visibility | 8–12d |
-| 8 | Animation & Sequencer sync | 14–21d |
-| 9 | High-performance streaming | 10–16d |
-| 10 | Production ecosystem | Ongoing |
+| 6 | Live editing: create/delete/rename/visibility/collections | TBD |
+| 7 | Animation & Sequencer sync | TBD |
+| 8 | High-performance streaming | TBD |
+| 9 | Production ecosystem | TBD |

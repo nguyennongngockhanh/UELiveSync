@@ -1,5 +1,25 @@
 #pragma once
 
+// =========================================================
+// SyncTypes.h — Protocol Structs, Constants, Packet Definitions
+// =========================================================
+// PHASE 5 COMPLETE — RUNTIME CORE FROZEN
+//
+// All packet structures, protocol version dispatch, and binary
+// layout constants.  STABLE and FROZEN as of v0.5.0-stabilized.
+//
+// The 24-byte fixed-size header layout and the 81-byte V4+ object
+// payload (with primitive type byte at offset 80) are wire-format
+// invariants.  Changing any struct packing requires a protocol
+// version bump.
+//
+// FSyncTransformState must remain POD-only — no FString additions.
+// Asset metadata lives in a separate TMap<FGuid, FAssetMetadata>,
+// NOT in FSyncTransformState.
+//
+// See Docs/Architecture/12-core-runtime-invariants.md
+// =========================================================
+
 #include "CoreMinimal.h"
 
 #include "Math/Quat.h"

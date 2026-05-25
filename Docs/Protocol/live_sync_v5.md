@@ -96,7 +96,7 @@ Offset  Size  Type    Field
 
 | Blender Sends | UE Receives | Result |
 |---------------|-------------|--------|
-| V5 (AssetDef+Transform) | V5 (Phase 6A) | Full asset resolution |
-| V5 (AssetDef+Transform) | V4 (pre-6A) | AssetDef ignored, primitives used |
-| V4 (Transform only) | V5 (Phase 6A) | No asset defs, primitives used |
-| V3 (Transform only) | V5 (Phase 6A) | No asset defs, primitives used |
+| V5 (AssetDef+Transform) | V5 (Phase 5D) | Full asset resolution |
+| V5 (AssetDef+Transform) | V4 (pre-5D) | AssetDef ignored, primitives used |
+| V4 (Transform only) | V5 (Phase 5D) | No asset defs, primitives used |
+| V3 (Transform only) | V5 (Phase 5D) | No asset defs, primitives used |

@@ -81,7 +81,7 @@ timer_running = False
 
 last_sent_transforms = {}
 
-# Phase 6A: Per-GUID last mesh identity for change detection
+# Phase 5D: Per-GUID last mesh identity for change detection
 # Stores (identity_low, identity_high, mesh_name)
 _last_mesh_identity = {}
 
@@ -916,7 +916,7 @@ def check_updates():
                     transform["scale"][:]
             }
 
-            # Phase 6A: Asset identity tracking
+            # Phase 5D: Asset identity tracking
             mesh_low, mesh_high, mesh_prim = (
                 get_mesh_identity_hash(obj)
             )
@@ -983,7 +983,7 @@ def check_updates():
         )
 
     # =====================================================
-    # SEND ASSET DEF PACKETS (Phase 6A: V5 PT_AssetDef)
+    # SEND ASSET DEF PACKETS (Phase 5D: V5 PT_AssetDef)
     # Sent after CREATE, before TRANSFORM — non-blocking
     # =====================================================
 

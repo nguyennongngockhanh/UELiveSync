@@ -155,7 +155,7 @@ def xxh64(data, seed=0):
 
 
 # =========================================================
-# ASSET IDENTITY HELPERS (Phase 6A)
+# ASSET IDENTITY HELPERS (Phase 5D)
 # =========================================================
 
 def get_mesh_identity_hash(obj):

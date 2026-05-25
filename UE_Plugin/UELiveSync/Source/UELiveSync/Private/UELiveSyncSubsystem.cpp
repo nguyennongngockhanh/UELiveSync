@@ -1,3 +1,34 @@
+// =========================================================
+// UELiveSyncSubsystem.cpp — Runtime Orchestrator
+// =========================================================
+// PHASE 5 COMPLETE — RUNTIME CORE FROZEN
+//
+// This file implements the game-thread Tick pipeline that is
+// the central orchestrator of the UELiveSync runtime.  It is
+// considered STABLE and FROZEN as of v0.5.0-stabilized.
+//
+// Modification of the following subsystems without explicit
+// justification (critical bug fix only) risks destabilizing
+// the entire runtime:
+//
+//   - Tick pipeline ordering (ProcessQueuedPackets →
+//     InterpolateTransforms → ResolvePendingAttachments →
+//     RecoverMissingActors → ResolvePendingAssets)
+//   - Packet binary parser (ProcessBinaryPacket + version
+//     dispatch)
+//   - Queue dequeue/metadata lifecycle (ProcessQueuedPackets)
+//   - Reconnect lifecycle (StopNetworkThread / StartNetworkThread)
+//   - Transform interpolation (InterpolateTransforms)
+//   - BEGIN/END tracing instrumentation
+//
+// Profile/debug instrumentation (TRACE_CPUPROFILER_EVENT_SCOPE,
+// UE_LOG BEGIN/END markers, runtime metrics) is retained
+// INTENTIONALLY for future scalability debugging.  Do not remove.
+//
+// See Docs/Architecture/12-core-runtime-invariants.md for
+// complete invariant documentation.
+// =========================================================
+
 #include "UELiveSyncSubsystem.h"
 
 DEFINE_LOG_CATEGORY(LogLiveSync);
@@ -33,7 +64,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 
 #include "HAL/PlatformTLS.h"
 
-#include "ProfilingDebugging/Trace.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 
 // =========================================================
@@ -87,6 +118,96 @@ GetPrimitiveMesh(uint8 PrimitiveType)
     }
 }
 
+
+// =========================================================
+// TRANSFORM VALIDATION
+// =========================================================
+// Validates a transform before application to catch NaN/Inf
+// quaternion drift, or degenerate values that could freeze
+// the physics or rendering system.
+// Returns true if the transform is safe to apply.
+// =========================================================
+
+static bool ValidateTransform(
+    const FTransform& XForm,
+    const FGuid& Guid,
+    const TCHAR* Context)
+{
+    bool bValid = true;
+
+    const FVector& Loc = XForm.GetLocation();
+    if (Loc.ContainsNaN())
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("INVALID TRANSFORM [%s]: guid=%s location=NaN"),
+            Context, *Guid.ToString(EGuidFormats::Digits));
+        bValid = false;
+    }
+
+    if (!FMath::IsFinite(Loc.X) || !FMath::IsFinite(Loc.Y) || !FMath::IsFinite(Loc.Z))
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("INVALID TRANSFORM [%s]: guid=%s location=Inf"),
+            Context, *Guid.ToString(EGuidFormats::Digits));
+        bValid = false;
+    }
+
+    const FQuat& Rot = XForm.GetRotation();
+    if (Rot.ContainsNaN())
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("INVALID TRANSFORM [%s]: guid=%s rotation=NaN"),
+            Context, *Guid.ToString(EGuidFormats::Digits));
+        bValid = false;
+    }
+
+    if (!FMath::IsFinite(Rot.W) || !FMath::IsFinite(Rot.X) ||
+        !FMath::IsFinite(Rot.Y) || !FMath::IsFinite(Rot.Z))
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("INVALID TRANSFORM [%s]: guid=%s rotation=Inf"),
+            Context, *Guid.ToString(EGuidFormats::Digits));
+        bValid = false;
+    }
+
+    float RotNorm = Rot.SizeSquared();
+    if (FMath::Abs(RotNorm - 1.0f) > 0.01f)
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("INVALID TRANSFORM [%s]: guid=%s rotation=non-unit quaternion (len^2=%.4f)"),
+            Context, *Guid.ToString(EGuidFormats::Digits), RotNorm);
+        bValid = false;
+    }
+
+    const FVector& Scale = XForm.GetScale3D();
+    if (Scale.ContainsNaN())
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("INVALID TRANSFORM [%s]: guid=%s scale=NaN"),
+            Context, *Guid.ToString(EGuidFormats::Digits));
+        bValid = false;
+    }
+
+    if (!FMath::IsFinite(Scale.X) || !FMath::IsFinite(Scale.Y) || !FMath::IsFinite(Scale.Z))
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("INVALID TRANSFORM [%s]: guid=%s scale=Inf"),
+            Context, *Guid.ToString(EGuidFormats::Digits));
+        bValid = false;
+    }
+
+    if (Scale.X > 1e6f || Scale.Y > 1e6f || Scale.Z > 1e6f ||
+        Scale.X < -1e6f || Scale.Y < -1e6f || Scale.Z < -1e6f)
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("INVALID TRANSFORM [%s]: guid=%s scale=extreme (%.2f, %.2f, %.2f)"),
+            Context, *Guid.ToString(EGuidFormats::Digits),
+            Scale.X, Scale.Y, Scale.Z);
+        bValid = false;
+    }
+
+    return bValid;
+}
 
 // =========================================================
 // CONSOLE VARIABLES
@@ -243,6 +364,51 @@ static TAutoConsoleVariable<int32>
         0,
         TEXT("Skip AttachToActor calls (1=on, 0=off). "
              "Set to 1 to test if attachment logic causes freeze."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncDisableInterpolation(
+        TEXT("UE.LiveSync.DisableInterpolation"),
+        0,
+        TEXT("Skip InterpolateTransforms entirely (1=on, 0=off). "
+             "Set to 1 to test if interpolation causes freeze."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncDisableAttachmentResolution(
+        TEXT("UE.LiveSync.DisableAttachmentResolution"),
+        0,
+        TEXT("Skip ResolvePendingAttachments entirely (1=on, 0=off). "
+             "Set to 1 to test if attachment resolution causes freeze."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncDisableAssetResolution(
+        TEXT("UE.LiveSync.DisableAssetResolution"),
+        0,
+        TEXT("Skip ResolvePendingAssets entirely (1=on, 0=off). "
+             "Set to 1 to test if asset resolution causes freeze."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncDisableRecovery(
+        TEXT("UE.LiveSync.DisableRecovery"),
+        0,
+        TEXT("Skip RecoverMissingActors entirely (1=on, 0=off). "
+             "Set to 1 to test if recovery loop causes freeze."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncBypassSetActorTransform(
+        TEXT("UE.LiveSync.BypassSetActorTransform"),
+        0,
+        TEXT("Skip SetActorTransform calls but keep internal state updates (1=on, 0=off). "
+             "Set to 1 to isolate if SetActorTransform itself causes freeze."),
         ECVF_Default
     );
 
@@ -853,34 +1019,86 @@ bool UUELiveSyncSubsystem::Tick(
     //   6. ResolvePendingAssets   — late-binding asset mesh resolution
     // =====================================================
 
+    // =====================================================
+    // PROFILING / DEBUG INFRASTRUCTURE — PRESERVED INTENTIONALLY
+    //
+    // The TRACE_CPUPROFILER_EVENT_SCOPE markers and paired
+    // UE_LOG(LogLiveSync, Log, TEXT("BEGIN/END ...")) traces
+    // below are retained for future scalability debugging.
+    //
+    //   • TRACE_CPUPROFILER_EVENT_SCOPE — UE5 CPU profiler scopes
+    //     (Unreal Insights / stat UE_LiveSync)
+    //   • BEGIN/END UE_LOG markers — pipeline health validation
+    //     (detect unbalanced stages, infinite loops, stuck frames)
+    //
+    // These are NOT dead code.  Do NOT remove.
+    // =====================================================
     {
         TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_TickPipeline);
 
+        UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ProcessQueuedPackets"));
         {
             TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessQueuedPackets);
             ProcessQueuedPackets();
         }
+        UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ProcessQueuedPackets"));
 
         EvictStaleTransformStates();
 
+        if (!CVarLiveSyncDisableInterpolation.GetValueOnGameThread())
         {
-            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_InterpolateTransforms);
-            InterpolateTransforms(DeltaTime);
+            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: InterpolateTransforms"));
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_InterpolateTransforms);
+                InterpolateTransforms(DeltaTime);
+            }
+            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: InterpolateTransforms"));
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Log, TEXT("SKIP  Pipeline: InterpolateTransforms (disabled by CVar)"));
         }
 
+        if (!CVarLiveSyncDisableAttachmentResolution.GetValueOnGameThread())
         {
-            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAttachments);
-            ResolvePendingAttachments();
+            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingAttachments"));
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAttachments);
+                ResolvePendingAttachments();
+            }
+            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingAttachments"));
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Log, TEXT("SKIP  Pipeline: ResolvePendingAttachments (disabled by CVar)"));
         }
 
+        if (!CVarLiveSyncDisableRecovery.GetValueOnGameThread())
         {
-            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_RecoverMissingActors);
-            RecoverMissingActors();
+            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: RecoverMissingActors"));
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_RecoverMissingActors);
+                RecoverMissingActors();
+            }
+            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: RecoverMissingActors"));
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Log, TEXT("SKIP  Pipeline: RecoverMissingActors (disabled by CVar)"));
         }
 
+        if (!CVarLiveSyncDisableAssetResolution.GetValueOnGameThread())
         {
-            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAssets);
-            ResolvePendingAssets();
+            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingAssets"));
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAssets);
+                ResolvePendingAssets();
+            }
+            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingAssets"));
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Log, TEXT("SKIP  Pipeline: ResolvePendingAssets (disabled by CVar)"));
         }
     }
 
@@ -893,23 +1111,29 @@ bool UUELiveSyncSubsystem::Tick(
 
     if (ConnectionSocket && VerboseFrameCounter % 300 == 0)
     {
+        UE_LOG(LogLiveSync, Log, TEXT("BEGIN Periodic: ValidateHierarchy"));
         {
             TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ValidateHierarchy);
             ValidateHierarchy();
         }
+        UE_LOG(LogLiveSync, Log, TEXT("END   Periodic: ValidateHierarchy"));
     }
 
     // =====================================================
     // ROLLING METRICS (EMA, every tick)
     // =====================================================
 
+    UE_LOG(LogLiveSync, Log, TEXT("BEGIN TickMetrics"));
     TickMetrics(DeltaTime);
+    UE_LOG(LogLiveSync, Log, TEXT("END   TickMetrics"));
 
     // =====================================================
     // SAFETY MONITORS (flood detection, queue pressure)
     // =====================================================
 
+    UE_LOG(LogLiveSync, Log, TEXT("BEGIN TickSafetyMonitors"));
     TickSafetyMonitors(DeltaTime);
+    UE_LOG(LogLiveSync, Log, TEXT("END   TickSafetyMonitors"));
 
     // =====================================================
     // RUNTIME METRICS (every 30s in verbose mode)
@@ -926,7 +1150,9 @@ bool UUELiveSyncSubsystem::Tick(
             Stats.LastMetricsLogTime =
                 Now;
 
+            UE_LOG(LogLiveSync, Log, TEXT("BEGIN LogRuntimeMetricsVerbose"));
             LogRuntimeMetricsVerbose();
+            UE_LOG(LogLiveSync, Log, TEXT("END   LogRuntimeMetricsVerbose"));
         }
     }
 
@@ -937,10 +1163,13 @@ bool UUELiveSyncSubsystem::Tick(
     if (bEnableDebugDraw)
     {
 #if WITH_EDITOR
+        UE_LOG(LogLiveSync, Log, TEXT("BEGIN DrawDebugOverlay"));
         DrawDebugOverlay();
+        UE_LOG(LogLiveSync, Log, TEXT("END   DrawDebugOverlay"));
 #endif
     }
 
+    UE_LOG(LogLiveSync, Log, TEXT("END TRACE: Tick complete frame=%d"), VerboseFrameCounter);
     return true;
 }
 
@@ -2742,11 +2971,18 @@ InterpolateTransforms(
     float DeltaTime)
 {
     CHECK_GAME_THREAD();
-    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_InterpolateTransforms);
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_InterpolateTransforms);
+
+    static int InterpFreezeIter = 0;
+    InterpFreezeIter++;
+
+    UE_LOG(LogLiveSync, Log, TEXT("BEGIN InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
+
     // Skip interpolation during snapshot build — all transforms
     // will be bulk-applied when EndSnapshot is received
     if (bInSnapshotBuild)
     {
+        UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms (snapshot build, skip)"));
         return;
     }
 
@@ -2756,6 +2992,7 @@ InterpolateTransforms(
 
     if (CVarLiveSyncDisableTransformApply.GetValueOnGameThread())
     {
+        UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms (disabled by CVar)"));
         return;
     }
 
@@ -2839,6 +3076,45 @@ InterpolateTransforms(
         AActor* Actor =
             ActorPtr->Get();
 
+        // =====================================================
+        // STALE ACTOR VALIDATION
+        // =====================================================
+
+        if (!IsValid(Actor))
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("STALE ACTOR: guid=%s actor=%p IsValid=%d — skipping"),
+                *Guid.ToString(EGuidFormats::Digits),
+                (void*)Actor,
+                IsValid(Actor) ? 1 : 0);
+            MissingCount++;
+            continue;
+        }
+
+        UWorld* ActorWorld = Actor->GetWorld();
+        if (!ActorWorld || ActorWorld != GetWorld())
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("STALE WORLD: guid=%s actor=%p world=%p expected=%p — skipping"),
+                *Guid.ToString(EGuidFormats::Digits),
+                (void*)Actor,
+                (void*)ActorWorld,
+                (void*)GetWorld());
+            MissingCount++;
+            continue;
+        }
+
+        // =====================================================
+        // PER-ACTOR TRACE
+        // =====================================================
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("BEGIN transform apply guid=%s actor=%p iter=%d total=%d"),
+            *Guid.ToString(EGuidFormats::Digits),
+            (void*)Actor,
+            InterpIterationIndex,
+            TransformStates.Num());
+
         // ---------------------------------------------------
         // CONVERGENCE CHECK
         // ---------------------------------------------------
@@ -2894,6 +3170,9 @@ InterpolateTransforms(
             bRotationConverged &&
             bScaleConverged)
         {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("END   transform apply guid=%s (converged)"),
+                *Guid.ToString(EGuidFormats::Digits));
             ConvergedCount++;
             continue;
         }
@@ -2983,8 +3262,36 @@ InterpolateTransforms(
                         Parent->
                         GetActorTransform();
 
-                    Actor->SetActorTransform(
-                        WorldXForm);
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("  BEGIN SetActorTransform guid=%s (attached child)"),
+                        *Guid.ToString(EGuidFormats::Digits));
+
+                    if (ValidateTransform(WorldXForm, Guid, TEXT("AttachedChild")))
+                    {
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("  DO SetActorTransform guid=%s (attached child)"),
+                            *Guid.ToString(EGuidFormats::Digits));
+                        if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
+                        {
+                            Actor->SetActorTransform(WorldXForm);
+                        }
+                        else
+                        {
+                            UE_LOG(LogLiveSync, Log,
+                                TEXT("  BYPASS SetActorTransform guid=%s (attached child)"),
+                                *Guid.ToString(EGuidFormats::Digits));
+                        }
+                    }
+                    else
+                    {
+                        UE_LOG(LogLiveSync, Error,
+                            TEXT("  SKIP SetActorTransform guid=%s (invalid transform)"),
+                            *Guid.ToString(EGuidFormats::Digits));
+                    }
+
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("  END   SetActorTransform guid=%s (attached child)"),
+                        *Guid.ToString(EGuidFormats::Digits));
 
                     // NON-AUTHORITATIVE
                     // Update debug world cache for diagnostics
@@ -3084,13 +3391,41 @@ InterpolateTransforms(
             State.CurrentScale =
                 State.TargetScale;
 
-            Actor->SetActorTransform(
+            UE_LOG(LogLiveSync, Log,
+                TEXT("  BEGIN SetActorTransform guid=%s (root direct-set)"),
+                *Guid.ToString(EGuidFormats::Digits));
 
-                FTransform(
-                    State.CurrentRotation,
-                    State.CurrentLocation,
-                    State.CurrentScale)
-            );
+            FTransform RootDirectXForm(
+                State.CurrentRotation,
+                State.CurrentLocation,
+                State.CurrentScale);
+
+            if (ValidateTransform(RootDirectXForm, Guid, TEXT("RootDirectSet")))
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("  DO SetActorTransform guid=%s (root direct-set)"),
+                    *Guid.ToString(EGuidFormats::Digits));
+                if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
+                {
+                    Actor->SetActorTransform(RootDirectXForm);
+                }
+                else
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("  BYPASS SetActorTransform guid=%s (root direct-set)"),
+                        *Guid.ToString(EGuidFormats::Digits));
+                }
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Error,
+                    TEXT("  SKIP SetActorTransform guid=%s (invalid transform)"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("  END   SetActorTransform guid=%s (root direct-set)"),
+                *Guid.ToString(EGuidFormats::Digits));
 
             InterpCount++;
             continue;
@@ -3119,13 +3454,41 @@ InterpolateTransforms(
             State.CurrentScale =
                 State.TargetScale;
 
-            Actor->SetActorTransform(
+            UE_LOG(LogLiveSync, Log,
+                TEXT("  BEGIN SetActorTransform guid=%s (root snap)"),
+                *Guid.ToString(EGuidFormats::Digits));
 
-                FTransform(
-                    State.CurrentRotation,
-                    State.CurrentLocation,
-                    State.CurrentScale)
-            );
+            FTransform RootSnapXForm(
+                State.CurrentRotation,
+                State.CurrentLocation,
+                State.CurrentScale);
+
+            if (ValidateTransform(RootSnapXForm, Guid, TEXT("RootSnap")))
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("  DO SetActorTransform guid=%s (root snap)"),
+                    *Guid.ToString(EGuidFormats::Digits));
+                if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
+                {
+                    Actor->SetActorTransform(RootSnapXForm);
+                }
+                else
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("  BYPASS SetActorTransform guid=%s (root snap)"),
+                        *Guid.ToString(EGuidFormats::Digits));
+                }
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Error,
+                    TEXT("  SKIP SetActorTransform guid=%s (invalid transform)"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("  END   SetActorTransform guid=%s (root snap)"),
+                *Guid.ToString(EGuidFormats::Digits));
 
             SnapCount++;
             continue;
@@ -3196,15 +3559,50 @@ InterpolateTransforms(
 
             State.TargetScale;
 
-        Actor->SetActorTransform(
+        UE_LOG(LogLiveSync, Log,
+            TEXT("  BEGIN SetActorTransform guid=%s (root smooth)"),
+            *Guid.ToString(EGuidFormats::Digits));
 
-            FTransform(
-                State.CurrentRotation,
-                State.CurrentLocation,
-                State.CurrentScale));
+        FTransform RootSmoothXForm(
+            State.CurrentRotation,
+            State.CurrentLocation,
+            State.CurrentScale);
+
+        if (ValidateTransform(RootSmoothXForm, Guid, TEXT("RootSmooth")))
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("  DO SetActorTransform guid=%s (root smooth)"),
+                *Guid.ToString(EGuidFormats::Digits));
+            if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
+            {
+                Actor->SetActorTransform(RootSmoothXForm);
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("  BYPASS SetActorTransform guid=%s (root smooth)"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("  SKIP SetActorTransform guid=%s (invalid transform)"),
+                *Guid.ToString(EGuidFormats::Digits));
+        }
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("  END   SetActorTransform guid=%s (root smooth)"),
+            *Guid.ToString(EGuidFormats::Digits));
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("END   transform apply guid=%s"),
+            *Guid.ToString(EGuidFormats::Digits));
 
         InterpCount++;
     }
+
+    UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
 
     if (ShouldLogVerbose())
     {
@@ -3745,10 +4143,53 @@ AActor* Child =
         }
     }
 
+    // =====================================================
+    // STALE ACTOR VALIDATION BEFORE ATTACH
+    // =====================================================
+
+    if (!IsValid(Child) || !IsValid(Parent))
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("AttachToParent: stale actor child=%s valid=%d | parent=%s valid=%d — aborting"),
+            *Guid.ToString(EGuidFormats::Digits),
+            IsValid(Child) ? 1 : 0,
+            *ParentGuid.ToString(EGuidFormats::Digits),
+            IsValid(Parent) ? 1 : 0);
+        return;
+    }
+
+    // =====================================================
+    // OSCILLATING PARENT DETECTION
+    // =====================================================
+
+    {
+        static TMap<FGuid, FGuid> LastAttachedParent;
+        FGuid* PrevParent = LastAttachedParent.Find(Guid);
+        if (PrevParent && *PrevParent != ParentGuid)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("AttachToParent: parent oscillating guid=%s was=%s now=%s"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *PrevParent->ToString(EGuidFormats::Digits),
+                *ParentGuid.ToString(EGuidFormats::Digits));
+        }
+        LastAttachedParent.Add(Guid, ParentGuid);
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("  BEGIN AttachToActor child=%s parent=%s"),
+        *Guid.ToString(EGuidFormats::Digits),
+        *ParentGuid.ToString(EGuidFormats::Digits));
+
     Child->AttachToActor(
         Parent,
         FAttachmentTransformRules::
             KeepWorldTransform);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("  END   AttachToActor child=%s parent=%s"),
+        *Guid.ToString(EGuidFormats::Digits),
+        *ParentGuid.ToString(EGuidFormats::Digits));
 
     // Verbose authority transition log
     if (bEnableVerboseSyncLogs)
@@ -3882,6 +4323,33 @@ HandleCreateObject(
 
     if (!World)
     {
+        return;
+    }
+
+    // =====================================================
+    // VALIDATE SPAWN TRANSFORM
+    // =====================================================
+
+    if (Location.ContainsNaN() || Rotation.ContainsNaN() || Scale.ContainsNaN())
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("HandleCreateObject: NaN transform guid=%s loc=%s rot=(%.4f,%.4f,%.4f,%.4f) scale=%s — aborting"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *Location.ToString(),
+            Rotation.W, Rotation.X, Rotation.Y, Rotation.Z,
+            *Scale.ToString());
+        return;
+    }
+
+    // =====================================================
+    // STALE WORLD VALIDATION
+    // =====================================================
+
+    if (World != GetWorld())
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("HandleCreateObject: stale world guid=%s — aborting"),
+            *Guid.ToString(EGuidFormats::Digits));
         return;
     }
 
@@ -4278,11 +4746,21 @@ ResolvePendingAssets()
 
     FGuid Guid;
 
+    // Phase 5E fix: ResolvedThisTick is incremented at the TOP
+    // of each iteration so the loop is ALWAYS bounded by
+    // MAX_ASSET_RESOLUTIONS_PER_TICK (=8) regardless of which
+    // code path is taken.  Without this, a tick where all
+    // dequeued GUIDs hit the "re-enqueue (NextRetryTime not yet
+    // reached)" path would loop indefinitely because
+    // ResolvedThisTick was only incremented on successful
+    // resolution — leading to a non-responsive editor hang.
     while (
         ResolvedThisTick <
             MAX_ASSET_RESOLUTIONS_PER_TICK &&
         PendingAssetQueue.Dequeue(Guid))
     {
+        ResolvedThisTick++;
+
         FAssetMetadata* Meta =
             AssetMetadata.Find(Guid);
 
@@ -4357,7 +4835,6 @@ ResolvePendingAssets()
         Stats.AssetAssignmentsSucceeded.fetch_add(
             1,
             std::memory_order_relaxed);
-        ResolvedThisTick++;
     }
 }
 
@@ -4625,10 +5102,100 @@ ResolvePendingAttachments()
 
                 if (Child)
                 {
+                    // =============================================
+                    // ATTACHMENT-CYCLE PROTECTION
+                    // =============================================
+
+                    // 1. Self-parent check
+                    if (Child == Parent)
+                    {
+                        UE_LOG(LogLiveSync, Error,
+                            TEXT("ATTACH CYCLE: self-parent detected child=%s parent=%s — aborting"),
+                            *Entry.Child.ToString(EGuidFormats::Digits),
+                            *Entry.Parent.ToString(EGuidFormats::Digits));
+                        continue;
+                    }
+
+                    // 2. Stale actor validation
+                    if (!IsValid(Child) || !IsValid(Parent))
+                    {
+                        UE_LOG(LogLiveSync, Warning,
+                            TEXT("ATTACH STALE: child=%s valid=%d | parent=%s valid=%d — aborting"),
+                            *Entry.Child.ToString(EGuidFormats::Digits),
+                            IsValid(Child) ? 1 : 0,
+                            *Entry.Parent.ToString(EGuidFormats::Digits),
+                            IsValid(Parent) ? 1 : 0);
+                        continue;
+                    }
+
+                    // 3. Circular chain detection
+                    // Walk up parent chain, verify child never appears as ancestor
+                    {
+                        AActor* Probe = Parent;
+                        int32 Depth = 0;
+                        bool bCircular = false;
+
+                        while (Probe && Depth < 128)
+                        {
+                            if (Probe == Child)
+                            {
+                                UE_LOG(LogLiveSync, Error,
+                                    TEXT("ATTACH CYCLE: circular chain child=%s parent=%s detected at depth=%d — aborting"),
+                                    *Entry.Child.ToString(EGuidFormats::Digits),
+                                    *Entry.Parent.ToString(EGuidFormats::Digits),
+                                    Depth);
+                                bCircular = true;
+                                break;
+                            }
+                            Probe = Probe->GetAttachParentActor();
+                            Depth++;
+                        }
+
+                        if (bCircular)
+                        {
+                            continue;
+                        }
+
+                        if (Depth >= 128)
+                        {
+                            UE_LOG(LogLiveSync, Error,
+                                TEXT("ATTACH CYCLE: excessive depth (%d) child=%s — aborting"),
+                                Depth, *Entry.Child.ToString(EGuidFormats::Digits));
+                            continue;
+                        }
+                    }
+
+                    // 4. Oscillating parent reassignment detection
+                    // If same child had a different parent recently, log and track
+                    {
+                        static TMap<FGuid, FGuid> LastAssignedParent;
+                        FGuid* PrevParent = LastAssignedParent.Find(Entry.Child);
+                        if (PrevParent && *PrevParent != Entry.Parent)
+                        {
+                            // Check if this oscillates (old parent becomes child's new parent's child?)
+                            UE_LOG(LogLiveSync, Warning,
+                                TEXT("ATTACH OSCILLATION: child=%s parent reassign %s -> %s"),
+                                *Entry.Child.ToString(EGuidFormats::Digits),
+                                *PrevParent->ToString(EGuidFormats::Digits),
+                                *Entry.Parent.ToString(EGuidFormats::Digits));
+                        }
+                        LastAssignedParent.Add(Entry.Child, Entry.Parent);
+                    }
+
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("  BEGIN AttachToActor child=%s parent=%s"),
+                        *Entry.Child.ToString(EGuidFormats::Digits),
+                        *Entry.Parent.ToString(EGuidFormats::Digits));
+
                     Child->AttachToActor(
                         Parent,
                         FAttachmentTransformRules::
                             KeepWorldTransform);
+
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("  END   AttachToActor child=%s parent=%s"),
+                        *Entry.Child.ToString(EGuidFormats::Digits),
+                        *Entry.Parent.ToString(EGuidFormats::Digits));
 
                     // Patch 1: Force one world-space recompute
                     // on next interp tick. Child may have
