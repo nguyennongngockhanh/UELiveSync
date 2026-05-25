@@ -217,6 +217,7 @@ enum EPacketType : uint8
 
     // Phase 6: Semantic editor-event replication
     // See Docs/Architecture/19-phase6-vertical-slice-rename.md
+    PT_Visibility    = 0x0B,  // Semantic visibility toggle (discrete, NOT state stream)
     PT_Rename        = 0x0C,  // Semantic rename event (discrete, NOT state stream)
 };
 
@@ -369,6 +370,12 @@ struct FLiveSyncStats
     std::atomic<int32> RenameReplayApplied{0};
     std::atomic<int32> RenameReplaySkipped{0};
 
+    // --- Visibility diagnostics (Phase 6, written by game thread) ---
+    std::atomic<int32> VisibilityProcessed{0};
+    std::atomic<int32> VisibilityStaleRejections{0};
+    std::atomic<int32> VisibilityReplayApplied{0};
+    std::atomic<int32> VisibilityReplaySkipped{0};
+
     // --- Per-frame timing (written by game thread) ---
     double LastPacketTime = 0.0;
     double LastThreadLoopTime = 0.0;
@@ -490,6 +497,59 @@ struct FRenameSequenceTracker
         if (LastSequence.Num() >= MAX_TRACKED_GUIDS)
         {
             // Evict oldest entry if at capacity
+            LastSequence.Remove(LastSequence.CreateIterator().Key());
+        }
+        LastSequence.Add(Guid, AppliedSeq);
+    }
+};
+
+
+// =========================================================
+// VISIBILITY PACKET (Phase 6, PT_Visibility = 0x0B)
+// =========================================================
+// Discrete semantic editor-event payload.
+// NOT a state-stream packet — visibility is a discrete toggle,
+// not a continuously sampled value.
+//
+// Wire format (fixed 29 bytes per object):
+//   offset  size  field
+//   0       16    GUID (4 × uint32 LE)
+//   16      1     bHidden (uint8: 0=visible, 1=hidden in editor)
+//   17      4     sequence_number (uint32 LE, monotonic per-GUID)
+//   21      8     timestamp (double LE)
+//
+// Provenance (EChangeOrigin) is in-memory only — NOT on the wire.
+// See Docs/Architecture/21-phase6-vertical-slice-visibility.md §2
+//
+// Fixed payload: 16 + 1 + 4 + 8 = 29 bytes
+// =========================================================
+
+
+// =========================================================
+// VISIBILITY SEQUENCE TRACKER (Phase 6)
+// =========================================================
+// Tracks the last-applied visibility sequence number per GUID
+// for stale/duplicate replay rejection.
+// =========================================================
+
+struct FVisibilitySequenceTracker
+{
+    TMap<FGuid, uint32> LastSequence;
+    static constexpr uint32 MAX_TRACKED_GUIDS = 2048;
+
+    bool IsStaleOrDuplicate(const FGuid& Guid, uint32 IncomingSeq)
+    {
+        if (const uint32* LastSeq = LastSequence.Find(Guid))
+        {
+            return IncomingSeq <= *LastSeq;
+        }
+        return false;
+    }
+
+    void Update(const FGuid& Guid, uint32 AppliedSeq)
+    {
+        if (LastSequence.Num() >= MAX_TRACKED_GUIDS)
+        {
             LastSequence.Remove(LastSequence.CreateIterator().Key());
         }
         LastSequence.Add(Guid, AppliedSeq);

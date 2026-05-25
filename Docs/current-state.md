@@ -2,7 +2,7 @@
 
 **Generated**: 2026-05-25  
 **Branch**: `main`  
-**Phase**: Phase 6 — Live Editing System (Rename Vertical Slice: STABILIZED)
+**Phase**: Phase 6 — Live Editing System (Rename STABILIZED, Visibility IMPLEMENTED pending live validation)
 
 ---
 
@@ -52,49 +52,45 @@ Before Phase 6 begins, the Phase 5 runtime foundation has been formally frozen:
 
 ## Active Work
 
-### Phase 6 — Rename Vertical Slice: STABILIZED
+### Phase 6C — Visibility Replication: IMPLEMENTED (pending live validation)
 
-Phase 6 (Live Editing System) has begun with the minimal rename
-replication vertical slice, now stabilized after maintenance pass:
+The second semantic-event vertical slice is structurally complete:
 
-- **Rename replication**: IMPLEMENTED + VERIFIED + STABILIZED
-  - ✅ Frozen runtime: unchanged (LiveSyncQueue, PendingAssetQueue, LiveSyncRunnable, FSyncTransformState, header layout, Tick pipeline)
-  - ✅ Replay safety: FRenameSequenceTracker (2048 bounded, `<=` stale/duplicate rejection)
-  - ✅ Provenance: EChangeOrigin (RemoteReplicated/Replay) in-memory only
-  - ✅ Suppression: RAII scoped (no cross-frame leakage, no recursion in one-way flow)
-  - ✅ Thread safety: HandleRename has CHECK_GAME_THREAD()
-  - ✅ Parser resilience: 5 boundary checks
-  - ✅ Reconnect safety: GRenameSequences cleared in StopNetworkThread + ConsoleReset
-  - ✅ CPU profiler: TRACE_CPUPROFILER_EVENT_SCOPE on HandleRename + ProcessRenamePackets
-  - ✅ Dead counters removed: RenameSuppressions, RenameStormWarnings
-  - ✅ RenameReplaySkipped wired: incremented when Replay-stale rename rejected
-  - ✅ ConsoleReset: clears all rename stats + replay tracker
-  - ✅ Blender  `_rename_sequences`: cleared on disconnect (was unbounded growth)
-- **Known intentional limitations** (by scope lock, not bugs):
-  - ⏳ `OnActorLabelChanged` handler not registered — suppression infrastructure is scaffolding-only (bidirectional OOS per Scope Lock)
-  - ⏳ `FScopedRenameSuppression` is log-only (no suppression state set — benign without callback)
-### Next Slice: Visibility Replication (PLANNED)
+- **Packet type**: `PT_Visibility = 0x0B` — fixed 29 bytes per object (GUID(16)+bHidden(1)+seq(4)+ts(8))
+- **FVisibilitySequenceTracker**: bounded 2048, stale/duplicate rejection via `<=`
+- **FScopedVisibilitySuppression**: RAII guard (architectural consistency — no callback recursion risk)
+- **FScopedChangeOrigin**: provenance tagging (RemoteReplicated / Replay)
+- **FLiveSyncStats counters**: `VisibilityProcessed`, `VisibilityStaleRejections`, `VisibilityReplayApplied`, `VisibilityReplaySkipped`
+- **TRACE_CPUPROFILER_EVENT_SCOPE**: `UELiveSync_HandleVisibility`, `UELiveSync_ProcessVisibilityPackets`
+- **Blender**: `_last_visibility_state` diff + `hide_get()` detection + `serialize_visibility()`
+- **Tests**: `tests/phase6_visibility_validation.py` — 12 tests (all auto-skip without UE)
+- **Pending**: end-to-end live validation against UE editor on `:57000`
 
-The second semantic-event vertical slice has been designed:
+### Phase 6A/6B — Rename Replication: STABILIZED
 
-- **Scope lock**: `Docs/Architecture/20-phase6-visibility-scope-lock.md`
-- **Vertical slice plan**: `Docs/Architecture/21-phase6-vertical-slice-visibility.md`
-- **Packet type**: `PT_Visibility = 0x0B`, fixed 29 bytes per object
-- **Status**: ARCHITECTURE COMPLETE — awaiting implementation
-- **Key differences from rename**:
-  - No callback recursion risk (`SetIsTemporarilyHiddenInEditor` fires no standard callback)
-  - Fixed-length wire format (simpler parsing)
-  - Idempotent bool state (simpler replay verification)
-- **Remaining Phase 6 features**: Visibility (PLANNED), rest NOT STARTED
+Rename stabilization completed with 49/49 runtime audit checks passing,
+stale and duplicate-replay rejection verified, all fix items resolved
+(CPU profiler scopes, dead counters, reconnect cleanup, ConsoleReset):
+
+- **Phase 6B report**: `Docs/Architecture/21-phase6b-runtime-confidence-report.md`
+- **Stabilization findings**: 10 fixes applied (profiler scopes, counter cleanup, reconnect tracker clear, stale sequence eviction comment)
+- **Verification methodology**: source-code audit (49 checks), failure injection, soak, replay robustness — all structural validation complete (UE-dependent execution pending)
+
+### Phase 6 Documentation Consolidation
+
+Semantic architecture conventions formalized:
+
+- **`22-semantic-event-architecture-conventions.md`**: canonical reference for all semantic lanes — defines mandatory requirements (packet type, parser branch, GUID lookup, replay tracker, provenance, suppression, profiler, observability, bounded memory, reconnect cleanup), forbidden patterns, replay/ provenance/ suppression/ observability/ packet numbering/ frozen boundary/ future slice standards
+- **Semantic lane inventory**: Rename (STABILIZED), Visibility (IMPLEMENTED pending live validation), Hierarchy/Lifecycle/Collection/Duplicate (PLANNED), Bidirectional/Generalized framework/ Transaction merge (DEFERRED)
 
 Per canonical roadmap:
 - **Phase 5**: Protocol Evolution & Runtime Stabilization ← COMPLETE
-- **Phase 6**: Live Editing System ← Rename STABILIZED, Visibility PLANNED (rest NOT STARTED)
-  - ✅ Rename replication (semantic event, Blender→UE, provenance, suppression, replay-safe)
-  - 🔷 Visibility/hidden state sync (ARCHITECTURE COMPLETE, not implemented)
-  - ❌ Collection/folder structure sync
-  - ❌ Duplicate detection
-  - ❌ Object create/delete lifecycle management from editor
+- **Phase 6**: Live Editing System ← Rename STABILIZED, Visibility IMPLEMENTED (pending live validation)
+  - ✅ Rename replication (semantic event, Blender→UE, provenance, suppression, replay-safe, 49/49 audit)
+  - ✅ Visibility/hidden state sync (semantic event, Blender→UE, provenance, suppression, replay-safe, 28/28 constructs, 12 tests)
+  - ⏳ Collection/folder structure sync (planned, not started)
+  - ⏳ Duplicate detection (planned, not started)
+  - ⏳ Object create/delete lifecycle from editor (planned, not started)
 
 ---
 
@@ -128,7 +124,7 @@ Blender Daemon Thread                                                      │
 | V3 | Stable | 24-byte header, binary GUID, packet types |
 | V4 | Stable | Snapshot batching, local-transform flag |
 | V5 | Active | PT_AssetDef (0x08), xxHash64 identity, 33B fixed payload |
-| V5+ | Active | PT_Rename (0x0C), variable-length semantic event |
+| V5+ | Active | PT_Rename (0x0C), PT_Visibility (0x0B), semantic event lanes |
 | V4+ | Stable | V4+ objects always 81 bytes (primitive type byte at offset 80 for ALL V4+ payloads) |
 
 ---
@@ -158,6 +154,8 @@ Blender Daemon Thread                                                      │
 | `Docs/Architecture/19-phase6-vertical-slice-rename.md` | Rename replication vertical slice plan |
 | `Docs/Architecture/20-phase6-visibility-scope-lock.md` | Visibility replication scope boundaries (planned) |
 | `Docs/Architecture/21-phase6-vertical-slice-visibility.md` | Visibility replication vertical slice plan |
+| `Docs/Architecture/21-phase6b-runtime-confidence-report.md` | Phase 6B runtime confidence report |
+| `Docs/Architecture/22-semantic-event-architecture-conventions.md` | Semantic event architecture conventions |
 
 ---
 
@@ -165,7 +163,7 @@ Blender Daemon Thread                                                      │
 
 | Phase | Description | Est. |
 |-------|-------------|------|
-| 6 | Live editing: create/delete/rename/visibility/collections (see `18-phase6-scope-lock.md` for full scope) | TBD |
+| 6 | Live editing: rename (stable), visibility (pending live validation), collections, duplicate, lifecycle (rest TBD) | TBD |
 | 7 | Animation & Sequencer sync | TBD |
 | 8 | High-performance streaming | TBD |
 | 9 | Production ecosystem | TBD |

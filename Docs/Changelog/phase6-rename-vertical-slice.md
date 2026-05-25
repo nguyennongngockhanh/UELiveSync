@@ -127,24 +127,20 @@
 | No OnActorLabelChanged handler | Bidirectional rename OOS per 18-phase6-scope-lock.md |
 | FScopedRenameSuppression is log-only | Benign — no callback handler to suppress |
 
-## Next Slice Planning: Visibility Replication
+## Subsequent Implementation: Visibility Replication
 
-The second Phase 6 semantic-event lane has been designed (not yet
-implemented):
+The second Phase 6 semantic-event lane has been implemented (pending live
+validation):
 
-- **Scope lock**: `20-phase6-visibility-scope-lock.md` — IN/OUT of scope,
-  authority model, escalation rules, done criteria
-- **Vertical slice plan**: `21-phase6-vertical-slice-visibility.md` — packet
-  semantics, replay rules, provenance strategy, suppression strategy,
-  observability requirements, validation matrix (10+ tests), implementation
-  ordering (11 steps), rollback criteria
-- **Packet type**: `PT_Visibility = 0x0B` (between PT_EndSnapshot `0x0A`
-  and PT_Rename `0x0C`)
-- **Payload**: Fixed 29 bytes per object (GUID(16) + bHidden(1) + seq(4) +
-  ts(8))
-- **Key distinction from rename**: No callback recursion risk, fixed-length
-  wire format, idempotent bool state — validates pattern generalization
-- **Implementation**: NOT STARTED (pending final review of planning docs)
+- **Scope lock**: `20-phase6-visibility-scope-lock.md`
+- **Vertical slice plan**: `21-phase6-vertical-slice-visibility.md`
+- **Semantic conventions**: `22-semantic-event-architecture-conventions.md`
+- **Packet type**: `PT_Visibility = 0x0B` (fixed 29 bytes per object)
+- **Status**: IMPLEMENTED pending live UE validation
+- **Architecture validation**: Confirms semantic-event pattern generalizes
+  to string-rename → bool-toggle, variable-length → fixed-length,
+  callback-risk → callback-free — all mandatory requirements met (see
+  §2 of `22-semantic-event-architecture-conventions.md`)
 
 ## Design Constraints Preserved
 

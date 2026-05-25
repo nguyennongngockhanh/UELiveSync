@@ -92,6 +92,9 @@ _last_mesh_identity = {}
 # Phase 6: Per-GUID last object name for rename detection
 _last_object_names = {}
 
+# Phase 6: Per-GUID last visibility state for visibility toggle detection
+_last_visibility_state = {}
+
 tracked_objects = {}
 
 _timer_ref = None
@@ -773,6 +776,7 @@ def check_updates():
     deletes_to_send = []
     asset_defs_to_send = []
     renames_to_send = []
+    vis_payloads_to_send = []
 
     # =====================================================
     # SCENE SCAN (only when object count changes or
@@ -830,6 +834,7 @@ def check_updates():
 
             _last_mesh_identity.pop(guid, None)
             _last_object_names.pop(guid, None)
+            _last_visibility_state.pop(guid, None)
 
             deletes_to_send.append(
                 serialize_delete_v3(guid_obj)
@@ -968,6 +973,17 @@ def check_updates():
                     print(f"[RENAME] GUID={guid} \"{prev_name}\" → \"{current_name}\"")
             _last_object_names[guid] = current_name
 
+            # Phase 6: Visibility detection (semantic event)
+            current_vis = obj.hide_get()
+            prev_vis = _last_visibility_state.get(guid)
+            if not is_first_send and prev_vis is not None and prev_vis != current_vis:
+                vis_payloads_to_send.append(
+                    serialize_visibility(guid_obj, current_vis)
+                )
+                if _verbose_logging:
+                    print(f"[VISIBILITY] GUID={guid} hidden={current_vis}")
+            _last_visibility_state[guid] = current_vis
+
     # =====================================================
     # SEND DELETE PACKETS
     # =====================================================
@@ -1024,6 +1040,17 @@ def check_updates():
         send_objects(
             renames_to_send,
             packet_type=PT_Rename
+        )
+
+    # =====================================================
+    # SEND VISIBILITY PACKETS (Phase 6 — Semantic Event)
+    # =====================================================
+
+    if vis_payloads_to_send:
+
+        send_objects(
+            vis_payloads_to_send,
+            packet_type=PT_Visibility
         )
 
     # =====================================================
@@ -1300,9 +1327,11 @@ def start_sync():
     global _scan_counter
     global _sync_start_time
     global _last_object_names
+    global _last_visibility_state
 
     last_sent_transforms.clear()
     _last_object_names.clear()
+    _last_visibility_state.clear()
 
     tracked_objects.clear()
 
@@ -1366,9 +1395,11 @@ def stop_sync():
     global timer_running
     global _timer_ref
     global _last_object_names
+    global _last_visibility_state
 
     timer_running = False
     _last_object_names.clear()
+    _last_visibility_state.clear()
 
     if _timer_ref is not None:
         try:

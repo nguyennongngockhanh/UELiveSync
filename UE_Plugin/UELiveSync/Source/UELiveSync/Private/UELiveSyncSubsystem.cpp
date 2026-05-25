@@ -111,8 +111,33 @@ struct FScopedRenameSuppression
     }
 };
 
+// --- Visibility suppression scope ---
+// Wrapping SetIsTemporarilyHiddenInEditor in this guard prevents
+// editor callbacks from re-replicating visibility back to Blender.
+// Pattern follows FScopedRenameSuppression for architectural consistency.
+struct FScopedVisibilitySuppression
+{
+    FString GuidStr;
+    FScopedVisibilitySuppression(const FGuid& InGuid)
+        : GuidStr(InGuid.ToString(EGuidFormats::Digits))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[VISIBILITY] Enter suppression scope (GUID=%s)"),
+            *GuidStr);
+    }
+    ~FScopedVisibilitySuppression()
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[VISIBILITY] Exit suppression scope (GUID=%s)"),
+            *GuidStr);
+    }
+};
+
 // --- Rename sequence tracker (single subsystem-level instance) ---
 FRenameSequenceTracker GRenameSequences;
+
+// --- Visibility sequence tracker (single subsystem-level instance) ---
+FVisibilitySequenceTracker GVisibilitySequences;
 
 #include "HAL/IConsoleManager.h"
 
@@ -1441,6 +1466,7 @@ StopNetworkThread()
     LastSequenceId = 0;
 
     GRenameSequences.LastSequence.Empty();
+    GVisibilitySequences.LastSequence.Empty();
 
     uint64 EndCycles =
         FPlatformTime::Cycles64();
@@ -1904,7 +1930,7 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A, 0x0C };
+            { 0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
@@ -2044,6 +2070,70 @@ ProcessBinaryPacket(
                 IdentityHigh,
                 IdentityLow,
                 PrimitiveFallback);
+        }
+
+        Stats.PacketsProcessed.fetch_add(
+            1,
+            std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // VISIBILITY PACKET (Phase 6 — Semantic Event)
+    // =====================================================
+    // Wire format (fixed 29 bytes per object):
+    //   GUID(16) + bHidden(1) + seq(4) + ts(8)
+    //
+    // This is a SEPARATE handler from the transform object
+    // loop below. Visibility is a discrete semantic editor
+    // event, NOT a state-stream packet.
+    //
+    // Multiple visibility objects may be batched in one packet.
+    // =====================================================
+
+    if (PacketType == PT_Visibility)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessVisibilityPackets);
+
+        for (uint32 i = 0; i < ObjectCount; i++)
+        {
+            if (Ptr + 29 > PacketEnd)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[VISIBILITY] Truncated packet: needs 29 bytes but only %lld available"),
+                    (int64)(PacketEnd - Ptr));
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+
+            FGuid VisGuid;
+            FMemory::Memcpy(&VisGuid, Ptr, sizeof(FGuid));
+            Ptr += sizeof(FGuid);
+
+            uint8 bHiddenRaw;
+            FMemory::Memcpy(&bHiddenRaw, Ptr, sizeof(uint8));
+            Ptr += sizeof(uint8);
+
+            uint32 VisSequence;
+            FMemory::Memcpy(&VisSequence, Ptr, sizeof(uint32));
+            Ptr += sizeof(uint32);
+
+            double VisTimestamp;
+            FMemory::Memcpy(&VisTimestamp, Ptr, sizeof(double));
+            Ptr += sizeof(double);
+
+            EChangeOrigin Origin = EChangeOrigin::RemoteReplicated;
+            if (bInSnapshotBuild)
+            {
+                Origin = EChangeOrigin::Replay;
+            }
+
+            HandleVisibility(
+                VisGuid,
+                bHiddenRaw != 0,
+                VisSequence,
+                VisTimestamp,
+                Origin);
         }
 
         Stats.PacketsProcessed.fetch_add(
@@ -4940,6 +5030,94 @@ HandleRename(
 
 
 // =========================================================
+// HANDLE VISIBILITY (Phase 6 — Semantic Event)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleVisibility(
+    const FGuid& Guid,
+    bool bHidden,
+    uint32 SequenceNumber,
+    double Timestamp,
+    EChangeOrigin Origin)
+{
+    CHECK_GAME_THREAD();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleVisibility);
+
+    // =====================================================
+    // REJECT: No tracked actor for this GUID
+    // =====================================================
+
+    AActor* Actor = FindActorFast(Guid);
+    if (!Actor)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[VISIBILITY] Rejected — no tracked actor for GUID=%s "
+                 "(bHidden=%d, Seq=%u, Origin=%d)"),
+            *Guid.ToString(EGuidFormats::Digits),
+            (int32)bHidden, SequenceNumber, (int32)Origin);
+        Stats.VisibilityStaleRejections.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // REJECT: Stale or duplicate sequence number
+    // =====================================================
+
+    if (GVisibilitySequences.IsStaleOrDuplicate(Guid, SequenceNumber))
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[VISIBILITY] Rejected — stale/duplicate sequence "
+                 "GUID=%s bHidden=%d Seq=%u (last=%u)"),
+            *Guid.ToString(EGuidFormats::Digits),
+            (int32)bHidden, SequenceNumber,
+            GVisibilitySequences.LastSequence.FindRef(Guid));
+        Stats.VisibilityStaleRejections.fetch_add(1, std::memory_order_relaxed);
+
+        if (Origin == EChangeOrigin::Replay)
+        {
+            Stats.VisibilityReplaySkipped.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        return;
+    }
+
+    // =====================================================
+    // APPLY VISIBILITY with suppression scope
+    // =====================================================
+
+    {
+        FScopedVisibilitySuppression Suppress(Guid);
+        FScopedChangeOrigin OriginScope(Origin);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[VISIBILITY] Applying: GUID=%s Origin=%s "
+                 "bHidden=%d Seq=%u"),
+            *Guid.ToString(EGuidFormats::Digits),
+            Origin == EChangeOrigin::RemoteReplicated ? TEXT("REMOTE_REPLICATED") :
+            Origin == EChangeOrigin::Replay ? TEXT("REPLAY") :
+            Origin == EChangeOrigin::LocalUser ? TEXT("LOCAL_USER") :
+            Origin == EChangeOrigin::Recovery ? TEXT("RECOVERY") :
+            TEXT("UNSPECIFIED"),
+            (int32)bHidden, SequenceNumber);
+
+        Actor->SetIsTemporarilyHiddenInEditor(bHidden);
+
+        GVisibilitySequences.Update(Guid, SequenceNumber);
+
+        if (Origin == EChangeOrigin::RemoteReplicated)
+        {
+            Stats.VisibilityProcessed.fetch_add(1, std::memory_order_relaxed);
+        }
+        else if (Origin == EChangeOrigin::Replay)
+        {
+            Stats.VisibilityReplayApplied.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+
+// =========================================================
 // HANDLE ASSET DEF (V5)
 // =========================================================
 
@@ -7063,6 +7241,16 @@ ConsoleReset()
 
     UE_LOG(LogLiveSync, Log,
         TEXT("[RENAME] Replay tracker reset (ConsoleReset)"));
+
+    // Visibility diagnostics reset (Phase 6)
+    Stats.VisibilityProcessed.store(0, std::memory_order_relaxed);
+    Stats.VisibilityStaleRejections.store(0, std::memory_order_relaxed);
+    Stats.VisibilityReplayApplied.store(0, std::memory_order_relaxed);
+    Stats.VisibilityReplaySkipped.store(0, std::memory_order_relaxed);
+    GVisibilitySequences.LastSequence.Empty();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[VISIBILITY] Replay tracker reset (ConsoleReset)"));
 
     AssetMetadata.Empty();
     AssetPathCache.Empty();

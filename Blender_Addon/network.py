@@ -61,6 +61,7 @@ PRIMITIVE_EMPTY = 0x04
 PT_BeginSnapshot = 0x09
 PT_EndSnapshot = 0x0A
 PT_AssetDef = 0x08
+PT_Visibility = 0x0B
 PT_Rename = 0x0C
 
 # V4 protocol version
@@ -477,6 +478,47 @@ def serialize_rename(guid_obj, old_name, new_name):
 
 
 # =========================================================
+# VISIBILITY SERIALIZATION (Phase 6, PT_Visibility = 0x0B)
+# =========================================================
+# Fixed-size wire format per object (29 bytes):
+#   + GUID(16) + bHidden(1) + sequence(4) + timestamp(8)
+#
+# This is a discrete semantic editor event, NOT a state stream.
+# See Docs/Architecture/21-phase6-vertical-slice-visibility.md §2
+# =========================================================
+
+_visibility_sequences = {}
+
+def serialize_visibility(guid_obj, b_hidden):
+
+    payload = bytearray()
+
+    # GUID
+    d_a = guid_obj.time_low
+    d_b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
+    d_c = (guid_obj.clock_seq_hi_variant << 24
+           | guid_obj.clock_seq_low << 16
+           | (guid_obj.node >> 32) & 0xFFFF)
+    d_d = guid_obj.node & 0xFFFFFFFF
+
+    payload.extend(struct.pack("<IIII", d_a, d_b, d_c, d_d))
+
+    # bHidden (uint8: 0=visible, 1=hidden)
+    payload.extend(struct.pack("<B", 1 if b_hidden else 0))
+
+    # Monotonic sequence per GUID (replay dedup)
+    guid_key = str(guid_obj)
+    seq = _visibility_sequences.get(guid_key, 0) + 1
+    _visibility_sequences[guid_key] = seq
+    payload.extend(struct.pack("<I", seq))
+
+    # Timestamp
+    payload.extend(struct.pack("<d", time.time()))
+
+    return payload
+
+
+# =========================================================
 # LIVE SYNC CLIENT
 # =========================================================
 
@@ -837,6 +879,12 @@ class LiveSyncClient:
         if _rename_sequences:
             _rename_sequences.clear()
             print("[RENAME] Sequence tracker cleared on disconnect")
+
+        # Phase 6: reset visibility sequence tracker on disconnect
+        global _visibility_sequences
+        if _visibility_sequences:
+            _visibility_sequences.clear()
+            print("[VISIBILITY] Sequence tracker cleared on disconnect")
 
     # =====================================================
     # PUBLIC API (thread-safe)

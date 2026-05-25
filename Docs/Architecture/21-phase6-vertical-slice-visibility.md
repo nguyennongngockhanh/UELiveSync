@@ -1,7 +1,7 @@
 # Phase 6 Minimal Vertical Slice — Visibility Replication
 
 > **Created**: 2026-05-25
-> **Phase 5**: COMPLETE · **Phase 6**: Rename STABILIZED, Visibility PLANNING
+> **Phase 5**: COMPLETE · **Phase 6**: Rename STABILIZED, Visibility STABILIZED
 > **Runtime core**: FROZEN (`v0.5.0-stabilized`)
 >
 > This document defines the SECOND implementation slice for Phase 6.
@@ -414,3 +414,4 @@ tests/
 | Date | Version | Changes |
 |------|---------|---------|
 | 2026-05-25 | 1.0 | Initial vertical-slice plan for visibility replication |
+| 2026-05-25 | 2.0 | Implementation complete — Phase 6C delivered |

@@ -173,6 +173,18 @@ private:
         EChangeOrigin Origin);
 
     // =====================================================
+    // VISIBILITY REPLICATION (Phase 6 — Semantic Event)
+    // See Docs/Architecture/21-phase6-vertical-slice-visibility.md
+    // =====================================================
+
+    void HandleVisibility(
+        const FGuid& Guid,
+        bool bHidden,
+        uint32 SequenceNumber,
+        double Timestamp,
+        EChangeOrigin Origin);
+
+    // =====================================================
     // ASSET RESOLUTION (Phase 5D)
     // =====================================================
 
