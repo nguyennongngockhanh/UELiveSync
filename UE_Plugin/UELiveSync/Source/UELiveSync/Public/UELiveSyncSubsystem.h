@@ -160,6 +160,19 @@ private:
     void AbortSnapshot();
 
     // =====================================================
+    // RENAME REPLICATION (Phase 6 — Semantic Event)
+    // See Docs/Architecture/19-phase6-vertical-slice-rename.md
+    // =====================================================
+
+    void HandleRename(
+        const FGuid& Guid,
+        const FString& OldName,
+        const FString& NewName,
+        uint32 SequenceNumber,
+        double Timestamp,
+        EChangeOrigin Origin);
+
+    // =====================================================
     // ASSET RESOLUTION (Phase 5D)
     // =====================================================
 

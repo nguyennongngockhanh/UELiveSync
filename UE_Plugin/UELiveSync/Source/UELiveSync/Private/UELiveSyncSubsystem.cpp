@@ -58,6 +58,62 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 
 #include "Engine/StaticMesh.h"
 
+// =========================================================
+// PHASE 6 — SEMANTIC EDITOR-EVENT HELPERS
+// =========================================================
+//
+// These helpers enable provenance tracking, scoped callback
+// suppression, and replay-rename dedup for the rename
+// vertical slice (PT_Rename = 0x0C).
+//
+// See Docs/Architecture/19-phase6-vertical-slice-rename.md
+//
+// =========================================================
+
+// --- Provenance (in-memory only, not on the wire) ---
+// Every editor-originating mutation must carry a provenance tag
+// so that replicated changes can suppress recursive callbacks.
+thread_local EChangeOrigin GCurrentChangeOrigin = EChangeOrigin::Unspecified;
+
+// RAII guard — sets current-thread provenance, restores on exit
+struct FScopedChangeOrigin
+{
+    EChangeOrigin Previous;
+    FScopedChangeOrigin(EChangeOrigin NewOrigin)
+        : Previous(GCurrentChangeOrigin)
+    {
+        GCurrentChangeOrigin = NewOrigin;
+    }
+    ~FScopedChangeOrigin()
+    {
+        GCurrentChangeOrigin = Previous;
+    }
+};
+
+// --- Rename suppression scope ---
+// Wrapping SetActorLabel in this guard prevents OnActorLabelChanged
+// from re-replicating the rename back to Blender.
+struct FScopedRenameSuppression
+{
+    FString GuidStr;
+    FScopedRenameSuppression(const FGuid& InGuid)
+        : GuidStr(InGuid.ToString(EGuidFormats::Digits))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[RENAME] Enter suppression scope (GUID=%s)"),
+            *GuidStr);
+    }
+    ~FScopedRenameSuppression()
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[RENAME] Exit suppression scope (GUID=%s)"),
+            *GuidStr);
+    }
+};
+
+// --- Rename sequence tracker (single subsystem-level instance) ---
+FRenameSequenceTracker GRenameSequences;
+
 #include "HAL/IConsoleManager.h"
 
 #include "HAL/PlatformProcess.h"
@@ -1384,6 +1440,8 @@ StopNetworkThread()
 
     LastSequenceId = 0;
 
+    GRenameSequences.LastSequence.Empty();
+
     uint64 EndCycles =
         FPlatformTime::Cycles64();
 
@@ -1846,14 +1904,14 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A };
+            { 0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A, 0x0C };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
 
         bool bValidType = false;
 
-        for (int32 i = 0; i < 7; i++)
+        for (int32 i = 0; i < sizeof(kValidTypes); i++)
         {
             if (PacketType == kValidTypes[i])
             {
@@ -1875,7 +1933,7 @@ ProcessBinaryPacket(
 
         bool bValidFlags = false;
 
-        for (int32 i = 0; i < 4; i++)
+        for (int32 i = 0; i < sizeof(kValidFlags); i++)
         {
             if (PacketFlags == kValidFlags[i])
             {
@@ -1986,6 +2044,112 @@ ProcessBinaryPacket(
                 IdentityHigh,
                 IdentityLow,
                 PrimitiveFallback);
+        }
+
+        Stats.PacketsProcessed.fetch_add(
+            1,
+            std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // RENAME PACKET (Phase 6 — Semantic Event)
+    // =====================================================
+    // Wire format (variable length per object):
+    //   GUID(16) + oldNameLen(2) + oldName(N) +
+    //   newNameLen(2) + newName(M) + seq(4) + ts(8)
+    //
+    // This is a SEPARATE handler from the transform object
+    // loop below. Rename is a semantic editor event, NOT a
+    // state-stream packet. See 19-phase6-vertical-slice-rename.md
+    //
+    // Multiple rename objects may be batched in one packet.
+    // =====================================================
+
+    if (PacketType == PT_Rename)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessRenamePackets);
+
+        for (uint32 i = 0; i < ObjectCount; i++)
+        {
+            if (Ptr + 18 > PacketEnd)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[RENAME] Truncated packet: cannot read GUID + old_name_length"));
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+
+            FGuid RenameGuid;
+            FMemory::Memcpy(&RenameGuid, Ptr, sizeof(FGuid));
+            Ptr += sizeof(FGuid);
+
+            uint16 OldNameLen;
+            FMemory::Memcpy(&OldNameLen, Ptr, sizeof(uint16));
+            Ptr += 2;
+
+            if (Ptr + OldNameLen > PacketEnd)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[RENAME] Truncated packet: old_name needs %u bytes"),
+                    OldNameLen);
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+
+            FString OldName(OldNameLen,
+                reinterpret_cast<const ANSICHAR*>(Ptr));
+            Ptr += OldNameLen;
+
+            if (Ptr + 2 > PacketEnd)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[RENAME] Truncated packet: cannot read new_name_length"));
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+
+            uint16 NewNameLen;
+            FMemory::Memcpy(&NewNameLen, Ptr, sizeof(uint16));
+            Ptr += 2;
+
+            if (Ptr + NewNameLen > PacketEnd)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[RENAME] Truncated packet: new_name needs %u bytes"),
+                    NewNameLen);
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+
+            FString NewName(NewNameLen,
+                reinterpret_cast<const ANSICHAR*>(Ptr));
+            Ptr += NewNameLen;
+
+            if (Ptr + 12 > PacketEnd)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[RENAME] Truncated packet: cannot read sequence+timestamp"));
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+
+            uint32 RenameSequence;
+            FMemory::Memcpy(&RenameSequence, Ptr, sizeof(uint32));
+            Ptr += 4;
+
+            double RenameTimestamp;
+            FMemory::Memcpy(&RenameTimestamp, Ptr, sizeof(double));
+            Ptr += 8;
+
+            EChangeOrigin Origin = EChangeOrigin::RemoteReplicated;
+            if (bInSnapshotBuild)
+            {
+                Origin = EChangeOrigin::Replay;
+            }
+
+            HandleRename(RenameGuid, OldName, NewName,
+                         RenameSequence, RenameTimestamp, Origin);
         }
 
         Stats.PacketsProcessed.fetch_add(
@@ -4672,6 +4836,110 @@ HandleDeleteObject(
 
 
 // =========================================================
+// HANDLE RENAME (Phase 6 — Semantic Event)
+// =========================================================
+// Applies a discrete rename event to a tracked actor.
+//
+// Rename is NOT a state-stream operation:
+//   • Lifecycle-sensitive  — rejects Tombstoned/Unknown GUIDs
+//   • Provenance-sensitive — every rename carries EChangeOrigin
+//   • Callback-sensitive   — wrapped in FScopedRenameSuppression
+//   • Replay-safe          — stale/duplicate rejection via sequence
+//
+// See Docs/Architecture/19-phase6-vertical-slice-rename.md §4
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleRename(
+    const FGuid& Guid,
+    const FString& OldName,
+    const FString& NewName,
+    uint32 SequenceNumber,
+    double Timestamp,
+    EChangeOrigin Origin)
+{
+    CHECK_GAME_THREAD();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleRename);
+
+    // =====================================================
+    // REJECT: No tracked actor for this GUID
+    // =====================================================
+
+    AActor* Actor = FindActorFast(Guid);
+    if (!Actor)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[RENAME] Rejected — no tracked actor for GUID=%s "
+                 "(OldName=%s, NewName=%s, Seq=%u, Origin=%d)"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *OldName, *NewName, SequenceNumber, (int32)Origin);
+        Stats.RenameStaleRejections.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // REJECT: Stale or duplicate sequence number
+    // =====================================================
+
+    if (GRenameSequences.IsStaleOrDuplicate(Guid, SequenceNumber))
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[RENAME] Rejected — stale/duplicate sequence "
+                 "GUID=%s Name=%s Seq=%u (last=%u)"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *NewName, SequenceNumber,
+            GRenameSequences.LastSequence.FindRef(Guid));
+        Stats.RenameStaleRejections.fetch_add(1, std::memory_order_relaxed);
+
+        if (Origin == EChangeOrigin::Replay)
+        {
+            Stats.RenameReplaySkipped.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        return;
+    }
+
+    // =====================================================
+    // APPLY RENAME with suppression scope
+    // =====================================================
+
+    {
+        FScopedRenameSuppression Suppress(Guid);
+        FScopedChangeOrigin OriginScope(Origin);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[RENAME] Applying: GUID=%s Origin=%s "
+                 "OldName=\"%s\" NewName=\"%s\" Seq=%u"),
+            *Guid.ToString(EGuidFormats::Digits),
+            Origin == EChangeOrigin::RemoteReplicated ? TEXT("REMOTE_REPLICATED") :
+            Origin == EChangeOrigin::Replay ? TEXT("REPLAY") :
+            Origin == EChangeOrigin::LocalUser ? TEXT("LOCAL_USER") :
+            Origin == EChangeOrigin::Recovery ? TEXT("RECOVERY") :
+            TEXT("UNSPECIFIED"),
+            *OldName, *NewName, SequenceNumber);
+
+        // SetActorLabel fires OnActorLabelChanged synchronously.
+        // The callback handler checks GCurrentChangeOrigin and
+        // FScopedRenameSuppression to prevent re-replication.
+        Actor->SetActorLabel(NewName);
+
+        GRenameSequences.Update(Guid, SequenceNumber);
+
+        if (Origin == EChangeOrigin::RemoteReplicated)
+        {
+            Stats.RenamesProcessed.fetch_add(1, std::memory_order_relaxed);
+        }
+        else if (Origin == EChangeOrigin::Replay)
+        {
+            Stats.RenameReplayApplied.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    // Suppression scope destructor re-enables replication
+}
+
+
+// =========================================================
 // HANDLE ASSET DEF (V5)
 // =========================================================
 
@@ -6785,6 +7053,16 @@ ConsoleReset()
     Stats.PendingAssetCount = 0;
     Stats.PendingAssetPeak = 0;
     Stats.StaleEvictions = 0;
+
+    // Rename diagnostics reset (Phase 6)
+    Stats.RenamesProcessed.store(0, std::memory_order_relaxed);
+    Stats.RenameStaleRejections.store(0, std::memory_order_relaxed);
+    Stats.RenameReplayApplied.store(0, std::memory_order_relaxed);
+    Stats.RenameReplaySkipped.store(0, std::memory_order_relaxed);
+    GRenameSequences.LastSequence.Empty();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[RENAME] Replay tracker reset (ConsoleReset)"));
 
     AssetMetadata.Empty();
     AssetPathCache.Empty();

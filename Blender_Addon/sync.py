@@ -18,6 +18,7 @@ try:
         serialize_object,
         serialize_object_v3,
         serialize_delete_v3,
+        serialize_rename,
         is_connected,
         get_last_error,
         get_last_error_severity,
@@ -36,6 +37,7 @@ try:
         PT_BeginSnapshot,
         PT_EndSnapshot,
         PT_AssetDef,
+        PT_Rename,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
         serialize_asset_identity,
@@ -49,6 +51,7 @@ except ImportError:
         serialize_object,
         serialize_object_v3,
         serialize_delete_v3,
+        serialize_rename,
         is_connected,
         get_last_error,
         get_last_error_severity,
@@ -67,6 +70,7 @@ except ImportError:
         PT_BeginSnapshot,
         PT_EndSnapshot,
         PT_AssetDef,
+        PT_Rename,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
         serialize_asset_identity,
@@ -84,6 +88,9 @@ last_sent_transforms = {}
 # Phase 5D: Per-GUID last mesh identity for change detection
 # Stores (identity_low, identity_high, mesh_name)
 _last_mesh_identity = {}
+
+# Phase 6: Per-GUID last object name for rename detection
+_last_object_names = {}
 
 tracked_objects = {}
 
@@ -765,6 +772,7 @@ def check_updates():
     children_create = []
     deletes_to_send = []
     asset_defs_to_send = []
+    renames_to_send = []
 
     # =====================================================
     # SCENE SCAN (only when object count changes or
@@ -821,6 +829,7 @@ def check_updates():
             last_sent_transforms.pop(guid, None)
 
             _last_mesh_identity.pop(guid, None)
+            _last_object_names.pop(guid, None)
 
             deletes_to_send.append(
                 serialize_delete_v3(guid_obj)
@@ -948,6 +957,17 @@ def check_updates():
                     obj.data.name if obj.data else ""
                 )
 
+            # Phase 6: Rename detection (semantic event)
+            current_name = obj.name
+            prev_name = _last_object_names.get(guid)
+            if not is_first_send and prev_name is not None and prev_name != current_name:
+                renames_to_send.append(
+                    serialize_rename(guid_obj, prev_name, current_name)
+                )
+                if _verbose_logging:
+                    print(f"[RENAME] GUID={guid} \"{prev_name}\" → \"{current_name}\"")
+            _last_object_names[guid] = current_name
+
     # =====================================================
     # SEND DELETE PACKETS
     # =====================================================
@@ -993,6 +1013,17 @@ def check_updates():
             asset_defs_to_send,
             packet_type=PT_AssetDef,
             version=LIVE_SYNC_VERSION_V5
+        )
+
+    # =====================================================
+    # SEND RENAME PACKETS (Phase 6 — Semantic Event)
+    # =====================================================
+
+    if renames_to_send:
+
+        send_objects(
+            renames_to_send,
+            packet_type=PT_Rename
         )
 
     # =====================================================
@@ -1268,8 +1299,10 @@ def start_sync():
     global _last_object_count
     global _scan_counter
     global _sync_start_time
+    global _last_object_names
 
     last_sent_transforms.clear()
+    _last_object_names.clear()
 
     tracked_objects.clear()
 
@@ -1332,8 +1365,10 @@ def stop_sync():
 
     global timer_running
     global _timer_ref
+    global _last_object_names
 
     timer_running = False
+    _last_object_names.clear()
 
     if _timer_ref is not None:
         try:

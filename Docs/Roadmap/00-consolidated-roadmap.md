@@ -1,7 +1,7 @@
 # UELiveSync — Consolidated Roadmap
 
-**Document Version**: 1.1  
-**Last Updated**: 2026-05-24  
+**Document Version**: 1.2  
+**Last Updated**: 2026-05-25  
 **Status**: Living document — updated as phases complete
 
 ---
@@ -259,11 +259,40 @@ def _log_diagnostics():
 
 ## 4. Phase 6 — Live Editing System
 
-**Status**: NOT STARTED  
-**Phase 6 begins when** these editor-side workflows start implementation:
-- Rename replication (Blender → UE object name sync)
-- Collection/folder structure sync  
-- Visibility/hidden state sync
+**Status**: Phase 6A ACTIVE (Rename STABILIZED, Visibility PLANNED)  
+**Scope**: See `Docs/Architecture/18-phase6-scope-lock.md` (rename) and
+`Docs/Architecture/20-phase6-visibility-scope-lock.md` (visibility —
+planned) for hard IN-SCOPE/OUT-OF-SCOPE boundaries, authority models,
+and escalation rules.
+
+### 4A — Rename Replication Vertical Slice (STABILIZED)
+
+**Status**: Implemented, stabilized, and verified.  
+**Docs**: `19-phase6-vertical-slice-rename.md` (plan), `18-phase6-scope-lock.md` (scope)
+
+**Packet type**: `PT_Rename = 0x0C`
+- Wire format: GUID(16) + oldNameLen(2) + oldName(N) + newNameLen(2) + newName(M) + seq(4) + ts(8)
+- Semantic editor event (NOT state stream)
+- Provenance: `EChangeOrigin` (`RemoteReplicated` / `Replay`), in-memory only
+- Suppression: `FScopedRenameSuppression` RAII
+- Replay safety: `FRenameSequenceTracker` (bounded 2048, stale/duplicate via `<=` sequence)
+- Reconnect: tracker cleared in `StopNetworkThread()` + `ConsoleReset()` + Blender `_close_internal()`
+- CPU profiler: `UELiveSync_HandleRename`, `UELiveSync_ProcessRenamePackets`
+- Counters: `RenamesProcessed`, `RenameStaleRejections`, `RenameReplayApplied`, `RenameReplaySkipped`
+
+### 4B — Visibility Replication Vertical Slice (PLANNED)
+
+**Status**: Architecture complete, not yet implemented.  
+**Docs**: `20-phase6-visibility-scope-lock.md` (scope), `21-phase6-vertical-slice-visibility.md` (plan)
+
+**Packet type**: `PT_Visibility = 0x0B`
+- Wire format: GUID(16) + bHidden(1) + seq(4) + ts(8) — fixed 29 bytes per object
+- Distinct from rename: no callback recursion risk (`SetIsTemporarilyHiddenInEditor` fires no standard callback), fixed-length wire format, idempotent bool state
+- Follows identical architectural pattern: provenance → suppression → replay → observability
+
+### 4C — Future Phase 6 Features (NOT STARTED)
+
+- Collection/folder structure sync
 - Duplicate detection and handling
 - Object create/delete lifecycle management from editor
 
@@ -379,15 +408,23 @@ Console command `UE.LiveSync.AssetHealth` prints:
 | `Docs/Protocol/live_sync_v5.md` | V5 protocol documentation |
 | `Docs/Architecture/09-asset-identity.md` | Asset identity architecture documentation |
 
-### Files (Phase 6 backlog)
+### Files (Phase 6 — rename, stabilized)
 
 | File | What |
 |------|------|
-| `network.py` | `serialize_material_assign()` (material assignment) |
-| `sync.py` | `collect_material_name()`, `export_mesh_fbx()` (material + FBX push) |
-| `UELiveSyncSubsystem.cpp` | `HandleMaterialAssign()`, async reimport queue (material + FBX) |
-| `UELiveSyncSubsystem.h` | `AssetHealth` command (6B) |
-| `__init__.py` | Asset path config in prefs, export path field (6C) |
+| `UELiveSyncSubsystem.cpp` | `HandleRename()`, `FScopedChangeOrigin`, `FScopedRenameSuppression`, PT_Rename dispatch |
+| `UELiveSyncSubsystem.h` | `HandleRename` declaration |
+| `SyncTypes.h` | `PT_Rename = 0x0C`, `EChangeOrigin`, `FRenameSequenceTracker`, rename counters |
+| `network.py` | `serialize_rename()`, `_rename_sequences` tracker, cleanup in `_close_internal()` |
+| `sync.py` | `_last_object_names` diff detection, emit PT_Rename, cleanup on stop/reset |
+
+### Files (Phase 6 — visibility, planned)
+
+| File | What |
+|------|------|
+| `Docs/Architecture/20-phase6-visibility-scope-lock.md` | Visibility scope lock |
+| `Docs/Architecture/21-phase6-vertical-slice-visibility.md` | Visibility vertical slice plan |
+| (implementation TBD — not yet started) | |
 
 ---
 
@@ -413,33 +450,21 @@ Console command `UE.LiveSync.AssetHealth` prints:
 
 ### 5.2 — Rename Replication
 
-**Packet type**: `PT_Rename = 0x0D`
+**Status**: COMPLETED (Phase 6A). See Phase 6 section above.
+**Packet type**: `PT_Rename = 0x0C` (implemented in Phase 6A)
 
-| Section | Bytes | Description |
-|---------|-------|-------------|
-| GUID | 16 | Object GUID |
-| Name Length | 2 | uint16 length of new name |
-| New Name | N | UTF-8 encoded new name |
-
-**UE side**: `Actor->SetActorLabel(NewName)` or rename the underlying `UObject`.
-
-**Constraints**:
-- UE actor labels do not need to match Blender object names exactly
-- Rename is "best effort" — UE may append suffixes for uniqueness
-- Blender-side rename detection via `obj.name` polling (cheap string compare)
+UE side uses `AActor::SetActorLabel(NewName)` with full provenance
+tracking, suppression, and replay safety (see Phase 6A for details).
 
 ### 5.3 — Visibility Sync
 
-**Packet type**: `PT_Visibility = 0x0E`
+**Status**: PLANNED (Phase 6B). See Phase 6 section above.
+**Packet type**: `PT_Visibility = 0x0B` (planned for Phase 6B)
 
-| Section | Bytes | Description |
-|---------|-------|-------------|
-| GUID | 16 | Object GUID |
-| Visible | 1 | uint8 (0=hidden, 1=visible) |
-
-**Blender side**: Poll `obj.hide_get()` and `obj.hide_viewport` for visibility state.
-
-**UE side**: `Actor->SetActorHiddenInGame(!Visible)`, `Actor->SetActorEnableCollision(Visible)`.
+Editor hidden-state replication (`SetIsTemporarilyHiddenInEditor`).
+See `Docs/Architecture/20-phase6-visibility-scope-lock.md` for scope
+and `Docs/Architecture/21-phase6-vertical-slice-visibility.md` for
+full design.
 
 ### 5.4 — Folder / Collection Sync (Blender → UE)
 
@@ -1011,17 +1036,17 @@ Variable-length strings in the protocol (mesh paths, material paths, names) will
 | 0x05 | PT_Material | 3 | Reserved (original stub) |
 | 0x06 | PT_Mesh | 3 | Reserved (original stub) |
 | 0x07 | PT_Heartbeat | 3 | Production-stable |
-| 0x08 | PT_AssetDef | 6A | Active |
+| 0x08 | PT_AssetDef | 5D | Active |
 | 0x09 | PT_BeginSnapshot | 5A | Production-stable |
 | 0x0A | PT_EndSnapshot | 5A | Production-stable |
-| 0x0B | PT_MaterialAssign | 6 | Planned |
-| 0x0C | PT_MeshUpdate | 6 | Planned |
-| 0x0D | PT_Rename | 7 | Planned |
-| 0x0E | PT_Visibility | 7 | Planned |
-| 0x0F | PT_Folder | 7 | Planned |
-| 0x10 | PT_Timeline | 8 | Research |
-| 0x11 | PT_Camera | 8 | Research |
-| 0x12 | PT_Keyframe | 8 | Research |
+| 0x0B | PT_Visibility | 6A | Planned (architecture complete) |
+| 0x0C | PT_Rename | 6A | Active (stabilized) |
+| 0x0D | PT_MaterialAssign | 6C | Planned |
+| 0x0E | PT_MeshUpdate | 6C | Planned |
+| 0x0F | PT_Folder | 6C | Planned |
+| 0x10 | PT_Timeline | 7 | Research |
+| 0x11 | PT_Camera | 7 | Research |
+| 0x12 | PT_Keyframe | 7 | Research |
 
 ### Flag Registry
 

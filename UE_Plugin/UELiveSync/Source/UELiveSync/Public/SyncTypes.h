@@ -214,6 +214,22 @@ enum EPacketType : uint8
     PT_AssetDef  = 0x08,  // V5: asset identity definition
     PT_BeginSnapshot = 0x09,
     PT_EndSnapshot   = 0x0A,
+
+    // Phase 6: Semantic editor-event replication
+    // See Docs/Architecture/19-phase6-vertical-slice-rename.md
+    PT_Rename        = 0x0C,  // Semantic rename event (discrete, NOT state stream)
+};
+
+// Phase 6: Provenance for editor-originating mutations
+// In-memory only — NOT serialized on the wire.
+// See Docs/Architecture/13-phase6-design-constraints.md §12
+enum class EChangeOrigin : uint8
+{
+    Unspecified        = 0,  // Bug — every mutation must set provenance
+    LocalUser          = 1,  // Direct user action in local editor → replicates
+    RemoteReplicated   = 2,  // Received from remote peer → must NOT re-replicate
+    Replay             = 3,  // Reconnect snapshot replay → must NOT replicate
+    Recovery           = 4,  // Actor recovery (re-spawn, re-link) → must NOT replicate
 };
 
 // Primitive type constants (1 byte in CREATE packet payload)
@@ -347,6 +363,12 @@ struct FLiveSyncStats
     int32 PendingAssetPeak    = 0;
     int32 StaleEvictions      = 0;
 
+    // --- Rename diagnostics (Phase 6, written by game thread) ---
+    std::atomic<int32> RenamesProcessed{0};
+    std::atomic<int32> RenameStaleRejections{0};
+    std::atomic<int32> RenameReplayApplied{0};
+    std::atomic<int32> RenameReplaySkipped{0};
+
     // --- Per-frame timing (written by game thread) ---
     double LastPacketTime = 0.0;
     double LastThreadLoopTime = 0.0;
@@ -403,6 +425,75 @@ struct FLiveSyncPacket
 
     double ReceiveTime =
         0.0;
+};
+
+
+// =========================================================
+// RENAME PACKET (Phase 6, PT_Rename = 0x0C)
+// =========================================================
+// Discrete semantic editor-event payload.
+// NOT a state-stream packet — rename is a lifecycle-sensitive,
+// ordering-sensitive, provenance-carrying mutation.
+//
+// Wire format (variable length):
+//   offset  size  field
+//   0       16    GUID (4 × uint32 LE)
+//   16      2     old_name_length (uint16 LE)
+//   18      N     old_name (UTF-8)
+//   18+N    2     new_name_length (uint16 LE)
+//   20+N    M     new_name (UTF-8)
+//   20+N+M  4     sequence_number (uint32 LE, monotonic per-GUID)
+//   24+N+M  8     timestamp (double LE)
+//
+// Provenance (EChangeOrigin) is in-memory only — NOT on the wire.
+// See Docs/Architecture/19-phase6-vertical-slice-rename.md §5
+//
+// Max total payload: 16 + 2 + 256 + 2 + 256 + 4 + 8 = 544 bytes
+// =========================================================
+
+struct FLiveSyncRenamePacket
+{
+    FGuid    Guid;
+    FString  OldName;
+    FString  NewName;
+    uint32   SequenceNumber = 0;   // Monotonic per-GUID (replay dedup)
+    double   Timestamp      = 0.0;
+
+    // In-memory provenance (not serialized)
+    EChangeOrigin Origin = EChangeOrigin::Unspecified;
+};
+
+
+// =========================================================
+// RENAME SEQUENCE TRACKER (Phase 6)
+// =========================================================
+// Tracks the last-applied rename sequence number per GUID
+// for stale/duplicate replay rejection.
+// =========================================================
+
+struct FRenameSequenceTracker
+{
+    TMap<FGuid, uint32> LastSequence;
+    static constexpr uint32 MAX_TRACKED_GUIDS = 2048;
+
+    bool IsStaleOrDuplicate(const FGuid& Guid, uint32 IncomingSeq)
+    {
+        if (const uint32* LastSeq = LastSequence.Find(Guid))
+        {
+            return IncomingSeq <= *LastSeq;
+        }
+        return false; // first sequence for this GUID — always process
+    }
+
+    void Update(const FGuid& Guid, uint32 AppliedSeq)
+    {
+        if (LastSequence.Num() >= MAX_TRACKED_GUIDS)
+        {
+            // Evict oldest entry if at capacity
+            LastSequence.Remove(LastSequence.CreateIterator().Key());
+        }
+        LastSequence.Add(Guid, AppliedSeq);
+    }
 };
 
 
@@ -537,7 +628,7 @@ static constexpr uint32
     H = fnv(H, 0x01); H = fnv(H, 0x03);
     H = fnv(H, 0x04); H = fnv(H, 0x07);
     H = fnv(H, 0x08); H = fnv(H, 0x09);
-    H = fnv(H, 0x0A);
+    H = fnv(H, 0x0A); H = fnv(H, 0x0C);
 
     return H;
 }();
