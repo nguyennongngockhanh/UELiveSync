@@ -1,7 +1,7 @@
 # Phase 6 Scope Lock — Live Editing System
 
 > **Created**: 2026-05-25
-> **Phase 5**: COMPLETE · **Phase 6**: NOT STARTED
+> **Phase 5**: COMPLETE · **Phase 6**: ACTIVE (Rename STABILIZED · Visibility STABILIZED · Hierarchy IN PROGRESS)
 > **Runtime core**: FROZEN (`v0.5.0-stabilized`)
 >
 > This document defines the **hard scope boundaries** for Phase 6.
@@ -84,7 +84,7 @@ pipeline stage, parser branch, queue, or thread boundary may be modified.
 | Field | Value |
 |-------|-------|
 | **Description** | Blender collections (or primary collection) map to UE World Outliner folders. Adding/removing objects from collections in Blender updates UE folder membership. Creating/deleting collections creates/deletes folders. |
-| **New packet type** | `PT_COLLECTION` (proposed `0x0D`) — GUID (16) + parent-collection-GUID (16) + flags (1) + name-length (2) + UTF-8 name (variable, max 256) |
+| **New packet type** | `PT_COLLECTION` (proposed `0x0E`) — GUID (16) + parent-collection-GUID (16) + flags (1) + name-length (2) + UTF-8 name (variable, max 256) |
 | **Authority model** | Blender authoritative for collection structure. UE folder renames (by user) replicate back to Blender. |
 | **Challenges** | Blender multi-collection membership per object (no UE equivalent); UE folders are flat (no nesting beyond one level in World Outliner by default); collection visibility does not map 1:1 to folder visibility; objects in multiple Blender collections must choose a "primary" collection for UE folder assignment. |
 
@@ -440,3 +440,4 @@ Phase 6 IS:                         Phase 6 IS NOT:
 | Date | Version | Author | Changes |
 |------|---------|--------|---------|
 | 2026-05-25 | 1.0 | System | Initial scope lock — created before Phase 6 implementation begins |
+| 2026-05-26 | 1.1 | System | Terminology consolidation: updated status from NOT STARTED to ACTIVE (Rename STABILIZED · Visibility STABILIZED · Hierarchy IN PROGRESS). Fixed PT_COLLECTION proposed value from 0x0D to 0x0E (0x0D now assigned to PT_HIERARCHY). |

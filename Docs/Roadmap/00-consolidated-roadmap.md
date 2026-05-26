@@ -1,7 +1,7 @@
 # UELiveSync — Consolidated Roadmap
 
-**Document Version**: 1.2  
-**Last Updated**: 2026-05-25  
+**Document Version**: 1.3  
+**Last Updated**: 2026-05-26  
 **Status**: Living document — updated as phases complete
 
 ---
@@ -259,10 +259,8 @@ def _log_diagnostics():
 
 ## 4. Phase 6 — Live Editing System
 
-**Status**: Phase 6A ACTIVE (Rename STABILIZED, Visibility PLANNED)  
-**Scope**: See `Docs/Architecture/18-phase6-scope-lock.md` (rename) and
-`Docs/Architecture/20-phase6-visibility-scope-lock.md` (visibility —
-planned) for hard IN-SCOPE/OUT-OF-SCOPE boundaries, authority models,
+**Status**: Phase 6 — Live Editing System (Rename STABILIZED · Visibility STABILIZED · Hierarchy IN PROGRESS)  
+**Scope**: See `Docs/Architecture/18-phase6-scope-lock.md` for hard IN-SCOPE/OUT-OF-SCOPE boundaries, authority models,
 and escalation rules.
 
 ### 4A — Rename Replication Vertical Slice (STABILIZED)
@@ -280,21 +278,34 @@ and escalation rules.
 - CPU profiler: `UELiveSync_HandleRename`, `UELiveSync_ProcessRenamePackets`
 - Counters: `RenamesProcessed`, `RenameStaleRejections`, `RenameReplayApplied`, `RenameReplaySkipped`
 
-### 4B — Visibility Replication Vertical Slice (PLANNED)
+### 4B — Visibility Replication Vertical Slice (STABILIZED)
 
-**Status**: Architecture complete, not yet implemented.  
-**Docs**: `20-phase6-visibility-scope-lock.md` (scope), `21-phase6-vertical-slice-visibility.md` (plan)
+**Status**: Stabilized and validated. 9/9 live validation criteria met, 11/11 live tests PASS.  
+**Docs**: `20-phase6-visibility-scope-lock.md` (scope), `21-phase6-vertical-slice-visibility.md` (plan),
+`23-phase6-live-runtime-validation.md` (validation report)
 
 **Packet type**: `PT_Visibility = 0x0B`
 - Wire format: GUID(16) + bHidden(1) + seq(4) + ts(8) — fixed 29 bytes per object
 - Distinct from rename: no callback recursion risk (`SetIsTemporarilyHiddenInEditor` fires no standard callback), fixed-length wire format, idempotent bool state
 - Follows identical architectural pattern: provenance → suppression → replay → observability
 
-### 4C — Future Phase 6 Features (NOT STARTED)
+### 4C — Hierarchy Replication Vertical Slice (IN PROGRESS — Stage 7/14)
 
-- Collection/folder structure sync
-- Duplicate detection and handling
-- Object create/delete lifecycle management from editor
+**Status**: Implementation in progress. Stages 0-7 complete: enum reservation, parser branch, sequence tracker,
+replay rejection, validation foundation, basic AttachToActor/DetachFromActor, deferred queue + orphan lifecycle.
+Blender-side emission and cycle detection not yet implemented.
+**Docs**: `24-phase6D-hierarchy-scope-lock.md` (scope), `25-phase6D-vertical-slice-hierarchy.md` (design),
+`26-phase6D-hierarchy-implementation-plan.md` (14-stage plan)
+- **PT_HIERARCHY = 0x0D**: Fixed 44 bytes per object: ChildGuid(16)+ParentGuid(16)+seq(4)+ts(8)
+- Follows identical architectural pattern: provenance → suppression → replay → observability
+- First dependency-sensitive lane: graph consistency, orphan lifecycle, deferred retry queue (bounded 2048)
+- 40 standalone tests pass; 7 integration tests skip (require UE editor)
+
+### 4D — Future Phase 6 Features (BLOCKED / PLANNED)
+
+- Lifecycle/delete replication (BLOCKED — hierarchy must stabilize first, see dependency chain below)
+- Collection/folder structure sync (PLANNED — requires hierarchy + lifecycle)
+- Duplicate detection and handling (PLANNED — requires all prior lanes)
 
 All protocol parsing, queue safety, reconnect handling, asset identity,
 stress infrastructure, and runtime stabilization work was completed in
@@ -450,16 +461,16 @@ Console command `UE.LiveSync.AssetHealth` prints:
 
 ### 5.2 — Rename Replication
 
-**Status**: COMPLETED (Phase 6A). See Phase 6 section above.
-**Packet type**: `PT_Rename = 0x0C` (implemented in Phase 6A)
+**Status**: STABILIZED (Phase 6A/6B). See Phase 6 section above.
+**Packet type**: `PT_Rename = 0x0C` (implemented in Phase 6A, stabilized in Phase 6B)
 
 UE side uses `AActor::SetActorLabel(NewName)` with full provenance
-tracking, suppression, and replay safety (see Phase 6A for details).
+tracking, suppression, and replay safety (see Phase 6A/6B for details).
 
 ### 5.3 — Visibility Sync
 
-**Status**: PLANNED (Phase 6B). See Phase 6 section above.
-**Packet type**: `PT_Visibility = 0x0B` (planned for Phase 6B)
+**Status**: STABILIZED (Phase 6C). See Phase 6 section above.
+**Packet type**: `PT_Visibility = 0x0B` (stabilized in Phase 6C)
 
 Editor hidden-state replication (`SetIsTemporarilyHiddenInEditor`).
 See `Docs/Architecture/20-phase6-visibility-scope-lock.md` for scope
@@ -470,7 +481,7 @@ full design.
 
 Blender collections can be mapped to UE folder actors (empty actors for organization):
 
-**Packet type**: `PT_Folder = 0x0F`
+**Packet type**: `PT_Folder = 0x0F` (provisional — 0x0F is Reserved for future semantic lane per canonical conventions; this assignment will be confirmed during Phase 6F design)
 
 - Collection name → folder actor label
 - Collection hierarchy → folder actor hierarchy
@@ -516,7 +527,7 @@ Blender undo/redo can rewind object state. After undo:
 
 | File | What |
 |------|------|
-| `SyncTypes.h` | `PT_Rename = 0x0D`, `PT_Visibility = 0x0E`, `PT_Folder = 0x0F` |
+| `SyncTypes.h` | `PT_Rename = 0x0C`, `PT_Visibility = 0x0B`, `PT_Hierarchy = 0x0D` |
 | `network.py` | Serialize rename, visibility, folder packets |
 | `sync.py` | Poll `obj.name`, `obj.hide_get()`, detect duplicates, collection scan |
 | `UELiveSyncSubsystem.cpp` | `HandleRename()`, `HandleVisibility()`, `HandleFolder()`, grace-period delete |
@@ -1003,7 +1014,7 @@ Simultaneous animation from Blender and UE Sequencer creates conflicting authori
 
 **Mitigations**: Strict threading model (documented in `AGENTS.md` and `04-threading-model.md`). No UObject access from network thread. Bounded queues for cross-thread communication. Editor async tasks for asset operations.
 
-### 11.7 — Remaining Concern: Variable-Length Protocol Fields (Phase 6B+)
+### 11.7 — Remaining Concern: Variable-Length Protocol Fields (Phase 6+)
 
 Variable-length strings in the protocol (mesh paths, material paths, names) will add parsing complexity when introduced in future subphases:
 
@@ -1011,7 +1022,7 @@ Variable-length strings in the protocol (mesh paths, material paths, names) will
 - UTF-8 encoding requires validation
 - String comparison for change detection is slower than `memcmp` on fixed structs
 
-**Mitigation**: Phase 6A avoids this entirely with fixed-size 33B PT_AssetDef payload. Phase 6B+ will use length-prefixed strings with max length check (4096 bytes). UTF-8 validation on receive.
+**Mitigation**: Phase 6A avoids this entirely with fixed-size 33B PT_AssetDef payload. Phase 6+ uses length-prefixed strings with max length check (4096 bytes). UTF-8 validation on receive.
 
 ---
 
@@ -1030,7 +1041,7 @@ Variable-length strings in the protocol (mesh paths, material paths, names) will
 | Byte | Type | Phase | Status |
 |------|------|-------|--------|
 | 0x01 | PT_Transform | 3 | Production-stable |
-| 0x02 | PT_Hierarchy | 3 | Reserved (not implemented) |
+| 0x02 | PT_Reserved_02 | 3 | Legacy stub — unused |
 | 0x03 | PT_Create | 3 | Production-stable |
 | 0x04 | PT_Delete | 3 | Production-stable |
 | 0x05 | PT_Material | 3 | Reserved (original stub) |
@@ -1039,11 +1050,11 @@ Variable-length strings in the protocol (mesh paths, material paths, names) will
 | 0x08 | PT_AssetDef | 5D | Active |
 | 0x09 | PT_BeginSnapshot | 5A | Production-stable |
 | 0x0A | PT_EndSnapshot | 5A | Production-stable |
-| 0x0B | PT_Visibility | 6A | Planned (architecture complete) |
-| 0x0C | PT_Rename | 6A | Active (stabilized) |
-| 0x0D | PT_MaterialAssign | 6C | Planned |
-| 0x0E | PT_MeshUpdate | 6C | Planned |
-| 0x0F | PT_Folder | 6C | Planned |
+| 0x0B | PT_Visibility | 6C | Stabilized |
+| 0x0C | PT_Rename | 6A/6B | Active (stabilized) |
+| 0x0D | PT_Hierarchy | 6D | In Progress (Stage 7) |
+| 0x0E | Reserved | — | Future semantic lane |
+| 0x0F | Reserved | — | Future semantic lane |
 | 0x10 | PT_Timeline | 7 | Research |
 | 0x11 | PT_Camera | 7 | Research |
 | 0x12 | PT_Keyframe | 7 | Research |
@@ -1059,4 +1070,4 @@ Variable-length strings in the protocol (mesh paths, material paths, names) will
 
 ---
 
-*End of consolidated roadmap. Updated 2026-05-25 (Phase 5E complete, Phase 6 NOT STARTED).*
+*End of consolidated roadmap. Updated 2026-05-26 (Phase 5E complete, Phase 6 ACTIVE: Rename STABILIZED · Visibility STABILIZED · Hierarchy IN PROGRESS).*

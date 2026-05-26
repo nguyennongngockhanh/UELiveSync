@@ -1,7 +1,7 @@
 # Phase 6 — Visibility Replication Scope Lock
 
-> **Created**: 2026-05-25
-> **Status**: IMPLEMENTED — Phase 6C Complete (2026-05-25)
+> **Created**: 2026-05-25 · **Updated**: 2026-05-26
+> **Status**: STABILIZED — Phase 6C Complete (2026-05-26)
 > **Predecessor**: Rename Vertical Slice (STABILIZED, `19-phase6-vertical-slice-rename.md`)
 >
 > This document defines the exact boundaries for the SECOND Phase 6

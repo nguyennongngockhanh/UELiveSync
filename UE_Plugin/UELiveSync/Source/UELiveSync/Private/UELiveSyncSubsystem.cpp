@@ -133,11 +133,98 @@ struct FScopedVisibilitySuppression
     }
 };
 
+// --- Delete suppression scope ---
+// RAII guard following semantic event conventions. Added for
+// architectural completeness — delete has no recursive callback
+// risk currently, but all semantic lanes require suppression
+// infrastructure for future-proofing.
+struct FScopedDeleteSuppression
+{
+    FString GuidStr;
+    FScopedDeleteSuppression(const FGuid& InGuid)
+        : GuidStr(InGuid.ToString(EGuidFormats::Digits))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[DELETE] Enter suppression scope (GUID=%s)"),
+            *GuidStr);
+    }
+    ~FScopedDeleteSuppression()
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[DELETE] Exit suppression scope (GUID=%s)"),
+            *GuidStr);
+    }
+};
+
 // --- Rename sequence tracker (single subsystem-level instance) ---
 FRenameSequenceTracker GRenameSequences;
 
 // --- Visibility sequence tracker (single subsystem-level instance) ---
 FVisibilitySequenceTracker GVisibilitySequences;
+
+// --- Hierarchy sequence tracker (single subsystem-level instance) ---
+FHierarchySequenceTracker GHierarchySequences;
+
+// --- Delete sequence tracker (Phase 6E, single subsystem-level instance) ---
+FDeleteSequenceTracker GDeleteSequences;
+
+// --- Delete tombstone map (Phase 6E, GUID → last delete sequence) ---
+// Bounded at 2048 entries with FIFO eviction on overflow.
+// Game-thread only. Cleared on StopNetworkThread and ConsoleReset.
+TMap<FGuid, uint32> GDeleteTombstoneMap;
+
+// Maximum number of tombstone entries before eviction
+static constexpr uint32 MAX_TOMBSTONE_ENTRIES = 2048;
+
+// Insertion-order FIFO queue for tombstone eviction
+static TArray<FGuid> GDeleteTombstoneOrder;
+
+// Phase 6E Stage 4: tombstone helper APIs
+// =========================================================
+// IsTombstoned: O(1) check — used by all semantic handlers to
+//   reject packets for deleted GUIDs.
+// AddTombstone: insert with bounded FIFO eviction at 2048.
+//   Called only after successful actor destruction (Stage 5).
+// RemoveTombstone: remove entry (for future use, e.g., undo).
+// =========================================================
+static bool IsTombstoned(const FGuid& Guid)
+{
+    return GDeleteTombstoneMap.Contains(Guid);
+}
+
+static void AddTombstone(const FGuid& Guid, uint32 SequenceNumber)
+{
+    if (GDeleteTombstoneMap.Num() >= MAX_TOMBSTONE_ENTRIES)
+    {
+        if (GDeleteTombstoneOrder.Num() == 0)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[TOMBSTONE] FIFO eviction failed — order queue empty "
+                     "(map has %d entries but order is empty)"),
+                GDeleteTombstoneMap.Num());
+            return;
+        }
+        FGuid EvictGuid = GDeleteTombstoneOrder[0];
+        GDeleteTombstoneOrder.RemoveAt(0);
+        GDeleteTombstoneMap.Remove(EvictGuid);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[TOMBSTONE] FIFO evict: GUID=%s — max entries (%u) reached"),
+            *EvictGuid.ToString(EGuidFormats::Digits),
+            MAX_TOMBSTONE_ENTRIES);
+    }
+    GDeleteTombstoneOrder.Add(Guid);
+    GDeleteTombstoneMap.Add(Guid, SequenceNumber);
+    UE_LOG(LogLiveSync, Verbose,
+        TEXT("[TOMBSTONE] Added: GUID=%s Seq=%u"),
+        *Guid.ToString(EGuidFormats::Digits),
+        SequenceNumber);
+}
+
+static void RemoveTombstone(const FGuid& Guid)
+{
+    GDeleteTombstoneOrder.Remove(Guid);
+    GDeleteTombstoneMap.Remove(Guid);
+}
 
 #include "HAL/IConsoleManager.h"
 
@@ -1154,6 +1241,20 @@ bool UUELiveSyncSubsystem::Tick(
             UE_LOG(LogLiveSync, Log, TEXT("SKIP  Pipeline: ResolvePendingAttachments (disabled by CVar)"));
         }
 
+        // =================================================
+        // SEMANTIC HIERARCHY DEFERRED RESOLUTION (Phase 6D)
+        // Runs AFTER runtime ResolvePendingAttachments so the
+        // runtime graph is settled before semantic attachements
+        // are applied (FINDING-009).
+        // =================================================
+
+        UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolveHierarchyAttachments"));
+        {
+            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolveHierarchyAttachments);
+            ResolveHierarchyAttachments();
+        }
+        UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolveHierarchyAttachments"));
+
         if (!CVarLiveSyncDisableRecovery.GetValueOnGameThread())
         {
             UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: RecoverMissingActors"));
@@ -1467,6 +1568,22 @@ StopNetworkThread()
 
     GRenameSequences.LastSequence.Empty();
     GVisibilitySequences.LastSequence.Empty();
+    GHierarchySequences.LastSequence.Empty();
+    PendingHierarchyAttachments.Empty();
+
+    // Phase 6E: clear delete state — tombstones MUST NOT survive reconnect.
+    // Replay after reconnect starts with clean tracker + empty tombstone map.
+    GDeleteSequences.Clear();
+    GDeleteTombstoneMap.Empty();
+    GDeleteTombstoneOrder.Empty();
+    DeferredDeleteQueue.Empty();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[HIERARCHY] PendingHierarchyAttachments cleared (StopNetworkThread)"));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[DELETE][RECONNECT] Sequence tracker, tombstone map, order queue,"
+             " and deferred queue cleared — tombstones do NOT survive reconnect"));
 
     uint64 EndCycles =
         FPlatformTime::Cycles64();
@@ -1930,7 +2047,7 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C };
+            { 0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
@@ -2242,6 +2359,183 @@ ProcessBinaryPacket(
                          RenameSequence, RenameTimestamp, Origin);
         }
 
+        Stats.PacketsProcessed.fetch_add(
+            1,
+            std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // HIERARCHY PACKET (Phase 6D — Semantic Event)
+    // =====================================================
+    // Wire format (fixed 44 bytes per object):
+    //   ChildGuid(16) + ParentGuid(16) + seq(4) + ts(8)
+    //
+    // This is a SEPARATE handler from the transform object
+    // loop below. Hierarchy is a discrete semantic editor
+    // event (attachment intent), NOT a state-stream packet.
+    //
+    // All-zero ParentGuid = detach-to-root semantic mutation.
+    // See Docs/Architecture/24-phase6D-hierarchy-scope-lock.md
+    //
+    // Multiple hierarchy objects may be batched in one packet.
+    // =====================================================
+
+    if (PacketType == PT_Hierarchy)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessHierarchyPackets);
+
+        for (uint32 i = 0; i < ObjectCount; i++)
+        {
+            if (Ptr + 44 > PacketEnd)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[HIERARCHY] Truncated packet: needs 44 bytes but only %lld available"),
+                    (int64)(PacketEnd - Ptr));
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+
+            FGuid ChildGuid;
+            FMemory::Memcpy(&ChildGuid, Ptr, sizeof(FGuid));
+            Ptr += sizeof(FGuid);
+
+            FGuid ParentGuid;
+            FMemory::Memcpy(&ParentGuid, Ptr, sizeof(FGuid));
+            Ptr += sizeof(FGuid);
+
+            uint32 HierarchySequence;
+            FMemory::Memcpy(&HierarchySequence, Ptr, sizeof(uint32));
+            Ptr += sizeof(uint32);
+
+            double HierarchyTimestamp;
+            FMemory::Memcpy(&HierarchyTimestamp, Ptr, sizeof(double));
+            Ptr += sizeof(double);
+
+            EChangeOrigin Origin = EChangeOrigin::RemoteReplicated;
+            if (bInSnapshotBuild)
+            {
+                Origin = EChangeOrigin::Replay;
+            }
+
+            HandleHierarchy(
+                ChildGuid,
+                ParentGuid,
+                HierarchySequence,
+                HierarchyTimestamp,
+                Origin);
+        }
+
+        Stats.HierarchyPackets.fetch_add(
+            1,
+            std::memory_order_relaxed);
+        Stats.PacketsProcessed.fetch_add(
+            1,
+            std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // PHASE 6E: LIFECYCLE/DELETE REPLICATION (PT_Delete_V5)
+    // =====================================================
+    // First identity-destruction semantic lane. Fixed 28-byte
+    // payload per object: TargetGuid(16) + seq(4) + ts(8).
+    //
+    // Stage 3 implementation: parser isolation + log-only handler.
+    // NO actor destruction, NO tombstone insertion, NO graph mutation.
+    //
+    // See Docs/Architecture/29-phase6E-lifecycle-scope-lock.md
+    // =====================================================
+
+    if (PacketType == 0x0E)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessDeletePackets);
+
+        constexpr int32 DeleteObjSize = 28;
+        const int32 DeleteCount = ObjectCount;
+
+        // ---- BOUNDARY CHECK: payload multiple of 28 ----
+        if (PayloadSize % DeleteObjSize != 0)
+        {
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[DELETE] Malformed packet — payload %d bytes (expected multiple of %d)"),
+                PayloadSize, DeleteObjSize);
+            return;
+        }
+
+        // ---- PER-OBJECT PARSE LOOP ----
+        for (uint32 i = 0; i < DeleteCount; i++)
+        {
+            if (Ptr + DeleteObjSize > PacketEnd)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[DELETE] Truncated packet: needs %d bytes but only %lld available"),
+                    DeleteObjSize, (int64)(PacketEnd - Ptr));
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+
+            FGuid TargetGuid;
+            FMemory::Memcpy(&TargetGuid, Ptr, sizeof(FGuid));
+            Ptr += sizeof(FGuid);
+
+            // ---- ALL-ZERO GUID CHECK ----
+            if (!TargetGuid.IsValid())
+            {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[DELETE] Malformed packet — all-zero GUID at object index %d"), i);
+                continue;
+            }
+
+            uint32 DeleteSequence;
+            FMemory::Memcpy(&DeleteSequence, Ptr, sizeof(uint32));
+            Ptr += sizeof(uint32);
+
+            double DeleteTimestamp;
+            FMemory::Memcpy(&DeleteTimestamp, Ptr, sizeof(double));
+            Ptr += sizeof(double);
+
+            EChangeOrigin DeleteOrigin = EChangeOrigin::RemoteReplicated;
+            if (bInSnapshotBuild)
+            {
+                DeleteOrigin = EChangeOrigin::Replay;
+            }
+
+            // Stage 7: defer delete during snapshot rebuild;
+            // processed after EndSnapshot in insertion order.
+            if (bInSnapshotBuild)
+            {
+                if (DeferredDeleteQueue.Num() >= MAX_TOMBSTONE_ENTRIES)
+                {
+                    DeferredDeleteQueue.RemoveAt(0);
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[DELETE] Deferred queue overflow — "
+                             "evicting oldest entry (maximum %u)"),
+                        MAX_TOMBSTONE_ENTRIES);
+                }
+                DeferredDeleteQueue.Add({TargetGuid, DeleteSequence, DeleteTimestamp});
+                Stats.DeleteDeferredDuringSnapshot.fetch_add(1, std::memory_order_relaxed);
+
+                UE_LOG(LogLiveSync, Verbose,
+                    TEXT("[DELETE] Deferred during snapshot: GUID=%s Seq=%u"),
+                    *TargetGuid.ToString(EGuidFormats::Digits),
+                    DeleteSequence);
+            }
+            else
+            {
+                HandleDelete(
+                    TargetGuid,
+                    DeleteSequence,
+                    DeleteTimestamp,
+                    DeleteOrigin);
+            }
+        }
+
+        Stats.DeletePackets.fetch_add(
+            1,
+            std::memory_order_relaxed);
         Stats.PacketsProcessed.fetch_add(
             1,
             std::memory_order_relaxed);
@@ -4607,6 +4901,19 @@ HandleCreateObject(
         return;
     }
 
+    // =====================================================
+    // (STAGE 4) REJECT: Tombstoned GUID — object was deleted
+    // =====================================================
+
+    if (IsTombstoned(Guid))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[CREATE][TOMBSTONE] GUID=%s — blocked by tombstone"),
+            *Guid.ToString(EGuidFormats::Digits));
+        Stats.DeleteTombstoneRejections.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
     AActor* Existing =
         FindActorFast(Guid);
 
@@ -4952,6 +5259,19 @@ HandleRename(
     TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleRename);
 
     // =====================================================
+    // (STAGE 4) REJECT: Tombstoned GUID — object was deleted
+    // =====================================================
+
+    if (IsTombstoned(Guid))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[RENAME][TOMBSTONE] GUID=%s — blocked by tombstone"),
+            *Guid.ToString(EGuidFormats::Digits));
+        Stats.DeleteTombstoneRejections.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
     // REJECT: No tracked actor for this GUID
     // =====================================================
 
@@ -5045,6 +5365,19 @@ HandleVisibility(
     TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleVisibility);
 
     // =====================================================
+    // (STAGE 4) REJECT: Tombstoned GUID — object was deleted
+    // =====================================================
+
+    if (IsTombstoned(Guid))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[VISIBILITY][TOMBSTONE] GUID=%s — blocked by tombstone"),
+            *Guid.ToString(EGuidFormats::Digits));
+        Stats.DeleteTombstoneRejections.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
     // REJECT: No tracked actor for this GUID
     // =====================================================
 
@@ -5118,6 +5451,813 @@ HandleVisibility(
 
 
 // =========================================================
+// HANDLE HIERARCHY (Phase 6D — Semantic Event)
+// =========================================================
+// Stage 4 implementation: replay rejection layer only.
+// Attachment application is deferred to Stage 6+.
+// See Docs/Architecture/24-phase6D-hierarchy-scope-lock.md
+// and 26-phase6D-hierarchy-implementation-plan.md
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleHierarchy(
+    const FGuid& ChildGuid,
+    const FGuid& ParentGuid,
+    uint32 SequenceNumber,
+    double Timestamp,
+    EChangeOrigin Origin)
+{
+    CHECK_GAME_THREAD();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleHierarchy);
+
+    // =====================================================
+    // (STAGE 4) REJECT: Tombstoned GUID — object was deleted
+    // =====================================================
+
+    if (IsTombstoned(ChildGuid) || IsTombstoned(ParentGuid))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[HIERARCHY][TOMBSTONE] ChildGuid=%s ParentGuid=%s "
+                 "— blocked by tombstone"),
+            *ChildGuid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits));
+        Stats.DeleteTombstoneRejections.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // REJECT: No tracked actor for child GUID
+    // =====================================================
+
+    AActor* ChildActor = FindActorFast(ChildGuid);
+    if (!ChildActor)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY] Rejected — no tracked actor for ChildGuid=%s "
+                 "(ParentGuid=%s, Seq=%u, Origin=%d)"),
+            *ChildGuid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits),
+            SequenceNumber, (int32)Origin);
+        Stats.HierarchyStaleRejections.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // REJECT: Stale or duplicate sequence number
+    // =====================================================
+
+    if (GHierarchySequences.IsStaleOrDuplicate(ChildGuid, SequenceNumber))
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY] Rejected — stale/duplicate sequence "
+                 "ChildGuid=%s ParentGuid=%s Seq=%u (last=%u)"),
+            *ChildGuid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits),
+            SequenceNumber,
+            GHierarchySequences.LastSequence.FindRef(ChildGuid));
+        Stats.HierarchyStaleRejections.fetch_add(1, std::memory_order_relaxed);
+
+        if (Origin == EChangeOrigin::Replay)
+        {
+            Stats.HierarchyReplaySkipped.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        return;
+    }
+
+    // =====================================================
+    // STAGE 6-7: GRAPH MUTATION — Attach / Detach
+    // =====================================================
+    // First guarded graph mutation layer. Issues attachment
+    // intent via AttachToActor/DetachFromActor using raw UE
+    // APIs (NOT the frozen AttachToParent/DetachFromParent
+    // wrappers which modify FSyncTransformState and have
+    // deferred queues).
+    //
+    // All-zero ParentGuid = semantic detach-to-root.
+    // Missing parent = DEFERRED to bounded retry queue
+    //   (Stage 7: PendingHierarchyAttachments, max 2048,
+    //    deterministic retry cadence, FINDING-001/002).
+    // Already attached to correct parent = no-op.
+    //
+    // Cycle detection added in Stage 9.
+    // =====================================================
+
+    const bool bIsDetach = !ParentGuid.IsValid();
+
+    if (bIsDetach)
+    {
+        // =================================================
+        // DETACH PATH: all-zero ParentGuid
+        // =================================================
+        // Detach has zero dependencies — always applied
+        // immediately. No deferral possible.
+        // =================================================
+
+        AActor* CurrentParent = ChildActor->GetAttachParentActor();
+        if (CurrentParent != nullptr)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[HIERARCHY][DETACH] BEGIN DetachFromActor "
+                     "child=%s current_parent=%s"),
+                *ChildGuid.ToString(EGuidFormats::Digits),
+                *CurrentParent->GetName());
+
+            ChildActor->DetachFromActor(
+                FDetachmentTransformRules::KeepWorldTransform);
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[HIERARCHY][DETACH] END   DetachFromActor "
+                     "child=%s — now root"),
+                *ChildGuid.ToString(EGuidFormats::Digits));
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[HIERARCHY][DETACH] No-op: child=%s already root"),
+                *ChildGuid.ToString(EGuidFormats::Digits));
+        }
+
+        // Update tracker — detach is a processed event
+        GHierarchySequences.Update(ChildGuid, SequenceNumber);
+
+        if (Origin == EChangeOrigin::RemoteReplicated)
+        {
+            Stats.HierarchyProcessed.fetch_add(1, std::memory_order_relaxed);
+        }
+        else if (Origin == EChangeOrigin::Replay)
+        {
+            Stats.HierarchyReplayApplied.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        return;
+    }
+
+    // =====================================================
+    // ATTACH PATH: non-zero ParentGuid
+    // =====================================================
+
+    AActor* ParentActor = FindActorFast(ParentGuid);
+    if (!ParentActor)
+    {
+        // =================================================
+        // DEFERRED — parent not found
+        // =================================================
+        // Push to bounded deferred retry queue. The resolver
+        // (ResolveHierarchyAttachments) will retry each frame
+        // with deterministic cadence and replay-safe checks.
+        //
+        // No hidden graph state — queue only stores unresolved
+        // semantic intent. No FSyncTransformState modifications.
+        // =================================================
+
+        // FINDING-002 dedup: if this child already has a pending
+        // entry, update it instead of adding a duplicate.
+        FPendingHierarchyAttachment* Existing =
+            FindPendingHierarchyAttachment(ChildGuid);
+
+        if (Existing)
+        {
+            if (SequenceNumber > Existing->Sequence)
+            {
+                uint32 OldSeq = Existing->Sequence;
+                Existing->Sequence = SequenceNumber;
+                Existing->ParentGuid = ParentGuid;
+                Existing->RetryCount = 0;
+                Existing->CreatedTime = FPlatformTime::Seconds();
+                Existing->Origin = Origin;
+                Existing->State = EOrphanState::DEFERRED;  // Reset to deferred
+
+                UE_LOG(LogLiveSync, Verbose,
+                    TEXT("[HIERARCHY][ORPHAN] RETRYING — updated pending: "
+                         "child=%s (seq %u → %u, state=DEFERRED)"),
+                    *ChildGuid.ToString(EGuidFormats::Digits),
+                    OldSeq, SequenceNumber);
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Verbose,
+                    TEXT("[HIERARCHY][ORPHAN] STALE_REJECTED — deferred "
+                         "update skipped: child=%s (incoming %u <= "
+                         "existing %u)"),
+                    *ChildGuid.ToString(EGuidFormats::Digits),
+                    SequenceNumber, Existing->Sequence);
+            }
+
+            // Do NOT update sequence tracker — event was not applied.
+            return;
+        }
+
+        // Queue overflow: FIFO eviction
+        if (PendingHierarchyAttachments.Num() >= 2048)
+        {
+            FPendingHierarchyAttachment Evicted =
+                PendingHierarchyAttachments[0];
+            PendingHierarchyAttachments.RemoveAt(0);
+
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[HIERARCHY][ORPHAN] EVICTED — deferred queue overflow "
+                     "— evicting child=%s (state=EVICTED)"),
+                *Evicted.ChildGuid.ToString(EGuidFormats::Digits));
+
+            Stats.HierarchyOrphans.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        FPendingHierarchyAttachment NewEntry;
+        NewEntry.ChildGuid = ChildGuid;
+        NewEntry.ParentGuid = ParentGuid;
+        NewEntry.Sequence = SequenceNumber;
+        NewEntry.CreatedTime = FPlatformTime::Seconds();
+        NewEntry.RetryCount = 0;
+        NewEntry.Origin = Origin;
+        NewEntry.State = EOrphanState::DEFERRED;
+
+        PendingHierarchyAttachments.Add(NewEntry);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[HIERARCHY][ORPHAN] DEFERRED — enqueued: child=%s parent=%s "
+                 "Seq=%u (queue size=%d)"),
+            *ChildGuid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits),
+            SequenceNumber,
+            PendingHierarchyAttachments.Num());
+            *ChildGuid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits),
+            SequenceNumber,
+            PendingHierarchyAttachments.Num());
+
+        // Do NOT update sequence tracker — event was not applied yet.
+        // The tracker is updated when the deferred entry resolves.
+        return;
+    }
+
+    // =====================================================
+    // STALE ACTOR VALIDATION BEFORE ATTACH
+    // =====================================================
+
+    if (!IsValid(ChildActor) || !IsValid(ParentActor))
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY] Stale actor — child=%s valid=%d "
+                 "parent=%s valid=%d — aborting attach"),
+            *ChildGuid.ToString(EGuidFormats::Digits),
+            IsValid(ChildActor) ? 1 : 0,
+            *ParentGuid.ToString(EGuidFormats::Digits),
+            IsValid(ParentActor) ? 1 : 0);
+
+        Stats.HierarchyStaleRejections.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // STAGE 9: CYCLE DETECTION
+    // =====================================================
+    // Explicit semantic cycle detection before any graph
+    // mutation. Uses the LIVE attachment graph only — no
+    // shadow graph, no intent graph, no cached topology.
+    //
+    // Self-cycles, direct 2-cycles, and indirect N-cycles
+    // are all detected by a bounded parent-chain walk.
+    // Max depth = 256 to prevent infinite loops.
+    //
+    // On cycle: reject immediately, increment counter, log
+    // with depth and path, NO deferral, NO auto-repair.
+    // =====================================================
+
+    if (WouldCreateHierarchyCycle(ChildGuid, ParentGuid))
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY][CYCLE] Rejected: child=%s parent=%s "
+                 "— cycle detected, no deferral"),
+            *ChildGuid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits));
+
+        Stats.HierarchyCycles.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // EXISTING-PARENT SHORT-CIRCUIT
+    // =====================================================
+    // Avoid redundant graph churn. If the child is already
+    // attached to the requested parent, skip the mutation.
+    // Still update the tracker to prevent stale re-sends.
+    // =====================================================
+
+    if (ChildActor->GetAttachParentActor() == ParentActor)
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[HIERARCHY][ATTACH] No-op: child=%s already "
+                 "attached to parent=%s — skipping"),
+            *ChildGuid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits));
+
+        GHierarchySequences.Update(ChildGuid, SequenceNumber);
+
+        if (Origin == EChangeOrigin::RemoteReplicated)
+        {
+            Stats.HierarchyProcessed.fetch_add(1, std::memory_order_relaxed);
+        }
+        else if (Origin == EChangeOrigin::Replay)
+        {
+            Stats.HierarchyReplayApplied.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        return;
+    }
+
+    // =====================================================
+    // APPLY ATTACHMENT
+    // =====================================================
+    // Raw AttachToActor with KeepWorldTransform.
+    // Does NOT go through the frozen AttachToParent wrapper
+    // (which would add cycle detection, deferred queue,
+    // FSyncTransformState modification, and oscillation
+    // detection — all deferred to Stage 7+).
+    // =====================================================
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[HIERARCHY][ATTACH] BEGIN AttachToActor "
+             "child=%s parent=%s"),
+        *ChildGuid.ToString(EGuidFormats::Digits),
+        *ParentGuid.ToString(EGuidFormats::Digits));
+
+    ChildActor->AttachToActor(
+        ParentActor,
+        FAttachmentTransformRules::KeepWorldTransform);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[HIERARCHY][ATTACH] END   AttachToActor "
+             "child=%s parent=%s"),
+        *ChildGuid.ToString(EGuidFormats::Digits),
+        *ParentGuid.ToString(EGuidFormats::Digits));
+
+    // =====================================================
+    // UPDATE TRACKER AND COUNTERS
+    // =====================================================
+
+    GHierarchySequences.Update(ChildGuid, SequenceNumber);
+
+    if (Origin == EChangeOrigin::RemoteReplicated)
+    {
+        Stats.HierarchyProcessed.fetch_add(1, std::memory_order_relaxed);
+    }
+    else if (Origin == EChangeOrigin::Replay)
+    {
+        Stats.HierarchyReplayApplied.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+
+// =========================================================
+// FIND PENDING HIERARCHY ATTACHMENT (by child GUID)
+// =========================================================
+
+UUELiveSyncSubsystem::FPendingHierarchyAttachment*
+UUELiveSyncSubsystem::FindPendingHierarchyAttachment(
+    const FGuid& ChildGuid)
+{
+    for (int32 i = 0; i < PendingHierarchyAttachments.Num(); i++)
+    {
+        if (PendingHierarchyAttachments[i].ChildGuid == ChildGuid)
+        {
+            return &PendingHierarchyAttachments[i];
+        }
+    }
+    return nullptr;
+}
+
+
+// =========================================================
+// RESOLVE HIERARCHY ATTACHMENTS (Phase 6D, Stage 7)
+// =========================================================
+// Deterministic deferred resolution for hierarchy events
+// whose parent was not available at packet time.
+//
+// Called once per Tick after ResolvePendingAttachments
+// (runtime resolver runs first, semantic runs second).
+//
+// Retry cadence: 10 fast (every frame) + 10 slow (every 5th
+// frame) = max 20 retries. Hard timeout at 60 total frames.
+//
+// Each deferred entry is re-checked against the sequence
+// tracker (FINDING-001) before application to prevent stale
+// graph mutations.
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ResolveHierarchyAttachments()
+{
+    CHECK_GAME_THREAD();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolveHierarchyAttachments);
+
+    if (PendingHierarchyAttachments.Num() == 0)
+    {
+        return;
+    }
+
+    // Iterate forward, rebuilding remaining entries.
+    // This avoids O(n) removal and preserves determinism.
+    TArray<FPendingHierarchyAttachment> Remaining;
+    Remaining.Reserve(PendingHierarchyAttachments.Num());
+
+    for (FPendingHierarchyAttachment& Entry :
+         PendingHierarchyAttachments)
+    {
+        // ---- STATE TRANSITION: DEFERRED → RETRYING ----
+        Entry.State = EOrphanState::RETRYING;
+
+        // ---- Hard timeout check (60 frames max) ----
+        if (Entry.RetryCount >= 60)
+        {
+            Entry.State = EOrphanState::EVICTED;
+
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[HIERARCHY][ORPHAN] EVICTED — TIMEOUT: child=%s "
+                     "parent=%s (state=EVICTED, retries=%d)"),
+                *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+                *Entry.ParentGuid.ToString(EGuidFormats::Digits),
+                Entry.RetryCount);
+
+            Stats.HierarchyOrphans.fetch_add(1, std::memory_order_relaxed);
+            continue; // Drop — do NOT re-queue
+        }
+
+        // ---- Retry cadence check ----
+        // Fast phase: retries 0-9 (10 total), every frame
+        // Slow phase: retries 10-19 (10 total), every 5th frame
+        // After 20: retries 20-59, only timeout applies
+        const bool bInFastPhase = Entry.RetryCount < 10;
+        const bool bInSlowPhase = Entry.RetryCount >= 10 && Entry.RetryCount < 20;
+
+        bool bShouldRetryThisFrame = false;
+        if (bInFastPhase)
+        {
+            bShouldRetryThisFrame = true; // Every frame
+        }
+        else if (bInSlowPhase)
+        {
+            // Every 5th frame: retry on frames 0, 5, 10, 15, ...
+            bShouldRetryThisFrame = (Entry.RetryCount % 5 == 0);
+        }
+        // After 20 retries: only timeout will evict
+
+        if (!bShouldRetryThisFrame)
+        {
+            // Not a retry frame — re-queue and try later
+            FPendingHierarchyAttachment UpdatedEntry = Entry;
+            UpdatedEntry.RetryCount = Entry.RetryCount + 1;
+            Remaining.Add(UpdatedEntry);
+            continue;
+        }
+
+        // ---- FINDING-001: Re-validate sequence against tracker ----
+        if (GHierarchySequences.IsStaleOrDuplicate(
+                Entry.ChildGuid, Entry.Sequence))
+        {
+            Entry.State = EOrphanState::STALE_REJECTED;
+
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[HIERARCHY][ORPHAN] STALE_REJECTED — deferred "
+                     "resolution stale: child=%s (deferred seq=%u, "
+                     "current last=%u)"),
+                *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+                Entry.Sequence,
+                GHierarchySequences.LastSequence.FindRef(Entry.ChildGuid));
+
+            Stats.HierarchyStaleRejections.fetch_add(1, std::memory_order_relaxed);
+            continue; // Drop — do NOT apply, do NOT re-queue
+        }
+
+        // ---- Check if parent is now available ----
+        AActor* ParentActor = FindActorFast(Entry.ParentGuid);
+        if (!ParentActor)
+        {
+            // Parent still not available — re-queue
+            FPendingHierarchyAttachment UpdatedEntry = Entry;
+            UpdatedEntry.RetryCount = Entry.RetryCount + 1;
+            Remaining.Add(UpdatedEntry);
+
+            if (bEnableVerboseSyncLogs &&
+                Entry.RetryCount > 0 &&
+                Entry.RetryCount % 10 == 0)
+            {
+                const TCHAR* PhaseStr =
+                    bInFastPhase ? TEXT("fast") : TEXT("slow");
+                UE_LOG(LogLiveSync, Verbose,
+                    TEXT("[HIERARCHY][ORPHAN] RETRYING — child=%s "
+                         "parent=%s (retry=%d, phase=%s)"),
+                    *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+                    *Entry.ParentGuid.ToString(EGuidFormats::Digits),
+                    Entry.RetryCount, PhaseStr);
+            }
+            continue;
+        }
+
+        // ---- Parent found — apply attachment ----
+        AActor* ChildActor = FindActorFast(Entry.ChildGuid);
+        if (!ChildActor)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[HIERARCHY][ORPHAN] EVICTED — child deleted while "
+                     "deferred: child=%s — dropping"),
+                *Entry.ChildGuid.ToString(EGuidFormats::Digits));
+            continue;
+        }
+
+        // Stale actor safety check
+        if (!IsValid(ChildActor) || !IsValid(ParentActor))
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[HIERARCHY][ORPHAN] EVICTED — stale actor during "
+                     "resolution: child=%s parent=%s — dropping"),
+                *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+                *Entry.ParentGuid.ToString(EGuidFormats::Digits));
+            continue;
+        }
+
+        // ---- Stage 9: Cycle detection on deferred resolution ----
+        if (WouldCreateHierarchyCycle(Entry.ChildGuid, Entry.ParentGuid))
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[HIERARCHY][CYCLE] Deferred resolution rejected: "
+                     "child=%s parent=%s — cycle detected"),
+                *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+                *Entry.ParentGuid.ToString(EGuidFormats::Digits));
+
+            Stats.HierarchyCycles.fetch_add(1, std::memory_order_relaxed);
+            continue; // Drop — do NOT apply, do NOT re-queue
+        }
+
+        // Existing-parent short-circuit (avoid redundant graph churn)
+        if (ChildActor->GetAttachParentActor() == ParentActor)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[HIERARCHY][ORPHAN] RESOLVED — no-op: child=%s "
+                     "already attached to parent=%s (retries=%d)"),
+                *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+                *Entry.ParentGuid.ToString(EGuidFormats::Digits),
+                Entry.RetryCount);
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[HIERARCHY][ORPHAN] RESOLVED — BEGIN AttachToActor "
+                     "child=%s parent=%s (resolved after %d retries)"),
+                *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+                *Entry.ParentGuid.ToString(EGuidFormats::Digits),
+                Entry.RetryCount);
+
+            ChildActor->AttachToActor(
+                ParentActor,
+                FAttachmentTransformRules::KeepWorldTransform);
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[HIERARCHY][ORPHAN] RESOLVED — END   AttachToActor "
+                     "child=%s parent=%s"),
+                *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+                *Entry.ParentGuid.ToString(EGuidFormats::Digits));
+        }
+
+        // ---- Update sequence tracker ----
+        GHierarchySequences.Update(Entry.ChildGuid, Entry.Sequence);
+
+        // ---- Count resolution + update state ----
+        Stats.HierarchyDeferredResolved.fetch_add(1, std::memory_order_relaxed);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[HIERARCHY][ORPHAN] RESOLVED: child=%s parent=%s "
+                 "(after %d retries, seq=%u)"),
+            *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+            *Entry.ParentGuid.ToString(EGuidFormats::Digits),
+            Entry.RetryCount, Entry.Sequence);
+    }
+
+    PendingHierarchyAttachments = MoveTemp(Remaining);
+}
+
+
+// =========================================================
+// STAGE 9: EXPLICIT CYCLE DETECTION
+// =========================================================
+// Bounded parent-chain cycle detection for the hierarchy
+// semantic lane. Uses LIVE attachment graph only — no shadow
+// graph, no intent graph, no cached topology.
+//
+// Detection types:
+//   Self-cycle:     Child == Parent → immediate reject
+//   Direct 2-cycle: Parent is attached to Child → reject
+//   Indirect cycle: Walking parent chain from Parent upward
+//                   reaches Child → reject
+//
+// Max walk depth = 256. If we hit the bound, reject as a
+// safety measure (corrupted graph guard).
+//
+// On cycle: caller is responsible for incrementing the
+// HierarchyCycles counter and rejecting the event.
+// =========================================================
+
+bool UUELiveSyncSubsystem::
+WouldCreateHierarchyCycle(
+    const FGuid& ChildGuid,
+    const FGuid& ParentGuid)
+{
+    CHECK_GAME_THREAD();
+
+    // ---- Self-cycle: A → A ----
+    if (ChildGuid == ParentGuid)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY][CYCLE] Self-cycle: child=parent=%s "
+                 "(depth=0)"),
+            *ChildGuid.ToString(EGuidFormats::Digits));
+        return true;
+    }
+
+    // ---- Walk parent chain from ParentGuid upward ----
+    // Uses live GetAttachParentActor() only.
+    // Max depth = 256 hard bound.
+    static constexpr int32 MAX_CYCLE_DEPTH = 256;
+
+    AActor* CurrentActor = FindActorFast(ParentGuid);
+    int32 Depth = 0;
+
+    while (CurrentActor != nullptr && Depth < MAX_CYCLE_DEPTH)
+    {
+        FGuid CurrentGuid = FindGuidForActor(CurrentActor);
+        if (CurrentGuid == ChildGuid)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[HIERARCHY][CYCLE] Chain cycle: child=%s "
+                     "parent=%s (depth=%d)"),
+                *ChildGuid.ToString(EGuidFormats::Digits),
+                *ParentGuid.ToString(EGuidFormats::Digits),
+                Depth + 1);
+            return true;
+        }
+
+        CurrentActor = CurrentActor->GetAttachParentActor();
+        Depth++;
+    }
+
+    if (Depth >= MAX_CYCLE_DEPTH)
+    {
+        // Safety bound — if we can't verify acyclicity in
+        // 256 steps, reject to prevent infinite loops on
+        // corrupted graphs.
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY][CYCLE] Depth limit exceeded: "
+                 "child=%s parent=%s (depth=%d) — rejecting"),
+            *ChildGuid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits),
+            Depth);
+        return true;
+    }
+
+    return false; // No cycle detected — safe to attach
+}
+
+
+// =========================================================
+// HANDLE DELETE (Phase 6E — Identity-Destruction Event)
+// =========================================================
+// Stage 5/6: LIVE DESTRUCTION ENABLED
+//   — Sequence and tombstone checks (Stage 3)
+//   — Actor destruction (Stage 5)
+//   — Tombstone insertion (Stage 5)
+//   — Child detach to root (Stage 6)
+//   — ActorCache removal (Stage 5)
+//   — Counters active (Stage 3)
+//
+// Stage 3 comment markers preserved for traceability.
+// See Docs/Architecture/33-phase6E-lifecycle-implementation-plan.md §3.5
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleDelete(
+    const FGuid& TargetGuid,
+    uint32 SequenceNumber,
+    double Timestamp,
+    EChangeOrigin Origin)
+{
+    CHECK_GAME_THREAD();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleDelete);
+
+    // =====================================================
+    // (STAGE 3) REJECT: Stale or duplicate sequence number
+    // =====================================================
+
+    if (GDeleteSequences.IsStaleOrDuplicate(TargetGuid, SequenceNumber))
+    {
+        Stats.DeleteStaleRejections.fetch_add(1, std::memory_order_relaxed);
+
+        if (Origin == EChangeOrigin::Replay)
+        {
+            Stats.DeleteReplaySkipped.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[DELETE][STALE] Rejected — stale/duplicate sequence "
+                 "GUID=%s Seq=%u (last=%u, Origin=%d)"),
+            *TargetGuid.ToString(EGuidFormats::Digits),
+            SequenceNumber,
+            GDeleteSequences.LastSequence.FindRef(TargetGuid),
+            (int32)Origin);
+        return;
+    }
+
+    // =====================================================
+    // (STAGE 3) CHECK: Tombstone — no-op if already deleted
+    // =====================================================
+
+    if (GDeleteTombstoneMap.Contains(TargetGuid))
+    {
+        Stats.DeleteTombstoneRejections.fetch_add(1, std::memory_order_relaxed);
+
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[DELETE][TOMBSTONE] GUID=%s Seq=%u — already tombstoned, discarding"),
+            *TargetGuid.ToString(EGuidFormats::Digits),
+            SequenceNumber);
+        return;
+    }
+
+    // =====================================================
+    // (STAGE 3) CHECK: ActorCache
+    // =====================================================
+
+    AActor* TargetActor = FindActorFast(TargetGuid);
+    if (!TargetActor)
+    {
+        Stats.DeleteMissingActor.fetch_add(1, std::memory_order_relaxed);
+
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[DELETE][MISSING] GUID=%s Seq=%u — actor not in ActorCache"),
+            *TargetGuid.ToString(EGuidFormats::Digits),
+            SequenceNumber);
+        return;
+    }
+
+    // =====================================================
+    // (STAGE 5+6) DESTROY ACTOR + INSERT TOMBSTONE
+    // =====================================================
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[DELETE][%s] Destroying actor GUID=%s Name=%s "
+             "Seq=%u"),
+        Origin == EChangeOrigin::RemoteReplicated ? TEXT("APPLY") :
+        Origin == EChangeOrigin::Replay ? TEXT("REPLAY") :
+        TEXT("APPLY"),
+        *TargetGuid.ToString(EGuidFormats::Digits),
+        *TargetActor->GetName(),
+        SequenceNumber);
+
+    // Stage 6: Detach all children to root before destroying parent.
+    // Uses raw UE API (GetAttachedActors). Does NOT update hierarchy
+    // tracker or recursively destroy — children become free-floating
+    // root actors. Logged for observability.
+    {
+        TArray<AActor*> AttachedChildren;
+        TargetActor->GetAttachedActors(AttachedChildren);
+        for (AActor* Child : AttachedChildren)
+        {
+            Child->DetachFromActor(
+                FDetachmentTransformRules::KeepWorldTransform);
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[DELETE][DETACH] Child detached to root: "
+                     "ChildName=%s ParentGuid=%s"),
+                *Child->GetName(),
+                *TargetGuid.ToString(EGuidFormats::Digits));
+        }
+    }
+
+    // Stage 5: Insert tombstone BEFORE destruction to prevent race
+    // conditions where a CREATE arrives for the same GUID before
+    // the actor is fully removed from the world.
+    AddTombstone(TargetGuid, SequenceNumber);
+
+    // Stage 5: Remove from ActorCache
+    ActorCache.Remove(TargetGuid);
+
+    // Stage 5: Destroy the actor
+    TargetActor->Destroy();
+
+    // Stage 5: Update sequence tracker to prevent stale replay
+    GDeleteSequences.Update(TargetGuid, SequenceNumber);
+
+    // Stage 5: Apply counters
+    if (Origin == EChangeOrigin::RemoteReplicated)
+    {
+        Stats.DeleteProcessed.fetch_add(1, std::memory_order_relaxed);
+    }
+    else if (Origin == EChangeOrigin::Replay)
+    {
+        Stats.DeleteReplayApplied.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+
+// =========================================================
 // HANDLE ASSET DEF (V5)
 // =========================================================
 
@@ -5138,6 +6278,19 @@ HandleAssetDef(
         Stats.AssetDefsSkipped.fetch_add(
             1,
             std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // (STAGE 4) REJECT: Tombstoned GUID — object was deleted
+    // =====================================================
+
+    if (IsTombstoned(Guid))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[ASSETDEF][TOMBSTONE] GUID=%s — blocked by tombstone"),
+            *Guid.ToString(EGuidFormats::Digits));
+        Stats.DeleteTombstoneRejections.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
@@ -5476,6 +6629,34 @@ HandleEndSnapshot()
         Log,
         TEXT("Snapshot build ended — flushed %d pending attachments"),
         PendingAttachments.Num());
+
+    // Clear semantic hierarchy deferred queue (don't carry across sessions)
+    PendingHierarchyAttachments.Empty();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[HIERARCHY] PendingHierarchyAttachments cleared (EndSnapshot)"));
+
+    // Phase 6E: process deferred deletes, then clear queue
+    // Ordering guarantee: deferred deletes processed BEFORE transient
+    // replay state is cleared. Snapshot replay is authoritative after
+    // EndSnapshot — stale replay cannot mutate runtime.
+    if (DeferredDeleteQueue.Num() > 0)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessDeferredDeletes);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[DELETE] Processing %d deferred deletes after EndSnapshot"),
+            DeferredDeleteQueue.Num());
+
+        for (const FDeferredDelete& Del : DeferredDeleteQueue)
+        {
+            HandleDelete(Del.TargetGuid, Del.Sequence, Del.Timestamp, EChangeOrigin::Replay);
+        }
+        DeferredDeleteQueue.Empty();
+
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[DELETE] Deferred queue cleared after processing"));
+    }
 }
 
 
@@ -7251,6 +8432,42 @@ ConsoleReset()
 
     UE_LOG(LogLiveSync, Log,
         TEXT("[VISIBILITY] Replay tracker reset (ConsoleReset)"));
+
+    // Hierarchy diagnostics reset (Phase 6D)
+    Stats.HierarchyPackets.store(0, std::memory_order_relaxed);
+    Stats.HierarchyProcessed.store(0, std::memory_order_relaxed);
+    Stats.HierarchyStaleRejections.store(0, std::memory_order_relaxed);
+    Stats.HierarchyReplayApplied.store(0, std::memory_order_relaxed);
+    Stats.HierarchyReplaySkipped.store(0, std::memory_order_relaxed);
+    Stats.HierarchyOrphans.store(0, std::memory_order_relaxed);
+    Stats.HierarchyCycles.store(0, std::memory_order_relaxed);
+    Stats.HierarchyDeferredResolved.store(0, std::memory_order_relaxed);
+    GHierarchySequences.LastSequence.Empty();
+    PendingHierarchyAttachments.Empty();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[HIERARCHY] Replay tracker reset (ConsoleReset)"));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[HIERARCHY] PendingHierarchyAttachments cleared (ConsoleReset)"));
+
+    // Lifecycle/delete diagnostics reset (Phase 6E)
+    Stats.DeletePackets.store(0, std::memory_order_relaxed);
+    Stats.DeleteProcessed.store(0, std::memory_order_relaxed);
+    Stats.DeleteReplayApplied.store(0, std::memory_order_relaxed);
+    Stats.DeleteReplaySkipped.store(0, std::memory_order_relaxed);
+    Stats.DeleteStaleRejections.store(0, std::memory_order_relaxed);
+    Stats.DeleteTombstoneRejections.store(0, std::memory_order_relaxed);
+    Stats.DeleteMissingActor.store(0, std::memory_order_relaxed);
+    Stats.DeleteDeferredDuringSnapshot.store(0, std::memory_order_relaxed);
+    GDeleteSequences.Clear();
+    GDeleteTombstoneMap.Empty();
+    GDeleteTombstoneOrder.Empty();
+    DeferredDeleteQueue.Empty();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[DELETE][RESET] Sequence tracker, tombstone map, order queue,"
+             " and deferred queue cleared (ConsoleReset)"));
 
     AssetMetadata.Empty();
     AssetPathCache.Empty();

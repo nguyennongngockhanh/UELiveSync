@@ -19,6 +19,8 @@ try:
         serialize_object_v3,
         serialize_delete_v3,
         serialize_rename,
+        serialize_hierarchy,
+        serialize_delete,
         is_connected,
         get_last_error,
         get_last_error_severity,
@@ -38,6 +40,8 @@ try:
         PT_EndSnapshot,
         PT_AssetDef,
         PT_Rename,
+        PT_Hierarchy,
+        PT_Delete_V5,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
         serialize_asset_identity,
@@ -52,6 +56,8 @@ except ImportError:
         serialize_object_v3,
         serialize_delete_v3,
         serialize_rename,
+        serialize_hierarchy,
+        serialize_delete,
         is_connected,
         get_last_error,
         get_last_error_severity,
@@ -71,6 +77,8 @@ except ImportError:
         PT_EndSnapshot,
         PT_AssetDef,
         PT_Rename,
+        PT_Hierarchy,
+        PT_Delete_V5,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
         serialize_asset_identity,
@@ -94,6 +102,15 @@ _last_object_names = {}
 
 # Phase 6: Per-GUID last visibility state for visibility toggle detection
 _last_visibility_state = {}
+
+# Phase 6D: Per-GUID last parent GUID for hierarchy attach/detach/reparent detection
+_last_parent_guid = {}
+
+# Phase 6E: Set of known GUIDs from end of previous tick.
+# Used for delete detection: GUIDs present in _known_guids but absent
+# from tracked_objects at start of tick = Blender-deleted objects.
+# Cleared on start_sync, stop_sync, and reconnect to prevent false emits.
+_known_guids = set()
 
 tracked_objects = {}
 
@@ -454,6 +471,29 @@ def get_parent_guid(obj):
     return None
 
 
+def _get_parent_depth(guid, parent_map, depth_cache, max_depth=256):
+    """Compute parent-chain depth for snapshot ordering (0 = root).
+
+    Uses memoized depth_cache for O(N) total across all objects.
+    Bounded at max_depth to prevent infinite loops from cycles.
+    """
+    if guid in depth_cache:
+        return depth_cache[guid]
+    visited = set()
+    depth = 0
+    cur = guid
+    while cur in parent_map and parent_map[cur] is not None:
+        if cur in visited:
+            break
+        visited.add(cur)
+        depth += 1
+        cur = parent_map[cur]
+        if depth > max_depth:
+            break
+    depth_cache[guid] = depth
+    return depth
+
+
 # =========================================================
 # TRANSFORM COMPARISON
 # =========================================================
@@ -651,6 +691,7 @@ def check_updates():
     global _last_heartbeat_time
     global _last_object_count
     global _scan_counter
+    global _known_guids
 
     if not timer_running:
         return 0.016
@@ -680,6 +721,11 @@ def check_updates():
 
         last_sent_transforms.clear()
 
+        # Phase 6E: clear known GUIDs to prevent false delete emissions
+        # on the first tick after reconnect.
+        global _known_guids
+        _known_guids.clear()
+
         if _verbose_logging:
             print(
                 "[Snapshot] Reconnect detected,"
@@ -689,8 +735,25 @@ def check_updates():
         snapshot_roots = []
         snapshot_children = []
 
-        for guid, obj_data in list(
-            tracked_objects.items()):
+        # Depth-sort: build parent map, sort tracked objects by parent depth
+        # so that parents always precede children in snapshot emission.
+        _depth_parent_map = {}
+        for g, (o, _) in tracked_objects.items():
+            try:
+                _ = o.name
+            except ReferenceError:
+                continue
+            _depth_parent_map[g] = get_parent_guid(o)
+
+        _depth_cache = {}
+        _sorted_guids = sorted(
+            tracked_objects.items(),
+            key=lambda item: _get_parent_depth(
+                item[0], _depth_parent_map, _depth_cache
+            )
+        )
+
+        for guid, obj_data in _sorted_guids:
 
             obj, guid_obj = obj_data
 
@@ -747,6 +810,20 @@ def check_updates():
                     transform["scale"][:]
             }
 
+        if _verbose_logging and _sorted_guids:
+            depth_counts = {}
+            for g, _ in _sorted_guids:
+                d = _depth_cache.get(g, 0)
+                depth_counts[d] = depth_counts.get(d, 0) + 1
+            depth_summary = ", ".join(
+                f"depth{d}:{c}" for d, c in sorted(depth_counts.items())
+            )
+            print(
+                f"[Snapshot][ORDER] Depth distribution: "
+                f"{depth_summary} "
+                f"({len(snapshot_roots)} roots, {len(snapshot_children)} children)"
+            )
+
         if snapshot_roots:
 
             send_objects(
@@ -774,9 +851,11 @@ def check_updates():
     children_to_send = []
     children_create = []
     deletes_to_send = []
+    deletes_v5_to_send = []
     asset_defs_to_send = []
     renames_to_send = []
     vis_payloads_to_send = []
+    hierarchies_to_send = []
 
     # =====================================================
     # SCENE SCAN (only when object count changes or
@@ -817,6 +896,44 @@ def check_updates():
             scan_scene()
 
     # =====================================================
+    # PHASE 6E: DELETE DETECTION — track GUIDs that have
+    # disappeared from tracked_objects since last tick.
+    # These are Blender-deleted objects (removed by
+    # scan_scene or direct scene manipulation).
+    # Emit V5 delete semantic events for each.
+    #
+    # Does NOT emit on:
+    #   - startup (_known_guids is empty)
+    #   - reconnect (_known_guids cleared in reconnect block)
+    #   - stop_sync (timer not running)
+    # =====================================================
+
+    if _known_guids:
+
+        current_guids = set(tracked_objects.keys())
+        disappeared = _known_guids - current_guids
+
+        for guid in disappeared:
+
+            try:
+                guid_obj = UUID(guid)
+            except Exception:
+                continue
+
+            deletes_v5_to_send.append(
+                serialize_delete(guid_obj)
+            )
+
+            # Cleanup per-GUID state for deleted object
+            _last_object_names.pop(guid, None)
+            _last_visibility_state.pop(guid, None)
+            _last_parent_guid.pop(guid, None)
+            _last_mesh_identity.pop(guid, None)
+
+            if _verbose_logging:
+                print(f"[DELETE] Detected: GUID={guid} — emitted V5 delete")
+
+    # =====================================================
     # OBJECT ITERATION
     # =====================================================
 
@@ -835,9 +952,15 @@ def check_updates():
             _last_mesh_identity.pop(guid, None)
             _last_object_names.pop(guid, None)
             _last_visibility_state.pop(guid, None)
+            _last_parent_guid.pop(guid, None)
 
             deletes_to_send.append(
                 serialize_delete_v3(guid_obj)
+            )
+
+            # Phase 6E: also emit V5 delete for Phase 6E UE handler
+            deletes_v5_to_send.append(
+                serialize_delete(guid_obj)
             )
 
             continue
@@ -984,8 +1107,41 @@ def check_updates():
                     print(f"[VISIBILITY] GUID={guid} hidden={current_vis}")
             _last_visibility_state[guid] = current_vis
 
+            # Phase 6D: Hierarchy detection (semantic attach/detach/reparent)
+            # parent_guid is already computed above for transform serialization
+            current_parent_guid = parent_guid
+            prev_parent_guid = _last_parent_guid.get(guid)
+            if not is_first_send and guid in _last_parent_guid and prev_parent_guid != current_parent_guid:
+                parent_guid_obj_for_hierarchy = (
+                    UUID(current_parent_guid)
+                    if current_parent_guid else None
+                )
+                hierarchies_to_send.append(
+                    serialize_hierarchy(guid_obj, parent_guid_obj_for_hierarchy)
+                )
+                if _verbose_logging:
+                    parent_str = current_parent_guid if current_parent_guid else "(root)"
+                    prev_parent_str = prev_parent_guid if prev_parent_guid else "(root)"
+                    print(f"[HIERARCHY] GUID={guid} parent={prev_parent_str} → {parent_str}")
+            _last_parent_guid[guid] = current_parent_guid
+
     # =====================================================
-    # SEND DELETE PACKETS
+    # SEND DELETE PACKETS (Phase 6E V5 — identity-destruction)
+    # =====================================================
+
+    if deletes_v5_to_send:
+
+        if _verbose_logging:
+            print(f"[DELETE][SEND] Sending {len(deletes_v5_to_send)} V5 delete(s)")
+
+        send_objects(
+            deletes_v5_to_send,
+            packet_type=PT_Delete_V5,
+            version=LIVE_SYNC_VERSION_V5
+        )
+
+    # =====================================================
+    # SEND DELETE PACKETS (V3 legacy)
     # =====================================================
 
     if deletes_to_send:
@@ -1054,6 +1210,17 @@ def check_updates():
         )
 
     # =====================================================
+    # SEND HIERARCHY PACKETS (Phase 6D — Semantic Event)
+    # =====================================================
+
+    if hierarchies_to_send:
+
+        send_objects(
+            hierarchies_to_send,
+            packet_type=PT_Hierarchy
+        )
+
+    # =====================================================
     # SEND TRANSFORM PACKETS (existing objects, roots)
     # =====================================================
 
@@ -1117,6 +1284,11 @@ def check_updates():
             except Exception:
                 pass
 
+    # Phase 6E: Update known GUIDs for next tick's delete detection.
+    # Must happen AFTER all tracked_objects modifications (scan_scene,
+    # iteration, ReferenceError removals) to ensure accurate next-tick diff.
+    _known_guids = set(tracked_objects.keys())
+
     return 0.016
 
 
@@ -1146,9 +1318,24 @@ def rebind_all():
     roots = []
     children = []
 
-    for guid, obj_data in list(
-        tracked_objects.items()
-    ):
+    # Depth-sort: parents before children in snapshot emission
+    _rb_parent_map = {}
+    for g, (o, _) in tracked_objects.items():
+        try:
+            _ = o.name
+        except ReferenceError:
+            continue
+        _rb_parent_map[g] = get_parent_guid(o)
+
+    _rb_depth_cache = {}
+    _rb_sorted = sorted(
+        tracked_objects.items(),
+        key=lambda item: _get_parent_depth(
+            item[0], _rb_parent_map, _rb_depth_cache
+        )
+    )
+
+    for guid, obj_data in _rb_sorted:
 
         obj, guid_obj = obj_data
 
@@ -1328,10 +1515,12 @@ def start_sync():
     global _sync_start_time
     global _last_object_names
     global _last_visibility_state
+    global _last_parent_guid
 
     last_sent_transforms.clear()
     _last_object_names.clear()
     _last_visibility_state.clear()
+    _last_parent_guid.clear()
 
     tracked_objects.clear()
 
@@ -1396,10 +1585,14 @@ def stop_sync():
     global _timer_ref
     global _last_object_names
     global _last_visibility_state
+    global _last_parent_guid
+    global _known_guids
 
     timer_running = False
     _last_object_names.clear()
     _last_visibility_state.clear()
+    _last_parent_guid.clear()
+    _known_guids.clear()
 
     if _timer_ref is not None:
         try:

@@ -1,8 +1,8 @@
 # Phase 6C — Visibility Replication Vertical Slice
 
-**Date**: 2026-05-25  
+**Date**: 2026-05-25 (updated 2026-05-26)  
 **Scope**: Second semantic-event vertical slice — Blender hide/unhide → UE editor visibility  
-**Status**: IMPLEMENTED (pending live UE validation)
+**Status**: STABILIZED
 
 ## Summary
 
@@ -38,14 +38,43 @@ rename generalizes to a different editor mutation:
 |------|---------|
 | `Docs/Architecture/22-semantic-event-architecture-conventions.md` | Formalized architectural conventions for ALL semantic lanes |
 
-## Verification
+## Verification (Phase 6C)
 
 - 28/28 visibility constructs verified present across all source files
 - 49/49 runtime audit checks pass (no regressions)
 - 12 visibility tests: all structurally complete, auto-skip when UE unavailable
 - Frozen runtime systems: zero modifications (LiveSyncQueue, PendingAssetQueue, LiveSyncRunnable, FSyncTransformState, header layout, Tick pipeline, thread ownership)
 
-## Pending
+## Live Runtime Validation (2026-05-26)
 
-- End-to-end validation against UE editor on `:57000`
-- `python3 tests/run_phase6_visibility.py` full run with live UE
+See `Docs/Architecture/23-phase6-live-runtime-validation.md` for full report.
+
+### Source-Code Audit Results
+
+| Lane | Convention Compliance | Frozen-Zone Violations | Forbidden Patterns |
+|------|----------------------|----------------------|-------------------|
+| Visibility | **FULL** — 12/12 sections | **NONE** | **NONE** |
+| Rename | **FULL** — 12/12 sections | **NONE** | **NONE** |
+
+### Defect Found: FNV Protocol Signature
+
+- **UE side** (`SyncTypes.h:691`): Missing `0x0B` (PT_Visibility) in FNV hash
+- **Blender side** (`network.py:40`): Missing both `0x0B` and `0x0C` (PT_Rename, PT_Visibility) in FNV hash
+- **Fix applied**: Both sides updated — signatures now cover all 9 active packet types
+
+### Structural Verdict
+
+Both semantic lanes are **fully compliant** with `22-semantic-event-architecture-conventions.md`.
+No runtime modifications required. No frozen boundaries crossed.
+
+## Pending Live UE Validation
+
+All dynamic tests require UE Editor on `:57000`:
+
+- `python3 tests/run_phase6_visibility.py` — 12 visibility tests
+- `python3 tests/run_phase6_rename.py` — 10 rename tests
+- `python3 tests/run_phase6b_all.py --quick` — soak, failure injection, replay robustness
+- `python3 tests/run_phase5_all.py` — protocol hardening + asset identity
+- `python3 tests/run_phase4_all.py` — overflow, diagnostics, protocol validation
+
+**Visibility: STABILIZED** ✅

@@ -205,8 +205,8 @@ struct FSyncTransformState
 enum EPacketType : uint8
 {
     PT_Transform = 0x01,
-    PT_Hierarchy = 0x02,
-    PT_Create    = 0x03,
+    PT_Reserved_02 = 0x02,  // Legacy — was PT_Hierarchy in early Phase 3; unused
+    PT_Create      = 0x03,
     PT_Delete    = 0x04,
     PT_Material  = 0x05,
     PT_Mesh      = 0x06,
@@ -219,6 +219,14 @@ enum EPacketType : uint8
     // See Docs/Architecture/19-phase6-vertical-slice-rename.md
     PT_Visibility    = 0x0B,  // Semantic visibility toggle (discrete, NOT state stream)
     PT_Rename        = 0x0C,  // Semantic rename event (discrete, NOT state stream)
+
+    // Phase 6D: Hierarchy replication (semantic attachment event)
+    // See Docs/Architecture/24-phase6D-hierarchy-scope-lock.md
+    PT_Hierarchy     = 0x0D,  // Semantic attach/detach event (discrete, NOT state stream)
+
+    // Phase 6E: Lifecycle/delete replication (identity-destruction event)
+    // See Docs/Architecture/29-phase6E-lifecycle-scope-lock.md
+    PT_Delete_V5      = 0x0E,  // V5+ delete with sequence + tombstone semantics
 };
 
 // Phase 6: Provenance for editor-originating mutations
@@ -375,6 +383,26 @@ struct FLiveSyncStats
     std::atomic<int32> VisibilityStaleRejections{0};
     std::atomic<int32> VisibilityReplayApplied{0};
     std::atomic<int32> VisibilityReplaySkipped{0};
+
+    // --- Hierarchy diagnostics (Phase 6D, written by game thread) ---
+    std::atomic<int32> HierarchyPackets{0};            // Total PT_Hierarchy packets received
+    std::atomic<int32> HierarchyProcessed{0};          // Individual attach/detach events applied (live)
+    std::atomic<int32> HierarchyStaleRejections{0};    // Stale/duplicate sequence rejections
+    std::atomic<int32> HierarchyReplayApplied{0};      // Events applied from snapshot replay
+    std::atomic<int32> HierarchyReplaySkipped{0};      // Events skipped during replay (already up-to-date)
+    std::atomic<int32> HierarchyOrphans{0};            // Deferred retries — parent not yet found
+    std::atomic<int32> HierarchyCycles{0};             // Cycle detected and rejected
+    std::atomic<int32> HierarchyDeferredResolved{0};   // Deferred entries resolved (parent found)
+
+    // --- Lifecycle/delete diagnostics (Phase 6E, written by game thread) ---
+    std::atomic<int32> DeletePackets{0};               // Total PT_Delete_V5 packets received
+    std::atomic<int32> DeleteProcessed{0};             // Delete events accepted and applied (live)
+    std::atomic<int32> DeleteReplayApplied{0};         // Delete events applied from snapshot replay
+    std::atomic<int32> DeleteReplaySkipped{0};         // Delete events skipped during replay
+    std::atomic<int32> DeleteStaleRejections{0};       // Stale/duplicate sequence rejections
+    std::atomic<int32> DeleteTombstoneRejections{0};   // Packet blocked by tombstone check
+    std::atomic<int32> DeleteMissingActor{0};          // Delete for GUID not in ActorCache
+    std::atomic<int32> DeleteDeferredDuringSnapshot{0};// Delete deferred during snapshot replay (CREATE not yet processed)
 
     // --- Per-frame timing (written by game thread) ---
     double LastPacketTime = 0.0;
@@ -558,6 +586,111 @@ struct FVisibilitySequenceTracker
 
 
 // =========================================================
+// HIERARCHY PACKET (Phase 6D, PT_Hierarchy = 0x0D)
+// =========================================================
+// Discrete semantic editor-event payload for attachment intent.
+// NOT a state-stream packet — hierarchy changes are discrete
+// editor mutations, not continuously sampled values.
+//
+// Wire format (fixed 44 bytes per object):
+//   offset  size  field
+//   0       16    Child GUID (4 × uint32 LE)
+//   16      16    Parent GUID (4 × uint32 LE, all-zero = detach-to-root)
+//   32       4    sequence_number (uint32 LE, monotonic per-GUID)
+//   36       8    timestamp (double LE)
+//
+// Provenance (EChangeOrigin) is in-memory only — NOT on the wire.
+// See Docs/Architecture/24-phase6D-hierarchy-scope-lock.md
+//
+// Fixed payload: 16 + 16 + 4 + 8 = 44 bytes
+// =========================================================
+
+
+// =========================================================
+// HIERARCHY SEQUENCE TRACKER (Phase 6D)
+// =========================================================
+// Tracks the last-applied hierarchy sequence number per child
+// GUID for stale/duplicate replay rejection.
+//
+// Identity is child GUID (the object whose parent changes).
+// Bounded at 2048 entries, evicts oldest on overflow.
+// See Docs/Architecture/24-phase6D-hierarchy-scope-lock.md §5.1
+// =========================================================
+
+struct FHierarchySequenceTracker
+{
+    TMap<FGuid, uint32> LastSequence;
+    static constexpr uint32 MAX_TRACKED_GUIDS = 2048;
+
+    bool IsStaleOrDuplicate(const FGuid& ChildGuid, uint32 IncomingSeq)
+    {
+        if (const uint32* LastSeq = LastSequence.Find(ChildGuid))
+        {
+            return IncomingSeq <= *LastSeq;
+        }
+        return false;
+    }
+
+    void Update(const FGuid& ChildGuid, uint32 AppliedSeq)
+    {
+        if (LastSequence.Num() >= MAX_TRACKED_GUIDS)
+        {
+            LastSequence.Remove(LastSequence.CreateIterator().Key());
+        }
+        LastSequence.Add(ChildGuid, AppliedSeq);
+    }
+};
+
+
+// =========================================================
+// DELETE SEQUENCE TRACKER (Phase 6E, PT_Delete_V5 = 0x0E)
+// =========================================================
+// Tracks the last-applied delete sequence number per GUID
+// for stale/duplicate replay rejection.
+//
+// Identity is the target GUID (the object being deleted).
+// Bounded at 2048 entries, evicts oldest on overflow.
+// Cleared on StopNetworkThread and ConsoleReset.
+//
+// Three-barrier stale rejection:
+//   1. Sequence tracker (intra-connection)
+//   2. Tombstone map (intra-connection, after first delete)
+//   3. ActorCache existence check (cross-connection)
+//
+// See Docs/Architecture/29-phase6E-lifecycle-scope-lock.md §3.4
+// =========================================================
+
+struct FDeleteSequenceTracker
+{
+    TMap<FGuid, uint32> LastSequence;
+    static constexpr uint32 MAX_TRACKED_GUIDS = 2048;
+
+    bool IsStaleOrDuplicate(const FGuid& Guid, uint32 IncomingSeq)
+    {
+        if (const uint32* LastSeq = LastSequence.Find(Guid))
+        {
+            return IncomingSeq <= *LastSeq;
+        }
+        return false;
+    }
+
+    void Update(const FGuid& Guid, uint32 AppliedSeq)
+    {
+        if (LastSequence.Num() >= MAX_TRACKED_GUIDS)
+        {
+            LastSequence.Remove(LastSequence.CreateIterator().Key());
+        }
+        LastSequence.Add(Guid, AppliedSeq);
+    }
+
+    void Clear()
+    {
+        LastSequence.Empty();
+    }
+};
+
+
+// =========================================================
 // PROTOCOL CONSTANTS
 // =========================================================
 
@@ -684,11 +817,13 @@ static constexpr uint32
     // Object sizes
     H = fnv(H, 80); H = fnv(H, 81);
     H = fnv(H, 16); H = fnv(H, 33);
+    H = fnv(H, 28); // LIVE_SYNC_DELETE_V5_SIZE
     // Packet types
     H = fnv(H, 0x01); H = fnv(H, 0x03);
     H = fnv(H, 0x04); H = fnv(H, 0x07);
     H = fnv(H, 0x08); H = fnv(H, 0x09);
-    H = fnv(H, 0x0A); H = fnv(H, 0x0C);
+    H = fnv(H, 0x0A); H = fnv(H, 0x0B); H = fnv(H, 0x0C); H = fnv(H, 0x0D);
+    H = fnv(H, 0x0E); // PT_Delete_V5
 
     return H;
 }();
@@ -719,6 +854,31 @@ static_assert(
     LIVE_SYNC_V3_DELETE_SIZE == 16,
     "V3 delete must be exactly 16 bytes");
 
+// =========================================================
+// V5+ DELETE (PT_Delete_V5) OBJECT LAYOUT
+// 16 GUID (4 × uint32)
+//  4 SEQUENCE NUMBER (uint32 LE, monotonic per-GUID)
+//  8 TIMESTAMP (double LE)
+// =========================================================
+//
+// Wire format (fixed 28 bytes per object):
+//   offset  size  field
+//   0       16    Target GUID (4 × uint32 LE)
+//   16       4    sequence_number (uint32 LE, monotonic per-GUID)
+//   20       8    timestamp (double LE)
+//
+// Discrete terminal semantic mutation — NOT reversible, NOT a state stream.
+// See Docs/Architecture/29-phase6E-lifecycle-scope-lock.md §3.1
+// =========================================================
+
+static constexpr int32
+    LIVE_SYNC_DELETE_V5_SIZE =
+        28;
+
 static_assert(
     LIVE_SYNC_V5_ASSET_DEF_SIZE == 33,
     "V5 asset def must be exactly 33 bytes");
+
+static_assert(
+    LIVE_SYNC_DELETE_V5_SIZE == 28,
+    "V5+ delete must be exactly 28 bytes");

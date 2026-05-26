@@ -1,7 +1,7 @@
 # Phase 6 Minimal Vertical Slice — Rename Replication
 
 > **Created**: 2026-05-25
-> **Phase 5**: COMPLETE · **Phase 6**: NOT STARTED
+> **Phase 5**: COMPLETE · **Phase 6**: ACTIVE (Rename: STABILIZED via Phase 6A/6B)
 > **Runtime core**: FROZEN (`v0.5.0-stabilized`)
 >
 > This document defines the FIRST implementation slice for Phase 6.

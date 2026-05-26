@@ -185,6 +185,56 @@ private:
         EChangeOrigin Origin);
 
     // =====================================================
+    // HIERARCHY REPLICATION (Phase 6D — Semantic Event)
+    // See Docs/Architecture/24-phase6D-hierarchy-scope-lock.md
+    // =====================================================
+
+    // Stage 8: Orphan lifecycle formalization
+    enum class EOrphanState : uint8
+    {
+        DEFERRED       = 0,  // Just enqueued — intent recorded
+        RETRYING       = 1,  // Active retry (fast or slow phase)
+        RESOLVED       = 2,  // Parent found, attachment applied
+        EVICTED        = 3,  // Timeout or overflow — dropped
+        STALE_REJECTED = 4,  // Tracker advanced while deferred (FINDING-001)
+    };
+
+    struct FPendingHierarchyAttachment
+    {
+        FGuid ChildGuid;
+        FGuid ParentGuid;
+        uint32 Sequence;
+        double CreatedTime;
+        int32 RetryCount;
+        EChangeOrigin Origin;
+        EOrphanState State;  // Stage 8: explicit orphan lifecycle state
+    };
+
+    void HandleHierarchy(
+        const FGuid& ChildGuid,
+        const FGuid& ParentGuid,
+        uint32 SequenceNumber,
+        double Timestamp,
+        EChangeOrigin Origin);
+
+    void ResolveHierarchyAttachments();
+
+    // Stage 9: Explicit cycle detection — bounded parent-chain walk
+    bool WouldCreateHierarchyCycle(
+        const FGuid& ChildGuid,
+        const FGuid& ParentGuid);
+
+    // =====================================================
+    // LIFECYCLE/DELETE REPLICATION (Phase 6E)
+    // =====================================================
+
+    void HandleDelete(
+        const FGuid& TargetGuid,
+        uint32 SequenceNumber,
+        double Timestamp,
+        EChangeOrigin Origin);
+
+    // =====================================================
     // ASSET RESOLUTION (Phase 5D)
     // =====================================================
 
@@ -412,6 +462,42 @@ private:
 
     TArray<FPendingAttachment>
         PendingAttachments;
+
+    // =====================================================
+    // SEMANTIC HIERARCHY DEFERRED QUEUE (Phase 6D, Stage 7)
+    // See Docs/Architecture/26-phase6D-hierarchy-implementation-plan.md §4
+    // =====================================================
+    // Bounded deferred retry buffer for hierarchy attach events
+    // whose parent actor does not yet exist. NOT a hidden graph
+    // state machine — only stores unresolved semantic intent.
+    //
+    // Cleared on reconnect/ConsoleReset/EndSnapshot.
+    // =====================================================
+
+    TArray<FPendingHierarchyAttachment>
+        PendingHierarchyAttachments;
+
+    FPendingHierarchyAttachment*
+        FindPendingHierarchyAttachment(
+            const FGuid& ChildGuid);
+
+    // =====================================================
+    // LIFECYCLE/DELETE DEFERRED QUEUE (Phase 6E, Stage 9)
+    // =====================================================
+    // Delete packets received during snapshot replay whose
+    // target GUID's CREATE has not yet been processed.
+    // Processed in HandleEndSnapshot(), cleared on reconnect/reset.
+    // =====================================================
+
+    struct FDeferredDelete
+    {
+        FGuid TargetGuid;
+        uint32 Sequence;
+        double Timestamp;
+    };
+
+    TArray<FDeferredDelete>
+        DeferredDeleteQueue;
 
     // =====================================================
     // MISSING ACTOR RECOVERY

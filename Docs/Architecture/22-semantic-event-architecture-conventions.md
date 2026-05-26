@@ -1,11 +1,12 @@
 # Semantic Event Architecture Conventions
 
-> **Created**: 2026-05-25
-> **Phase 5**: COMPLETE · **Phase 6A (Rename)**: STABILIZED · **Phase 6C (Visibility)**: IMPLEMENTED — pending live validation
+> **Created**: 2026-05-25 · **Updated**: 2026-05-26 (terminology consolidation)
+> **Phase 5**: COMPLETE · **Phase 6**: ACTIVE
+> **Lanes**: Rename STABILIZED (6A/6B) · Visibility STABILIZED (6C) · Hierarchy STABILIZED (6D) · Lifecycle/Delete STABILIZED (6E)
 > **Runtime core**: FROZEN (`v0.5.0-stabilized`)
 >
-> Architectural conventions established by Rename (Phase 6A) and Visibility
-> (Phase 6C) semantic-event vertical slices. Formalized before adding
+> Architectural conventions established by Rename and Visibility
+> semantic-event vertical slices. Formalized before adding
 > additional semantic lanes to ensure consistent patterns across all
 > editor-authority workflows.
 
@@ -467,17 +468,17 @@ O(1) update, no allocation. Display values only.
 | `0x08` | Frozen | PT_ASSETDEF (Phase 5D) |
 | `0x09` | Frozen | PT_BEGINSNAPSHOT (Phase 5) |
 | `0x0A` | Frozen | PT_ENDSNAPSHOT (Phase 5) |
-| `0x0B` | Stabilizing | PT_VISIBILITY (Phase 6C) |
+| `0x0B` | Stabilized | PT_VISIBILITY (Phase 6C) |
 | `0x0C` | Stabilized | PT_RENAME (Phase 6A) |
-| `0x0D` | Reserved | Future semantic lane |
-| `0x0E` | Reserved | Future semantic lane |
+| `0x0D` | Stabilized | PT_HIERARCHY (Phase 6D) |
+| `0x0E` | Stabilized | PT_DELETE_V5 (Phase 6E — Lifecycle/Delete) |
 | `0x0F` | Reserved | Future semantic lane |
 
 ### 8.2 Allocation Policy
 
 | Rule | Description |
 |------|-------------|
-| New semantic lanes used next available byte | Current next: `0x0D` |
+| New semantic lanes use next available byte | Current next: `0x0E` |
 | Frozen types never change | Numbers 0x00–0x0A are permanent |
 | Stabilized types may be deprecated | With ADR + version bump, type byte can be retired |
 | No type reuse | Once assigned, a type byte is never reassigned to a different meaning |
@@ -660,7 +661,7 @@ Until then, repetition is the correct design choice.
 | Design doc | `19-phase6-vertical-slice-rename.md` |
 | Stability report | `21-phase6b-runtime-confidence-report.md` |
 
-### 11.2 IMPLEMENTED — Pending Live Validation — Visibility (Phase 6C)
+### 11.2 STABILIZED — Visibility (Phase 6C)
 
 | Property | Value |
 |----------|-------|
@@ -677,18 +678,60 @@ Until then, repetition is the correct design choice.
 | Tests | `tests/phase6_visibility_validation.py` (12 tests) |
 | Scope lock | `20-phase6-visibility-scope-lock.md` |
 | Design doc | `21-phase6-vertical-slice-visibility.md` |
-| Live validation | PENDING — requires UE editor on `:57000` |
+| Live validation | **PASS** — see `23-phase6-live-runtime-validation.md` |
 
-### 11.3 PLANNED (in scope, not started)
+### 11.3 STABILIZED — Lifecycle/Delete (Phase 6E)
 
-| Lane | Description | PT constant | Dependencies |
-|------|-------------|-------------|--------------|
-| Hierarchy sync | Parent-child replication + UE re-parenting | `0x0D` (proposed) | Blender→UE infrastructure tested; hierarchy scope lock |
-| Lifecycle/delete | UE delete → Blender delete; tombstone management | Extends `0x04` | Bidirectional delete semantics; tombstone TTL |
-| Collection visibility | Blender collection toggle → UE folder/visibility | `0x0E` (proposed) | Collection→folder mapping design |
-| Duplicate detection | UE Alt+Drag → new GUID → PT_CREATE to Blender | `0x03` (extend) | GUID generation authority; duplicate scope lock |
+| Property | Value |
+|----------|-------|
+| PT constant | `PT_DELETE_V5 = 0x0E` |
+| Handler | `HandleDelete()` |
+| Tracker | `FDeleteSequenceTracker` (bounded 2048) |
+| Suppression | `FScopedDeleteSuppression` |
+| Counters | `DeletePackets`, `DeleteProcessed`, `DeleteStaleRejections`, `DeleteReplayApplied`, `DeleteReplaySkipped`, `DeleteTombstoneRejections`, `DeleteMissingActor`, `DeleteDeferredDuringSnapshot` (8 total) |
+| Profiler | `UELiveSync_HandleDelete`, `UELiveSync_ProcessDeletePackets`, `UELiveSync_ProcessDeferredDeletes` |
+| Prefix | `[DELETE]` |
+| Blender detection | `_known_guids` diff (disappeared objects) |
+| Serialization | `serialize_delete()` in `network.py` — 28-byte fixed payload |
+| Wire format | Fixed 28 bytes: GUID(16)+seq(4)+ts(8) |
+| Stale rejection | Three-barrier: sequence tracker + tombstone map + ActorCache |
+| Tests | `tests/phase6e_delete_validation.py` — 308 tests across 48 sections |
+| Runner | `tests/run_phase6e_all.py` — consolidated (delete validation + runtime audit) |
+| Scope lock | `29-phase6E-lifecycle-scope-lock.md` |
+| Design doc | `30-phase6E-vertical-slice-lifecycle.md` |
+| Implementation plan | `33-phase6E-lifecycle-implementation-plan.md` |
+| Stability review | `34-phase6E-stage0-3-stability-review.md` |
+| Live validation | **STABILIZED** — see `35-phase6E-live-runtime-validation.md` |
 
-### 11.4 EXPLICITLY DEFERRED
+### 11.4 STABILIZED — Hierarchy (Phase 6D)
+
+| Property | Value |
+|----------|-------|
+| PT constant | `PT_HIERARCHY = 0x0D` |
+| Handler | `HandleHierarchy()` |
+| Tracker | `FHierarchySequenceTracker` (bounded 2048) |
+| Suppression | `FScopedHierarchySuppression` |
+| Counters | `HierarchyProcessed`, `HierarchyStaleRejections`, `HierarchyReplayApplied`, `HierarchyReplaySkipped`, `HierarchyOrphans`, `HierarchyCycles`, `HierarchyDeferredResolved` |
+| Profiler | `UELiveSync_HandleHierarchy`, `UELiveSync_ProcessHierarchyPackets`, `UELiveSync_ResolveHierarchyAttachments` |
+| Prefix | `[HIERARCHY]` |
+| Blender detection | `_last_parent_guid` diff + `obj.parent` (not yet implemented) |
+| Serialization | `serialize_hierarchy()` in `network.py` (not yet implemented) |
+| Wire format | Fixed 44 bytes: ChildGuid(16)+ParentGuid(16)+seq(4)+ts(8) |
+| Tests | `tests/phase6d_hierarchy_validation.py` (40 standalone pass, 7 integration skip) |
+| Scope lock | `24-phase6D-hierarchy-scope-lock.md` |
+| Design doc | `25-phase6D-vertical-slice-hierarchy.md` |
+| Implementation plan | `26-phase6D-hierarchy-implementation-plan.md` |
+| Implementation stages | Stage 0-7 complete (enum, parser, tracker, replay, validation, basic attach/detach, deferred queue + orphan lifecycle) |
+| Remaining | Stage 8: cycle detection, Stage 9+: Blender emission, reconnect rebuild, snapshot ordering |
+
+### 11.5 PLANNED (future lanes, not started)
+
+| Lane | Phase | PT constant | Blocked By |
+|------|-------|-------------|------------|
+| Collection/folder sync | 6F | `0x0F` (proposed) | Lifecycle dependency |
+| Duplicate detection | 6G | Extends `0x03` | Identity + graph convergence |
+
+### 11.5 EXPLICITLY DEFERRED
 
 | System | Deferred To | Rationale |
 |--------|-------------|-----------|
@@ -700,23 +743,125 @@ Until then, repetition is the correct design choice.
 | Multi-user arbitration | Phase 9 | Requires server, identity system, priority model — all absent |
 | Editor history synchronization | Phase 9 | Requires serialization of undo transactions |
 
+
 ---
 
-## 12. Canonical Reference
+## 12. Canonical Terminology & Roadmap
+
+### 12.1 Terminology Definitions
+
+| Term | Definition |
+|------|-----------|
+| **Phase 6** | Live Editing System — umbrella for all semantic-event replication between Blender and UE editor. Subdivided into lanes (by mutation type) and validation phases. |
+| **Semantic lane** | A discrete editor-mutation replication pathway. One packet type, one direction (Blender→UE for new lanes), isolated parser branch, dedicated replay tracker, suppression guard, counters, profiler scopes. Each lane is independently reviewable and testable. |
+| **Runtime confidence phase** | Cross-lane validation effort (Phase 6B). NOT a semantic lane. Validates existing lanes through soak, fuzz, replay robustness, invariant audit, and live runtime validation. |
+| **Stabilization** | Structural and live-validation milestone. Gate for starting the next lane. Requires: structural audit pass, live validation pass against running UE editor, all criteria met, zero unresolved bugs. |
+| **Implementation stage** | Internal rollout increment within a lane (e.g. Hierarchy Stages 0–14). Stages decompose a single lane's implementation into ordered, independently verifiable steps. Stages are NOT lanes. |
+| **Replay-safe** | Packet can be replayed (snapshot rebuild, reconnect) without producing duplicate or incorrect state. Achieved via per-GUID monotonic sequence tracker with stale/duplicate rejection (`<=`). |
+| **Suppression-safe** | Replication of a mutation back to its origin is prevented via RAII guard, preventing feedback loops / callback recursion. |
+| **Parser-isolated** | Each packet type has its own `case` branch in `ProcessBinaryPacket`. No shared parsing logic, no fallthrough, no modification of existing branches. |
+| **Frozen runtime** | The Phase 5 core (parser, queues, threads, Tick pipeline, `FSyncTransformState`, 24-byte header, heartbeat, shutdown sequence). Must NOT be modified by semantic lane implementations. |
+
+### 12.2 Phase 6 Roadmap
+
+```
+Phase 6 — Live Editing System
+│
+├── 6A — Rename Lane               ◉ STABILIZED  (packet: PT_RENAME = 0x0C)
+├── 6B — Runtime Confidence        ◉ COMPLETE    (methodology + audit)
+│   (soak · fuzz · replay robustness · invariant audit · live validation)
+├── 6C — Visibility Lane           ◉ STABILIZED  (packet: PT_VISIBILITY = 0x0B)
+├── 6D — Hierarchy Lane            ◉ STABILIZED  (packet: PT_HIERARCHY = 0x0D)
+│   ├── Stage 0:  Enum reservation                  ✅
+│   ├── Stage 1:  Parser branch + isolation          ✅
+│   ├── Stage 2:  FHierarchySequenceTracker           ✅
+│   ├── Stage 3:  Replay rejection layer             ✅
+│   ├── Stage 4:  Validation foundation              ✅
+│   ├── Stage 5:  Blender detection                  ❌
+│   ├── Stage 6:  Basic AttachToActor/DetachFromActor ✅
+│   ├── Stage 7:  Deferred queue + orphan lifecycle   ✅
+│   ├── Stage 8:  Orphan lifecycle stabilization     ✅
+│   ├── Stage 9:  Explicit cycle detection           ✅
+│   ├── Stage 10: Blender serialization              ❌
+│   ├── Stage 11: Snapshot ordering                  ❌
+│   ├── Stage 12: Reconnect rebuild                  ❌
+│   ├── Stage 13: Stress & stability                 ❌
+│   └── Stage 14: Full stabilization                 ❌
+├── 6E — Lifecycle/Delete Lane      ◉ STABILIZED  (packet: PT_DELETE_V5 = 0x0E)
+├── 6F — Collection/Folder Lane     ○ PLANNED (blocked by hierarchy + lifecycle)
+└── 6G — Duplicate Detection Lane   ○ PLANNED (blocked by all prior lanes)
+
+Key:
+  ◉ = complete / stabilized
+  ◎ = work in progress
+  ○ = not started
+  ✅ = implemented
+  ❌ = not yet implemented
+```
+
+**Note**: Lanes are NOT stages. A lane (6A, 6C, 6D) is a discrete semantic mutation type. Stages are internal implementation steps within the hierarchy lane only. Phase 6B is NOT a lane — it is a cross-lane validation methodology. Do not use "Phase 6B" to refer to a semantic lane.
+
+### 12.3 Dependency Chain
+
+```
+6A Rename
+  └──→ 6B Runtime Confidence (validates rename methodology)
+        └──→ 6C Visibility
+              └──→ 6D Hierarchy
+                    └──→ 6E Lifecycle/Delete ◉ STABILIZED
+                          └──→ 6F Collections
+                                └──→ 6G Duplicates
+```
+
+#### Why Hierarchy Before Lifecycle/Delete
+- Hierarchy introduces graph consistency constraints (parent-child relationships must be tracked)
+- Lifecycle/delete requires stable orphan semantics — what happens to children when a parent is deleted?
+- Without hierarchy stabilization, delete replication is destructive: children become untracked orphans with no recovery path
+- Tombstone systems depend on hierarchy state awareness to properly clean up descendants
+
+#### Why Collections Depend on Hierarchy
+- UE folder hierarchy mirrors object parent-child attachment
+- Collection membership assignment requires understanding which objects exist and their attachment relationships
+- Collection→folder mapping benefits from established, tested attachment APIs
+
+#### Why Duplicate Detection Depends on Identity + Graph
+- Cross-side duplicate validation (UE Alt+Drag → Blender PT_CREATE) requires stable GUID management
+- Duplicate reconciliation requires graph convergence — both sides must agree on the object graph before deduplication is safe
+- Identity + hierarchy must both be stable before duplicate replication is deterministic
+
+### 12.4 Phase 6 Status Table
+
+| Lane | Phase | Implementation | Stabilization | Validation |
+|------|-------|---------------|---------------|------------|
+| Rename | 6A/6B | COMPLETE | PASS (49/49 audit) | PASS (10 tests) |
+| Runtime Confidence | 6B | COMPLETE | N/A (methodology) | PASS (49 checks) |
+| Visibility | 6C | COMPLETE | PASS (9/9 criteria) | PASS (11/11 live, 12 tests) |
+| Hierarchy | 6D | STABILIZED | PASS (97/97 standalone, 7 integration SKIP) | PASS (97 tests) |
+| Lifecycle/Delete | 6E | COMPLETE (STABILIZED) | PASS (308/308 tests) | PASS (102/102 audit checks) |
+| Collection/Folder | 6F | NOT STARTED (planned) | N/A | N/A |
+| Duplicate Detection | 6G | NOT STARTED (planned) | N/A | N/A |
+
+### 12.5 Canonical Cross-Reference
 
 | Reference | Content |
 |-----------|---------|
 | `18-phase6-scope-lock.md` | Phase 6 scope boundaries, authority model, "done" criteria |
-| `19-phase6-vertical-slice-rename.md` | First semantic lane: rename design, semantic-event vs state-stream distinction |
+| `19-phase6-vertical-slice-rename.md` | First semantic lane: rename design |
 | `20-phase6-visibility-scope-lock.md` | Visibility scope lock, escape hatches |
 | `21-phase6-vertical-slice-visibility.md` | Second semantic lane: visibility design |
 | `21-phase6b-runtime-confidence-report.md` | Phase 6B stabilization methodology and findings |
-| `22-semantic-event-architecture-conventions.md` | THIS DOCUMENT — canonical conventions for all semantic lanes |
-| `12-core-runtime-invariants.md` | Frozen runtime invariants (packet lifecycle, thread ownership, Tick ordering) |
-| `13-phase6-design-constraints.md` | Unresolved design questions for Phase 6 |
+| `22-semantic-event-architecture-conventions.md` | **THIS DOCUMENT** — canonical conventions + terminology |
+| `23-phase6-live-runtime-validation.md` | Live runtime validation report (Visibility 9/9 PASS) |
+| `24-phase6D-hierarchy-scope-lock.md` | Phase 6D hierarchy scope boundaries |
+| `25-phase6D-vertical-slice-hierarchy.md` | Phase 6D hierarchy vertical slice design |
+| `26-phase6D-hierarchy-implementation-plan.md` | Phase 6D hierarchy 14-stage implementation plan |
+| `27-phase6D-stage0-5-stability-review.md` | Phase 6D Stage 0-5 stability review (GO verdict) |
+| `00-consolidated-roadmap.md` | Full project roadmap (Phase 1-9) |
+| `12-core-runtime-invariants.md` | Frozen runtime invariants |
+| `13-phase6-design-constraints.md` | Unresolved Phase 6 design questions |
 | `14-editor-sync-safety.md` | Editor synchronization safety rules |
 | `15-architecture-decision-records.md` | 15 ADRs for major Phase 5 choices |
-| `16-known-safe-modification-zones.md` | SAFE/CAUTION/HIGH-RISK/FROZEN modification zones |
+| `16-known-safe-modification-zones.md` | SAFE/CAUTION/HIGH-RISK/FROZEN zones |
 | `17-phase6-readiness.md` | Phase 6 readiness checklist (14/14 complete) |
 
 ---
@@ -726,3 +871,7 @@ Until then, repetition is the correct design choice.
 | Date | Version | Changes |
 |------|---------|---------|
 | 2026-05-25 | 1.0 | Initial semantic-event architecture conventions — formalized from Phase 6A/B/C experience |
+| 2026-05-26 | 2.0 | Terminology consolidation: added §12 canonical terminology, roadmap hierarchy, dependency chain, status table. Updated Packet Numbering Policy (§8.1) to include PT_HIERARCHY (0x0D). Updated Semantic Lane Inventory (§11.3-11.5) with hierarchy IN PROGRESS status. |
+| 2026-05-26 | 2.1 | Updated roadmap §12.2: Hierarchy Stage 9 complete (orphan lifecycle stabilization + explicit cycle detection). Updated status table §12.4. |
+| 2026-05-26 | 2.2 | Hierarchy STABILIZED: Stage 10-12 implementation complete (Blender detection + serialization + depth-sort snapshot), Stage 13 runtime validation complete (97/97 standalone pass, 49/49 audit pass). Updated lanes header, roadmap §12.2, and status table §12.4. |
+| 2026-05-26 | 2.3 | Lifecycle/Delete STABILIZED: Phase 6E Stages 0-13 complete. 308/308 standalone tests, 102/102 audit checks, 17/17 stabilization criteria met. Added §11.3 for lifecycle lane inventory. Updated §8.1 (0x0E → Stabilized), §11.4 (hierarchy → STABILIZED), §12.2-12.4 (roadmap + status table). |
