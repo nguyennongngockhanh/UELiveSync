@@ -1,5 +1,6 @@
 import socket
 import struct
+import sys
 import threading
 import queue
 import time
@@ -69,6 +70,15 @@ PT_Collection = 0x0F  # Phase 6F: collection/group replication (metadata-only)
 
 # Collection packet versioning (Phase 6F Stage 5)
 COLLECTION_PACKET_VERSION_V1 = 0x01
+
+# Collection operation type constants (must match SyncTypes.h)
+COLLECTION_OP_ADD = 0x01                 # Add actor to collection
+COLLECTION_OP_REMOVE = 0x02              # Remove actor from collection
+COLLECTION_OP_MOVE = 0x03                # Move actor between collections
+COLLECTION_OP_CLEAR = 0x04               # Clear all actors from collection
+COLLECTION_OP_COLLECTION_CREATE = 0x06   # Create a new collection
+COLLECTION_OP_COLLECTION_DELETE = 0x07   # Delete a collection
+COLLECTION_OP_COLLECTION_REPARENT = 0x08 # Reparent a collection
 
 # Collection packet payload sub-header size (version byte + reserved byte)
 LIVE_SYNC_COLLECTION_SUBHEADER_SIZE = 2
@@ -884,6 +894,11 @@ class LiveSyncClient:
         port=5000
     ):
 
+        print(
+            f"[LiveSync] Client constructor: host={host} port={port}",
+            flush=True
+        )
+
         self.host = host
         self.port = port
 
@@ -928,7 +943,11 @@ class LiveSyncClient:
             daemon=True
         )
 
+        print("[LiveSync] Starting sender thread...", flush=True)
+
         self._thread.start()
+
+        print("[LiveSync] Sender thread started, initiating connect...", flush=True)
 
         self.connect()
 
@@ -937,6 +956,8 @@ class LiveSyncClient:
     # =====================================================
 
     def _sender_loop(self):
+
+        print("[LiveSync] Sender thread started", flush=True)
 
         while self._running:
 
@@ -953,9 +974,11 @@ class LiveSyncClient:
 
                 data_len = len(data)
 
-                print(
-                    f"[SYNC-DBG] 4 Sender dequeued: {data_len} bytes"
-                )
+                if _network_verbose:
+                    print(
+                        f"[SYNC-DBG] 4 Sender dequeued: {data_len} bytes",
+                        flush=True
+                    )
 
                 with self._lock:
 
@@ -976,9 +999,11 @@ class LiveSyncClient:
 
                             self._runtime_stats["reconnect_count"] = self._reconnect_attempts
 
-                            print(
-                                f"[SYNC-DBG] 5 Socket send OK: {data_len} bytes"
-                            )
+                            if _network_verbose:
+                                print(
+                                    f"[SYNC-DBG] 5 Socket send OK: {data_len} bytes",
+                                    flush=True
+                                )
 
                         except (
 
@@ -991,7 +1016,8 @@ class LiveSyncClient:
                             self.last_error = str(e)
 
                             print(
-                                f"[SYNC-DBG] 5 Socket send FAILED: {e}"
+                                f"[SYNC-DBG] 5 Socket send FAILED: {e}",
+                                flush=True
                             )
 
                             self._reconnect_internal()
@@ -1010,6 +1036,11 @@ class LiveSyncClient:
 
         try:
 
+            print(
+                "[LiveSync] Creating TCP socket (AF_INET, SOCK_STREAM)",
+                flush=True
+            )
+
             self.sock = socket.socket(
                 socket.AF_INET,
                 socket.SOCK_STREAM
@@ -1022,6 +1053,11 @@ class LiveSyncClient:
             )
 
             self.sock.settimeout(10.0)
+
+            print(
+                f"[LiveSync] Attempting connect to {self.host}:{self.port}",
+                flush=True
+            )
 
             self.sock.connect((
                 self.host,
@@ -1047,8 +1083,9 @@ class LiveSyncClient:
             self._was_connected = True
 
             print(
-                f"[LiveSync] Connected to UE  "
-                f"[sig=0x{LIVE_SYNC_PROTOCOL_SIG:08X}]"
+                f"[LiveSync] Connected to UE {self.host}:{self.port} "
+                f"[sig=0x{LIVE_SYNC_PROTOCOL_SIG:08X}]",
+                flush=True
             )
 
             import struct as _pstruct
@@ -1060,7 +1097,8 @@ class LiveSyncClient:
                 f"obj_v3={_pstruct.calcsize('<IIIIfff ffff fff d IIII B') - 1} "
                 f"obj_v4={_pstruct.calcsize('<IIIIfff ffff fff d IIII B')} "
                 f"obj_del={_pstruct.calcsize('<IIII')} "
-                f"obj_asset={_pstruct.calcsize('<IIII QQ B')}"
+                f"obj_asset={_pstruct.calcsize('<IIII QQ B')}",
+                flush=True
             )
 
         except ConnectionRefusedError:
@@ -1074,8 +1112,9 @@ class LiveSyncClient:
             self._status_detail = "Connection refused"
 
             print(
-                "[LiveSync] Connection refused:",
-                self.last_error
+                "[LiveSync] Connection refused: "
+                f"is UE listening on {self.host}:{self.port}?",
+                flush=True
             )
 
         except socket.timeout:
@@ -1090,8 +1129,9 @@ class LiveSyncClient:
             self._status_detail = "Connection timeout"
 
             print(
-                "[LiveSync] Connection timeout:",
-                self.last_error
+                f"[LiveSync] Connection timeout: "
+                f"no response from {self.host}:{self.port}",
+                flush=True
             )
 
         except OSError as e:
@@ -1099,20 +1139,26 @@ class LiveSyncClient:
             self.connected = False
             self.sock = None
 
-            if "address already in use" in str(e).lower():
+            import errno as _errno
+            err_code = getattr(e, 'errno', None)
+            err_str = _errno.errorcode.get(err_code, 'UNKNOWN') if err_code is not None else 'UNKNOWN'
+            err_msg = str(e)
+
+            if "address already in use" in err_msg.lower():
                 self.last_error = (
                     f"Port {self.port} is already in use"
                 )
                 self.last_error_severity = "CRITICAL"
             else:
-                self.last_error = str(e)
+                self.last_error = f"[errno={err_code} {err_str}] {err_msg}"
                 self.last_error_severity = "WARNING"
 
             self._status_detail = f"Connection failed: {self.last_error}"
 
             print(
-                "[LiveSync] Connection failed:",
-                e
+                f"[LiveSync] Socket connect FAILED: "
+                f"errno={err_code} ({err_str}) — {err_msg}",
+                flush=True
             )
 
         except Exception as e:
@@ -1124,8 +1170,8 @@ class LiveSyncClient:
             self._status_detail = f"Connection failed: {self.last_error}"
 
             print(
-                "[LiveSync] Connection failed:",
-                e
+                f"[LiveSync] Connection failed (unexpected): {e}",
+                flush=True
             )
 
     def _reconnect_internal(self):
@@ -1221,7 +1267,7 @@ class LiveSyncClient:
 
                 self.sock.close()
 
-            except:
+            except Exception:
                 pass
 
         self.sock = None
@@ -1430,9 +1476,11 @@ class LiveSyncClient:
                 packet
             )
 
-            print(
-                f"[SYNC-DBG] 3 Enqueued: {len(packet)} bytes"
-            )
+            if _network_verbose:
+                print(
+                    f"[SYNC-DBG] 3 Enqueued: {len(packet)} bytes",
+                    flush=True
+                )
 
         except queue.Full:
 

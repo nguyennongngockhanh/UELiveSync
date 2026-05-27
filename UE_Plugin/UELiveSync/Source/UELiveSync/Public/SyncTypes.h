@@ -384,7 +384,7 @@ struct FReplayTraceConfig
 // forensic inspection after the fact.
 // =========================================================
 
-enum class EReplayResult : uint8
+enum class ELiveSyncReplayResult : uint8
 {
     Accepted      = 0,
     Rejected      = 1,
@@ -401,7 +401,7 @@ struct FReplayTimelineEvent
 {
     int32      Index           = -1;     // Replay buffer index
     uint32     Sequence        = 0;      // Packet sequence number
-    EReplayResult Result       = EReplayResult::Rejected;
+    ELiveSyncReplayResult Result = ELiveSyncReplayResult::Rejected;
     double     Timestamp       = 0.0;    // Wall-clock time of event
     uint8      OpType          = 0;      // Collection op type (if applicable)
     int32      PayloadSize     = 0;      // Payload size (30 or 46)
@@ -1120,14 +1120,49 @@ struct FWorldStateSnapshot
 
     bool operator==(const FWorldStateSnapshot& Other) const
     {
-        return CollectionMembership == Other.CollectionMembership
-            && CollectionIdentities == Other.CollectionIdentities
-            && CollectionSequences  == Other.CollectionSequences
-            && ActiveActors         == Other.ActiveActors
-            && DeleteSequences      == Other.DeleteSequences
-            && ActorNames           == Other.ActorNames
-            && TransformCount       == Other.TransformCount
-            && TransformHash        == Other.TransformHash;
+        // TMap<FGuid,FGuid>
+        if (CollectionMembership.Num() != Other.CollectionMembership.Num()) return false;
+        for (const auto& KV : CollectionMembership)
+        {
+            const FGuid* V = Other.CollectionMembership.Find(KV.Key);
+            if (!V || *V != KV.Value) return false;
+        }
+        // TMap<FGuid,FString>
+        if (CollectionIdentities.Num() != Other.CollectionIdentities.Num()) return false;
+        for (const auto& KV : CollectionIdentities)
+        {
+            const FString* V = Other.CollectionIdentities.Find(KV.Key);
+            if (!V || *V != KV.Value) return false;
+        }
+        // TMap<FGuid,uint32>
+        if (CollectionSequences.Num() != Other.CollectionSequences.Num()) return false;
+        for (const auto& KV : CollectionSequences)
+        {
+            const uint32* V = Other.CollectionSequences.Find(KV.Key);
+            if (!V || *V != KV.Value) return false;
+        }
+        // TSet<FGuid>
+        if (ActiveActors.Num() != Other.ActiveActors.Num()) return false;
+        for (const FGuid& K : ActiveActors)
+        {
+            if (!Other.ActiveActors.Contains(K)) return false;
+        }
+        // TMap<FGuid,uint32>
+        if (DeleteSequences.Num() != Other.DeleteSequences.Num()) return false;
+        for (const auto& KV : DeleteSequences)
+        {
+            const uint32* V = Other.DeleteSequences.Find(KV.Key);
+            if (!V || *V != KV.Value) return false;
+        }
+        // TMap<FGuid,FString>
+        if (ActorNames.Num() != Other.ActorNames.Num()) return false;
+        for (const auto& KV : ActorNames)
+        {
+            const FString* V = Other.ActorNames.Find(KV.Key);
+            if (!V || *V != KV.Value) return false;
+        }
+        return TransformCount == Other.TransformCount
+            && TransformHash  == Other.TransformHash;
     }
 
     bool operator!=(const FWorldStateSnapshot& Other) const

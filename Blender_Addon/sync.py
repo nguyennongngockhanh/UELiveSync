@@ -1,6 +1,8 @@
+import sys
 import bpy
 import hashlib
 import time
+import traceback
 import uuid
 
 from bpy.app.handlers import persistent
@@ -20,6 +22,7 @@ try:
         serialize_delete_v3,
         serialize_rename,
         serialize_hierarchy,
+        serialize_visibility,
         serialize_delete,
         is_connected,
         get_last_error,
@@ -42,6 +45,7 @@ try:
         PT_Rename,
         PT_Hierarchy,
         PT_Delete_V5,
+        PT_Collection,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
         serialize_asset_identity,
@@ -762,6 +766,13 @@ def check_updates():
     if not timer_running:
         return 0.016
 
+    # First-tick diagnostic
+    if _sync_start_time > 0 and time.time() - _sync_start_time < 0.1:
+        print(
+            "[LiveSync] Timer callback fired — main loop active",
+            flush=True
+        )
+
     _update_runtime_stats()
 
     _verbose_logging = _get_threshold(
@@ -989,6 +1000,11 @@ def check_updates():
             try:
                 guid_obj = UUID(guid)
             except Exception:
+                if _verbose_logging:
+                    print(
+                        f"[LiveSync] WARNING: invalid GUID in delete detection: {guid}",
+                        flush=True
+                    )
                 continue
 
             deletes_v5_to_send.append(
@@ -1217,7 +1233,11 @@ def check_updates():
                 coll_guid_str = _get_collection_guid_str(coll)
                 current_coll_guids.add(coll_guid_str)
         except Exception:
-            pass
+            if _verbose_logging:
+                print(
+                    f"[LiveSync] WARNING: collection iteration failed for GUID={guid}",
+                    flush=True
+                )
 
         if not is_first_collection:
             prev_colls = _last_collection_state.get(guid, set())
@@ -1393,6 +1413,12 @@ def check_updates():
     now = time.time()
 
     if now - _last_heartbeat_time >= _heartbeat_interval:
+
+        if _verbose_logging:
+            print(
+                "[LiveSync] Sending heartbeat",
+                flush=True
+            )
 
         send_objects(
             [],
@@ -1663,66 +1689,96 @@ def start_sync():
     global _last_parent_guid
     global _last_collection_state  # Phase 6F
 
-    last_sent_transforms.clear()
-    _last_object_names.clear()
-    _last_visibility_state.clear()
-    _last_parent_guid.clear()
-    _last_collection_state.clear()  # Phase 6F
+    print("[LiveSync] Start button pressed — entering start_sync()", flush=True)
 
-    # Phase 6F Stage 5: Start replay recording on sync start
-    start_collection_replay_recording()
+    try:
 
-    tracked_objects.clear()
+        last_sent_transforms.clear()
+        _last_object_names.clear()
+        _last_visibility_state.clear()
+        _last_parent_guid.clear()
+        _last_collection_state.clear()
 
-    _sync_start_time = time.time()
+        print("[LiveSync] State cleared, starting collection replay recording", flush=True)
 
-    _last_heartbeat_time = time.time()
+        # Phase 6F Stage 5: Start replay recording on sync start
+        start_collection_replay_recording()
 
-    _last_object_count = len(bpy.data.objects)
+        tracked_objects.clear()
 
-    _scan_counter = 0
+        _sync_start_time = time.time()
 
-    _sync_runtime_config()
+        _last_heartbeat_time = time.time()
 
-    _verbose_logging = _get_threshold(
-        "verbose_logging",
-        False
-    )
+        _last_object_count = len(bpy.data.objects)
 
-    _network_set_verbose(
-        _verbose_logging
-    )
+        _scan_counter = 0
 
-    for obj in bpy.data.objects:
-        if obj.type == 'MESH':
-            guid = ensure_unique_guid(obj, tracked_objects)
-            tracked_objects[guid] = (
-                obj,
-                UUID(guid)
-            )
+        _sync_runtime_config()
 
-    _reconcile_guids_on_load()
+        _verbose_logging = _get_threshold(
+            "verbose_logging",
+            False
+        )
 
-    port = _get_threshold(
-        "server_port",
-        57000
-    )
+        _network_set_verbose(
+            _verbose_logging
+        )
 
-    connect(port=port)
+        mesh_count = 0
 
-    timer_running = True
+        for obj in bpy.data.objects:
+            if obj.type == 'MESH':
+                guid = ensure_unique_guid(obj, tracked_objects)
+                tracked_objects[guid] = (
+                    obj,
+                    UUID(guid)
+                )
+                mesh_count += 1
 
-    if _timer_ref is not None:
-        try:
-            bpy.app.timers.unregister(_timer_ref)
-        except ValueError:
-            pass
+        print(
+            f"[LiveSync] Scanned scene: {mesh_count} mesh objects tracked, "
+            f"{len(bpy.data.objects)} total objects",
+            flush=True
+        )
 
-    _timer_ref = bpy.app.timers.register(
-        lambda: check_updates()
-    )
+        _reconcile_guids_on_load()
 
-    print("UE Live Sync Started")
+        port = _get_threshold(
+            "server_port",
+            57000
+        )
+
+        print(
+            f"[LiveSync] Creating socket — connecting to 127.0.0.1:{port}",
+            flush=True
+        )
+
+        connect(port=port)
+
+        print("[LiveSync] connect() returned — socket/thread bootstrap complete", flush=True)
+
+        timer_running = True
+
+        if _timer_ref is not None:
+            try:
+                bpy.app.timers.unregister(_timer_ref)
+            except ValueError:
+                pass
+
+        _timer_ref = bpy.app.timers.register(
+            lambda: check_updates()
+        )
+
+        print("[LiveSync] Sync timer registered — main loop active", flush=True)
+
+        print("[LiveSync] Startup complete — UE Live Sync Started", flush=True)
+
+    except Exception:
+        traceback.print_exc()
+        msg = f"Startup failed: {traceback.format_exc()}"
+        print(f"[LiveSync] {msg}", flush=True)
+        set_critical_error(msg)
 
 
 # =========================================================

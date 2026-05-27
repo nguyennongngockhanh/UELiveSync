@@ -238,7 +238,25 @@ class UELIVESYNC_OT_start(
 
     def execute(self, context):
 
-        sync.start_sync()
+        import traceback as _tb
+
+        try:
+
+            sync.start_sync()
+
+        except Exception:
+
+            err = _tb.format_exc()
+
+            print(
+                "[LiveSync] CRITICAL: Operator start_sync() "
+                f"raised exception:\n{err}"
+            )
+
+            self.report(
+                {'ERROR'},
+                f"Start sync failed — see console for details"
+            )
 
         return {'FINISHED'}
 

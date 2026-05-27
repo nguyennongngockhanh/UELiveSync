@@ -357,36 +357,87 @@ static void RemoveTombstone(const FGuid& Guid)
 static UStaticMesh*
 GetPrimitiveMesh(uint8 PrimitiveType)
 {
+    // Diagnostic: attempt alternate paths for UE5.4+ content
+    UStaticMesh* Mesh = nullptr;
+
     switch (PrimitiveType)
     {
     case LSP_Sphere:
-        return LoadObject<UStaticMesh>(
+        Mesh = LoadObject<UStaticMesh>(
             nullptr,
             TEXT(
             "/Engine/BasicShapes/"
             "Sphere.Sphere"));
+        if (!Mesh)
+        {
+            Mesh = LoadObject<UStaticMesh>(
+                nullptr,
+                TEXT("/Engine/BasicShapes/BasicSphere.BasicSphere"));
+        }
+        if (!Mesh)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[DIAG][PRIMITIVE] Sphere: all paths failed"));
+        }
+        return Mesh;
 
     case LSP_Cylinder:
-        return LoadObject<UStaticMesh>(
+        Mesh = LoadObject<UStaticMesh>(
             nullptr,
             TEXT(
             "/Engine/BasicShapes/"
             "Cylinder.Cylinder"));
+        if (!Mesh)
+        {
+            Mesh = LoadObject<UStaticMesh>(
+                nullptr,
+                TEXT("/Engine/BasicShapes/BasicCylinder.BasicCylinder"));
+        }
+        if (!Mesh)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[DIAG][PRIMITIVE] Cylinder: all paths failed"));
+        }
+        return Mesh;
 
     case LSP_Plane:
-        return LoadObject<UStaticMesh>(
+        Mesh = LoadObject<UStaticMesh>(
             nullptr,
             TEXT(
             "/Engine/BasicShapes/"
             "Plane.Plane"));
+        if (!Mesh)
+        {
+            Mesh = LoadObject<UStaticMesh>(
+                nullptr,
+                TEXT("/Engine/BasicShapes/BasicPlane.BasicPlane"));
+        }
+        if (!Mesh)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[DIAG][PRIMITIVE] Plane: all paths failed"));
+        }
+        return Mesh;
 
     case LSP_Cube:
     default:
-        return LoadObject<UStaticMesh>(
+        Mesh = LoadObject<UStaticMesh>(
             nullptr,
             TEXT(
             "/Engine/BasicShapes/"
             "Cube.Cube"));
+        if (!Mesh)
+        {
+            Mesh = LoadObject<UStaticMesh>(
+                nullptr,
+                TEXT("/Engine/BasicShapes/BasicCube.BasicCube"));
+        }
+        if (!Mesh)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[DIAG][PRIMITIVE] Cube: all paths failed — actor will be invisible!"));
+        }
+        return Mesh;
     }
 }
 
@@ -1075,6 +1126,29 @@ bool UUELiveSyncSubsystem::Tick(
 
     bEnableDebugDraw =
         CVarLiveSyncDebugDraw.GetValueOnGameThread() != 0;
+
+    // =====================================================
+    // PERIODIC TICK DIAGNOSTICS (every ~100 frames)
+    // =====================================================
+
+    if (VerboseFrameCounter % 100 == 1)
+    {
+        const int32 CacheSize = ActorCache.Num();
+        const int32 StateSize = TransformStates.Num();
+        int32 AliveActors = 0;
+        int32 DeadActors = 0;
+        for (const auto& Pair : ActorCache)
+        {
+            if (Pair.Value.IsValid()) AliveActors++;
+            else DeadActors++;
+        }
+
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[TICK][DIAG] frame=%lld ActorCache=%d (alive=%d dead=%d) TransformStates=%d"),
+            (long long)VerboseFrameCounter,
+            CacheSize, AliveActors, DeadActors,
+            StateSize);
+    }
 
     // =====================================================
     // RETRY LISTENER IF PREVIOUS BIND FAILED
@@ -2683,6 +2757,7 @@ ProcessBinaryPacket(
 
         constexpr int32 DeleteObjSize = 28;
         const int32 DeleteCount = ObjectCount;
+        const int32 PayloadSize = static_cast<int32>(PacketEnd - Ptr);
 
         // ---- BOUNDARY CHECK: payload multiple of 28 ----
         if (PayloadSize % DeleteObjSize != 0)
@@ -3420,6 +3495,22 @@ ProcessBinaryPacket(
         {
             PrimitiveType = *Ptr;
             Ptr += 1;
+
+            if (PacketType == 0x03)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[CREATE][DIAG] PARSED primitive_type=0x%02X guid=%s obj=%u/%u ver=%u"),
+                    PrimitiveType,
+                    *Guid.ToString(EGuidFormats::Digits),
+                    i, ObjectCount, Version);
+            }
+        }
+        else if (Version >= LIVE_SYNC_VERSION_V4 && PacketType == 0x03)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[CREATE][DIAG] V4+ CREATE packet has no primitive type byte at end of object! guid=%s obj=%u/%u"),
+                *Guid.ToString(EGuidFormats::Digits),
+                i, ObjectCount);
         }
 
         // =================================================
@@ -3428,6 +3519,16 @@ ProcessBinaryPacket(
 
         if (PacketType == 0x03)
         {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CREATE][DIAG] DISPATCH guid=%s loc=%s rot=(%.4f,%.4f,%.4f,%.4f) scale=%s prim=0x%02X parent=%s local=%d"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *SpawnLocation.ToString(),
+                SpawnRotation.W, SpawnRotation.X, SpawnRotation.Y, SpawnRotation.Z,
+                *SpawnScale.ToString(),
+                PrimitiveType,
+                *ParentGuid.ToString(EGuidFormats::Digits),
+                bIsLocalTransform ? 1 : 0);
+
             HandleCreateObject(
                 Guid,
                 SpawnLocation,
@@ -5270,7 +5371,69 @@ HandleCreateObject(
 
     if (!World)
     {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("[CREATE][DIAG] GetWorld() returned nullptr — aborting"));
         return;
+    }
+
+    // =====================================================
+    // COMPREHENSIVE ENTRY DIAGNOSTICS
+    // =====================================================
+
+    {
+        const FString WorldName = World->GetName();
+        const FString LevelName = World->GetCurrentLevel() ? World->GetCurrentLevel()->GetName() : TEXT("None");
+        const TCHAR* WorldTypeStr = TEXT("Unknown");
+        switch (World->WorldType)
+        {
+            case EWorldType::None:        WorldTypeStr = TEXT("None");        break;
+            case EWorldType::Game:        WorldTypeStr = TEXT("Game");        break;
+            case EWorldType::Editor:      WorldTypeStr = TEXT("Editor");      break;
+            case EWorldType::PIE:         WorldTypeStr = TEXT("PIE");         break;
+            case EWorldType::EditorPreview: WorldTypeStr = TEXT("EditorPreview"); break;
+            case EWorldType::GamePreview:   WorldTypeStr = TEXT("GamePreview");   break;
+            case EWorldType::GameRPC:     WorldTypeStr = TEXT("GameRPC");     break;
+            case EWorldType::Inactive:    WorldTypeStr = TEXT("Inactive");    break;
+        }
+
+        const int32 ActorCachePreCount = ActorCache.Num();
+
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CREATE][DIAG] ENTRY guid=%s prim=0x%02X loc=%s rot=(%.4f,%.4f,%.4f,%.4f) scale=%s parent=%s local=%d ts=%.3f"),
+            *Guid.ToString(EGuidFormats::Digits),
+            PrimitiveType,
+            *Location.ToString(),
+            Rotation.W, Rotation.X, Rotation.Y, Rotation.Z,
+            *Scale.ToString(),
+            *ParentGuid.ToString(EGuidFormats::Digits),
+            bIsLocalTransform ? 1 : 0,
+            FPlatformTime::Seconds());
+
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CREATE][DIAG] ENTRY world=%s type=%s level=%s ActorCache=%d"),
+            *WorldName, WorldTypeStr, *LevelName, ActorCachePreCount);
+
+        // Validate parsed payload integrity
+        if (!Guid.IsValid())
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[CREATE][DIAG] INVALID GUID (all zero) — aborting"));
+            return;
+        }
+
+        if (Scale.IsZero() || Scale.X <= 0.0f || Scale.Y <= 0.0f || Scale.Z <= 0.0f)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CREATE][DIAG] SUSPICIOUS scale=%s — proceeding"),
+                *Scale.ToString());
+        }
+
+        if (Location.SizeSquared() > 1e12f)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CREATE][DIAG] SUSPICIOUS location magnitude=%f — proceeding"),
+                Location.Size());
+        }
     }
 
     // =====================================================
@@ -5396,14 +5559,35 @@ HandleCreateObject(
 
     if (!NewActor)
     {
+        const FString WorldName = World->GetName();
+        const FString ActorClass = AActor::StaticClass()->GetName();
+
         UE_LOG(
             LogLiveSync,
-            Warning,
-            TEXT("HandleCreate: SpawnActor FAILED "
-                 "for GUID=%s (spawn took %.1fms)"),
+            Error,
+            TEXT("[CREATE][DIAG] SPAWN FAILED guid=%s class=%s world=%s spawnMs=%.1f"),
             *Guid.ToString(
                 EGuidFormats::Digits),
+            *ActorClass,
+            *WorldName,
             SpawnMs);
+
+        // Log possible reasons
+        UWorld* InnerWorld = World;
+        if (InnerWorld->WorldType == EWorldType::EditorPreview ||
+            InnerWorld->WorldType == EWorldType::Inactive)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[CREATE][DIAG] SPAWN FAILED REASON: world type is %d (EditorPreview/Inactive)"),
+                (int32)InnerWorld->WorldType);
+        }
+
+        if (InnerWorld->GetCurrentLevel() == nullptr ||
+            InnerWorld->GetCurrentLevel()->bIsVisible == false)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[CREATE][DIAG] SPAWN FAILED REASON: level is null or not visible"));
+        }
 
         return;
     }
@@ -5413,11 +5597,52 @@ HandleCreateObject(
         UE_LOG(
             LogLiveSync,
             Warning,
-            TEXT("STALL: SpawnActor took %.1fms "
+            TEXT("[CREATE][DIAG] STALL: SpawnActor took %.1fms "
                  "for GUID=%s"),
             SpawnMs,
             *Guid.ToString(
                 EGuidFormats::Digits));
+    }
+
+    // =====================================================
+    // SPAWN SUCCESS DIAGNOSTICS
+    // =====================================================
+
+    {
+        const FString ActorName = NewActor->GetName();
+        const FString ActorClass = NewActor->GetClass()->GetName();
+        const FString SpawnWorldName = NewActor->GetWorld() ? NewActor->GetWorld()->GetName() : TEXT("None");
+        const FTransform SpawnXForm = NewActor->GetActorTransform();
+
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CREATE][DIAG] SPAWN SUCCESS guid=%s name=%s class=%s world=%s spawnMs=%.1f"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *ActorName,
+            *ActorClass,
+            *SpawnWorldName,
+            SpawnMs);
+
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CREATE][DIAG] SPAWN TRANSFORM loc=%s rot=(%.4f,%.4f,%.4f,%.4f) scale=%s"),
+            *SpawnXForm.GetLocation().ToString(),
+            (double)SpawnXForm.GetRotation().W,
+            (double)SpawnXForm.GetRotation().X,
+            (double)SpawnXForm.GetRotation().Y,
+            (double)SpawnXForm.GetRotation().Z,
+            *SpawnXForm.GetScale3D().ToString());
+
+        // Verify actor is in a visible world
+        if (NewActor->GetWorld() &&
+            NewActor->GetWorld()->WorldType != EWorldType::Editor &&
+            NewActor->GetWorld()->WorldType != EWorldType::Game &&
+            NewActor->GetWorld()->WorldType != EWorldType::PIE)
+        {
+            const int32 WorldTypeVal = (int32)NewActor->GetWorld()->WorldType;
+
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[CREATE][DIAG] ACTOR spawned into NON-VISIBLE world type=%d — will NOT appear in viewport!"),
+                WorldTypeVal);
+        }
     }
 
     // =====================================================
@@ -5437,6 +5662,23 @@ HandleCreateObject(
         Guid,
         NewActor);
 
+    // Verify registry integration
+    {
+        AActor* CacheCheck = FindActorFast(Guid);
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CREATE][DIAG] REGISTRY guid=%s ActorCache check=%s"),
+            *Guid.ToString(EGuidFormats::Digits),
+            CacheCheck ? TEXT("FOUND") : TEXT("MISSING"));
+
+        // Immediate post-spawn actor destruction check
+        if (CacheCheck && CacheCheck->IsPendingKillPending())
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[CREATE][DIAG] ACTOR PENDING DESTROY IMMEDIATELY AFTER SPAWN guid=%s — cleanup race!"),
+                *Guid.ToString(EGuidFormats::Digits));
+        }
+    }
+
     // =====================================================
     // Step 2: Attach to parent (initial attach).
     // Attach BEFORE initializing local state so attachment
@@ -5447,6 +5689,23 @@ HandleCreateObject(
     AttachToParent(
         Guid,
         ParentGuid);
+
+    // =====================================================
+    // POST-ATTACH DIAGNOSTICS
+    // =====================================================
+
+    {
+        AActor* PostAttachActor = FindActorFast(Guid);
+        if (PostAttachActor)
+        {
+            AActor* CurrentParent = PostAttachActor->GetAttachParentActor();
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CREATE][DIAG] ATTACH guid=%s parent=%s actualParent=%s"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *ParentGuid.ToString(EGuidFormats::Digits),
+                CurrentParent ? *CurrentParent->GetName() : TEXT("None"));
+        }
+    }
 
     // =====================================================
     // Validate primitive type
@@ -5493,6 +5752,14 @@ HandleCreateObject(
         NewObject<UStaticMeshComponent>(
             NewActor);
 
+    if (!MeshComp)
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("[CREATE][DIAG] NewObject<UStaticMeshComponent> FAILED guid=%s — aborting"),
+            *Guid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
     MeshComp->SetMobility(
         EComponentMobility::Movable);
 
@@ -5506,6 +5773,19 @@ HandleCreateObject(
     {
         MeshComp->SetStaticMesh(
             PrimitiveMesh);
+
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CREATE][DIAG] PRIMITIVE guid=%s type=0x%02X mesh=%s"),
+            *Guid.ToString(EGuidFormats::Digits),
+            PrimitiveType,
+            *PrimitiveMesh->GetName());
+    }
+    else
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("[CREATE][DIAG] PRIMITIVE RESOLVE FAILED guid=%s type=0x%02X — no mesh assigned, actor will be invisible!"),
+            *Guid.ToString(EGuidFormats::Digits),
+            PrimitiveType);
     }
 
     MeshComp->SetCollisionEnabled(
@@ -5530,7 +5810,7 @@ HandleCreateObject(
         UE_LOG(
             LogLiveSync,
             Warning,
-            TEXT("STALL: RegisterComponent took %.1fms "
+            TEXT("[CREATE][DIAG] STALL: RegisterComponent took %.1fms "
                  "for GUID=%s"),
             RegisterMs,
             *Guid.ToString(
@@ -5539,10 +5819,10 @@ HandleCreateObject(
 
     UE_LOG(
         LogLiveSync,
-        Log,
-        TEXT("END TRACE: HandleCreateObject::RegisterComponent guid=%s (%.1fms)"),
-        *Guid.ToString(
-            EGuidFormats::Digits),
+        Warning,
+        TEXT("[CREATE][DIAG] REGISTER COMPLETE guid=%s mesh=%s regMs=%.1f"),
+        *Guid.ToString(EGuidFormats::Digits),
+        PrimitiveMesh ? *PrimitiveMesh->GetName() : TEXT("NULL"),
         RegisterMs);
 
     // NOTE: State initialization is handled by the caller
@@ -5580,6 +5860,31 @@ HandleDeleteObject(
     const FGuid& Guid)
 {
     CHECK_GAME_THREAD();
+
+    // ── UNEXPECTED DELETE DIAGNOSTICS ──
+    // If we're deleting a GUID that was recently created, this could
+    // explain actors disappearing immediately after spawn.
+    {
+        AActor* Found =
+            FindActorFast(Guid);
+
+        if (Found)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[DELETE][DIAG] Deleting EXISTING actor guid=%s name=%s bInSnapshot=%d"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Found->GetName(),
+                bInSnapshotBuild ? 1 : 0);
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[DELETE][DIAG] Deleting MISSING guid=%s bInSnapshot=%d"),
+                *Guid.ToString(EGuidFormats::Digits),
+                bInSnapshotBuild ? 1 : 0);
+        }
+    }
+
     AActor* Actor =
         FindActorFast(Guid);
 
@@ -5607,6 +5912,11 @@ HandleDeleteObject(
     {
         if (Actor)
         {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[DELETE][DIAG] DESTROYING actor guid=%s name=%s — will disappear from viewport!"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Actor->GetName());
+
             Actor->Destroy();
         }
 
@@ -6099,10 +6409,6 @@ HandleHierarchy(
         UE_LOG(LogLiveSync, Log,
             TEXT("[HIERARCHY][ORPHAN] DEFERRED — enqueued: child=%s parent=%s "
                  "Seq=%u (queue size=%d)"),
-            *ChildGuid.ToString(EGuidFormats::Digits),
-            *ParentGuid.ToString(EGuidFormats::Digits),
-            SequenceNumber,
-            PendingHierarchyAttachments.Num());
             *ChildGuid.ToString(EGuidFormats::Digits),
             *ParentGuid.ToString(EGuidFormats::Digits),
             SequenceNumber,
@@ -6972,9 +7278,9 @@ RecordCollectionReplayPayload(
             1, std::memory_order_relaxed);
         Stats.CollectionReplayPacketsDropped.fetch_add(
             1, std::memory_order_relaxed);
-        GCollectionReplayBuffer.RemoveAt(0, 1, false);
-        GCollectionReplaySequences.RemoveAt(0, 1, false);
-        GCollectionReplayChecksums.RemoveAt(0, 1, false);
+        GCollectionReplayBuffer.RemoveAt(0, 1, EAllowShrinking::No);
+        GCollectionReplaySequences.RemoveAt(0, 1, EAllowShrinking::No);
+        GCollectionReplayChecksums.RemoveAt(0, 1, EAllowShrinking::No);
     }
 
     // Track peak buffer usage
@@ -7469,7 +7775,7 @@ RecordWorldReplayEntry(const FWorldReplayEntry& Entry)
 
     if (GWorldReplayBuffer.Num() >= WORLD_REPLAY_MAX)
     {
-        GWorldReplayBuffer.RemoveAt(0, 1, false);
+        GWorldReplayBuffer.RemoveAt(0, 1, EAllowShrinking::No);
     }
 
     GWorldReplayBuffer.Add(Entry);
@@ -7530,8 +7836,8 @@ ComputeWorldStateHash() const
 
     auto fnv_str = [&](uint64 H, const FString& S) -> uint64
     {
-        FTCHARToUTF8 Converter(*S);
-        const FUTF8Char* Buf = Converter.Get();
+        auto Converter = StringCast<UTF8CHAR>(*S);
+        auto* Buf = Converter.Get();
         int32 Len = Converter.Length();
         for (int32 i = 0; i < Len; i++)
         {
@@ -7578,7 +7884,7 @@ ComputeWorldStateHash() const
 
         for (const FGuid& MemberGuid : SortedMembers)
         {
-            H = fnv_u64(H, 0xCM);  // membership marker
+            H = fnv_u64(H, 0xCE);  // membership marker
             H = fnv_u64(H, *reinterpret_cast<const uint64*>(&CollGuid));
             H = fnv_u64(H, *reinterpret_cast<const uint64*>(
                 reinterpret_cast<const uint8*>(&CollGuid) + 8));
@@ -7589,7 +7895,7 @@ ComputeWorldStateHash() const
     }
 
     // ── Lifecycle domain ───────────────────────────────
-    H = fnv(H, 0xLC);  // domain marker
+    H = fnv(H, 0xCE);  // lifecycle domain marker
 
     // Active actor GUIDs (from ActorCache, sorted)
     TArray<FGuid> SortedActors;
@@ -7610,7 +7916,7 @@ ComputeWorldStateHash() const
     }
 
     // ── Rename domain ──────────────────────────────────
-    H = fnv(H, 0xRN);  // domain marker
+    H = fnv(H, 0xCD);  // rename domain marker
 
     // FRenameSequenceTracker has LastSequence which tracks name state per GUID
     // We hash the identity of tracked GUIDs + their last sequences
@@ -7618,7 +7924,7 @@ ComputeWorldStateHash() const
     // what we can observe — the transform state table has no name field)
 
     // ── Transform domain ───────────────────────────────
-    H = fnv(H, 0xTR);  // domain marker
+    H = fnv(H, 0xCC);  // transform domain marker
 
     // Hash transform states (sorted by GUID for determinism)
     TArray<FGuid> SortedTransforms;
@@ -7635,17 +7941,17 @@ ComputeWorldStateHash() const
             reinterpret_cast<const uint8*>(&Tg) + 8));
 
         // Hash location (3 floats -> 12 bytes)
-        const uint8* LocBytes = reinterpret_cast<const uint8*>(&State->Location);
+        const uint8* LocBytes = reinterpret_cast<const uint8*>(&State->CurrentLocation);
         for (int32 i = 0; i < 12; i++)
             H = fnv(H, LocBytes[i]);
 
         // Hash rotation (4 floats -> 16 bytes)
-        const uint8* RotBytes = reinterpret_cast<const uint8*>(&State->Rotation);
+        const uint8* RotBytes = reinterpret_cast<const uint8*>(&State->CurrentRotation);
         for (int32 i = 0; i < 16; i++)
             H = fnv(H, RotBytes[i]);
 
         // Hash scale (3 floats -> 12 bytes)
-        const uint8* ScaleBytes = reinterpret_cast<const uint8*>(&State->Scale);
+        const uint8* ScaleBytes = reinterpret_cast<const uint8*>(&State->CurrentScale);
         for (int32 i = 0; i < 12; i++)
             H = fnv(H, ScaleBytes[i]);
     }
@@ -7720,9 +8026,9 @@ SaveWorldState()
     {
         const FSyncTransformState* State = &Pair.Value;
         uint64 TH = 0;
-        const uint8* LocBytes = reinterpret_cast<const uint8*>(&State->Location);
+        const uint8* LocBytes = reinterpret_cast<const uint8*>(&State->CurrentLocation);
         for (int32 i = 0; i < 12; i++) TH = (TH ^ LocBytes[i]) * 16777619u;
-        const uint8* RotBytes = reinterpret_cast<const uint8*>(&State->Rotation);
+        const uint8* RotBytes = reinterpret_cast<const uint8*>(&State->CurrentRotation);
         for (int32 i = 0; i < 16; i++) TH = (TH ^ RotBytes[i]) * 16777619u;
         GWorldSavedState.TransformHash ^= TH;
     }
@@ -8108,9 +8414,9 @@ ExportWorldSnapshot() const
         Report += FString::Printf(
             TEXT("T %s %s %s %s\n"),
             *TfGuid.ToString(EGuidFormats::Digits),
-            *State->Location.ToString(),
-            *State->Rotation.ToString(),
-            *State->Scale.ToString());
+            *State->CurrentLocation.ToString(),
+            *State->CurrentRotation.ToString(),
+            *State->CurrentScale.ToString());
     }
 
     Report += FString::Printf(
@@ -8395,7 +8701,7 @@ ReplayCollectionStream()
                 FReplayTimelineEvent GapEvent;
                 GapEvent.Index = i;
                 GapEvent.Sequence = CurrentSeq;
-                GapEvent.Result = EReplayResult::SequenceGap;
+                GapEvent.Result = ELiveSyncReplayResult::SequenceGap;
                 GapEvent.Timestamp = FPlatformTime::Seconds();
                 RecordReplayTimelineEvent(GapEvent);
 
@@ -8419,7 +8725,7 @@ ReplayCollectionStream()
                     FReplayTimelineEvent OooEvent;
                     OooEvent.Index = i;
                     OooEvent.Sequence = CurrentSeq;
-                    OooEvent.Result = EReplayResult::OutOfOrder;
+                    OooEvent.Result = ELiveSyncReplayResult::OutOfOrder;
                     OooEvent.Timestamp = FPlatformTime::Seconds();
                     RecordReplayTimelineEvent(OooEvent);
 
@@ -8438,7 +8744,7 @@ ReplayCollectionStream()
                 FReplayTimelineEvent GapEvent;
                 GapEvent.Index = i;
                 GapEvent.Sequence = CurrentSeq;
-                GapEvent.Result = EReplayResult::SequenceGap;
+                GapEvent.Result = ELiveSyncReplayResult::SequenceGap;
                 GapEvent.Timestamp = FPlatformTime::Seconds();
                 RecordReplayTimelineEvent(GapEvent);
 
@@ -8472,7 +8778,7 @@ ReplayCollectionStream()
 
             FReplayTimelineEvent CorrEvent;
             CorrEvent.Index = i;
-            CorrEvent.Result = EReplayResult::Corrupted;
+            CorrEvent.Result = ELiveSyncReplayResult::Corrupted;
             CorrEvent.Timestamp = FPlatformTime::Seconds();
             CorrEvent.PayloadSize = EntrySize;
             RecordReplayTimelineEvent(CorrEvent);
@@ -8501,7 +8807,7 @@ ReplayCollectionStream()
 
                 FReplayTimelineEvent CorrEvent;
                 CorrEvent.Index = i;
-                CorrEvent.Result = EReplayResult::Corrupted;
+                CorrEvent.Result = ELiveSyncReplayResult::Corrupted;
                 CorrEvent.Timestamp = FPlatformTime::Seconds();
                 CorrEvent.PayloadSize = EntrySize;
                 RecordReplayTimelineEvent(CorrEvent);
@@ -8546,7 +8852,7 @@ ReplayCollectionStream()
             SavedMembership.Num(), SavedIdentities.Num());
 
         FReplayTimelineEvent RbEvent;
-        RbEvent.Result = EReplayResult::RolledBack;
+        RbEvent.Result = ELiveSyncReplayResult::RolledBack;
         RbEvent.Timestamp = FPlatformTime::Seconds();
         RbEvent.PayloadSize = EntryCount;
         RecordReplayTimelineEvent(RbEvent);
@@ -8673,20 +8979,20 @@ ReplayCollectionStream()
 
         if (!bReplaySuccess)
         {
-            TimelineEvent.Result = EReplayResult::RolledBack;
+            TimelineEvent.Result = ELiveSyncReplayResult::RolledBack;
         }
         else if (CorruptedCount > 0)
         {
-            TimelineEvent.Result = EReplayResult::Corrupted;
+            TimelineEvent.Result = ELiveSyncReplayResult::Corrupted;
         }
         else if (GCollectionLastVerifiedHash != 0 &&
                  RebuiltHash != GCollectionLastVerifiedHash)
         {
-            TimelineEvent.Result = EReplayResult::Diverged;
+            TimelineEvent.Result = ELiveSyncReplayResult::Diverged;
         }
         else
         {
-            TimelineEvent.Result = EReplayResult::Accepted;
+            TimelineEvent.Result = ELiveSyncReplayResult::Accepted;
         }
 
         RecordReplayTimelineEvent(TimelineEvent);
