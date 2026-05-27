@@ -45,6 +45,21 @@ try:
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
         serialize_asset_identity,
+        serialize_collection_identity,
+        serialize_collection_membership,
+        COLLECTION_OP_ADD,
+        COLLECTION_OP_REMOVE,
+        COLLECTION_OP_MOVE,
+        COLLECTION_OP_CLEAR,
+        COLLECTION_OP_COLLECTION_CREATE,
+        COLLECTION_OP_COLLECTION_DELETE,
+        COLLECTION_OP_COLLECTION_REPARENT,
+        COLLECTION_PACKET_VERSION_V1,
+        start_collection_replay_recording,
+        clear_collection_replay_stream,
+        compute_full_snapshot_hash,
+        compute_collection_membership_hash,
+        make_collection_subheader,
     )
 except ImportError:
     from network import (
@@ -79,9 +94,25 @@ except ImportError:
         PT_Rename,
         PT_Hierarchy,
         PT_Delete_V5,
+        PT_Collection,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
         serialize_asset_identity,
+        serialize_collection_identity,
+        serialize_collection_membership,
+        COLLECTION_OP_ADD,
+        COLLECTION_OP_REMOVE,
+        COLLECTION_OP_MOVE,
+        COLLECTION_OP_CLEAR,
+        COLLECTION_OP_COLLECTION_CREATE,
+        COLLECTION_OP_COLLECTION_DELETE,
+        COLLECTION_OP_COLLECTION_REPARENT,
+        COLLECTION_PACKET_VERSION_V1,
+        start_collection_replay_recording,
+        clear_collection_replay_stream,
+        compute_full_snapshot_hash,
+        compute_collection_membership_hash,
+        make_collection_subheader,
     )
 
 
@@ -111,6 +142,16 @@ _last_parent_guid = {}
 # from tracked_objects at start of tick = Blender-deleted objects.
 # Cleared on start_sync, stop_sync, and reconnect to prevent false emits.
 _known_guids = set()
+
+# Phase 6F: Per-collection last known member GUIDs for collection diff detection.
+# Maps collection UUID string → set of member GUID UUID strings.
+# Updated each tick; diff against current state emits PT_Collection packets.
+_last_collection_state = {}
+
+# Phase 6F: Anti-loop guard set — GUIDs of objects whose collection state
+# was just updated by UE. These should not trigger a re-emission.
+# Cleared at the start of each tick.
+_collection_anti_loop_guids = set()
 
 tracked_objects = {}
 
@@ -471,6 +512,31 @@ def get_parent_guid(obj):
     return None
 
 
+# =========================================================
+# COLLECTION GUID HELPER (Phase 6F)
+# =========================================================
+# Generates a deterministic UUID for a Blender collection based
+# on its name, using UUID5 (SHA-1 based).
+# Stable across sessions as long as the collection name doesn't
+# change. The collection "GUID" is used as the collection
+# identity in PT_Collection packets.
+# =========================================================
+
+import uuid as _uuid
+
+_COLLECTION_NAMESPACE = _uuid.uuid5(_uuid.NAMESPACE_DNS, "uelivesync-collections")
+
+
+def _get_collection_guid(collection):
+    """Return a deterministic UUID for a Blender collection."""
+    return _uuid.uuid5(_COLLECTION_NAMESPACE, collection.name)
+
+
+def _get_collection_guid_str(collection):
+    """Return a deterministic UUID hex string for a Blender collection."""
+    return _get_collection_guid(collection).hex
+
+
 def _get_parent_depth(guid, parent_map, depth_cache, max_depth=256):
     """Compute parent-chain depth for snapshot ordering (0 = root).
 
@@ -724,7 +790,11 @@ def check_updates():
         # Phase 6E: clear known GUIDs to prevent false delete emissions
         # on the first tick after reconnect.
         global _known_guids
+        global _last_collection_state
+        global _collection_anti_loop_guids
         _known_guids.clear()
+        _last_collection_state.clear()
+        _collection_anti_loop_guids.clear()
 
         if _verbose_logging:
             print(
@@ -856,6 +926,7 @@ def check_updates():
     renames_to_send = []
     vis_payloads_to_send = []
     hierarchies_to_send = []
+    collection_payloads_to_send = []
 
     # =====================================================
     # SCENE SCAN (only when object count changes or
@@ -929,6 +1000,7 @@ def check_updates():
             _last_visibility_state.pop(guid, None)
             _last_parent_guid.pop(guid, None)
             _last_mesh_identity.pop(guid, None)
+            _last_collection_state.pop(guid, None)  # Phase 6F: cleanup collection state
 
             if _verbose_logging:
                 print(f"[DELETE] Detected: GUID={guid} — emitted V5 delete")
@@ -953,6 +1025,7 @@ def check_updates():
             _last_object_names.pop(guid, None)
             _last_visibility_state.pop(guid, None)
             _last_parent_guid.pop(guid, None)
+            _last_collection_state.pop(guid, None)  # Phase 6F: cleanup collection state
 
             deletes_to_send.append(
                 serialize_delete_v3(guid_obj)
@@ -1125,6 +1198,63 @@ def check_updates():
                     print(f"[HIERARCHY] GUID={guid} parent={prev_parent_str} → {parent_str}")
             _last_parent_guid[guid] = current_parent_guid
 
+        # =================================================
+        # Phase 6F: Collection membership detection
+        # Build current collection membership and diff against
+        # last known state. Emit ADD/REMOVE for each change.
+        # Skips anti-loop suppressed GUIDs.
+        #
+        # is_first_collection: True if this is the first tick
+        # tracking this object's collection state (prevents
+        # false emissions on startup/reconnect).
+        # =================================================
+
+        is_first_collection = guid not in _last_collection_state
+        current_coll_guids = set()
+
+        try:
+            for coll in obj.users_collection:
+                coll_guid_str = _get_collection_guid_str(coll)
+                current_coll_guids.add(coll_guid_str)
+        except Exception:
+            pass
+
+        if not is_first_collection:
+            prev_colls = _last_collection_state.get(guid, set())
+
+            if guid not in _collection_anti_loop_guids:
+                added = current_coll_guids - prev_colls
+                removed = prev_colls - current_coll_guids
+
+                for added_coll_str in added:
+                    added_coll_uuid = UUID(added_coll_str)
+                    collection_payloads_to_send.append(
+                        serialize_collection_membership(
+                            guid_obj, added_coll_uuid,
+                            COLLECTION_OP_ADD
+                        )
+                    )
+
+                for removed_coll_str in removed:
+                    removed_coll_uuid = UUID(removed_coll_str)
+                    collection_payloads_to_send.append(
+                        serialize_collection_membership(
+                            guid_obj, removed_coll_uuid,
+                            COLLECTION_OP_REMOVE
+                        )
+                    )
+
+                if _verbose_logging and (added or removed):
+                    print(
+                        f"[COLLECTION] GUID={guid} added={len(added)} "
+                        f"removed={len(removed)}"
+                    )
+
+        _last_collection_state[guid] = current_coll_guids
+
+        # Clear anti-loop guard for this GUID after processing
+        _collection_anti_loop_guids.discard(guid)
+
     # =====================================================
     # SEND DELETE PACKETS (Phase 6E V5 — identity-destruction)
     # =====================================================
@@ -1218,6 +1348,21 @@ def check_updates():
         send_objects(
             hierarchies_to_send,
             packet_type=PT_Hierarchy
+        )
+
+    # =====================================================
+    # SEND COLLECTION PACKETS (Phase 6F — Semantic Event)
+    # =====================================================
+
+    if collection_payloads_to_send:
+
+        if _verbose_logging:
+            print(f"[COLLECTION][SEND] Sending {len(collection_payloads_to_send)} collection event(s)")
+
+        send_objects(
+            collection_payloads_to_send,
+            packet_type=PT_Collection,
+            version=LIVE_SYNC_VERSION_V5
         )
 
     # =====================================================
@@ -1516,11 +1661,16 @@ def start_sync():
     global _last_object_names
     global _last_visibility_state
     global _last_parent_guid
+    global _last_collection_state  # Phase 6F
 
     last_sent_transforms.clear()
     _last_object_names.clear()
     _last_visibility_state.clear()
     _last_parent_guid.clear()
+    _last_collection_state.clear()  # Phase 6F
+
+    # Phase 6F Stage 5: Start replay recording on sync start
+    start_collection_replay_recording()
 
     tracked_objects.clear()
 
@@ -1587,12 +1737,14 @@ def stop_sync():
     global _last_visibility_state
     global _last_parent_guid
     global _known_guids
+    global _last_collection_state  # Phase 6F
 
     timer_running = False
     _last_object_names.clear()
     _last_visibility_state.clear()
     _last_parent_guid.clear()
     _known_guids.clear()
+    _last_collection_state.clear()  # Phase 6F
 
     if _timer_ref is not None:
         try:

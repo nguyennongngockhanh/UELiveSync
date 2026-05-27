@@ -227,6 +227,10 @@ enum EPacketType : uint8
     // Phase 6E: Lifecycle/delete replication (identity-destruction event)
     // See Docs/Architecture/29-phase6E-lifecycle-scope-lock.md
     PT_Delete_V5      = 0x0E,  // V5+ delete with sequence + tombstone semantics
+
+    // Phase 6F: Collection/group replication (metadata-only grouping layer)
+    // See Docs/Architecture/38-phase6F-collection-scope-lock.md
+    PT_Collection     = 0x0F,  // Collection membership events (metadata, NOT scene graph)
 };
 
 // Phase 6: Provenance for editor-originating mutations
@@ -344,6 +348,195 @@ struct FPacketHeaderV3
 
 
 // =========================================================
+// REPLAY TRACE CATEGORIES (Phase 6F Stage 7)
+// =========================================================
+
+enum class EReplayTraceCategory : uint8
+{
+    None           = 0,
+    ReplayTrace    = 0x01,  // General replay tracing
+    ReplayValidate = 0x02,  // Sequence / ordering validation
+    ReplayCorrupt  = 0x04,  // Corruption / checksum events
+    ReplayRollback = 0x08,  // Rollback / divergence events
+    All            = 0x0F,
+};
+
+ENUM_CLASS_FLAGS(EReplayTraceCategory);
+
+
+// =========================================================
+// REPLAY TRACE RUNTIME CONFIG (Phase 6F Stage 7)
+// =========================================================
+
+struct FReplayTraceConfig
+{
+    bool bTracingEnabled = false;
+    EReplayTraceCategory CategoryMask = EReplayTraceCategory::None;
+    bool bStrictDiagnostics = true;  // true=Strict, false=Relaxed
+};
+
+
+// =========================================================
+// REPLAY TIMELINE EVENT (Phase 6F Stage 7)
+// =========================================================
+// A single recorded timeline entry documenting a replay
+// operation outcome. Non-mutating — captures results for
+// forensic inspection after the fact.
+// =========================================================
+
+enum class EReplayResult : uint8
+{
+    Accepted      = 0,
+    Rejected      = 1,
+    Corrupted     = 2,
+    Diverged      = 3,
+    RolledBack    = 4,
+    Skipped       = 5,
+    SequenceGap   = 6,
+    OutOfOrder    = 7,
+    BufferOverflow = 8,
+};
+
+struct FReplayTimelineEvent
+{
+    int32      Index           = -1;     // Replay buffer index
+    uint32     Sequence        = 0;      // Packet sequence number
+    EReplayResult Result       = EReplayResult::Rejected;
+    double     Timestamp       = 0.0;    // Wall-clock time of event
+    uint8      OpType          = 0;      // Collection op type (if applicable)
+    int32      PayloadSize     = 0;      // Payload size (30 or 46)
+    uint64     StateHashAfter  = 0;      // Collection hash after (if accepted)
+
+    FString ToString() const
+    {
+        return FString::Printf(
+            TEXT("[idx=%d seq=%u result=%d op=0x%02X size=%d hash=0x%016llX]"),
+            Index, Sequence, static_cast<int32>(Result),
+            OpType, PayloadSize, StateHashAfter);
+    }
+};
+
+
+// =========================================================
+// REPLAY TIMELINE (Phase 6F Stage 7)
+// =========================================================
+// Bounded ring buffer of replay timeline events.
+// Capacity: 1024 events (FIFO eviction on overflow).
+// Written by game thread during ReplayCollectionStream().
+// Read by diagnostics/console dump.
+// =========================================================
+
+struct FReplayTimeline
+{
+    static constexpr int32 MAX_EVENTS = 1024;
+
+    TArray<FReplayTimelineEvent> Events;
+    int32 NextIndex = 0;
+    int32 TotalRecorded = 0;
+
+    void Record(const FReplayTimelineEvent& Event)
+    {
+        if (Events.Num() < MAX_EVENTS)
+        {
+            Events.Add(Event);
+        }
+        else
+        {
+            Events[NextIndex] = Event;
+        }
+        NextIndex = (NextIndex + 1) % MAX_EVENTS;
+        TotalRecorded++;
+    }
+
+    void Clear()
+    {
+        Events.Empty();
+        NextIndex = 0;
+        TotalRecorded = 0;
+    }
+
+    int32 Num() const { return Events.Num(); }
+};
+
+
+// =========================================================
+// REPLAY WINDOW STATISTICS (Phase 6F Stage 7)
+// =========================================================
+// Rolling window of recent replay metrics for diagnostics.
+// =========================================================
+
+struct FReplayWindowStats
+{
+    static constexpr int32 WINDOW_SIZE = 120;  // 120 samples
+
+    TArray<double> DurationSamples;     // Replay durations (ms)
+    TArray<double> RebuildSamples;      // Rebuild durations (ms)
+    TArray<double> HashVerifySamples;   // Hash verify durations (ms)
+    int32 NextDurationIndex = 0;
+    int32 NextHashIndex = 0;
+
+    void RecordDuration(double Ms)
+    {
+        if (DurationSamples.Num() < WINDOW_SIZE)
+            DurationSamples.Add(Ms);
+        else
+            DurationSamples[NextDurationIndex] = Ms;
+        NextDurationIndex = (NextDurationIndex + 1) % WINDOW_SIZE;
+    }
+
+    void RecordRebuild(double Ms)
+    {
+        if (RebuildSamples.Num() < WINDOW_SIZE)
+            RebuildSamples.Add(Ms);
+        else
+            RebuildSamples[NextDurationIndex] = Ms;
+    }
+
+    void RecordHashVerify(double Ms)
+    {
+        if (HashVerifySamples.Num() < WINDOW_SIZE)
+            HashVerifySamples.Add(Ms);
+        else
+            HashVerifySamples[NextHashIndex] = Ms;
+        NextHashIndex = (NextHashIndex + 1) % WINDOW_SIZE;
+    }
+
+    double AvgDurationMs() const
+    {
+        if (DurationSamples.Num() == 0) return 0.0;
+        double Sum = 0.0;
+        for (double D : DurationSamples) Sum += D;
+        return Sum / DurationSamples.Num();
+    }
+
+    double AvgRebuildMs() const
+    {
+        if (RebuildSamples.Num() == 0) return 0.0;
+        double Sum = 0.0;
+        for (double D : RebuildSamples) Sum += D;
+        return Sum / RebuildSamples.Num();
+    }
+
+    double AvgHashVerifyMs() const
+    {
+        if (HashVerifySamples.Num() == 0) return 0.0;
+        double Sum = 0.0;
+        for (double D : HashVerifySamples) Sum += D;
+        return Sum / HashVerifySamples.Num();
+    }
+
+    void Clear()
+    {
+        DurationSamples.Empty();
+        RebuildSamples.Empty();
+        HashVerifySamples.Empty();
+        NextDurationIndex = 0;
+        NextHashIndex = 0;
+    }
+};
+
+
+// =========================================================
 // RUNTIME METRICS (lock-free, atomics)
 // =========================================================
 
@@ -403,6 +596,49 @@ struct FLiveSyncStats
     std::atomic<int32> DeleteTombstoneRejections{0};   // Packet blocked by tombstone check
     std::atomic<int32> DeleteMissingActor{0};          // Delete for GUID not in ActorCache
     std::atomic<int32> DeleteDeferredDuringSnapshot{0};// Delete deferred during snapshot replay (CREATE not yet processed)
+
+    // --- Collection diagnostics (Phase 6F, written by game thread) ---
+    std::atomic<int32> CollectionPacketsReceived{0};    // Total PT_Collection packets received
+    std::atomic<int32> CollectionStaleRejected{0};       // Stale/duplicate sequence rejections
+    std::atomic<int32> CollectionDuplicateRejected{0};   // Exact duplicate sequence rejections
+    std::atomic<int32> CollectionAddsApplied{0};         // ADD membership mutations applied
+    std::atomic<int32> CollectionRemovesApplied{0};      // REMOVE membership mutations applied
+    std::atomic<int32> CollectionMovesApplied{0};        // MOVE membership mutations applied
+    std::atomic<int32> CollectionClearsApplied{0};       // CLEAR membership mutations applied
+    std::atomic<int32> CollectionReplayProcessed{0};     // Packets replayed from ring buffer
+    std::atomic<int32> CollectionReplayRejected{0};      // Replay packets rejected (stale/malformed)
+    std::atomic<int32> CollectionSnapshotHashMismatch{0};// Snapshot hash divergence detected
+    std::atomic<int32> CollectionSnapshotRebuilds{0};    // Full snapshot rebuilds completed
+    std::atomic<int32> CollectionReplaySequenceGap{0};   // Replay sequence gap detected
+    std::atomic<int32> CollectionReplayOutOfOrder{0};    // Replay out-of-order insertion detected
+    std::atomic<int32> CollectionReplayDivergence{0};     // Replay divergence detected
+    std::atomic<int32> CollectionReplayCorruption{0};     // Replay corruption detected
+    std::atomic<int32> CollectionReplayRollbacks{0};      // Replay rollbacks performed
+
+    // --- Collection observability (Phase 6F Stage 7, written by game thread) ---
+    std::atomic<int32> CollectionReplayTimelineRecorded{0};    // Timeline events recorded
+    std::atomic<int32> CollectionReplayTracesEmitted{0};       // Verbose trace lines emitted
+    std::atomic<int32> CollectionReplayBufferOverflow{0};      // Replay buffer overflow count
+    std::atomic<int32> CollectionReplayPacketsTruncated{0};    // Replay packets truncated
+    std::atomic<int32> CollectionReplayPacketsDropped{0};      // Replay packets dropped (FIFO)
+    std::atomic<int32> CollectionReplayPeakBufferUsage{0};     // Peak replay buffer entries
+    std::atomic<int32> CollectionReplayLatencySamples{0};      // Replay latency metric samples
+    std::atomic<int32> CollectionReplayReconnectRebuilds{0};   // Reconnects requiring rebuild
+    std::atomic<int32> CollectionReplayReconnectPacketsReplayed{0};  // Packets replayed on reconnect
+    std::atomic<int32> CollectionReplayReconnectDivergences{0};     // Divergences detected on reconnect
+    std::atomic<int32> CollectionReplayReconnectRollbacks{0};       // Rollbacks on reconnect
+
+    // --- Unified world replay (Phase 6G, written by game thread) ---
+    std::atomic<int32> WorldReplayEntriesRecorded{0};            // Total unified entries recorded
+    std::atomic<int32> WorldReplayVerifications{0};              // World replay verification runs
+    std::atomic<int32> WorldReplayDivergences{0};                // World-state hash mismatches
+    std::atomic<int32> WorldReplayRollbacks{0};                  // Cross-domain rollbacks
+    std::atomic<int32> WorldReplayCorruption{0};                 // Corrupted entries detected
+    std::atomic<int32> WorldReplayDependencyViolations{0};       // Cross-domain dependency violations
+    std::atomic<int32> WorldReplaySnapshotExports{0};            // World snapshot exports
+    std::atomic<int32> WorldReplaySnapshotRebuilds{0};           // World snapshot rebuilds
+    std::atomic<int32> WorldReplayReconnectRebuilds{0};          // Reconnect world rebuilds
+    std::atomic<int32> WorldReplayReconnectDivergences{0};       // Reconnect world divergences
 
     // --- Per-frame timing (written by game thread) ---
     double LastPacketTime = 0.0;
@@ -691,6 +927,230 @@ struct FDeleteSequenceTracker
 
 
 // =========================================================
+// COLLECTION SEQUENCE TRACKER (Phase 6F, PT_Collection = 0x0F)
+// =========================================================
+// Tracks the last-applied collection sequence number per GUID
+// for stale/duplicate replay rejection.
+//
+// Per-GUID monotonic sequence tracking. Bounded at 2048 entries,
+// evicts oldest on overflow. Cleared on StopNetworkThread and
+// ConsoleReset.
+//
+// See Docs/Architecture/38-phase6F-collection-scope-lock.md
+// and 39-phase6F-vertical-slice-collection.md
+// =========================================================
+
+struct FCollectionSequenceTracker
+{
+    TMap<FGuid, uint32> LastSequence;
+    static constexpr uint32 MAX_TRACKED_GUIDS = 2048;
+
+    bool IsStaleOrDuplicate(const FGuid& Guid, uint32 IncomingSeq)
+    {
+        if (const uint32* LastSeq = LastSequence.Find(Guid))
+        {
+            return IncomingSeq <= *LastSeq;
+        }
+        return false;
+    }
+
+    void Update(const FGuid& Guid, uint32 AppliedSeq)
+    {
+        if (LastSequence.Num() >= MAX_TRACKED_GUIDS)
+        {
+            LastSequence.Remove(LastSequence.CreateIterator().Key());
+        }
+        LastSequence.Add(Guid, AppliedSeq);
+    }
+
+    void Clear()
+    {
+        LastSequence.Empty();
+    }
+};
+
+
+// =========================================================
+// COLLECTION PACKET CONSTANTS (Phase 6F)
+// =========================================================
+// Wire format (30 bytes base per operation):
+//   offset  size  field
+//   0       16    TargetGuid (4 × uint32 LE)
+//   16       1    OpType (uint8: ADD/REMOVE/MOVE/etc.)
+//   17       1    OpFlags (uint8: bitmask)
+//   18       4    sequence_number (uint32 LE, monotonic per-(TargetGuid,CollectionGuid))
+//   22       8    timestamp (double LE)
+//
+// Membership operations (ADD/REMOVE/MOVE/CLEAR) append an
+// additional CollectionGuid(16) for 46 bytes total.
+// Collection-identity operations (COLLECTION_CREATE/DELETE/
+// RENAME/REPARENT) use the TargetGuid as the collection GUID
+// and are 30 bytes total.
+//
+// Stage 1-3 implementation: parse base 30 bytes only.
+// Extended parsing deferred to later stages.
+//
+// See Docs/Architecture/39-phase6F-vertical-slice-collection.md §1.2
+// =========================================================
+
+static constexpr int32
+    LIVE_SYNC_COLLECTION_BASE_SIZE =
+        30;
+
+static constexpr int32
+    LIVE_SYNC_COLLECTION_MEMBERSHIP_SIZE =
+        46;
+
+// Collection operation types (OpType field)
+static constexpr uint8
+    COLLECTION_OP_ADD            = 0x01,
+    COLLECTION_OP_REMOVE         = 0x02,
+    COLLECTION_OP_MOVE           = 0x03,
+    COLLECTION_OP_CLEAR          = 0x04,
+    COLLECTION_OP_RENAME_REF     = 0x05,
+    COLLECTION_OP_COLLECTION_CREATE    = 0x06,
+    COLLECTION_OP_COLLECTION_DELETE    = 0x07,
+    COLLECTION_OP_COLLECTION_REPARENT  = 0x08;
+
+// Collection packet versioning (Phase 6F Stage 5)
+static constexpr uint8
+    COLLECTION_PACKET_VERSION_V1 = 0x01;  // Stage 4+ wire format
+
+// Collection packet header flag: bit 0 = sub-header present
+static constexpr uint8
+    COLLECTION_PACKET_FLAG_HAS_SUBHEADER = 0x01;
+
+// Collection packet payload sub-header size (version + reserved)
+static constexpr int32
+    LIVE_SYNC_COLLECTION_SUBHEADER_SIZE =
+        2;
+
+// Collection replay: max recorded packets in ring buffer (2048)
+static constexpr int32
+    LIVE_SYNC_COLLECTION_MAX_REPLAY =
+        2048;
+
+// Collection snapshot schema version (Stage 6)
+static constexpr int32
+    COLLECTION_SNAPSHOT_SCHEMA_VERSION = 1;
+
+// Replay ordering validation modes
+enum class ECollectionReplayOrderMode : uint8
+{
+    None    = 0,  // No ordering validation (Stage 5 compat)
+    Strict  = 1,  // Strict monotonic sequence order
+    Relaxed = 2   // Allow same-sequence duplicates (merge)
+};
+
+
+// =========================================================
+// UNIFIED REPLAY DOMAIN (Phase 6G)
+// =========================================================
+// Domain classification for replay packet entries.
+// Used by the unified replay system to categorize and
+// process replay entries across all synchronization domains.
+// =========================================================
+
+enum class EWorldReplayDomain : uint8
+{
+    Unknown      = 0,
+    Collection   = 1,  // PT_Collection (collection membership/identity)
+    Lifecycle    = 2,  // PT_Create, PT_Delete, PT_Delete_V5
+    Rename       = 3,  // PT_Rename
+    Transform    = 4,  // PT_Transform (state-sampled, not raw-stream)
+};
+
+
+// =========================================================
+// UNIFIED REPLAY ENTRY (Phase 6G)
+// =========================================================
+// A single replay entry for the unified replay buffer.
+// Stores all metadata needed for deterministic replay
+// verification across all domains.
+// =========================================================
+
+struct FWorldReplayEntry
+{
+    EWorldReplayDomain Domain   = EWorldReplayDomain::Unknown;
+    uint8              PacketType = 0;    // Original PT_* constant
+    FGuid              Guid;              // Primary GUID (target/child)
+    FGuid              SecondaryGuid;     // Secondary GUID (parent/collection)
+    uint32             Sequence  = 0;     // Domain-level sequence number
+    double             Timestamp = 0.0;   // Packet timestamp
+    TArray<uint8>      Payload;           // Canonical payload bytes
+    uint32             Checksum  = 0;     // FNV-1a of payload
+
+    bool IsValid() const
+    {
+        return Domain != EWorldReplayDomain::Unknown
+            && (Guid.IsValid() || Payload.Num() > 0);
+    }
+};
+
+
+// =========================================================
+// UNIFIED WORLD-STATE SNAPSHOT (Phase 6G)
+// =========================================================
+// Captures the synchronized world state at a point in time.
+// Used for rollback save/restore, hash verification, and
+// deterministic snapshot export/rebuild.
+// =========================================================
+
+struct FWorldStateSnapshot
+{
+    // Collection domain state
+    TMap<FGuid, FGuid>     CollectionMembership;  // object → collection (flat map)
+    TMap<FGuid, FString>   CollectionIdentities;  // collection → name
+    TMap<FGuid, uint32>    CollectionSequences;   // per-GUID last sequence
+
+    // Lifecycle domain state
+    TSet<FGuid>            ActiveActors;          // GUIDs with live actors
+    TMap<FGuid, uint32>    DeleteSequences;       // per-GUID delete sequence
+
+    // Rename domain state
+    TMap<FGuid, FString>   ActorNames;            // GUID → display name
+
+    // Transform domain state (lightweight)
+    int32                  TransformCount   = 0;  // Number of tracked transforms
+    uint64                 TransformHash    = 0;  // Combined hash of all transforms
+
+    // Metadata
+    double                 CaptureTime = 0.0;
+    static constexpr int32 SCHEMA_VERSION = 1;
+
+    bool operator==(const FWorldStateSnapshot& Other) const
+    {
+        return CollectionMembership == Other.CollectionMembership
+            && CollectionIdentities == Other.CollectionIdentities
+            && CollectionSequences  == Other.CollectionSequences
+            && ActiveActors         == Other.ActiveActors
+            && DeleteSequences      == Other.DeleteSequences
+            && ActorNames           == Other.ActorNames
+            && TransformCount       == Other.TransformCount
+            && TransformHash        == Other.TransformHash;
+    }
+
+    bool operator!=(const FWorldStateSnapshot& Other) const
+    {
+        return !(*this == Other);
+    }
+
+    void Clear()
+    {
+        CollectionMembership.Empty();
+        CollectionIdentities.Empty();
+        CollectionSequences.Empty();
+        ActiveActors.Empty();
+        DeleteSequences.Empty();
+        ActorNames.Empty();
+        TransformCount = 0;
+        TransformHash = 0;
+        CaptureTime = 0.0;
+    }
+};
+
+
+// =========================================================
 // PROTOCOL CONSTANTS
 // =========================================================
 
@@ -818,12 +1278,16 @@ static constexpr uint32
     H = fnv(H, 80); H = fnv(H, 81);
     H = fnv(H, 16); H = fnv(H, 33);
     H = fnv(H, 28); // LIVE_SYNC_DELETE_V5_SIZE
+    H = fnv(H, 30); // LIVE_SYNC_COLLECTION_BASE_SIZE
+    H = fnv(H, 46); // LIVE_SYNC_COLLECTION_MEMBERSHIP_SIZE
+    H = fnv(H, COLLECTION_PACKET_VERSION_V1); // collection packet version
     // Packet types
     H = fnv(H, 0x01); H = fnv(H, 0x03);
     H = fnv(H, 0x04); H = fnv(H, 0x07);
     H = fnv(H, 0x08); H = fnv(H, 0x09);
     H = fnv(H, 0x0A); H = fnv(H, 0x0B); H = fnv(H, 0x0C); H = fnv(H, 0x0D);
     H = fnv(H, 0x0E); // PT_Delete_V5
+    H = fnv(H, 0x0F); // PT_Collection
 
     return H;
 }();

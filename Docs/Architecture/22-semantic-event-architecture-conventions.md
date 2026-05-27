@@ -1,9 +1,10 @@
 # Semantic Event Architecture Conventions
 
-> **Created**: 2026-05-25 · **Updated**: 2026-05-26 (terminology consolidation)
-> **Phase 5**: COMPLETE · **Phase 6**: ACTIVE
+> **Created**: 2026-05-25 · **Updated**: 2026-05-27 (freeze checkpoint)
+> **Phase 5**: COMPLETE · **Phase 6**: ACTIVE · **Freeze**: ACTIVE
 > **Lanes**: Rename STABILIZED (6A/6B) · Visibility STABILIZED (6C) · Hierarchy STABILIZED (6D) · Lifecycle/Delete STABILIZED (6E)
 > **Runtime core**: FROZEN (`v0.5.0-stabilized`)
+> **Freeze checkpoint**: `36-phase6-stabilization-freeze-checkpoint.md` · `37-phase6-invariant-checklist.md`
 >
 > Architectural conventions established by Rename and Visibility
 > semantic-event vertical slices. Formalized before adding
@@ -27,6 +28,7 @@
 11. [Semantic Lane Inventory](#11-semantic-lane-inventory)
 12. [Canonical Reference](#12-canonical-reference)
 13. [Revision History](#13-revision-history)
+14. [Phase 6 Stabilization Freeze](#14-phase-6-stabilization-freeze)
 
 ---
 
@@ -875,3 +877,71 @@ Key:
 | 2026-05-26 | 2.1 | Updated roadmap §12.2: Hierarchy Stage 9 complete (orphan lifecycle stabilization + explicit cycle detection). Updated status table §12.4. |
 | 2026-05-26 | 2.2 | Hierarchy STABILIZED: Stage 10-12 implementation complete (Blender detection + serialization + depth-sort snapshot), Stage 13 runtime validation complete (97/97 standalone pass, 49/49 audit pass). Updated lanes header, roadmap §12.2, and status table §12.4. |
 | 2026-05-26 | 2.3 | Lifecycle/Delete STABILIZED: Phase 6E Stages 0-13 complete. 308/308 standalone tests, 102/102 audit checks, 17/17 stabilization criteria met. Added §11.3 for lifecycle lane inventory. Updated §8.1 (0x0E → Stabilized), §11.4 (hierarchy → STABILIZED), §12.2-12.4 (roadmap + status table). |
+| 2026-05-27 | 3.0 | Phase 6 Stabilization Freeze checkpoint: added §14 with freeze rules, cross-lane interaction summary, invariant checklist reference, and new lane implications. Updated header to reference freeze checkpoint. |
+
+---
+
+## 14. Phase 6 Stabilization Freeze
+
+> **Introduced**: 2026-05-27
+> **Covering**: Rename (6A), Visibility (6C), Hierarchy (6D), Lifecycle/Delete (6E)
+> **Documents**: `36-phase6-stabilization-freeze-checkpoint.md` · `37-phase6-invariant-checklist.md`
+
+### 14.1 Purpose
+
+The Phase 6 Stabilization Freeze formally locks all four validated
+semantic lanes after live UE Editor validation. It is a non-functional
+architectural meta-stability checkpoint — no runtime code is modified,
+no new behavior is introduced.
+
+### 14.2 Hard Guarantees
+
+| # | Rule |
+|---|------|
+| 1 | No semantic lane may modify an existing lane's code. All new lanes must be additive-only. |
+| 2 | No lane may introduce cross-lane state coupling. Sequence trackers must remain per-lane and isolated. |
+| 3 | All new work must be additive-only. No modifications to frozen runtime systems. |
+| 4 | Any violation constitutes a freeze break requiring immediate rollback and incident review. |
+| 5 | New packet types must be appended to the existing FNV signature. |
+
+See `36-phase6-stabilization-freeze-checkpoint.md §5` for full freeze rules and exceptions.
+
+### 14.3 Cross-Lane Interaction Summary
+
+| Pair | Conflict Detected |
+|------|-----------------|
+| Rename ↔ Visibility | NO CONFLICT — independent state |
+| Rename ↔ Hierarchy | NO CONFLICT — independent subsystems |
+| Rename ↔ Delete | NO CONFLICT — tombstone gates rename of deleted GUIDs |
+| Visibility ↔ Hierarchy | NO CONFLICT — independent state |
+| Visibility ↔ Delete | NO CONFLICT — tombstone gates visibility of deleted GUIDs |
+| Hierarchy ↔ Delete | NO CONFLICT — delete evicts; tombstone gates re-attach |
+| All 5 lanes simultaneous | NO CONFLICT — 10-min soak, 0 crashes, 4 reconnects |
+
+Full matrix: `36-phase6-stabilization-freeze-checkpoint.md §3`.
+
+### 14.4 Invariant Checklist
+
+66 invariants across 5 categories are all VERIFIED:
+
+| Category | Verified |
+|----------|----------|
+| A. Structural (Build-Time) | 18/18 ✅ |
+| B. Runtime (Test-Time) | 18/18 ✅ |
+| C. Cross-Lane (Integration) | 12/12 ✅ |
+| D. Observability | 8/8 ✅ |
+| E. Blender-Side | 10/10 ✅ |
+
+Complete checklist: `37-phase6-invariant-checklist.md`.
+
+### 14.5 Implications for New Lanes
+
+Any new semantic lane (6F, 6G, etc.) must:
+
+1. Be additive-only — no modification of existing lane code or frozen core
+2. Have its own packet type, parser branch, sequence tracker, counters, profiler scopes, suppression guard
+3. Follow semantic event conventions defined in this document
+4. Respect tombstone gating (no operations on deleted GUIDs)
+5. Have bounded memory (2048 max for all structures)
+6. Include cross-lane interaction testing in validation
+7. **Critical**: Collections must NOT modify lifecycle/delete behavior — collection state is metadata, not structural state

@@ -235,6 +235,123 @@ private:
         EChangeOrigin Origin);
 
     // =====================================================
+    // COLLECTION REPLICATION (Phase 6F)
+    // =====================================================
+
+    void HandleCollection(
+        const FGuid& TargetGuid,
+        uint8 OpType,
+        uint8 OpFlags,
+        uint32 SequenceNumber,
+        double Timestamp,
+        const FGuid* CollectionGuid = nullptr);
+
+    // =====================================================
+    // COLLECTION REPLAY + SNAPSHOT (Phase 6F Stage 5)
+    // =====================================================
+
+    /** Record a raw collection payload to the replay ring buffer. */
+    void RecordCollectionReplayPayload(const uint8* Payload, int32 PayloadSize, uint32 SequenceNumber = 0);
+
+    /** Enable/disable collection replay recording. */
+    void SetCollectionReplayEnabled(bool bEnabled);
+
+    /** Clear and replay the recorded collection packet stream. */
+    void ReplayCollectionStream();
+
+    /** Export the entire collection state as a canonical snapshot. */
+    FString ExportCollectionSnapshot() const;
+
+    /** Rebuild collection state from a canonical snapshot string. */
+    bool RebuildCollectionFromSnapshot(const FString& Snapshot);
+
+    /** Compute deterministic hash of current collection state. */
+    uint64 ComputeCollectionStateHash() const;
+
+    // =====================================================
+    // COLLECTION OBSERVABILITY (Phase 6F Stage 7)
+    // =====================================================
+
+    /** Record a timeline event during replay. */
+    void RecordReplayTimelineEvent(const FReplayTimelineEvent& Event);
+
+    /** Clear replay timeline. */
+    void ClearReplayTimeline();
+
+    /** Get replay timeline (const ref). */
+    const FReplayTimeline& GetReplayTimeline() const;
+
+    /** Emit a verbose replay trace if tracing is enabled. */
+    void EmitReplayTrace(
+        EReplayTraceCategory Category,
+        const FString& Message);
+
+    /** Check if replay tracing is active for a given category. */
+    bool IsReplayTracingActive(EReplayTraceCategory Category) const;
+
+    /** Toggle replay tracing at runtime. */
+    void SetReplayTracingEnabled(bool bEnabled, EReplayTraceCategory CategoryMask = EReplayTraceCategory::All);
+
+    /** Record replay timing sample. */
+    void RecordReplayTiming(double DurationMs, double RebuildMs, double HashVerifyMs);
+
+    /** Get rolling replay window stats. */
+    const FReplayWindowStats& GetReplayWindowStats() const;
+
+    /** Export replay buffer state as text. */
+    FString DumpReplayBuffer() const;
+
+    /** Export collection membership graph as text. */
+    FString DumpCollectionGraph() const;
+
+    /** Force a replay verification run (idempotent, non-mutating). */
+    FString ForceReplayVerification();
+
+    /** Clear all replay observability diagnostics. */
+    void ClearReplayDiagnostics();
+
+    /** Check replay buffer health; emit warnings near capacity. */
+    void CheckReplayBufferHealth();
+
+    /** Export current collection state diagnostics. */
+    FString ExportCollectionDiagnostics() const;
+
+    // =====================================================
+    // UNIFIED WORLD REPLAY (Phase 6G)
+    // =====================================================
+
+    /** Record a world replay entry from any domain. */
+    void RecordWorldReplayEntry(const FWorldReplayEntry& Entry);
+
+    /** Enable/disable world replay recording. */
+    void SetWorldReplayEnabled(bool bEnabled);
+
+    /** Compute deterministic world-state hash across all domains. */
+    uint64 ComputeWorldStateHash() const;
+
+    /** Save current world state for rollback. */
+    void SaveWorldState();
+
+    /** Restore world state from last save point. */
+    void RestoreWorldState();
+
+    /** Verify world replay by replaying buffer and comparing hash. */
+    FString VerifyWorldReplay();
+
+    /** Export unified world snapshot as canonical text. */
+    FString ExportWorldSnapshot() const;
+
+    /** Rebuild world state from canonical snapshot text. */
+    bool RebuildWorldFromSnapshot(const FString& Snapshot);
+
+    /** Dump world replay state for developer diagnostics. */
+    FString DumpWorldReplayState() const;
+
+    /** Check cross-domain dependency ordering in the replay buffer. */
+    void CheckReplayDependencies();
+
+
+    // =====================================================
     // ASSET RESOLUTION (Phase 5D)
     // =====================================================
 
@@ -401,6 +518,26 @@ private:
     void ConsolePing();
 
     void ConsoleStats();
+
+    // Phase 6F Stage 7 — Observability console commands
+    void ConsoleDumpReplayBuffer();
+
+    void ConsoleDumpCollectionGraph();
+
+    void ConsoleVerifyCollectionReplay();
+
+    void ConsoleClearReplayDiagnostics();
+
+    void ConsoleToggleReplayTracing();
+
+    // Phase 6G — Unified world replay console commands
+    void ConsoleDumpWorldReplayState();
+
+    void ConsoleVerifyWorldReplay();
+
+    void ConsoleDumpReplayTimeline();
+
+    void ConsoleExportWorldSnapshot();
 
     // =====================================================
     // ASSET RESOLUTION DATA (Phase 5D)

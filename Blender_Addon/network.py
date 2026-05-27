@@ -37,7 +37,7 @@ def _compute_protocol_signature():
     import struct as _s
     for size in (24, 22, 80, 81, 16, 33, 28):
         h = _fnv(h, size)
-    for pt in (0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E):
+    for pt in (0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F):
         h = _fnv(h, pt)
     return h
 
@@ -65,6 +65,16 @@ PT_Visibility = 0x0B
 PT_Rename = 0x0C
 PT_Hierarchy = 0x0D
 PT_Delete_V5 = 0x0E  # Phase 6E: lifecycle/delete (V5+, 28-byte fixed payload)
+PT_Collection = 0x0F  # Phase 6F: collection/group replication (metadata-only)
+
+# Collection packet versioning (Phase 6F Stage 5)
+COLLECTION_PACKET_VERSION_V1 = 0x01
+
+# Collection packet payload sub-header size (version byte + reserved byte)
+LIVE_SYNC_COLLECTION_SUBHEADER_SIZE = 2
+
+# Collection packet header flag: set bit 0 to indicate Stage 5+ sub-header present
+COLLECTION_PACKET_FLAG_HAS_SUBHEADER = 0x01
 
 # V4 protocol version
 LIVE_SYNC_VERSION_V4 = 4
@@ -607,6 +617,262 @@ def serialize_hierarchy(guid_obj, parent_guid_obj):
 
 
 # =========================================================
+# GUID PACKING HELPER (shared by collection serializers)
+# =========================================================
+
+def _pack_guid(guid_obj):
+    """Pack a GUID into 16 bytes (4 × uint32 LE)."""
+    d_a = guid_obj.time_low
+    d_b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
+    d_c = (guid_obj.clock_seq_hi_variant << 24
+           | guid_obj.clock_seq_low << 16
+           | (guid_obj.node >> 32) & 0xFFFF)
+    d_d = guid_obj.node & 0xFFFFFFFF
+    return struct.pack("<IIII", d_a, d_b, d_c, d_d)
+
+
+# =========================================================
+# COLLECTION SERIALIZATION (Phase 6F, PT_Collection = 0x0F)
+# =========================================================
+# Two variants:
+#   1. Identity variant (30 bytes) — for collection-identity ops
+#      (COLLECTION_CREATE, COLLECTION_DELETE, COLLECTION_RENAME,
+#       COLLECTION_REPARENT). TargetGuid is the collection GUID.
+#
+#   2. Membership variant (46 bytes) — for membership ops
+#      (ADD, REMOVE, MOVE, CLEAR). Includes TargetGuid (actor) +
+#      CollectionGuid.
+#
+# See Docs/Architecture/39-phase6F-vertical-slice-collection.md §1.2
+# =========================================================
+
+_collection_sequences = {}
+
+# Anti-loop guard: GUIDs that were just updated by UE and should
+# not trigger Blender re-emission. Cleared each tick.
+_collection_suppressed_guids = set()
+
+
+def serialize_collection_identity(guid_obj, op_type, op_flags=0):
+    """30 bytes: TargetGuid(16) + OpType(1) + OpFlags(1) + seq(4) + ts(8).
+
+    Used for COLLECTION_CREATE, COLLECTION_DELETE, COLLECTION_RENAME,
+    COLLECTION_REPARENT operations.
+    """
+    payload = bytearray()
+
+    # TargetGuid (collection identity)
+    payload.extend(_pack_guid(guid_obj))
+
+    # OpType
+    payload.extend(struct.pack("<B", op_type))
+
+    # OpFlags
+    payload.extend(struct.pack("<B", op_flags))
+
+    # Monotonic sequence per GUID (replay dedup)
+    guid_key = str(guid_obj)
+    seq = _collection_sequences.get(guid_key, 0) + 1
+    _collection_sequences[guid_key] = seq
+    payload.extend(struct.pack("<I", seq))
+
+    # Timestamp
+    payload.extend(struct.pack("<d", time.time()))
+
+    # Record to replay stream (Stage 5)
+    record_collection_payload(payload)
+
+    return payload
+
+
+def serialize_collection_membership(guid_obj, collection_guid_obj, op_type, op_flags=0):
+    """46 bytes: TargetGuid(16) + CollectionGuid(16) + OpType(1) + OpFlags(1) + seq(4) + ts(8).
+
+    Used for ADD, REMOVE, MOVE, CLEAR operations.
+    guid_obj = actor GUID
+    collection_guid_obj = collection GUID
+    """
+    payload = bytearray()
+
+    # TargetGuid (actor)
+    payload.extend(_pack_guid(guid_obj))
+
+    # CollectionGuid
+    payload.extend(_pack_guid(collection_guid_obj))
+
+    # OpType
+    payload.extend(struct.pack("<B", op_type))
+
+    # OpFlags
+    payload.extend(struct.pack("<B", op_flags))
+
+    # Monotonic sequence per pair key (actor + collection for dedup)
+    pair_key = str(guid_obj) + ":" + str(collection_guid_obj)
+    seq = _collection_sequences.get(pair_key, 0) + 1
+    _collection_sequences[pair_key] = seq
+    payload.extend(struct.pack("<I", seq))
+
+    # Timestamp
+    payload.extend(struct.pack("<d", time.time()))
+
+    # Record to replay stream (Stage 5)
+    record_collection_payload(payload)
+
+    return payload
+
+
+# =========================================================
+# CANONICAL SORTING HELPERS (Phase 6F Stage 5)
+# =========================================================
+# All collection GUID iteration must be sorted before
+# hashing or snapshot serialization to guarantee
+# deterministic output across runs and platforms.
+# =========================================================
+
+def _sorted_guids(guid_set):
+    """Return a sorted list of GUID hex strings from a set."""
+    return sorted(str(g) for g in guid_set)
+
+
+def _sorted_membership(membership_map):
+    """Return collection-GUID → sorted member-GUIDs, canonically ordered.
+
+    Args:
+        membership_map: dict of {collection_guid_str: set_of_member_guid_strs}
+
+    Returns:
+        list of (collection_guid_str, list_of_member_guid_strs) sorted
+        by collection GUID, with each member list sorted.
+    """
+    result = []
+    for coll_str in sorted(membership_map.keys()):
+        result.append((coll_str, sorted(membership_map[coll_str])))
+    return result
+
+
+# =========================================================
+# STABLE HASHING HELPERS (Phase 6F Stage 5)
+# =========================================================
+
+def compute_collection_membership_hash(membership_map):
+    """Compute a deterministic xxHash64 of the full membership state.
+
+    Args:
+        membership_map: dict of {collection_guid_str: set_of_member_guid_strs}
+
+    Returns:
+        64-bit integer hash
+    """
+    canonical_pairs = _sorted_membership(membership_map)
+    buf = bytearray()
+    for coll_str, members in canonical_pairs:
+        buf.extend(coll_str.encode("ascii"))
+        for m in members:
+            buf.extend(m.encode("ascii"))
+    return xxh64(bytes(buf))
+
+
+def compute_full_snapshot_hash(collection_identities, membership_map):
+    """Compute a deterministic xxHash64 of the entire collection snapshot.
+
+    Hashes collection identities (sorted by GUID) first, then
+    full membership state (sorted).
+
+    Args:
+        collection_identities: dict/set of collection GUID strings
+        membership_map: dict of {collection_guid_str: set_of_member_guid_strs}
+
+    Returns:
+        64-bit integer hash
+    """
+    buf = bytearray()
+
+    # Hash identities in canonical order
+    for coll_str in _sorted_guids(collection_identities):
+        buf.extend(coll_str.encode("ascii"))
+
+    # Hash membership in canonical order
+    for coll_str, members in _sorted_membership(membership_map):
+        buf.extend(coll_str.encode("ascii"))
+        for m in members:
+            buf.extend(m.encode("ascii"))
+
+    return xxh64(bytes(buf))
+
+
+# =========================================================
+# COLLECTION PACKET SUB-HEADER (Phase 6F Stage 5)
+# =========================================================
+# Prepended once before the collection objects array.
+# Format: Version(1) + Reserved(1)
+# V1 = current 30B/46B layout
+# =========================================================
+
+def make_collection_subheader(version=COLLECTION_PACKET_VERSION_V1):
+    """2 bytes: version + reserved."""
+    return struct.pack("<BB", version, 0)
+
+
+def parse_collection_subheader(data):
+    """Parse (version, reserved) from data bytes.
+
+    Returns (version, reserved) or (0, 0) if data is too short.
+    """
+    if len(data) < 2:
+        return (0, 0)
+    version, reserved = struct.unpack_from("<BB", data, 0)
+    return (version, reserved)
+
+
+# =========================================================
+# COLLECTION REPLAY STREAM (Blender-side recording, Phase 6F Stage 5)
+# =========================================================
+# Append-only in-memory stream of sent PT_Collection packets.
+# Each entry is the raw per-object payload bytes (30 or 46 bytes).
+# Reset on disconnect/reconnect/end-snapshot.
+# Bounded at COLLECTION_MAX_REPLAY_RECORD entries.
+# =========================================================
+
+COLLECTION_MAX_REPLAY_RECORD = 2048
+_collection_replay_stream = []
+_collection_replay_enabled = True
+
+
+def start_collection_replay_recording():
+    """Enable replay recording and reset the stream."""
+    global _collection_replay_stream, _collection_replay_enabled
+    _collection_replay_stream = []
+    _collection_replay_enabled = True
+
+
+def stop_collection_replay_recording():
+    """Disable replay recording without clearing the stream."""
+    global _collection_replay_enabled
+    _collection_replay_enabled = False
+
+
+def record_collection_payload(payload):
+    """Append a collection payload to the replay stream (if enabled)."""
+    global _collection_replay_stream
+    if not _collection_replay_enabled:
+        return
+    if len(_collection_replay_stream) >= COLLECTION_MAX_REPLAY_RECORD:
+        return
+    _collection_replay_stream.append(bytes(payload))
+
+
+def get_collection_replay_stream():
+    """Return the current replay stream as a list of bytes objects."""
+    return list(_collection_replay_stream)
+
+
+def clear_collection_replay_stream():
+    """Reset the replay stream."""
+    global _collection_replay_stream
+    _collection_replay_stream = []
+
+
+# =========================================================
 # LIVE SYNC CLIENT
 # =========================================================
 
@@ -1041,6 +1307,12 @@ class LiveSyncClient:
             seq_id = _sequence_id
 
         payload = bytearray()
+
+        # Phase 6F Stage 5: Prepend collection sub-header for PT_Collection packets
+        if packet_type == PT_Collection:
+            payload.extend(make_collection_subheader())
+            # Set flag bit 0 to indicate sub-header is present
+            flags |= COLLECTION_PACKET_FLAG_HAS_SUBHEADER
 
         object_count = len(objects_data)
 
