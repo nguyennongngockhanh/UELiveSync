@@ -5329,20 +5329,79 @@ DetachFromParent(
         return;
     }
 
-    if (!Actor->GetAttachParentActor())
-    {
-        return;
-    }
+    // Log BEFORE state changes for diagnostic clarity
+    const bool bWasAttached =
+        Actor->GetAttachParentActor() != nullptr;
 
-    Actor->DetachFromActor(
-        FDetachmentTransformRules::
-            KeepWorldTransform);
-
-    // Patch 2: Child -> root transition.
-    // Local-authority interpolation no longer valid.
+    FGuid OldParentGuid;
+    bool bOldHasLocalTarget = false;
     if (FSyncTransformState* State =
         TransformStates.Find(Guid))
     {
+        OldParentGuid = State->ParentGuid;
+        bOldHasLocalTarget = State->bHasLocalTarget;
+    }
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT(
+            "[DETACH][DIAG] Child guid=%s"),
+        *Guid.ToString(
+            EGuidFormats::Digits));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT(
+            "[DETACH][DIAG] Old parent=%s was_attached=%d"),
+        *OldParentGuid.ToString(
+            EGuidFormats::Digits),
+        bWasAttached ? 1 : 0);
+
+    // Detach from UE scene graph if still attached.
+    // HandleHierarchy may have already detached the actor —
+    // this check prevents redundant DetachFromActor while
+    // ensuring state cleanup still runs below.
+    if (bWasAttached)
+    {
+        Actor->DetachFromActor(
+            FDetachmentTransformRules::
+                KeepWorldTransform);
+
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT(
+                "[DETACH][DIAG] Attach state cleared"));
+    }
+    else
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT(
+                "[DETACH][DIAG] Already detached"
+                " (HandleHierarchy) — state cleanup only"));
+    }
+
+    // ----------------------------------------------------
+    // STATE CLEANUP — runs even when actor was already
+    // detached by HandleHierarchy. Without this, stale
+    // bHasLocalTarget=true causes all subsequent world
+    // transforms to be misrouted through the child branch.
+    // ----------------------------------------------------
+
+    if (FSyncTransformState* State =
+        TransformStates.Find(Guid))
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT(
+                "[DETACH][DIAG] Clearing local authority state"
+                " (bHasLocalTarget=%d)"),
+            bOldHasLocalTarget ? 1 : 0);
+
         State->bHasLocalTarget =
             false;
 
@@ -5362,10 +5421,29 @@ DetachFromParent(
             State->CurrentScale =
                 DetachedActor->
                 GetActorScale3D();
+
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT(
+                    "[DETACH][DIAG] New world authority"
+                    " final world transform=(%s)"),
+                *DetachedActor->
+                    GetActorLocation().
+                    ToString());
         }
 
         State->bPendingSceneGraphWrite =
             true;
+
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT(
+                "[DETACH][DIAG] bHasLocalTarget=%d"
+                " ParentGuid valid=%d"),
+            State->bHasLocalTarget ? 1 : 0,
+            State->ParentGuid.IsValid() ? 1 : 0);
     }
 
     UE_LOG(
