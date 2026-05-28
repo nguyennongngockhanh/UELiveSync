@@ -2888,6 +2888,10 @@ ProcessBinaryPacket(
             1,
             std::memory_order_relaxed);
 
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[COLLECTION][DIAG] Packet received: ObjectCount=%u Flags=0x%02X"),
+            ObjectCount, PacketFlags);
+
         // ---- PHASE 6F STAGE 5: Read collection sub-header if present ----
         // Backward-compatible: Stage 4 packets lack the sub-header.
         // The packet header flags byte indicates presence via bit 0.
@@ -6326,6 +6330,12 @@ HandleVisibility(
         {
             Stats.VisibilityReplayApplied.fetch_add(1, std::memory_order_relaxed);
         }
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[VISIBILITY][DIAG] Applied: GUID=%s HiddenInGame=%d Actor=%s"),
+            *Guid.ToString(EGuidFormats::Digits),
+            (int32)Actor->IsTemporarilyHiddenInEditor(),
+            *Actor->GetName());
     }
 }
 
@@ -7393,6 +7403,14 @@ HandleCollection(
     // =====================================================
 
     GCollectionSequences.Update(TargetGuid, SequenceNumber);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[COLLECTION][DIAG] Registry updated: TargetGuid=%s OpType=0x%02X "
+             "CollectionMemberCount=%d TotalCollections=%d"),
+        *TargetGuid.ToString(EGuidFormats::Digits),
+        OpType,
+        CollectionGuid ? GCollectionMembership.FindRef(*CollectionGuid).Num() : 0,
+        GCollectionMembership.Num());
 }
 
 

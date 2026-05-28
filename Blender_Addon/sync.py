@@ -1179,45 +1179,64 @@ def check_updates():
                     obj.data.name if obj.data else ""
                 )
 
-            # Phase 6: Rename detection (semantic event)
-            current_name = obj.name
-            prev_name = _last_object_names.get(guid)
-            if not is_first_send and prev_name is not None and prev_name != current_name:
-                renames_to_send.append(
-                    serialize_rename(guid_obj, prev_name, current_name)
-                )
-                if _verbose_logging:
-                    print(f"[RENAME] GUID={guid} \"{prev_name}\" → \"{current_name}\"")
-            _last_object_names[guid] = current_name
+        # Phase 6: Visibility detection (semantic event)
+        # NOTE: Lives OUTSIDE the transforms_different gate so that
+        # visibility changes are detected even when the object does
+        # not move. The prev_vis guard prevents first-tick emission.
+        current_vis = obj.hide_get()
+        prev_vis = _last_visibility_state.get(guid)
+        if prev_vis is not None and prev_vis != current_vis:
+            vis_payloads_to_send.append(
+                serialize_visibility(guid_obj, current_vis)
+            )
+            if _verbose_logging:
+                print(f"[VISIBILITY][DIAG] Change detected guid={guid} hidden={current_vis}")
+        _last_visibility_state[guid] = current_vis
 
-            # Phase 6: Visibility detection (semantic event)
-            current_vis = obj.hide_get()
-            prev_vis = _last_visibility_state.get(guid)
-            if not is_first_send and prev_vis is not None and prev_vis != current_vis:
-                vis_payloads_to_send.append(
-                    serialize_visibility(guid_obj, current_vis)
-                )
-                if _verbose_logging:
-                    print(f"[VISIBILITY] GUID={guid} hidden={current_vis}")
-            _last_visibility_state[guid] = current_vis
+        # Phase 6: Rename detection (semantic event)
+        # NOTE: Lives OUTSIDE the transforms_different gate so that
+        # rename changes are detected even when the object does
+        # not move. The prev_name guard prevents first-tick emission.
+        current_name = obj.name
+        prev_name = _last_object_names.get(guid)
+        is_first_send_rename = (previous is None)
+        if not is_first_send_rename and prev_name is not None and prev_name != current_name:
+            renames_to_send.append(
+                serialize_rename(guid_obj, prev_name, current_name)
+            )
+            if _verbose_logging:
+                print(f"[RENAME][DIAG] Rename detected without transform change")
+                print(f"[RENAME][DIAG] Old={prev_name}")
+                print(f"[RENAME][DIAG] New={current_name}")
+                print(f"[RENAME][DIAG] Packet queued")
+        _last_object_names[guid] = current_name
 
-            # Phase 6D: Hierarchy detection (semantic attach/detach/reparent)
-            # parent_guid is already computed above for transform serialization
-            current_parent_guid = parent_guid
-            prev_parent_guid = _last_parent_guid.get(guid)
-            if not is_first_send and guid in _last_parent_guid and prev_parent_guid != current_parent_guid:
-                parent_guid_obj_for_hierarchy = (
-                    UUID(current_parent_guid)
-                    if current_parent_guid else None
-                )
-                hierarchies_to_send.append(
-                    serialize_hierarchy(guid_obj, parent_guid_obj_for_hierarchy)
-                )
-                if _verbose_logging:
-                    parent_str = current_parent_guid if current_parent_guid else "(root)"
-                    prev_parent_str = prev_parent_guid if prev_parent_guid else "(root)"
-                    print(f"[HIERARCHY] GUID={guid} parent={prev_parent_str} → {parent_str}")
-            _last_parent_guid[guid] = current_parent_guid
+        # Phase 6D: Hierarchy detection (semantic attach/detach/reparent)
+        # NOTE: Lives OUTSIDE the transforms_different gate so that
+        # parent changes are detected even when the object does
+        # not move. Computes parent_guid independently via
+        # get_parent_guid() rather than depending on the transform
+        # path's parent_guid variable.
+        current_parent_guid = get_parent_guid(obj)
+        prev_parent_guid = _last_parent_guid.get(guid)
+        is_first_send_hierarchy = (previous is None)
+        if not is_first_send_hierarchy and guid in _last_parent_guid and prev_parent_guid != current_parent_guid:
+            parent_guid_obj_for_hierarchy = (
+                UUID(current_parent_guid)
+                if current_parent_guid else None
+            )
+            hierarchies_to_send.append(
+                serialize_hierarchy(guid_obj, parent_guid_obj_for_hierarchy)
+            )
+            if _verbose_logging:
+                parent_str = current_parent_guid if current_parent_guid else "(root)"
+                prev_parent_str = prev_parent_guid if prev_parent_guid else "(root)"
+                print(f"[HIERARCHY][DIAG] Parent change detected without transform change")
+                print(f"[HIERARCHY][DIAG] Child guid={guid}")
+                print(f"[HIERARCHY][DIAG] Old parent={prev_parent_str}")
+                print(f"[HIERARCHY][DIAG] New parent={parent_str}")
+                print(f"[HIERARCHY][DIAG] Packet queued")
+        _last_parent_guid[guid] = current_parent_guid
 
         # =================================================
         # Phase 6F: Collection membership detection
@@ -1259,6 +1278,10 @@ def check_updates():
                             COLLECTION_OP_ADD
                         )
                     )
+                    print(
+                        f"[COLLECTION][DIAG] Membership ADD "
+                        f"obj_guid={guid} coll_guid={added_coll_str}"
+                    )
 
                 for removed_coll_str in removed:
                     removed_coll_uuid = UUID(removed_coll_str)
@@ -1267,6 +1290,10 @@ def check_updates():
                             guid_obj, removed_coll_uuid,
                             COLLECTION_OP_REMOVE
                         )
+                    )
+                    print(
+                        f"[COLLECTION][DIAG] Membership REMOVE "
+                        f"obj_guid={guid} coll_guid={removed_coll_str}"
                     )
 
                 if _verbose_logging and (added or removed):

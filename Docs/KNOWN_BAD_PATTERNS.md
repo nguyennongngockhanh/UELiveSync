@@ -71,7 +71,44 @@ High-signal anti-patterns. Each entry: why dangerous, symptoms, protected invari
 - **Symptoms**: Excessive token consumption, slow cold-start
 - **Correct**: Load `HOT_PATHS.md` first, then grep-target specific function/symbol, read only relevant lines
 
-## 11. Root↔Child Authority Transition Gap
+## 11. Transform-Gated Semantic Event Detection
+
+- **Why**: Placing rename, hierarchy, or visibility detection inside `if transforms_different(...)` means semantic events only emit when the object's transform also changes. This is architecturally incorrect — each semantic domain must evaluate independently every tick.
+- **Symptoms**: Rename packets never sent unless object moves; parent changes never detected unless object moves; visibility toggles silently lost if object is stationary.
+- **Invariants**: GI-1 (GUID stable across rename), HI-1 (parent stable across renames), CL-1 (collection idempotent)
+- **Correct**: Each semantic domain evaluates independently at indent-8 scope (outside transform gate):
+  ```
+  # Transform domain (gated)
+  if transforms_different():
+      parent_guid = get_parent_guid(obj)
+      serialize_transform(...)
+      last_sent_transforms[guid] = ...
+
+  # Rename domain (always evaluates)
+  current_name = obj.name
+  if prev_name != current_name:
+      serialize_rename(...)
+  _last_object_names[guid] = current_name
+
+  # Hierarchy domain (always evaluates)
+  current_parent = get_parent_guid(obj)
+  if prev_parent != current_parent:
+      serialize_hierarchy(...)
+  _last_parent_guid[guid] = current_parent
+
+  # Visibility domain (always evaluates)
+  current_vis = obj.hide_get()
+  if prev_vis != current_vis:
+      serialize_visibility(...)
+  _last_visibility_state[guid] = current_vis
+
+  # Collection domain (always evaluates)
+  diff obj.users_collection
+  emit ADD/REMOVE
+  _last_collection_state[guid] = current_coll_guids
+  ```
+
+## 12. Root↔Child Authority Transition Gap
 
 - **Why**: `UpdateTargetTransform` receives `bIsLocalTransform=true` + valid `ParentGuid` but state was initialized as root (`bHasLocalTarget=false`, `State.bInitialized=true`). The `!State.bInitialized` init block is skipped, so the function stores LOCAL transform values as WORLD targets via the `else` (root) branch at line 3952-3964. `InterpolateTransforms` then enters the root path and applies local-as-world → actor jumps to parent origin.
 - **Symptoms**: Actor jumps to parent origin on Ctrl+P (parent-at-origin snapping); offset doubles after attach; cumulative drift on detach; replay mismatch after parenting; child transform corruption.
