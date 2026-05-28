@@ -1,0 +1,58 @@
+# UELiveSync — Opencode Indexing Exclusions
+
+# Build artifacts (UE)
+Binaries/
+Intermediate/
+DerivedDataCache/
+*.sln
+*.vcxproj*
+*.suo
+*.opensdf
+*.sdf
+*.user
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+
+# Local dev config
+AGENTS.md
+.opencode/skills/
+
+# Tests (local-only, not tracked)
+tests/
+
+# Replay dumps / temp exports
+replay_dumps/
+temp_exports/
+
+# Archived docs — obsolete, not relevant for current debugging
+Docs/_archive/
+
+# All docs below are explicitly included for indexing:
+# Docs/PROJECT_INIT.md, Docs/ARCHITECTURE.md, Docs/CRITICAL_INVARIANTS.md,
+# Docs/HOT_PATHS.md, Docs/STATE_OWNERS.md, Docs/KNOWN_BAD_PATTERNS.md,
+# Docs/KNOWN_GOOD_FLOWS.md, Docs/BUG_ENTRYPOINTS.md, Docs/TASK_PROMPT_TEMPLATES.md,
+# Docs/WORKSPACE_SPLIT.md, Docs/Issues/
+
+# Architecture subfolder — index all (active Phase 6 docs)
