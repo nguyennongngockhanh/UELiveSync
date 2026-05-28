@@ -369,8 +369,13 @@ def _compute_owner_hash(obj):
         if obj.data else ""
     )
 
+    # NOTE: obj.name is intentionally excluded.
+    # Object renames are independent semantic operations handled by
+    # the PT_Rename packet path. Including obj.name would cause
+    # _reconcile_guids_on_load to regenerate the GUID on every rename,
+    # triggering a delete+create cycle on the UE side and destroying
+    # the authoritative rename label.
     raw = (
-        f"{obj.name}|"
         f"{datablock_name}"
     )
 

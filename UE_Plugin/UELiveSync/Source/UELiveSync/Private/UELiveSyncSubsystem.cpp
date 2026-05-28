@@ -181,6 +181,13 @@ struct FScopedCollectionSuppression
 // --- Rename sequence tracker (single subsystem-level instance) ---
 FRenameSequenceTracker GRenameSequences;
 
+// --- Persistent rename label registry (GUID → authoritative actor label) ---
+// Stores the authoritative Blender-sourced label for each renamed GUID.
+// Survives snapshot rebuilds, reconnect, CreateObject spawn relabeling,
+// and RestoreWorldState rollback. Populated by HandleRename.
+// Game-thread only. Cleared on StopNetworkThread and ConsoleReset.
+TMap<FGuid, FString> GRenamePersistentLabel;
+
 // --- Visibility sequence tracker (single subsystem-level instance) ---
 FVisibilitySequenceTracker GVisibilitySequences;
 
@@ -1858,6 +1865,10 @@ StopNetworkThread()
     LastSequenceId = 0;
 
     GRenameSequences.LastSequence.Empty();
+    // NOTE: GRenamePersistentLabel intentionally NOT cleared on disconnect/reconnect.
+    // Persistent labels survive network restarts so HandleCreateObject can restore
+    // authoritative labels immediately after actor spawn during snapshot rebuild.
+    // Cleared only on ConsoleReset (full state reset).
     GVisibilitySequences.LastSequence.Empty();
     GHierarchySequences.LastSequence.Empty();
     PendingHierarchyAttachments.Empty();
@@ -5662,6 +5673,25 @@ HandleCreateObject(
         Guid,
         NewActor);
 
+    // ── Persistent rename label restoration ──
+    // If this GUID has an authoritative label from a previous rename,
+    // restore it immediately to prevent the default-label window.
+    // This ensures labels survive actor re-creation (e.g. after GUID
+    // regeneration on the Blender side) and snapshot rebuild.
+    {
+        const FString* PersistentLabel = GRenamePersistentLabel.Find(Guid);
+        if (PersistentLabel && !PersistentLabel->IsEmpty())
+        {
+#if WITH_EDITOR
+            NewActor->SetActorLabel(*PersistentLabel);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[RENAME][DIAG] Restoring persistent label for guid=%s label=\"%s\""),
+                *Guid.ToString(EGuidFormats::Digits),
+                **PersistentLabel);
+#endif
+        }
+    }
+
     // Verify registry integration
     {
         AActor* CacheCheck = FindActorFast(Guid);
@@ -6037,16 +6067,25 @@ HandleRename(
         FScopedRenameSuppression Suppress(Guid);
         FScopedChangeOrigin OriginScope(Origin);
 
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[RENAME] Applying: GUID=%s Origin=%s "
-                 "OldName=\"%s\" NewName=\"%s\" Seq=%u"),
-            *Guid.ToString(EGuidFormats::Digits),
-            Origin == EChangeOrigin::RemoteReplicated ? TEXT("REMOTE_REPLICATED") :
-            Origin == EChangeOrigin::Replay ? TEXT("REPLAY") :
-            Origin == EChangeOrigin::LocalUser ? TEXT("LOCAL_USER") :
-            Origin == EChangeOrigin::Recovery ? TEXT("RECOVERY") :
-            TEXT("UNSPECIFIED"),
-            *OldName, *NewName, SequenceNumber);
+        // ── Diagnostics + persistent label registry ──
+        {
+            const FString PreLabel = Actor->GetActorLabel();
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[RENAME][DIAG] Applying rename guid=%s Origin=%s "
+                     "OldName=\"%s\" NewName=\"%s\" Seq=%u PreLabel=\"%s\""),
+                *Guid.ToString(EGuidFormats::Digits),
+                Origin == EChangeOrigin::RemoteReplicated ? TEXT("REMOTE_REPLICATED") :
+                Origin == EChangeOrigin::Replay ? TEXT("REPLAY") :
+                Origin == EChangeOrigin::LocalUser ? TEXT("LOCAL_USER") :
+                Origin == EChangeOrigin::Recovery ? TEXT("RECOVERY") :
+                TEXT("UNSPECIFIED"),
+                *OldName, *NewName, SequenceNumber,
+                *PreLabel);
+        }
+
+        // Update persistent label registry BEFORE SetActorLabel
+        // so HandleCreateObject / RestoreWorldState can restore it.
+        GRenamePersistentLabel.Add(Guid, NewName);
 
         // SetActorLabel fires OnActorLabelChanged synchronously.
         // The callback handler checks GCurrentChangeOrigin and
@@ -6054,6 +6093,14 @@ HandleRename(
         Actor->SetActorLabel(NewName);
 
         GRenameSequences.Update(Guid, SequenceNumber);
+
+        {
+            const FString PostLabel = Actor->GetActorLabel();
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[RENAME][DIAG] Actor label changed guid=%s old=\"%s\" new=\"%s\""),
+                *Guid.ToString(EGuidFormats::Digits),
+                *OldName, *PostLabel);
+        }
 
         if (Origin == EChangeOrigin::RemoteReplicated)
         {
@@ -7918,10 +7965,27 @@ ComputeWorldStateHash() const
     // ── Rename domain ──────────────────────────────────
     H = fnv(H, 0xCD);  // rename domain marker
 
-    // FRenameSequenceTracker has LastSequence which tracks name state per GUID
-    // We hash the identity of tracked GUIDs + their last sequences
-    // (FRenameSequenceTracker is not directly accessible, so we only hash
-    // what we can observe — the transform state table has no name field)
+    // Hash the persistent label registry for deterministic state comparison.
+    // Each (GUID, label) pair is hashed in GUID-sorted order.
+    {
+        TArray<FGuid> SortedRenameGuids;
+        GRenamePersistentLabel.GetKeys(SortedRenameGuids);
+        SortedRenameGuids.Sort();
+
+        for (const FGuid& Rg : SortedRenameGuids)
+        {
+            H = fnv_u64(H, *reinterpret_cast<const uint64*>(&Rg));
+            H = fnv_u64(H, *reinterpret_cast<const uint64*>(
+                reinterpret_cast<const uint8*>(&Rg) + 8));
+
+            const FString* Label = GRenamePersistentLabel.Find(Rg);
+            if (Label)
+            {
+                H = fnv_str(H, *Label);
+            }
+            H = fnv(H, 0x00);  // separator
+        }
+    }
 
     // ── Transform domain ───────────────────────────────
     H = fnv(H, 0xCC);  // transform domain marker
@@ -8096,14 +8160,56 @@ RestoreWorldState()
     }
 
     // ── Rename domain ──────────────────────────────────
+    // Restore from saved state, then overlay with persistent registry
+    // to ensure the most authoritative label wins (persistent registry
+    // may have been updated after the saved state was captured).
     for (const auto& Pair : GWorldSavedState.ActorNames)
     {
         AActor* Actor = FindActorFast(Pair.Key);
         if (Actor)
         {
+            FGuid RestoreGuid = Pair.Key;
+            const FString* PersistentLabel = GRenamePersistentLabel.Find(RestoreGuid);
+            const FString& LabelToRestore = (PersistentLabel && !PersistentLabel->IsEmpty())
+                ? *PersistentLabel
+                : Pair.Value;
+
+            {
+                FScopedRenameSuppression Suppress(RestoreGuid);
+                FScopedChangeOrigin OriginScope(EChangeOrigin::Replay);
+
 #if WITH_EDITOR
-            Actor->SetActorLabel(Pair.Value);
+                Actor->SetActorLabel(LabelToRestore);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[RENAME][DIAG] Restoring label in RestoreWorldState guid=%s label=\"%s\" %s"),
+                    *RestoreGuid.ToString(EGuidFormats::Digits),
+                    *LabelToRestore,
+                    PersistentLabel ? TEXT("(from persistent registry)") : TEXT("(from saved state)"));
 #endif
+            }
+        }
+    }
+
+    // Also restore any persistent labels that were not in the saved state
+    // (e.g., if a rename happened during a session where SaveWorldState
+    // was called before the rename was processed).
+    for (const auto& Pair : GRenamePersistentLabel)
+    {
+        if (!GWorldSavedState.ActorNames.Contains(Pair.Key))
+        {
+            AActor* Actor = FindActorFast(Pair.Key);
+            if (Actor)
+            {
+                FScopedRenameSuppression Suppress(Pair.Key);
+                FScopedChangeOrigin OriginScope(EChangeOrigin::Replay);
+#if WITH_EDITOR
+                Actor->SetActorLabel(Pair.Value);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[RENAME][DIAG] Restoring persistent-only label guid=%s label=\"%s\""),
+                    *Pair.Key.ToString(EGuidFormats::Digits),
+                    *Pair.Value);
+#endif
+            }
         }
     }
 
@@ -8508,6 +8614,44 @@ RebuildWorldFromSnapshot(const FString& Snapshot)
                 FGuid::ParseExact(Parts[2], EGuidFormats::Digits, CollGuid))
             {
                 NewMembership.FindOrAdd(CollGuid).Add(MemberGuid);
+            }
+        }
+        else if (bInRename && Parts.Num() >= 3 && Parts[0] == TEXT("N"))
+        {
+            FGuid RenameGuid;
+            if (FGuid::ParseExact(Parts[1], EGuidFormats::Digits, RenameGuid))
+            {
+                // Rejoin remaining parts in case label contains spaces
+                FString Label = Parts[2];
+                for (int32 P = 3; P < Parts.Num(); P++)
+                {
+                    Label += TEXT(" ") + Parts[P];
+                }
+
+                // Store in persistent registry
+                GRenamePersistentLabel.Add(RenameGuid, Label);
+
+                // Apply to existing actor immediately
+                AActor* RenameActor = FindActorFast(RenameGuid);
+                if (RenameActor)
+                {
+                    FScopedRenameSuppression Suppress(RenameGuid);
+                    FScopedChangeOrigin OriginScope(EChangeOrigin::Replay);
+#if WITH_EDITOR
+                    RenameActor->SetActorLabel(Label);
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[RENAME][DIAG] Replay rebuild restoring label guid=%s label=\"%s\""),
+                        *RenameGuid.ToString(EGuidFormats::Digits),
+                        *Label);
+#endif
+                }
+                else
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[RENAME][DIAG] Replay rebuild label stored (actor not yet spawned) guid=%s label=\"%s\""),
+                        *RenameGuid.ToString(EGuidFormats::Digits),
+                        *Label);
+                }
             }
         }
     }
@@ -11761,9 +11905,10 @@ ConsoleReset()
     Stats.RenameReplayApplied.store(0, std::memory_order_relaxed);
     Stats.RenameReplaySkipped.store(0, std::memory_order_relaxed);
     GRenameSequences.LastSequence.Empty();
+    GRenamePersistentLabel.Empty();
 
     UE_LOG(LogLiveSync, Log,
-        TEXT("[RENAME] Replay tracker reset (ConsoleReset)"));
+        TEXT("[RENAME] Replay tracker + label registry reset (ConsoleReset)"));
 
     // Visibility diagnostics reset (Phase 6)
     Stats.VisibilityProcessed.store(0, std::memory_order_relaxed);
