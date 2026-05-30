@@ -508,6 +508,30 @@ private:
         0;
 
     // =====================================================
+    // INGRESS HEALTH
+    // =====================================================
+    // Lightweight check that the Tick-driven ingress
+    // pipeline is functioning. Checks:
+    //   - Tick has executed recently
+    //   - Network thread is alive
+    //   - Listener socket is valid
+    //   - Not in NullRHI mode (known blocker)
+    // =====================================================
+
+    struct FIngressHealthResult
+    {
+        bool   bTickActive = false;
+        bool   bNetworkThreadAlive = false;
+        bool   bListenerValid = false;
+        bool   bNullRHI = false;
+        double SecondsSinceLastTick = -1.0;
+        double SecondsSinceLastThreadLoop = -1.0;
+        FString ToString() const;
+    };
+
+    FIngressHealthResult IsIngressHealthy() const;
+
+    // =====================================================
     // CONSOLE COMMANDS
     // =====================================================
 
@@ -538,6 +562,56 @@ private:
     void ConsoleDumpReplayTimeline();
 
     void ConsoleExportWorldSnapshot();
+
+    // =====================================================
+    // PHASE 6H — SEMANTIC CONSISTENCY HARDENING
+    // =====================================================
+    // Stabilization + determinism + replay-hardening phase.
+    // All functions are additive, low-risk, diagnostics-oriented.
+    // See Docs/CRITICAL_INVARIANTS.md for guarded invariants.
+    // =====================================================
+
+    // ── Goal A: Packet Ordering Validation ───────────────
+    void ConsoleValidatePacketOrdering();
+    void ValidatePacketOrdering(const FLiveSyncPacket& Packet);
+
+    // ── Goal B: Semantic Authority Audit ─────────────────
+    void ConsoleVerifySemanticState();
+    FString VerifySemanticState();
+    void ConsoleDumpAuthorityState();
+    FString DumpAuthorityState();
+    bool CheckParentAuthority(const FGuid& Guid);
+    bool CheckVisibilityAuthority(const FGuid& Guid);
+    bool CheckRenameAuthority(const FGuid& Guid);
+    bool CheckCollectionAuthority(const FGuid& Guid);
+
+    // ── Goal C: Replay Fuzz / Stress Harness ─────────────
+    void ConsoleRunReplayFuzz(const TArray<FString>& Args);
+    void RunReplayFuzz(int32 Seed, int32 Iterations);
+    void ConsoleRunHierarchyStress(const TArray<FString>& Args);
+    void RunHierarchyStress(int32 ObjectCount, int32 Operations);
+    void ConsoleRunReconnectStress(const TArray<FString>& Args);
+    void RunReconnectStress(int32 CycleCount);
+
+    // ── Goal D: Burst Operation Metrics ──────────────────
+    struct FBurstMetrics
+    {
+        int32 PeakPacketsPerTick = 0;
+        double ReplayQueueGrowthRate = 0.0;
+        int32 RollbackCount = 0;
+        int32 DivergenceCount = 0;
+    };
+    FBurstMetrics GetBurstMetrics() const;
+
+    // ── Goal E: Semantic Replay Verification ─────────────
+    void ConsoleVerifyReplayDeterminism();
+    FString VerifyReplayDeterminism();
+
+    // ── Goal F: Known-Bad-Pattern Enforcement ────────────
+    void EnforceKnownBadPatterns();
+    void ConsoleEnforceKnownBadPatterns();
+    void CheckTransformGateSemanticEvents();
+    void CheckStaleLocalAuthority();
 
     // =====================================================
     // ASSET RESOLUTION DATA (Phase 5D)
@@ -687,6 +761,9 @@ private:
     int32 VerboseFrameCounter =
         0;
 
+    double LastTickExecutionTime =
+        0.0;
+
     // =====================================================
     // WATCHDOG RESTART BACKOFF
     // =====================================================
@@ -707,6 +784,69 @@ private:
     // =====================================================
 
     void ValidateHierarchy();
+
+    // =====================================================
+    // PHASE 6H — TICK-INTEGRATED DIAGNOSTICS
+    // =====================================================
+    // Lightweight non-mutating checks integrated into the
+    // tick pipeline. Runs at reduced frequency to avoid
+    // performance impact.
+    // =====================================================
+
+    void TickPhase6H(float DeltaTime);
+
+    // Phase 6H diagnostics state
+    int32 Phase6HFrameCounter = 0;
+    int32 Phase6HRunInterval = 300;    // Every ~300 ticks (~5s)
+    bool  bPhase6HVerbose = false;
+
+    // Phase 6H packet ordering state (Goal A)
+    TSet<FGuid> Phase6HCreatedThisTick;
+
+    // Phase 6H burst tracking (Goal D)
+    int32 Phase6HBurstTickPacketCount = 0;
+    int32 Phase6HBurstTickPeak = 0;
+
+    // =====================================================
+    // PHASE 6I — PERFORMANCE & SCALABILITY HARDENING
+    // =====================================================
+    // Transform burst optimization, replay buffer efficiency,
+    // packet scheduling metrics, hot path reduction, tick
+    // scheduling hardening. All additive, no protocol changes.
+    // =====================================================
+
+    void TickPhase6I(float DeltaTime);
+    void ConsolePhase6IStats();
+    void ConsoleToggleCoalesce(const TArray<FString>& Args);
+    void ConsoleSetDiagnosticsCadence(const TArray<FString>& Args);
+
+    // Per-domain packet counters for rate tracking
+    mutable int32 Phase6IPerSecondTransforms = 0;
+    mutable int32 Phase6IPerSecondCreates = 0;
+    mutable int32 Phase6IPerSecondDeletes = 0;
+    mutable int32 Phase6IPerSecondHierarchy = 0;
+    mutable int32 Phase6IPerSecondRenames = 0;
+    mutable int32 Phase6IPerSecondVisibility = 0;
+    mutable int32 Phase6IPerSecondCollections = 0;
+    double Phase6ILastPerSecondClear = 0.0;
+
+    int32 Phase6IFrameCounter = 0;
+    int32 Phase6IDiagnosticsRunInterval = 60;   // ~1s at 60fps
+    double Phase6ILongFrameThreshold = 0.033;   // 33ms warning
+    double Phase6IOverloadThreshold = 0.050;    // 50ms overload
+    bool   bPhase6ICoalesceEnabled = true;      // CVar-gated coalescing
+
+    // Transform coalescing: map GUID -> latest transform packet index
+    // Cleared each tick in ProcessQueuedPackets
+    TMap<FGuid, int32> Phase6ICoalesceMap;
+
+    // Internal helpers (used via Phase6I.inl, included at bottom of .cpp)
+    void CoalesceTransforms(TArray<FLiveSyncPacket>& PacketsThisTick);
+    void TrackPerDomainPacket(uint8 PacketType);
+    int32 EstimateReplayBufferMemory() const;
+    int32 CountUniqueReplayEntries() const;
+    int32 CountActiveGUIDs() const;
+    void CheckOverloadCondition();
 
     // =====================================================
     // SAFETY MONITORS (Phase 5C)

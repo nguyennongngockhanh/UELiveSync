@@ -1,128 +1,70 @@
-# Known Bad Patterns — Do Not Repeat
+# Known Bad Patterns — Do Not Do This
 
-High-signal anti-patterns. Each entry: why dangerous, symptoms, protected invariants, correct pattern.
+Each entry documents a configuration or code pattern that **must not be used** with LiveSync.
 
-## 1. Mutable State in GUID Derivation
+---
 
-- **Why**: `_compute_owner_hash` including `obj.name` caused GUID regeneration on every rename → DELETE+CREATE cycle on UE side
-- **Symptoms**: Actor destroyed and re-created on rename, label lost
-- **Invariants**: GI-1 (only obj.data.name), GI-2 (no mutable state)
-- **Correct**: `_compute_owner_hash` hashes ONLY `obj.data.name` (datablock)
+## A — Using `-RenderOffScreen` (Headless Editor Mode)
 
-## 2. Replay-Side Actor Relabel Overwrite
+UELiveSync requires the editor tick loop to be active for ingress. Use `-RenderOffScreen` instead of `-NullRHI` for headless/server scenarios:
 
-- **Why**: Calling `SetActorLabel` during replay without `GRenamePersistentLabel` as source of truth overwrites authoritative label
-- **Symptoms**: Stale/non-authoritative labels after replay
-- **Invariants**: RN-1 (GRenamePersistentLabel is SOLE authority), RN-5 (overlay on restore)
-- **Correct**: Use `FScopedRenameSuppression` + overlay from `GRenamePersistentLabel` in `RestoreWorldState`
+| Attribute | Value |
+|-----------|-------|
+| **Purpose** | Run UE editor without a physical display |
+| **Recommended** | `-RenderOffScreen` — runs the renderer on a headless framebuffer, keeps the tick loop alive |
+| **Verification** | `[TICK][HEARTBEAT] Tick is executing (frame=N)` appears every ~5s in the UE log |
+| **Detection (blocked)** | A startup guard in `UELiveSyncSubsystem.cpp` detects `-NullRHI` and logs `[LIFECYCLE][ERROR] NullRHI editor mode DETECTED.` — the engine will error out before tick loop starts |
 
-## 3. Local/World Transform Mixing
+**`-NullRHI` is detected and rejected at plugin startup.** Do not use it. Use `-RenderOffScreen` instead.
 
-- **Why**: `get_transform()` returns `matrix_local` for parented objects; if `parent_guid_obj` is set in packet but `flags=0x00` (root), UE treats local as world
-- **Symptoms**: Duplicates spawn at wrong positions, children float at local-as-world
-- **Invariants**: TF-4 (child transforms use KeepRelative)
-- **Correct**: Flags must match `get_transform()` output; UE world-spawn computation must handle missing parent
+---
 
-## 4. Non-Canonical Iteration in Hashing
+## B — StopNetworkThread Without Shutdown Before Close
 
-- **Why**: Iterating `TMap` or `TSet` without sorting produces non-deterministic hash
-- **Symptoms**: Hash mismatch on replay verification → unnecessary rollback
-- **Invariants**: RD-1 (deterministic replay), CL-2 (sorted-GUID ordering)
-- **Correct**: Always sort GUIDs before hashing (`TMap<FGuid, T>.KeySort`)
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | Critical — game thread deadlock |
+| **Root Cause** | On Linux, `close()` alone does NOT wake a blocked `recv()`/`poll()` in another thread. Only `shutdown(SHUT_RDWR)` sends TCP FIN/RST. |
+| **Fix** | Always call `Shutdown(ReadWrite)` before `Close()`. See `StopNetworkThread()` in `UELiveSyncSubsystem.cpp` for correct order. |
+| **Protected** | `LiveSyncRunnable.h` freeze banner warns of this. |
 
-## 5. Replay Mutation During Diagnostics
+---
 
-- **Why**: Diagnostic code paths calling mutation functions (e.g., `ApplyCollectionMembership` inside `DumpState`)
-- **Symptoms**: Diagnostics change runtime state, replay divergence
-- **Invariants**: RB-2 (diagnostics must NEVER mutate), DG-1/DG-2 (read-only counters)
-- **Correct**: Snapshot diagnostics state at entry, never call mutation functions
+## C — obj.name in GUID Owner Hash
 
-## 6. Hierarchy Overwrite from Transform Lane
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High — GUID churn on rename |
+| **Root Cause** | `_compute_owner_hash()` must depend ONLY on `obj.data.name`. Adding `obj.name` causes GUID to change when the user renames the object. |
+| **Fix** | See `sync.py:_compute_owner_hash()`. The fix was applied in Phase 6G. |
+| **See Also** | `Docs/CRITICAL_INVARIANTS.md` §A (GI-1 through GI-5) |
 
-- **Why**: `UpdateTargetTransform` calls `DetachFromParent` when `bParentChanged` is true — if parent GUID changes in packet, child is detached even when parent actor is same
-- **Symptoms**: Child becomes root mid-session after unrelated transform packet
-- **Invariants**: HI-4 (transforms must NOT detach children)
-- **Correct**: Transform lane must NOT modify hierarchy; hierarchy changes only via PT_Hierarchy
+---
 
-## 7. Rollback Without Full Restore
+## D — Non-Deterministic Iteration in Replay Hash
 
-- **Why**: Missing domain in `RestoreWorldState` temp save → half-restored state after rollback
-- **Symptoms**: Stale labels after rollback, wrong collection membership
-- **Invariants**: RB-1 (full restore), SN-1 (ALL domains in export)
-- **Correct**: Every domain saved in `SaveWorldState` must be restored in `RestoreWorldState`
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High — replay divergence |
+| **Root Cause** | Hashing `TMap`/`TSet` entries without sorting by GUID produces non-deterministic hashes across runs. |
+| **Fix** | Always sort GUIDs before hashing. See `ComputeCollectionStateHash()` and `ComputeWorldStateHash()`. |
 
-## 8. Replay Buffer Persistence Across Reconnect
+---
 
-- **Why**: Not clearing `GWorldReplayBuffer` on `StopNetworkThread` → stale replay entries applied on new connection
-- **Symptoms**: Wrong state after reconnect, phantom actors
-- **Invariants**: RD-5 (buffer cleared on Stop AND Reset)
-- **Correct**: `GWorldReplayBuffer.Empty()` in both `StopNetworkThread` and `ConsoleReset`
+## E — Omitting a Domain from World Snapshot Export
 
-## 9. Child World-Authority Overwrite
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High — state loss on rebuild |
+| **Root Cause** | `ExportWorldSnapshot()` must include ALL authoritative domains (rename, hierarchy, collection, lifecycle, transform). Missing a domain causes `RebuildWorldFromSnapshot()` to produce an incomplete state. |
+| **Fix** | See `ExportWorldSnapshot()` and `RebuildWorldFromSnapshot()` for the canonical domain list. |
 
-- **Why**: `InterpolateTransforms` root path applied to attached children when `bHasLocalTarget=false` → `SetActorTransform` with world transform overwrites attachment relative offset
-- **Symptoms**: Child floats away from parent after interpolation tick
-- **Invariants**: TF-4 (attached children use local authority)
-- **Correct**: Attached children must always use `bHasLocalTarget=true` path; `bPendingSceneGraphWrite` must retry if parent missing
+---
 
-## 10. Broad Repo Exploration for Surgical Tasks
+## F — Running Diagnostics Every Frame
 
-- **Why**: Reading entire repo to fix one bug wastes tokens and context
-- **Symptoms**: Excessive token consumption, slow cold-start
-- **Correct**: Load `HOT_PATHS.md` first, then grep-target specific function/symbol, read only relevant lines
-
-## 11. Transform-Gated Semantic Event Detection
-
-- **Why**: Placing rename, hierarchy, or visibility detection inside `if transforms_different(...)` means semantic events only emit when the object's transform also changes. This is architecturally incorrect — each semantic domain must evaluate independently every tick.
-- **Symptoms**: Rename packets never sent unless object moves; parent changes never detected unless object moves; visibility toggles silently lost if object is stationary.
-- **Invariants**: GI-1 (GUID stable across rename), HI-1 (parent stable across renames), CL-1 (collection idempotent)
-- **Correct**: Each semantic domain evaluates independently at indent-8 scope (outside transform gate):
-  ```
-  # Transform domain (gated)
-  if transforms_different():
-      parent_guid = get_parent_guid(obj)
-      serialize_transform(...)
-      last_sent_transforms[guid] = ...
-
-  # Rename domain (always evaluates)
-  current_name = obj.name
-  if prev_name != current_name:
-      serialize_rename(...)
-  _last_object_names[guid] = current_name
-
-  # Hierarchy domain (always evaluates)
-  current_parent = get_parent_guid(obj)
-  if prev_parent != current_parent:
-      serialize_hierarchy(...)
-  _last_parent_guid[guid] = current_parent
-
-  # Visibility domain (always evaluates)
-  current_vis = obj.hide_get()
-  if prev_vis != current_vis:
-      serialize_visibility(...)
-  _last_visibility_state[guid] = current_vis
-
-  # Collection domain (always evaluates)
-  diff obj.users_collection
-  emit ADD/REMOVE
-  _last_collection_state[guid] = current_coll_guids
-  ```
-
-## 12. Root↔Child Authority Transition Gap
-
-- **Why**: `UpdateTargetTransform` receives `bIsLocalTransform=true` + valid `ParentGuid` but state was initialized as root (`bHasLocalTarget=false`, `State.bInitialized=true`). The `!State.bInitialized` init block is skipped, so the function stores LOCAL transform values as WORLD targets via the `else` (root) branch at line 3952-3964. `InterpolateTransforms` then enters the root path and applies local-as-world → actor jumps to parent origin.
-- **Symptoms**: Actor jumps to parent origin on Ctrl+P (parent-at-origin snapping); offset doubles after attach; cumulative drift on detach; replay mismatch after parenting; child transform corruption.
-- **Invariants**: TF-5 (authority domain migration), HI-4 (transforms must NOT detach), RD-1 (replay determinism)
-- **Correct pattern**:
-  ```
-  PT_Hierarchy → AttachToActor(KeepWorld) → child stays at correct world position
-  PT_Transform(local, ParentGuid) → UpdateTargetTransform:
-    detect root→child: bIsLocalTransform && ParentGuid.IsValid() && !bHasLocalTarget
-    → migrate: bHasLocalTarget = true
-    → init: CurrentLocalLocation/Rotation/Scale = incoming
-    → store: LocalTargetLocation/Rotation/Scale = incoming
-    → compute world cache: TargetLocation/Rotation/Scale = Local × ParentWorld
-  InterpolateTransforms → bHasLocalTarget && bHasParent → local path
-    → LocalXForm × ParentActorTransform → correct world position
-  ```
-- **Protected invariants**: TF-5 (new authority domain migration rule), HI-4 (transforms must not modify hierarchy), RD-1 (deterministic replay after parenting)
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | Medium — performance regression |
+| **Root Cause** | Diagnostic functions that run every frame (instead of every ~300 frames) cause measurable hitches. |
+| **Fix** | Gate diagnostics behind `VerboseFrameCounter % 300 == 1` or similar cadence. See `TickPhase6H`, `TickSafetyMonitors`. |

@@ -640,6 +640,68 @@ struct FLiveSyncStats
     std::atomic<int32> WorldReplayReconnectRebuilds{0};          // Reconnect world rebuilds
     std::atomic<int32> WorldReplayReconnectDivergences{0};       // Reconnect world divergences
 
+    // --- Phase 6H: Packet Ordering Validation (Goal A, written by game thread) ---
+    std::atomic<int32> PacketHierarchyBeforeCreate{0};           // Hierarchy packet for GUID not yet created
+    std::atomic<int32> PacketRenameBeforeCreate{0};              // Rename packet for GUID not yet created
+    std::atomic<int32> PacketVisibilityBeforeCreate{0};          // Visibility packet for GUID not yet created
+    std::atomic<int32> PacketCollectionBeforeCreate{0};          // Collection packet for GUID not yet created
+    std::atomic<int32> PacketDuplicateAttachDetected{0};         // Duplicate attach events (same child->parent)
+    std::atomic<int32> PacketDuplicateDetachDetected{0};         // Duplicate detach events (already root)
+    std::atomic<int32> PacketStaleReplayOrder{0};                // Replay sequence regression detected
+    std::atomic<int32> PacketReplaySequenceGap{0};               // Non-contiguous replay sequence detected
+
+    // --- Phase 6H: Semantic Authority Audit (Goal B, written by game thread) ---
+    std::atomic<int32> AuthorityParentMismatch{0};               // Actor parent != replay state
+    std::atomic<int32> AuthorityVisibilityMismatch{0};           // Actor visibility != replay state
+    std::atomic<int32> AuthorityRenameMismatch{0};               // Actor label != GRenamePersistentLabel
+    std::atomic<int32> AuthorityCollectionDivergence{0};         // Collection membership != expected
+    std::atomic<int32> AuthorityStaleLocalFlag{0};               // bHasLocalTarget stale after detach
+    std::atomic<int32> AuthorityStaleRootFlag{0};                // bHasLocalTarget false for attached child
+
+    // --- Phase 6H: Burst Operation Metrics (Goal D, written by game thread) ---
+    std::atomic<int32> BurstPeakPacketsPerTick{0};               // Peak packets processed in single tick
+    std::atomic<int32> BurstReplayQueueGrowthPeak{0};            // Peak replay buffer growth rate
+    std::atomic<int32> BurstRollbackFrequency{0};                // Rollbacks per verification cycle
+    std::atomic<int32> BurstDivergenceFrequency{0};              // Divergences per verification cycle
+    std::atomic<int32> BurstReconnectCycles{0};                  // Total reconnect stress cycles run
+
+    // --- Phase 6H: Replay Determinism (Goal E, written by game thread) ---
+    std::atomic<int32> ReplayDeterminismVerifyCount{0};          // Total determinism verification runs
+    std::atomic<int32> ReplayDeterminismPassCount{0};            // Passed determinism verifications
+    std::atomic<int32> ReplayDeterminismFailCount{0};            // Failed determinism verifications
+    std::atomic<int32> ReplayDomainCollectionHash{0};            // Collection domain hash mismatches
+    std::atomic<int32> ReplayDomainLifecycleHash{0};             // Lifecycle domain hash mismatches
+    std::atomic<int32> ReplayDomainRenameHash{0};                // Rename domain hash mismatches
+    std::atomic<int32> ReplayDomainTransformHash{0};             // Transform domain hash mismatches
+
+    // --- Phase 6H: Known-Bad-Pattern Enforcement (Goal F, written by game thread) ---
+    std::atomic<int32> KBPTransformGatedSemantic{0};             // Semantic event gated behind transform
+    std::atomic<int32> KBPStaleLocalAfterDetach{0};              // bHasLocalTarget remains true after detach
+    std::atomic<int32> KBPWorldLocalAuthorityMixing{0};          // World/local authority domain mismatch
+    std::atomic<int32> KBPReplayRollbackIncomplete{0};           // Rollback without full domain restore
+    std::atomic<int32> KBPHierarchyOverwriteFromTransform{0};    // Transform lane modified hierarchy
+
+    // --- Phase 6I: Performance & Scaling Metrics (Goal A-E, written by game thread) ---
+    std::atomic<int32> CoalescedTransforms{0};                  // Transform packets coalesced per tick (same-GUID latest-wins)
+    std::atomic<int32> RedundantTransformsSuppressed{0};        // Redundant duplicate transforms suppressed
+    std::atomic<int32> ReplayDuplicateEntries{0};               // Duplicate replay entries detected (same domain+GUID+seq)
+    std::atomic<int32> ReplayStaleEntryRatio{0};                // Stale entries / total replay entries (x1000)
+    std::atomic<int32> ReplayMemoryEstimate{0};                 // Estimated replay buffer bytes (approx)
+    std::atomic<int32> ReplayPeakMemoryBytes{0};                // Peak replay buffer memory estimate
+    std::atomic<int32> TransformsPerSecond{0};                  // Transform packets per second (sampled)
+    std::atomic<int32> CreatesPerSecond{0};                     // Create packets per second
+    std::atomic<int32> DeletesPerSecond{0};                     // Delete packets per second
+    std::atomic<int32> HierarchyPacketsPerSecond{0};            // Hierarchy packets per second
+    std::atomic<int32> RenamePacketsPerSecond{0};               // Rename packets per second
+    std::atomic<int32> VisibilityPacketsPerSecond{0};           // Visibility packets per second
+    std::atomic<int32> CollectionPacketsPerSecond{0};           // Collection packets per second
+    std::atomic<int32> TickProcessTimeUs{0};                    // Total tick process time in microseconds (latest)
+    std::atomic<int32> TickPeakProcessTimeUs{0};                // Peak tick process time in microseconds
+    std::atomic<int32> QueuePeakDepth{0};                       // Peak queue depth (lifetime)
+    std::atomic<int32> LongFrameWarnings{0};                    // Long frame detected (tick > threshold)
+    std::atomic<int32> OverloadWarnings{0};                     // Overload condition warnings
+    std::atomic<int32> AdaptiveCadenceAdjusted{0};              // Adaptive diagnostics cadence adjusted
+
     // --- Per-frame timing (written by game thread) ---
     double LastPacketTime = 0.0;
     double LastThreadLoopTime = 0.0;

@@ -1,10 +1,10 @@
 # Phase 6F — Collection/Group Replication: Vertical Slice Design
 
 > **Created**: 2026-05-27
-> **Status**: PLANNING — NOT IMPLEMENTED
+> **Status**: IMPLEMENTED — TESTED
 > **Scope Lock**: `38-phase6F-collection-scope-lock.md`
 > **Predecessors**: Rename (`0x0C` · STABILIZED) · Visibility (`0x0B` · STABILIZED) · Hierarchy (`0x0D` · STABILIZED) · Lifecycle/Delete (`0x0E` · STABILIZED)
-> **Implementation**: BLOCKED — design phase only. No runtime code has been modified. No parser branches have been added. No packet handlers exist.
+> **Implementation**: IMPLEMENTED — PT_Collection (0x0F) parser branch in ProcessBinaryPacket, HandleCollection() with per-pair sequence tracking, world replay recording, ConsoleReset/StopNetworkThread lifecycle. Integration tests in `tests/run_phase6f_collection.py` (10/10 PASS).
 > **Freeze**: Phase 6 Stabilization Freeze ACTIVE — additive-only, no frozen-runtime modifications, no cross-lane coupling (`36-phase6-stabilization-freeze-checkpoint.md`)
 >
 > This document defines the **complete vertical slice design** for the fifth
@@ -14,9 +14,8 @@
 > on the UE side. Unlike all prior lanes, collection does NOT mutate actor
 > structural state — it operates entirely on a metadata overlay.
 >
-> **This is a design document, NOT an implementation specification.**
-> No runtime code has been modified. No parser branches have been added.
-> No packet handlers exist. No Tick pipeline changes are proposed.
+> **This document describes the design that was subsequently implemented.**
+> The PT_Collection (0x0F) parser branch, HandleCollection(), sequence tracking, world replay recording, and ConsoleReset/StopNetworkThread lifecycle are all active. See `tests/run_phase6f_collection.py` for integration tests.
 
 ---
 

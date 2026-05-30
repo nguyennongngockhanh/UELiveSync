@@ -45,6 +45,7 @@ try:
         PT_Rename,
         PT_Hierarchy,
         PT_Delete_V5,
+        PT_Visibility,
         PT_Collection,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
@@ -76,6 +77,7 @@ except ImportError:
         serialize_delete_v3,
         serialize_rename,
         serialize_hierarchy,
+        serialize_visibility,
         serialize_delete,
         is_connected,
         get_last_error,
@@ -98,6 +100,7 @@ except ImportError:
         PT_Rename,
         PT_Hierarchy,
         PT_Delete_V5,
+        PT_Visibility,
         PT_Collection,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
@@ -770,6 +773,12 @@ def check_updates():
 
     if not timer_running:
         return 0.016
+
+    # DIAG: print internal state each tick
+    print(
+        f"[DIAG] tick: timer_running={timer_running} tracked={len(tracked_objects)}",
+        flush=True
+    )
 
     # First-tick diagnostic
     if _sync_start_time > 0 and time.time() - _sync_start_time < 0.1:
@@ -1445,6 +1454,11 @@ def check_updates():
     now = time.time()
 
     if now - _last_heartbeat_time >= _heartbeat_interval:
+
+        print(
+            "[HEARTBEAT][DIAG] heartbeat queued",
+            flush=True
+        )
 
         if _verbose_logging:
             print(

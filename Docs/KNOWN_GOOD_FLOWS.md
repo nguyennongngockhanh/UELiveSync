@@ -7,6 +7,7 @@ Each flow documents the **correct** working path. If behavior diverges, compare 
 ## A — Connection Bootstrap
 
 **Trigger**: Start UE listener → Blender enable sync
+**UE prerequisite**: UE editor must be launched with `-RenderOffScreen` for headless use (not `-NullRHI`, which is detected and rejected at startup)
 **Blender**: `network.py.connect()`, background daemon thread `_sender_loop()`, timer `_sync_timer` in `sync.py`
 **UE**: `LiveSyncRunnable.cpp` `StartNetworkThread()`, `BuildActorCache()`, heartbeat timeout 15s
 **Expected diagnostics**:
@@ -17,7 +18,9 @@ Each flow documents the **correct** working path. If behavior diverges, compare 
 [UE] LiveSyncRunnable: Client connected → starting receive loop
 [BLENDER] [SYNC] Sync started (heartbeat every 5s)
 ```
-**Failure signature**: `[UE] Heartbeat timeout (15s) — no packet received` — port mismatch or Blender not sending
+**Failure signature**: `[UE] Heartbeat timeout (15s) — no packet received` — port mismatch, Blender not sending, **or Tick stalled by incorrect launch args**
+**NullRHI detection** (blocked at startup): If `-NullRHI` is passed, `[LIFECYCLE][ERROR] NullRHI editor mode DETECTED.` appears and the plugin refuses to run
+**Tick health marker**: `[TICK][HEARTBEAT] Tick is executing (frame=N)` appears every ~5 seconds while Tick is alive
 **Replay implication**: StopNetworkThread clears GWorldReplayBuffer; sequence trackers reset; GRenamePersistentLabel survives
 
 ---

@@ -125,6 +125,8 @@ When transitioning:
 | NW-2 | Packet version must be checked for backward compat | V2/V3/V4/V5 all accepted | Old Blender → UE incompatibility | ProcessBinaryPacket version dispatch |
 | NW-3 | All PT_* constants must appear in kValidTypes and LIVE_SYNC_PROTOCOL_SIG | Protocol signature drift detection | Undetected protocol drift | FNV signature verification |
 | NW-4 | TCP header is always 24 bytes fixed, little-endian | Header format must never change without major version bump | Wrong header parse → corrupted packet stream | build_v5_header, header parse |
+| NW-5 | Ingress is Tick-driven | accept() and StartNetworkThread() are called from within Tick() | `-NullRHI` suppresses Tick → use `-RenderOffScreen` instead (a startup guard rejects `-NullRHI` before Tick begins) | Tick(), IsIngressHealthy() |
+| NW-6 | Listener socket alone does NOT prove ingress health | Accept is polled from Tick; Tick may be stalled | False sense of connectivity (socket shows LISTEN but no data flows) | ConsoleDumpState, IsIngressHealthy() |
 
 **Forbidden**: Changing header layout. Adding PT constants without updating FNV hash. Removing backward compat for V2/V3/V4.
 
@@ -141,3 +143,22 @@ When transitioning:
 | DG-5 | FDiagnosticsHistory bounded at 32 entries | Never unbounded event lists | Memory leak | Event history arrays |
 
 **Forbidden**: Removing profiler scopes. Using counters for synchronization. Removing CVar gates on verbose logs.
+
+---
+
+## K — Phase 6H Semantic Consistency Invariants
+
+| # | Invariant | Why | If Violated | Protected Systems |
+|---|-----------|-----|-------------|-------------------|
+| 6H-1 | Packet ordering validation must NEVER mutate runtime state | Diagnostics-only — observability must not change behavior | Non-deterministic replay, phantom state changes | ValidatePacketOrdering, TickPhase6H |
+| 6H-2 | Semantic authority audit must be non-destructive | Read-only verification — no registry mutations | Lost rename labels, corrupted collections | VerifySemanticState, CheckParentAuthority, CheckRenameAuthority |
+| 6H-3 | Replay fuzz tests must NOT modify live replay buffer | Fuzz simulation on copy or read-only | Replay determinism destroyed | RunReplayFuzz (shuffled copy, not in-place) |
+| 6H-4 | Hierarchy stress tests must respect cycle detection | Stress operations must not create cycles | Infinite parent chain, stack overflow | RunHierarchyStress (WouldCreateHierarchyCycle gate) |
+| 6H-5 | Reconnect stress must preserve GRenamePersistentLabel | RN-2 invariant — persistent labels survive reconnect | Label loss across reconnects | RunReconnectStress (verify label count after StopNetworkThread) |
+| 6H-6 | VerifyReplayDeterminism must save+restore all domains | Domain-by-domain comparison requires full state capture | Partial comparison misses drift | VerifyReplayDeterminism (full snapshot + restore) |
+| 6H-7 | Known-bad-pattern detection must NOT auto-correct | Detection only — no silent repair | Hidden corruption from automatic fix | EnforceKnownBadPatterns (diagnostics only) |
+| 6H-8 | TickPhase6H must run at reduced frequency (≤ 300 frames) | Diagnostics must not impact production performance | Frame time regression | TickPhase6H frame counter gate |
+| 6H-9 | Packet ordering check must handle all packet types | PT_Hierarchy/PT_Rename/PT_Visibility/PT_Collection all need create-before-X | Undetected ordering violations for specific types | ValidatePacketOrdering switch statement |
+| 6H-10 | EnforceKnownBadPatterns must not allocate during critical path | KBP checks may run on tick; must not cause allocation spikes | Hitches during gameplay | Non-allocating iteration (no string building in hot path) |
+
+**Forbidden**: Mutating state in packet ordering validation. Auto-correcting known-bad-patterns. Running diagnostics every frame. Skipping domain in VerifyReplayDeterminism.

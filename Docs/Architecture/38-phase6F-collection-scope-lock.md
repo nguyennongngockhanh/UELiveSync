@@ -1,10 +1,10 @@
 # Phase 6F — Collection/Group Replication Scope Lock
 
 > **Created**: 2026-05-27
-> **Status**: PLANNING — NOT IMPLEMENTED
+> **Status**: IMPLEMENTED — TESTED
 > **Predecessors**: Rename (STABILIZED, Phase 6A/6B · `0x0C`) · Visibility (STABILIZED, Phase 6C · `0x0B`) · Hierarchy (STABILIZED, Phase 6D · `0x0D`) · Lifecycle/Delete (STABILIZED, Phase 6E · `0x0E`)
-> **Next**: Vertical Slice Design (TBD)
-> **Implementation**: BLOCKED — requires scope lock approval, cross-lane invariant verification, and collection authority model design before any code changes.
+> **Next**: — (complete)
+> **Implementation**: IMPLEMENTED — parser, handler (HandleCollection), per-pair sequence tracking, replay recording, and ConsoleReset/StopNetworkThread lifecycle are all active.
 > **Freeze**: Phase 6 Stabilization Freeze ACTIVE — must be additive-only, no frozen-runtime modifications, no cross-lane coupling (see `36-phase6-stabilization-freeze-checkpoint.md`)
 >
 > This document defines the **hard scope boundaries** for the fifth Phase 6
@@ -81,7 +81,7 @@ A **collection** is a named, user-visible group of objects in Blender
 |-------|-------|
 | **Packet type** | `PT_Collection = 0x0F` (next available after `0x0E`, see §8.2 of semantic conventions) |
 | **Direction** | Blender → UE only (Phase 6F); UE → Blender deferred (see §3) |
-| **Status** | **RESERVED — NOT IMPLEMENTED.** Packet type byte `0x0F` is reserved for Phase 6F. No parsing logic, no serialization, no FNV update. |
+| **Status** | **IMPLEMENTED — TESTED.** PT_Collection (0x0F) is parsed in ProcessBinaryPacket, reaches HandleCollection(), updates per-pair sequence tracking, records world replay, and is reset on StopNetworkThread/ConsoleReset. Wire format: membership ops 46 bytes (TargetGuid(16)+OpType(1)+OpFlags(1)+seq(4)+ts(8)+CollectionGuid(16)), identity ops 30 bytes (without CollectionGuid). |
 | **Semantics** | Replicates **collection group membership** as metadata: object X is a member of collection Y. Collection structure changes (create/delete/rename/re-parent) are also replicated. |
 | **Wire format** | **NOT DEFINED.** The payload layout is to be determined during vertical slice design. Candidate fields: `GUID(16) + CollectionGuid(16) + Operation(1) + seq(4) + ts(8)`. |
 | **Event type** | Discrete semantic mutation — NOT a state stream. Fires on collection membership change, not on every transform tick. |
@@ -636,3 +636,4 @@ the same additive-only, per-lane-tracker, isolated-parser-branch pattern.
 | Date | Version | Changes |
 |------|---------|---------|
 | 2026-05-27 | 1.0 | Initial scope lock — Phase 6F planning. Defines collection/group replication scope, semantic rules, cross-lane interaction matrix, replay semantics, observability contract, frozen-runtime guarantees, rollback conditions, and done criteria. Implementation BLOCKED — design phase only. |
+| 2026-05-30 | 2.0 | Updated: Collection is IMPLEMENTED — TESTED. Parser (ProcessBinaryPacket), handler (HandleCollection), per-pair sequence tracking, world replay recording, ConsoleReset/StopNetworkThread lifecycle all active. Integration tests in `tests/run_phase6f_collection.py` pass 10/10. |

@@ -22,6 +22,7 @@ Then use `TASK_PROMPT_TEMPLATES.md` to scope the specific task.
 - **Runtime core**: FROZEN — Tick pipeline, queue, thread lifecycle, parser
 - **Freeze checkpoint**: Active since 2026-05-27 — additive-only, no frozen-runtime modifications
 - **66/66 invariants**: Verified across Structural, Runtime, Cross-Lane, Observability, Blender-Side
+- **Phase 6H**: Active — Semantic Consistency Hardening (stabilization + determinism + replay-hardening)
 
 ## Active Protocol Versions
 
@@ -66,7 +67,20 @@ UE.LiveSync.VerifyWorldReplay   — Hash consistency check
 UE.LiveSync.DumpReplayTimeline  — Replay timeline ring buffer
 UE.LiveSync.ExportWorldSnapshot — JSON snapshot export
 UE.LiveSync.Verbose             — Toggle verbose logging
+
+## Phase 6H Console Commands
+
 ```
+UE.LiveSync.ValidatePacketOrdering     — Phase 6H: Packet ordering validation counters
+UE.LiveSync.VerifySemanticState        — Phase 6H: Semantic authority audit (non-mutating)
+UE.LiveSync.DumpAuthorityState         — Phase 6H: Per-actor authority state dump
+UE.LiveSync.RunReplayFuzz [s] [n]      — Phase 6H: Replay fuzz (seed, iterations)
+UE.LiveSync.RunHierarchyStress [o] [n] — Phase 6H: Hierarchy stress (objects, ops)
+UE.LiveSync.RunReconnectStress [c]     — Phase 6H: Reconnect stress cycles
+UE.LiveSync.VerifyReplayDeterminism    — Phase 6H: Full replay determinism verification
+UE.LiveSync.EnforceKnownBadPatterns    — Phase 6H: Known-bad-pattern detection
+```
+
 
 ## Test Commands (Standalone, No UE Required)
 

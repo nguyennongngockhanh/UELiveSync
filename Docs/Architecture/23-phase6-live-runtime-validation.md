@@ -35,7 +35,7 @@
 | UE 5.7.4 Editor | **YES** | Launched with ProjectTemplate, UELiveSync plugin loaded |
 | Editor port `:57000` | **YES** | TCP listener active on `0.0.0.0:57000` |
 | Blender 5.1.2 | **YES** | `org.blender.Blender` flatpak — not required for focused tests |
-| Editor mode | **YES** | `-NullRHI -RenderOffScreen` (no GPU required) |
+| Editor mode | **YES** | `-RenderOffScreen` (no GPU required) — `-NullRHI` is detected and rejected at plugin startup |
 | Verbose logging | **PARTIAL** | Plugin loads, console commands registered, live logs verified via UE.LiveSync commands |
 | Blender addon active | **NO** | Not required — tests send raw TCP packets simulating Blender |
 | CPU profiler | **PARTIAL** | Console commands available; TRACE_CPUPROFILER_EVENT_SCOPE macros present in code |

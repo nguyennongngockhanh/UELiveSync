@@ -203,7 +203,21 @@ uint32 FLiveSyncRunnable::Run()
 
             TotalHeaderRead +=
                 BytesRead;
+
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("[RECV][DIAG] header chunk: %d bytes (total %d/%d)"),
+                BytesRead,
+                TotalHeaderRead,
+                (int32)sizeof(FPacketHeaderV3));
         }
+
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("[RECV][DIAG] full header received: %d bytes"),
+            TotalHeaderRead);
 
         // =================================================
         // DETERMINE VERSION
@@ -225,6 +239,7 @@ uint32 FLiveSyncRunnable::Run()
         int32 PacketSize;
         int32 ObjectCount;
         int32 HeaderSize;
+        uint8 PacketType = 0;
 
         if (PacketVersion >=
             LIVE_SYNC_VERSION_V3)
@@ -245,6 +260,9 @@ uint32 FLiveSyncRunnable::Run()
 
             ObjectCount =
                 V3Hdr->ObjectCount;
+
+            PacketType =
+                V3Hdr->PacketType;
 
             HeaderSize =
                 sizeof(FPacketHeaderV3);
@@ -563,7 +581,22 @@ uint32 FLiveSyncRunnable::Run()
 
             TotalPayloadRead +=
                 BytesRead;
+
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("[RECV][DIAG] payload chunk: %d bytes "
+                     "(total %d/%d)"),
+                BytesRead,
+                TotalPayloadRead,
+                PacketSize - HeaderSize);
         }
+
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("[RECV][DIAG] full payload received: %d bytes"),
+            TotalPayloadRead);
 
         // =================================================
         // BUILD FINAL PACKET
@@ -639,6 +672,17 @@ uint32 FLiveSyncRunnable::Run()
 
         PacketQueue->Enqueue(
             MoveTemp(Packet));
+
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("[RECV][DIAG] packet received: type=0x%02x "
+                 "ver=%u seq=%llu size=%d objs=%d"),
+            PacketType,
+            PacketVersion,
+            PacketSequenceId,
+            PacketSize,
+            ObjectCount);
 
         LastPacketReceiveTime.store(
             FPlatformTime::Seconds(),

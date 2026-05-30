@@ -219,6 +219,83 @@ ConsoleStats()
         Stats.PendingAssetCount,
         Stats.PendingAssetPeak);
 
+    // ── Phase 6I: Performance & Scalability ────────────
+    UE_LOG(LogLiveSync, Log,
+        TEXT("  [Phase 6I] Performance & Scalability"));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    CoalescedTransforms:        %d"),
+        Stats.CoalescedTransforms.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    SuppressedRedundant:       %d"),
+        Stats.RedundantTransformsSuppressed.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    ReplayDuplicateEntries:    %d"),
+        Stats.ReplayDuplicateEntries.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    ReplayStaleEntryRatio:     %d"),
+        Stats.ReplayStaleEntryRatio.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    ReplayMemoryEstimate:      %d bytes"),
+        Stats.ReplayMemoryEstimate.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    ReplayPeakMemoryBytes:     %d bytes"),
+        Stats.ReplayPeakMemoryBytes.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    TransformsPerSecond:       %d"),
+        Stats.TransformsPerSecond.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    CreatesPerSecond:          %d"),
+        Stats.CreatesPerSecond.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    DeletesPerSecond:          %d"),
+        Stats.DeletesPerSecond.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    HierarchyPacketsPerSecond: %d"),
+        Stats.HierarchyPacketsPerSecond.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    RenamePacketsPerSecond:    %d"),
+        Stats.RenamePacketsPerSecond.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    VisibilityPacketsPerSecond:%d"),
+        Stats.VisibilityPacketsPerSecond.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    CollectionPacketsPerSecond:%d"),
+        Stats.CollectionPacketsPerSecond.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    TickProcessTime:           %d us (peak: %d us)"),
+        Stats.TickProcessTimeUs.load(std::memory_order_relaxed),
+        Stats.TickPeakProcessTimeUs.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    QueuePeakDepth:            %d"),
+        Stats.QueuePeakDepth.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    LongFrameWarnings:         %d"),
+        Stats.LongFrameWarnings.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    OverloadWarnings:          %d"),
+        Stats.OverloadWarnings.load(std::memory_order_relaxed));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("    AdaptiveCadenceAdjusted:   %d"),
+        Stats.AdaptiveCadenceAdjusted.load(std::memory_order_relaxed));
+
     UE_LOG(
         LogLiveSync,
         Log,
@@ -406,6 +483,70 @@ ConsoleExportWorldSnapshot()
 
 
 // =========================================================
+// INGRESS HEALTH
+// =========================================================
+
+FString UUELiveSyncSubsystem::FIngressHealthResult::ToString() const
+{
+    return FString::Printf(TEXT(
+        "  IngressHealth: tick=%s (%.1fs ago) "
+        "thread=%s listener=%s nullRHI=%s"),
+        bTickActive ? TEXT("OK") : TEXT("STALLED"),
+        SecondsSinceLastTick,
+        bNetworkThreadAlive ? TEXT("ALIVE") : TEXT("DEAD"),
+        bListenerValid ? TEXT("VALID") : TEXT("MISSING"),
+        bNullRHI ? TEXT("YES") : TEXT("no"));
+}
+
+UUELiveSyncSubsystem::FIngressHealthResult UUELiveSyncSubsystem::IsIngressHealthy() const
+{
+    FIngressHealthResult Result;
+    double Now = FPlatformTime::Seconds();
+
+    Result.bNullRHI = FParse::Param(FCommandLine::Get(), TEXT("NullRHI"));
+
+    // Tick activity: if LastTickExecutionTime is zero, Tick never ran
+    if (LastTickExecutionTime > 0.0)
+    {
+        Result.SecondsSinceLastTick = Now - LastTickExecutionTime;
+        // Tick is "active" if it ran within the last 10 seconds
+        Result.bTickActive = (Result.SecondsSinceLastTick < 10.0);
+    }
+    else
+    {
+        Result.SecondsSinceLastTick = -1.0;
+        Result.bTickActive = false;
+    }
+
+    // Listener validity
+    Result.bListenerValid = (ListenerSocket != nullptr);
+
+    // Network thread activity
+    if (NetworkRunnable)
+    {
+        double LastLoop = NetworkRunnable->LastThreadLoopTime.load(std::memory_order_relaxed);
+        if (LastLoop > 0.0)
+        {
+            Result.SecondsSinceLastThreadLoop = Now - LastLoop;
+            Result.bNetworkThreadAlive = (Result.SecondsSinceLastThreadLoop < 10.0);
+        }
+        else
+        {
+            Result.SecondsSinceLastThreadLoop = -1.0;
+            Result.bNetworkThreadAlive = false;
+        }
+    }
+    else
+    {
+        Result.SecondsSinceLastThreadLoop = -1.0;
+        Result.bNetworkThreadAlive = false;
+    }
+
+    return Result;
+}
+
+
+// =========================================================
 // CONSOLE: DUMP STATE
 // =========================================================
 
@@ -416,6 +557,16 @@ ConsoleDumpState()
         LogLiveSync,
         Log,
         TEXT("=== UE LiveSync State Dump ==="));
+
+    // =====================================================
+    // INGRESS HEALTH
+    // =====================================================
+
+    {
+        FIngressHealthResult Health = IsIngressHealthy();
+        UE_LOG(LogLiveSync, Log, TEXT("  [Ingress Health]"));
+        UE_LOG(LogLiveSync, Log, TEXT("  %s"), *Health.ToString());
+    }
 
     // =====================================================
     // CONNECTION
@@ -738,6 +889,72 @@ ConsoleReset()
     Stats.WorldReplaySnapshotRebuilds.store(0, std::memory_order_relaxed);
     Stats.WorldReplayReconnectRebuilds.store(0, std::memory_order_relaxed);
     Stats.WorldReplayReconnectDivergences.store(0, std::memory_order_relaxed);
+
+    // Phase 6H — Semantic Consistency Hardening counters reset
+    Stats.PacketHierarchyBeforeCreate.store(0, std::memory_order_relaxed);
+    Stats.PacketRenameBeforeCreate.store(0, std::memory_order_relaxed);
+    Stats.PacketVisibilityBeforeCreate.store(0, std::memory_order_relaxed);
+    Stats.PacketCollectionBeforeCreate.store(0, std::memory_order_relaxed);
+    Stats.PacketDuplicateAttachDetected.store(0, std::memory_order_relaxed);
+    Stats.PacketDuplicateDetachDetected.store(0, std::memory_order_relaxed);
+    Stats.PacketStaleReplayOrder.store(0, std::memory_order_relaxed);
+    Stats.PacketReplaySequenceGap.store(0, std::memory_order_relaxed);
+    Stats.AuthorityParentMismatch.store(0, std::memory_order_relaxed);
+    Stats.AuthorityVisibilityMismatch.store(0, std::memory_order_relaxed);
+    Stats.AuthorityRenameMismatch.store(0, std::memory_order_relaxed);
+    Stats.AuthorityCollectionDivergence.store(0, std::memory_order_relaxed);
+    Stats.AuthorityStaleLocalFlag.store(0, std::memory_order_relaxed);
+    Stats.AuthorityStaleRootFlag.store(0, std::memory_order_relaxed);
+    Stats.BurstPeakPacketsPerTick.store(0, std::memory_order_relaxed);
+    Stats.BurstReplayQueueGrowthPeak.store(0, std::memory_order_relaxed);
+    Stats.BurstRollbackFrequency.store(0, std::memory_order_relaxed);
+    Stats.BurstDivergenceFrequency.store(0, std::memory_order_relaxed);
+    Stats.BurstReconnectCycles.store(0, std::memory_order_relaxed);
+    Stats.ReplayDeterminismVerifyCount.store(0, std::memory_order_relaxed);
+    Stats.ReplayDeterminismPassCount.store(0, std::memory_order_relaxed);
+    Stats.ReplayDeterminismFailCount.store(0, std::memory_order_relaxed);
+    Stats.ReplayDomainCollectionHash.store(0, std::memory_order_relaxed);
+    Stats.ReplayDomainLifecycleHash.store(0, std::memory_order_relaxed);
+    Stats.ReplayDomainRenameHash.store(0, std::memory_order_relaxed);
+    Stats.ReplayDomainTransformHash.store(0, std::memory_order_relaxed);
+    Stats.KBPTransformGatedSemantic.store(0, std::memory_order_relaxed);
+    Stats.KBPStaleLocalAfterDetach.store(0, std::memory_order_relaxed);
+    Stats.KBPWorldLocalAuthorityMixing.store(0, std::memory_order_relaxed);
+    Stats.KBPReplayRollbackIncomplete.store(0, std::memory_order_relaxed);
+    Stats.KBPHierarchyOverwriteFromTransform.store(0, std::memory_order_relaxed);
+
+    Phase6HFrameCounter = 0;
+    Phase6HBurstTickPacketCount = 0;
+    Phase6HBurstTickPeak = 0;
+    Phase6HCreatedThisTick.Empty();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[PHASE6H] All Phase 6H counters reset (ConsoleReset)"));
+
+    // Phase 6I: reset all performance & scalability counters
+    Stats.CoalescedTransforms.store(0, std::memory_order_relaxed);
+    Stats.RedundantTransformsSuppressed.store(0, std::memory_order_relaxed);
+    Stats.ReplayDuplicateEntries.store(0, std::memory_order_relaxed);
+    Stats.ReplayStaleEntryRatio.store(0, std::memory_order_relaxed);
+    Stats.ReplayMemoryEstimate.store(0, std::memory_order_relaxed);
+    Stats.ReplayPeakMemoryBytes.store(0, std::memory_order_relaxed);
+    Stats.TransformsPerSecond.store(0, std::memory_order_relaxed);
+    Stats.CreatesPerSecond.store(0, std::memory_order_relaxed);
+    Stats.DeletesPerSecond.store(0, std::memory_order_relaxed);
+    Stats.HierarchyPacketsPerSecond.store(0, std::memory_order_relaxed);
+    Stats.RenamePacketsPerSecond.store(0, std::memory_order_relaxed);
+    Stats.VisibilityPacketsPerSecond.store(0, std::memory_order_relaxed);
+    Stats.CollectionPacketsPerSecond.store(0, std::memory_order_relaxed);
+    Stats.TickProcessTimeUs.store(0, std::memory_order_relaxed);
+    Stats.TickPeakProcessTimeUs.store(0, std::memory_order_relaxed);
+    Stats.QueuePeakDepth.store(0, std::memory_order_relaxed);
+    Stats.LongFrameWarnings.store(0, std::memory_order_relaxed);
+    Stats.OverloadWarnings.store(0, std::memory_order_relaxed);
+    Stats.AdaptiveCadenceAdjusted.store(0, std::memory_order_relaxed);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[PHASE6I] All Phase 6I counters reset (ConsoleReset)"));
+
     GWorldReplayBuffer.Empty();
     GWorldSavedState.Clear();
     GWorldLastVerifiedHash = 0;

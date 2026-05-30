@@ -820,6 +820,34 @@ void UUELiveSyncSubsystem::Initialize(
         TEXT("UE Live Sync Started"));
 
     // =====================================================
+    // NULLRHI GUARD — injected ingress block detection
+    // =====================================================
+    // -NullRHI suppresses the engine tick loop, preventing
+    // Tick() from executing, which blocks accept(),
+    // network thread startup, and packet ingress.
+    // See Docs/KNOWN_BAD_PATTERNS.md for details.
+    {
+        bool bIsNullRHI = FParse::Param(FCommandLine::Get(), TEXT("NullRHI"));
+        if (bIsNullRHI)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[LIFECYCLE][ERROR] ============================================================"));
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[LIFECYCLE][ERROR] NullRHI editor mode DETECTED."));
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[LIFECYCLE][ERROR] Tick-driven ingress will NOT execute."));
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[LIFECYCLE][ERROR] LiveSync networking is DISABLED."));
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[LIFECYCLE][ERROR] Remove -NullRHI from launch arguments."));
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[LIFECYCLE][ERROR] Use -RenderOffScreen instead of -NullRHI."));
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[LIFECYCLE][ERROR] ============================================================"));
+        }
+    }
+
+    // =====================================================
     // REGISTER CONSOLE COMMANDS
     // =====================================================
 
@@ -973,8 +1001,133 @@ void UUELiveSyncSubsystem::Initialize(
                     &UUELiveSyncSubsystem::
                         ConsoleExportWorldSnapshot),
             ECVF_Default);
-}
 
+    // =====================================================
+    // PHASE 6H — SEMANTIC CONSISTENCY HARDENING
+    // =====================================================
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.ValidatePacketOrdering"),
+            TEXT("Phase 6H: Dump packet ordering validation counters"),
+            FConsoleCommandDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleValidatePacketOrdering),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.VerifySemanticState"),
+            TEXT("Phase 6H: Run semantic authority audit (non-mutating)"),
+            FConsoleCommandDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleVerifySemanticState),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.DumpAuthorityState"),
+            TEXT("Phase 6H: Dump per-actor authority state"),
+            FConsoleCommandDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleDumpAuthorityState),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.RunReplayFuzz"),
+            TEXT("Phase 6H: Replay fuzz test [seed] [iterations]"),
+            FConsoleCommandWithArgsDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleRunReplayFuzz),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.RunHierarchyStress"),
+            TEXT("Phase 6H: Hierarchy stress test [objects] [ops]"),
+            FConsoleCommandWithArgsDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleRunHierarchyStress),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.RunReconnectStress"),
+            TEXT("Phase 6H: Reconnect stress test [cycles]"),
+            FConsoleCommandWithArgsDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleRunReconnectStress),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.VerifyReplayDeterminism"),
+            TEXT("Phase 6H: Full replay determinism verification (snapshot+rebuild+compare)"),
+            FConsoleCommandDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleVerifyReplayDeterminism),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.EnforceKnownBadPatterns"),
+            TEXT("Phase 6H: Run known-bad-pattern detection diagnostics"),
+            FConsoleCommandDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleEnforceKnownBadPatterns),
+            ECVF_Default);
+
+    // ── Phase 6I: Performance & Scalability ──────────────
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.Phase6IStats"),
+            TEXT("Phase 6I: Show performance and scalability stats"),
+            FConsoleCommandDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsolePhase6IStats),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.Coalesce"),
+            TEXT("Phase 6I: Toggle transform coalescing [0=off, 1=on]"),
+            FConsoleCommandWithArgsDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleToggleCoalesce),
+            ECVF_Default);
+
+    IConsoleManager::Get().
+        RegisterConsoleCommand(
+            TEXT("UE.LiveSync.SetDiagnosticsCadence"),
+            TEXT("Phase 6I: Set diagnostics cadence in frames [10-600]"),
+            FConsoleCommandWithArgsDelegate::
+                CreateUObject(
+                    this,
+                    &UUELiveSyncSubsystem::
+                        ConsoleSetDiagnosticsCadence),
+            ECVF_Default);
+}
 
 // =========================================================
 // DEINITIALIZE
@@ -1120,6 +1273,7 @@ bool UUELiveSyncSubsystem::Tick(
 {
     CHECK_GAME_THREAD();
     VerboseFrameCounter++;
+    LastTickExecutionTime = FPlatformTime::Seconds();
 
     // =====================================================
     // SYNC CVARS
@@ -1173,6 +1327,22 @@ bool UUELiveSyncSubsystem::Tick(
 
             StartServer();
         }
+    }
+
+    // =====================================================
+    // TICK HEARTBEAT — always-on proof of life
+    // =====================================================
+    // If this never appears in the log, Tick is not
+    // executing (e.g. -NullRHI mode, scheduler stall).
+    // Fires every ~300 ticks (~5s at 60fps).
+    if (VerboseFrameCounter % 300 == 1)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("[TICK][HEARTBEAT] Tick is executing "
+                 "(frame=%d)"),
+            VerboseFrameCounter);
     }
 
     // =====================================================
@@ -1591,6 +1761,27 @@ bool UUELiveSyncSubsystem::Tick(
             ValidateHierarchy();
         }
         UE_LOG(LogLiveSync, Log, TEXT("END   Periodic: ValidateHierarchy"));
+    }
+
+    // =====================================================
+    // PHASE 6H — SEMANTIC CONSISTENCY DIAGNOSTICS
+    // =====================================================
+
+    UE_LOG(LogLiveSync, Log, TEXT("BEGIN Periodic: TickPhase6H"));
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_TickPhase6H);
+        TickPhase6H(DeltaTime);
+    }
+    UE_LOG(LogLiveSync, Log, TEXT("END   Periodic: TickPhase6H"));
+
+    // =====================================================
+    // PHASE 6I — PERFORMANCE & SCALABILITY DIAGNOSTICS
+    // =====================================================
+
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_TickPhase6I);
+        TickPhase6I(DeltaTime);
+        CheckOverloadCondition();
     }
 
     // =====================================================
@@ -2029,6 +2220,24 @@ ProcessQueuedPackets()
     TSet<FGuid>
         SeenThisTick;
 
+    // Phase 6H: reset per-tick creation tracking
+    Phase6HCreatedThisTick.Empty();
+
+    // Phase 6H: track burst peak
+    Phase6HBurstTickPacketCount = PacketsThisTick.Num();
+    if (Phase6HBurstTickPacketCount > Phase6HBurstTickPeak)
+    {
+        Phase6HBurstTickPeak = Phase6HBurstTickPacketCount;
+        Stats.BurstPeakPacketsPerTick.store(
+            Phase6HBurstTickPeak, std::memory_order_relaxed);
+    }
+
+    // Phase 6I: transform coalescing (latest-transform-wins per tick)
+    // Counter is maintained inside CoalesceTransforms.
+    {
+        CoalesceTransforms(PacketsThisTick);
+    }
+
     // Per-packet instrumentation counter
     static uint64 PacketProcessCounter = 0;
 
@@ -2036,6 +2245,12 @@ ProcessQueuedPackets()
         Pkt : PacketsThisTick)
     {
         PacketProcessCounter++;
+
+        // Phase 6H: validate packet ordering (Goal A)
+        if (ConnectionSocket)
+        {
+            ValidatePacketOrdering(Pkt);
+        }
 
         // Inline-read header fields for diagnostics
         int32 PktSize =
@@ -2423,6 +2638,9 @@ ProcessBinaryPacket(
 
         return;
     }
+
+    // Phase 6I: track per-domain packet rates
+    TrackPerDomainPacket(PacketType);
 
     // =====================================================
     // SNAPSHOT BOUNDARY MARKERS
@@ -3559,6 +3777,9 @@ ProcessBinaryPacket(
                 ParentGuid,
                 PrimitiveType,
                 bIsLocalTransform);
+
+            // Phase 6H: track created GUIDs for ordering validation
+            Phase6HCreatedThisTick.Add(Guid);
         }
 
         UpdateTargetTransform(
@@ -7896,6 +8117,7 @@ HandleBeginSnapshot()
 // ABORT SNAPSHOT
 // =========================================================
 
+// Aborts an in-progress snapshot build and clears pending attachment state.
 void UUELiveSyncSubsystem::
 AbortSnapshot()
 {
@@ -9428,5 +9650,7 @@ GetWatchdogBackoff() const
 }
 
 
+#include "UELiveSyncSubsystem_Phase6H.inl"
+#include "UELiveSyncSubsystem_Phase6I.inl"
 #include "UELiveSyncSubsystem_Diagnostics.inl"
 

@@ -259,7 +259,7 @@ def _log_diagnostics():
 
 ## 4. Phase 6 — Live Editing System
 
-**Status**: Phase 6 — Live Editing System (Rename STABILIZED · Visibility STABILIZED · Hierarchy IN PROGRESS)  
+**Status**: Phase 6 — Live Editing System (Rename STABILIZED · Visibility STABILIZED · Collection IMPLEMENTED · Hierarchy IN PROGRESS)  
 **Scope**: See `Docs/Architecture/18-phase6-scope-lock.md` for hard IN-SCOPE/OUT-OF-SCOPE boundaries, authority models,
 and escalation rules.
 
@@ -481,7 +481,7 @@ full design.
 
 Blender collections can be mapped to UE folder actors (empty actors for organization):
 
-**Packet type**: `PT_Folder = 0x0F` (provisional — 0x0F is Reserved for future semantic lane per canonical conventions; this assignment will be confirmed during Phase 6F design)
+**Packet type**: `PT_Folder` (provisional — collection metadata now uses `PT_Collection = 0x0F`; a future packet type may be allocated for folder actors)
 
 - Collection name → folder actor label
 - Collection hierarchy → folder actor hierarchy
@@ -1070,4 +1070,4 @@ Variable-length strings in the protocol (mesh paths, material paths, names) will
 
 ---
 
-*End of consolidated roadmap. Updated 2026-05-26 (Phase 5E complete, Phase 6 ACTIVE: Rename STABILIZED · Visibility STABILIZED · Hierarchy IN PROGRESS).*
+*End of consolidated roadmap. Updated 2026-05-30 (Phase 5E complete, Phase 6 ACTIVE: Rename STABILIZED · Visibility STABILIZED · Collection IMPLEMENTED · Hierarchy IN PROGRESS).*

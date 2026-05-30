@@ -38,3 +38,12 @@ AGENTS.md
 
 # tests (local only)
 tests/
+
+# Local Opencode runtime/cache
+.opencode/node_modules/
+.opencode/node_modules.disabled.*/
+
+# Local Opencode runtime/cache/backups
+.opencode/
+.opencode.bak.*/
+**/node_modules/
