@@ -1,9 +1,9 @@
 # Phase 6I.1 — Transport Hardening Scope Lock
 
 > **Created**: 2026-05-30 · **Updated**: 2026-05-30
-> **Status**: STAGE 1A VERIFIED — Bounds hardening implemented and live-validated
+> **Status**: STAGE 1B VERIFIED — Observability implemented and live-validated
 > **Predecessors**: Rename (STABILIZED, Phase 6A/6B · `0x0C`) · Visibility (STABILIZED, Phase 6C · `0x0B`) · Collection (IMPLEMENTED, Phase 6F · `0x0F`) · Hierarchy (IN PROGRESS, Phase 6D · `0x0D`)
-> **Next**: Stage 1B Observability — CVars, counters, error enum
+> **Next**: Stage 1C Lifecycle Hardening — socket timeout, keepalive
 >
 > This document defines the **hard scope boundaries** for the first Phase 6I
 > sub-slice: transport/protocol hardening.
@@ -279,4 +279,18 @@ Phase 6I.1 is **complete** when:
 | `Blender_Addon/sync.py` | 2 | (none — transport-only changes in network.py) |
 | `tests/` | 0, 1, 2 | Stage validation test files |
 | `Docs/Architecture/41-phase6I1-transport-hardening-scope-lock.md` | 0 | This document |
+| `tests/phase6I1_observability_validation.py` | 1 | Stage 1B validation: MalformedPackets gaps, CVar, high-water |
+
+## 11. Validation Record — Stage 1B
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-30 |
+| **Command** | `python3 tests/phase6I1_observability_validation.py` |
+| **Result** | **43/43 PASS** |
+| **Stage 1A regression** | `python3 tests/phase6I1_bounds_validation.py`: 24/24 PASS (no regression) |
+| **Fuzz regression** | `python3 tests/phase5c_fuzz_protocol.py`: 37/39 PASS (same 2 pre-existing TCP sendall failures, no regression) |
+| **UE log confirmation** | MalformedPackets now increments on all 10 newly-patched paths. TransportVerbose CVar registered. |
+| **Editor health** | No crash, no assert, no check failure. |
+| **Stage 1B status** | **VERIFIED** |
 | `Docs/Architecture/42-phase6I1-transport-hardening-design.md` | 0 | Vertical slice design (next) |

@@ -641,6 +641,17 @@ static TAutoConsoleVariable<int32>
     );
 
 static TAutoConsoleVariable<int32>
+    CVarLiveSyncTransportVerbose(
+        TEXT("UE.LiveSync.TransportVerbose"),
+        0,
+        TEXT("Enable transport-layer diagnostics "
+             "(1=on, 0=off). "
+             "When enabled, logs per-packet transport "
+             "events at Verbose level."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
     CVarLiveSyncQueueWarnThreshold(
         TEXT("UE.LiveSync.QueueWarnThreshold"),
         64,
@@ -744,6 +755,10 @@ static TAutoConsoleVariable<int32>
 
 bool UUELiveSyncSubsystem::
     bEnableVerboseSyncLogs =
+        false;
+
+bool UUELiveSyncSubsystem::
+    bEnableTransportVerbose =
         false;
 
 bool GEnableVerboseSyncLogs =
@@ -1284,6 +1299,9 @@ bool UUELiveSyncSubsystem::Tick(
 
     GEnableVerboseSyncLogs =
         bEnableVerboseSyncLogs;
+
+    bEnableTransportVerbose =
+        CVarLiveSyncTransportVerbose.GetValueOnGameThread() != 0;
 
     bEnableDebugDraw =
         CVarLiveSyncDebugDraw.GetValueOnGameThread() != 0;
@@ -2374,6 +2392,8 @@ ProcessBinaryPacket(
     if (Packet.RawData.Num() <
         sizeof(FPacketHeader))
     {
+        Stats.MalformedPackets.fetch_add(
+            1, std::memory_order_relaxed);
         return;
     }
 
@@ -2412,6 +2432,8 @@ ProcessBinaryPacket(
     if (Magic !=
         LIVE_SYNC_MAGIC)
     {
+        Stats.MalformedPackets.fetch_add(
+            1, std::memory_order_relaxed);
         return;
     }
 
@@ -2431,6 +2453,8 @@ ProcessBinaryPacket(
         if (Packet.RawData.Num() <
             sizeof(FPacketHeaderV3))
         {
+            Stats.MalformedPackets.fetch_add(
+                1, std::memory_order_relaxed);
             return;
         }
 
@@ -2444,6 +2468,8 @@ ProcessBinaryPacket(
         if (HeaderV3.PacketSize >
             Packet.RawData.Num())
         {
+            Stats.MalformedPackets.fetch_add(
+                1, std::memory_order_relaxed);
             return;
         }
 
@@ -2496,6 +2522,8 @@ ProcessBinaryPacket(
         if (Packet.RawData.Num() <
             sizeof(FPacketHeader))
         {
+            Stats.MalformedPackets.fetch_add(
+                1, std::memory_order_relaxed);
             return;
         }
 
@@ -2509,6 +2537,8 @@ ProcessBinaryPacket(
         if (Header.PacketSize >
             Packet.RawData.Num())
         {
+            Stats.MalformedPackets.fetch_add(
+                1, std::memory_order_relaxed);
             return;
         }
 
@@ -2528,6 +2558,8 @@ ProcessBinaryPacket(
     }
     else
     {
+        Stats.MalformedPackets.fetch_add(
+            1, std::memory_order_relaxed);
         UE_LOG(
             LogLiveSync,
             Warning,
@@ -2607,6 +2639,8 @@ ProcessBinaryPacket(
 
         if (!bValidType)
         {
+            Stats.MalformedPackets.fetch_add(
+                1, std::memory_order_relaxed);
             UE_LOG(
                 LogLiveSync,
                 Warning,
@@ -2629,6 +2663,8 @@ ProcessBinaryPacket(
 
         if (!bValidFlags)
         {
+            Stats.MalformedPackets.fetch_add(
+                1, std::memory_order_relaxed);
             UE_LOG(
                 LogLiveSync,
                 Warning,
@@ -3309,6 +3345,8 @@ ProcessBinaryPacket(
         PacketType != PT_Create &&
         PacketType != PT_Delete)
     {
+        Stats.MalformedPackets.fetch_add(
+            1, std::memory_order_relaxed);
         UE_LOG(
             LogLiveSync,
             Warning,

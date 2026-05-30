@@ -47,7 +47,7 @@
 
 ## Current Roadmap
 
-1. **Phase 6I.1 — Transport Hardening** (Stage 1A: VERIFIED)
+1. **Phase 6I.1 — Transport Hardening** (Stage 1A: VERIFIED · Stage 1B: VERIFIED)
 2. **Phase 7A — Static Mesh Identity Mapping**
 3. **Phase 7B — Asset Registry + Material Mapping**
 4. **Phase 7C — Geometry/Modifier Pipeline**
@@ -62,8 +62,18 @@
 - **Validation**: 24/24 bounds tests PASS, 37/39 fuzz tests PASS (2 pre-existing TCP sendall expectation failures, non-regression)
 - **UE log**: All 10 bounds rejection messages confirmed. No crash/assert/check failure.
 
+## Stage 1B — Observability (VERIFIED)
+
+- **B1**: `ETransportError` enum added to `SyncTypes.h` (13 error categories)
+- **B2**: `MalformedPackets` counter now increments on ALL rejection paths (10 newly patched gaps: truncated header, magic mismatch, V3/V2 header truncation, V3/V2 size violation, unsupported version, invalid type, invalid flags, unknown type)
+- **B3**: `UE.LiveSync.TransportVerbose` CVar declared + wired into CVar refresh
+- **B4**: Blender send queue high-water warning at 75% capacity (192/256)
+- **Validation**: 43/43 observability tests PASS, 24/24 bounds tests PASS (no regression), 37/39 fuzz tests PASS (same 2 pre-existing TCP sendall failures)
+- **UE log**: All newly-patched paths confirmed to produce log output. No crash/assert/check failure.
+
 ## Recent Changes
 
+- **Phase 6I.1 Stage 1B**: Observability implemented and VERIFIED — 43/43 tests PASS, 10 MalformedPackets gaps patched, ETransportError enum, TransportVerbose CVar, Blender queue high-water warning
 - **Phase 6I.1 Stage 1A**: Bounds hardening implemented and VERIFIED — 24/24 bounds tests PASS, 10/10 rejection messages confirmed in UE log, no regressions
 - `SyncTypes.h`: Fixed UHT error — moved `#include <atomic>` before `.generated.h`
 - `UELiveSyncSubsystem.cpp`: Removed orphaned braces/log outside function body

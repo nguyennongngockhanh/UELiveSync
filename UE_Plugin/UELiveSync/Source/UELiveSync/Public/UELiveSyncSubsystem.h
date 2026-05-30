@@ -758,6 +758,8 @@ private:
 
     static bool bEnableVerboseSyncLogs;
 
+    static bool bEnableTransportVerbose;
+
     int32 VerboseFrameCounter =
         0;
 

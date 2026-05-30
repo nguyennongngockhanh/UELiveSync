@@ -1476,6 +1476,20 @@ class LiveSyncClient:
                 packet
             )
 
+            # High-water warning: log if queue exceeds 75% capacity
+            qdepth = self._send_queue.qsize()
+            if qdepth >= 192:
+                _now = time.time()
+                if not hasattr(
+                    self,
+                    "_last_queue_high_water_log"
+                ) or _now - self._last_queue_high_water_log > 5.0:
+                    self._last_queue_high_water_log = _now
+                    print(
+                        f"[SYNC] Warning: send queue at "
+                        f"{qdepth}/256 ({qdepth*100//256}% full)"
+                    )
+
             if _network_verbose:
                 print(
                     f"[SYNC-DBG] 3 Enqueued: {len(packet)} bytes",

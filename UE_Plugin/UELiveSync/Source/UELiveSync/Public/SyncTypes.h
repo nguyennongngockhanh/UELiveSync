@@ -537,6 +537,33 @@ struct FReplayWindowStats
 
 
 // =========================================================
+// TRANSPORT ERROR CLASSIFICATION (Phase 6I.1 Stage 1B)
+// =========================================================
+// Used for structured error diagnostics. Each value
+// corresponds to a specific transport-level rejection path.
+// Not wired to production handlers yet — reserved for future
+// programmatic error analysis via ETransportError counters.
+
+enum class ETransportError : uint8
+{
+    None               = 0,
+    InvalidMagic       = 1,
+    UnsupportedVersion = 2,
+    HeaderTruncated    = 3,
+    PacketSizeViolation= 4,
+    ObjectCountViolation=5,
+    InvalidPacketType  = 6,
+    InvalidFlags       = 7,
+    MalformedPayload   = 8,
+    NameLengthViolation= 9,
+    TransformNaN       = 10,
+    InvalidCollectionOp= 11,
+    UnknownPacketType  = 12,
+    ParseFailure       = 13
+};
+
+
+// =========================================================
 // RUNTIME METRICS (lock-free, atomics)
 // =========================================================
 
