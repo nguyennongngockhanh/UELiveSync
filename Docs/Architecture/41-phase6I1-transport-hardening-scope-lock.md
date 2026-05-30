@@ -1,7 +1,7 @@
 # Phase 6I.1 — Transport Hardening Scope Lock
 
 > **Created**: 2026-05-30 · **Updated**: 2026-05-30
-> **Status**: STAGE 2 VERIFIED — Lifecycle hardening implemented and live-validated
+> **Status**: COMPLETE — All three stages implemented and live-validated
 > **Predecessors**: Rename (STABILIZED, Phase 6A/6B · `0x0C`) · Visibility (STABILIZED, Phase 6C · `0x0B`) · Collection (IMPLEMENTED, Phase 6F · `0x0F`) · Hierarchy (IN PROGRESS, Phase 6D · `0x0D`)
 > **Next**: Phase 7A — Static Mesh Identity Mapping
 >
@@ -308,5 +308,21 @@ Phase 6I.1 is **complete** when:
 | **Known limitation** | TCP keepalive not exposed in UE5.7 FSocket API — no `SetKeepAlive()` method. `SetReceiveTimeout(ESocketReceiveTimeout)` also absent. Recv timeout achieved via configurable `Wait()` polling. |
 | **Editor health** | No crash, no assert, no check failure. |
 | **Stage 2 status** | **VERIFIED** |
+
+## 13. Validation Record — Final Closeout
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-30 |
+| **Suites run** | 6 |
+| **Stage 1A** | `python3 tests/phase6I1_bounds_validation.py`: **24/24 PASS** |
+| **Stage 1B** | `python3 tests/phase6I1_observability_validation.py`: **43/43 PASS** |
+| **Stage 2** | `python3 tests/phase6I1_lifecycle_validation.py`: **22/22 PASS** |
+| **Fuzz regression** | `python3 tests/phase5c_fuzz_protocol.py`: **37/39 PASS** (2 known pre-existing TCP sendall failures, non-regression) |
+| **Visibility semantic** | `python3 tests/phase6_visibility_validation.py`: **15/15 PASS** |
+| **Collection semantic** | `python3 tests/run_phase6f_collection.py`: **10/10 PASS** |
+| **Grand total** | **151/153 PASS** — 2 known non-regression |
+| **Editor health** | Editor alive through all 6 suites. No crash, no assert, no check failure. |
+| **Phase 6I.1 status** | **COMPLETE** ✅ |
 
 | `Docs/Architecture/42-phase6I1-transport-hardening-design.md` | 0 | Vertical slice design (next) |

@@ -47,38 +47,45 @@
 
 ## Current Roadmap
 
-1. **Phase 6I.1 — Transport Hardening** (Stage 1A: VERIFIED · Stage 1B: VERIFIED · Stage 2: VERIFIED)
-2. **Phase 7A — Static Mesh Identity Mapping**
+1. ~~**Phase 6I.1 — Transport Hardening**~~ **COMPLETE** ✅
+2. **Phase 7A — Static Mesh Identity Mapping** ← NEXT
 3. **Phase 7B — Asset Registry + Material Mapping**
 4. **Phase 7C — Geometry/Modifier Pipeline**
 
-## Stage 1A — Bounds Hardening (VERIFIED)
+## Phase 6I.1 — Transport Hardening (COMPLETE)
 
+### Stage 1A — Bounds Hardening (VERIFIED)
 - **A1**: `LIVE_SYNC_MAX_OBJECTS_PER_PACKET=4096` — ObjectCount>4096 rejected by network thread
 - **A2**: `LIVE_SYNC_MAX_PACKET_SIZE=524288` — Re-check in game-thread `ProcessBinaryPacket`
 - **A3**: `LIVE_SYNC_MAX_NAME_LENGTH=256` — Rename OldNameLen/NewNameLen>256 rejected
 - **A4/A5**: NaN/Inf Location, Rotation, Scale rejected at parse time
 - **A6**: Collection OpType outside 0x01–0x08 rejected
-- **Validation**: 24/24 bounds tests PASS, 37/39 fuzz tests PASS (2 pre-existing TCP sendall expectation failures, non-regression)
-- **UE log**: All 10 bounds rejection messages confirmed. No crash/assert/check failure.
+- **Validation**: 24/24 bounds tests PASS
 
-## Stage 1B — Observability (VERIFIED)
+### Stage 1B — Observability (VERIFIED)
+- **B1**: `ETransportError` enum (13 categories)
+- **B2**: `MalformedPackets` counter on ALL rejection paths (10 gaps patched)
+- **B3**: `UE.LiveSync.TransportVerbose` CVar
+- **B4**: Blender send queue high-water warning at 75% capacity
+- **Validation**: 43/43 observability tests PASS
 
-- **B1**: `ETransportError` enum added to `SyncTypes.h` (13 error categories)
-- **B2**: `MalformedPackets` counter now increments on ALL rejection paths (10 newly patched gaps: truncated header, magic mismatch, V3/V2 header truncation, V3/V2 size violation, unsupported version, invalid type, invalid flags, unknown type)
-- **B3**: `UE.LiveSync.TransportVerbose` CVar declared + wired into CVar refresh
-- **B4**: Blender send queue high-water warning at 75% capacity (192/256)
-- **Validation**: 43/43 observability tests PASS, 24/24 bounds tests PASS (no regression), 37/39 fuzz tests PASS (same 2 pre-existing TCP sendall failures)
-- **UE log**: All newly-patched paths confirmed to produce log output. No crash/assert/check failure.
+### Stage 2 — Lifecycle Hardening (VERIFIED)
+- **C1**: `UE.LiveSync.RecvTimeoutMs` CVar (default 5000ms) — configurable `Wait()` polling
+- **C2**: TCP keepalive — not exposed in UE5.7 FSocket API (noted)
+- **C3**: Send queue drained on reconnect in `_close_internal()`
+- **C4**: Atomic `compare_exchange_strong` guard for `StartNetworkThread` double-accept
+- **Validation**: 22/22 lifecycle tests PASS
 
-## Stage 2 — Lifecycle Hardening (VERIFIED)
-
-- **C1**: Socket recv timeout — `UE.LiveSync.RecvTimeoutMs` CVar (default 5000ms), configurable  `Wait()` polling in network thread
-- **C2**: TCP keepalive — not exposed in UE5.7 FSocket API; skipped (noted in scope doc)
-- **C3**: Blender send queue drained on reconnect — stale packets cleared from `_send_queue` in `_close_internal()`
-- **C4**: `StartNetworkThread` double-accept guard — atomic `compare_exchange_strong` prevents concurrent entry; socket preserved across restart
-- **Validation**: 22/22 lifecycle tests PASS, 24/24 Stage 1A PASS, 43/43 Stage 1B PASS, 37/39 fuzz PASS (no regressions)
-- **UE log**: 17 connection events handled without crash. Guard not triggered (normal sequential connection pattern).
+### Final Closeout Regression
+| Suite | Result | Notes |
+|-------|--------|-------|
+| Stage 1A bounds | **24/24 PASS** | |
+| Stage 1B observability | **43/43 PASS** | |
+| Stage 2 lifecycle | **22/22 PASS** | |
+| Fuzz protocol (existing) | **37/39 PASS** | 2 pre-existing TCP sendall expectation failures, non-regression |
+| Visibility semantic (existing) | **15/15 PASS** | |
+| Collection semantic (existing) | **10/10 PASS** | |
+| **Total** | **151/153 PASS** | 2 known, non-regression |
 
 ## Recent Changes
 
