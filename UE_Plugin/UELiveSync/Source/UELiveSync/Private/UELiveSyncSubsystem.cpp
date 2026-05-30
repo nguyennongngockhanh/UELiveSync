@@ -2377,6 +2377,18 @@ ProcessBinaryPacket(
         return;
     }
 
+    // Re-check max packet size at game-thread boundary.
+    // The network thread checks this before enqueue, but
+    // this provides defense-in-depth against code path
+    // bypasses.
+    if (Packet.RawData.Num() >
+        LIVE_SYNC_MAX_PACKET_SIZE)
+    {
+        Stats.MalformedPackets.fetch_add(
+            1, std::memory_order_relaxed);
+        return;
+    }
+
     const uint8* PacketData =
         Packet.RawData.GetData();
 
@@ -2828,6 +2840,19 @@ ProcessBinaryPacket(
             FMemory::Memcpy(&OldNameLen, Ptr, sizeof(uint16));
             Ptr += 2;
 
+            if (OldNameLen >
+                LIVE_SYNC_MAX_NAME_LENGTH)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[RENAME] Old name too long: "
+                         "%u > %u"),
+                    OldNameLen,
+                    (uint16)LIVE_SYNC_MAX_NAME_LENGTH);
+                Stats.MalformedPackets.fetch_add(
+                    1, std::memory_order_relaxed);
+                return;
+            }
+
             if (Ptr + OldNameLen > PacketEnd)
             {
                 UE_LOG(LogLiveSync, Warning,
@@ -2852,6 +2877,19 @@ ProcessBinaryPacket(
             uint16 NewNameLen;
             FMemory::Memcpy(&NewNameLen, Ptr, sizeof(uint16));
             Ptr += 2;
+
+            if (NewNameLen >
+                LIVE_SYNC_MAX_NAME_LENGTH)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[RENAME] New name too long: "
+                         "%u > %u"),
+                    NewNameLen,
+                    (uint16)LIVE_SYNC_MAX_NAME_LENGTH);
+                Stats.MalformedPackets.fetch_add(
+                    1, std::memory_order_relaxed);
+                return;
+            }
 
             if (Ptr + NewNameLen > PacketEnd)
             {
@@ -3185,6 +3223,20 @@ ProcessBinaryPacket(
             FMemory::Memcpy(&OpType, Ptr, sizeof(uint8));
             Ptr += sizeof(uint8);
 
+            // ---- VALIDATE OP-TYPE RANGE ----
+            // Valid range: COLLECTION_OP_ADD (0x01) through
+            // COLLECTION_OP_COLLECTION_REPARENT (0x08).
+            if (OpType < 0x01 || OpType > 0x08)
+            {
+                Stats.MalformedPackets.fetch_add(
+                    1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[COLLECTION] Invalid op-type "
+                         "0x%02X at object index %u"),
+                    OpType, i);
+                return;
+            }
+
             uint8 OpFlags;
             FMemory::Memcpy(&OpFlags, Ptr, sizeof(uint8));
             Ptr += sizeof(uint8);
@@ -3512,6 +3564,21 @@ ProcessBinaryPacket(
         FVector Location(
             LocationFloat);
 
+        if (Location.ContainsNaN())
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("Parse failure at obj=%u "
+                     "offset=%d type=0x%02X — "
+                     "Location contains NaN/Inf"),
+                i,
+                static_cast<int32>(
+                    Ptr - PacketData - sizeof(FVector3f)),
+                PacketType);
+            Stats.MalformedPackets.fetch_add(
+                1, std::memory_order_relaxed);
+            return;
+        }
+
         // =================================================
         // ROTATION (16 bytes)
         // =================================================
@@ -3551,6 +3618,24 @@ ProcessBinaryPacket(
 
         Rotation.Normalize();
 
+        if (!FMath::IsFinite(Rotation.X) ||
+            !FMath::IsFinite(Rotation.Y) ||
+            !FMath::IsFinite(Rotation.Z) ||
+            !FMath::IsFinite(Rotation.W))
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("Parse failure at obj=%u "
+                     "offset=%d type=0x%02X — "
+                     "Rotation contains NaN/Inf"),
+                i,
+                static_cast<int32>(
+                    Ptr - PacketData - sizeof(FQuat4f)),
+                PacketType);
+            Stats.MalformedPackets.fetch_add(
+                1, std::memory_order_relaxed);
+            return;
+        }
+
         // =================================================
         // SCALE (12 bytes)
         // =================================================
@@ -3587,6 +3672,21 @@ ProcessBinaryPacket(
 
         FVector Scale(
             ScaleFloat);
+
+        if (Scale.ContainsNaN())
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("Parse failure at obj=%u "
+                     "offset=%d type=0x%02X — "
+                     "Scale contains NaN/Inf"),
+                i,
+                static_cast<int32>(
+                    Ptr - PacketData - sizeof(FVector3f)),
+                PacketType);
+            Stats.MalformedPackets.fetch_add(
+                1, std::memory_order_relaxed);
+            return;
+        }
 
         // =================================================
         // V3: Timestamp (8 bytes) + Parent GUID (16 bytes)

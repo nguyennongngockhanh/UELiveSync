@@ -47,13 +47,24 @@
 
 ## Current Roadmap
 
-1. **Phase 6I.1 — Transport Hardening**
+1. **Phase 6I.1 — Transport Hardening** (Stage 1A: VERIFIED)
 2. **Phase 7A — Static Mesh Identity Mapping**
 3. **Phase 7B — Asset Registry + Material Mapping**
 4. **Phase 7C — Geometry/Modifier Pipeline**
 
+## Stage 1A — Bounds Hardening (VERIFIED)
+
+- **A1**: `LIVE_SYNC_MAX_OBJECTS_PER_PACKET=4096` — ObjectCount>4096 rejected by network thread
+- **A2**: `LIVE_SYNC_MAX_PACKET_SIZE=524288` — Re-check in game-thread `ProcessBinaryPacket`
+- **A3**: `LIVE_SYNC_MAX_NAME_LENGTH=256` — Rename OldNameLen/NewNameLen>256 rejected
+- **A4/A5**: NaN/Inf Location, Rotation, Scale rejected at parse time
+- **A6**: Collection OpType outside 0x01–0x08 rejected
+- **Validation**: 24/24 bounds tests PASS, 37/39 fuzz tests PASS (2 pre-existing TCP sendall expectation failures, non-regression)
+- **UE log**: All 10 bounds rejection messages confirmed. No crash/assert/check failure.
+
 ## Recent Changes
 
+- **Phase 6I.1 Stage 1A**: Bounds hardening implemented and VERIFIED — 24/24 bounds tests PASS, 10/10 rejection messages confirmed in UE log, no regressions
 - `SyncTypes.h`: Fixed UHT error — moved `#include <atomic>` before `.generated.h`
 - `UELiveSyncSubsystem.cpp`: Removed orphaned braces/log outside function body
 - `UELiveSyncEditorModule.cpp`: Removed `UStatusBarSubsystem::AddStatusBarWidget` calls (API doesn't exist in UE5.7)

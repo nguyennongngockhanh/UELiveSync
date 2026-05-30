@@ -1324,6 +1324,16 @@ static constexpr int32
     LIVE_SYNC_MAX_PACKET_SIZE =
         512 * 1024;
 
+// Maximum objects per packet — prevents runaway allocation
+static constexpr int32
+    LIVE_SYNC_MAX_OBJECTS_PER_PACKET =
+        4096;
+
+// Maximum rename name length in bytes
+static constexpr uint16
+    LIVE_SYNC_MAX_NAME_LENGTH =
+        256;
+
 // =========================================================
 // PROTOCOL SIGNATURE
 // =========================================================

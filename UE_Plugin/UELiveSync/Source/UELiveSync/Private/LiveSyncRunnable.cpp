@@ -424,6 +424,32 @@ uint32 FLiveSyncRunnable::Run()
         }
 
         // =================================================
+        // OBJECT COUNT VALIDATION
+        // =================================================
+
+        if (ObjectCount < 0 ||
+            ObjectCount >
+                LIVE_SYNC_MAX_OBJECTS_PER_PACKET)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Error,
+                TEXT("Object count out of range: "
+                     "%d (max %d)"),
+                ObjectCount,
+                LIVE_SYNC_MAX_OBJECTS_PER_PACKET);
+
+            if (StatsRef)
+            {
+                StatsRef->MalformedPackets.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+            }
+
+            continue;
+        }
+
+        // =================================================
         // PAYLOAD SIZE
         // =================================================
 
