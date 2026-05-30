@@ -753,6 +753,16 @@ static TAutoConsoleVariable<int32>
         ECVF_Default
     );
 
+// Phase 6I.1 Stage 2: socket receive timeout (ms). 0 = no timeout (blocking).
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncRecvTimeoutMs(
+        TEXT("UE.LiveSync.RecvTimeoutMs"),
+        5000,
+        TEXT("Socket receive timeout in milliseconds "
+             "(default=5000). 0 = infinite (blocking)."),
+        ECVF_Default
+    );
+
 bool UUELiveSyncSubsystem::
     bEnableVerboseSyncLogs =
         false;
@@ -1871,11 +1881,29 @@ void UUELiveSyncSubsystem::
 StartNetworkThread()
 {
     // =====================================================
+    // GUARD: prevent concurrent entry (atomic exchange)
+    // =====================================================
+
+    bool Expected = false;
+    if (!bNetworkThreadStarting.
+        compare_exchange_strong(
+            Expected, true))
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("StartNetworkThread: already starting, "
+                 "rejected"));
+        return;
+    }
+
+    // =====================================================
     // GUARD: no socket
     // =====================================================
 
     if (!ConnectionSocket)
     {
+        bNetworkThreadStarting = false;
         UE_LOG(
             LogLiveSync,
             Warning,
@@ -1894,21 +1922,18 @@ StartNetworkThread()
         UE_LOG(
             LogLiveSync,
             Log,
-            TEXT("StartNetworkThread: already running, stopping old thread"));
+            TEXT("StartNetworkThread: already running, "
+                 "stopping old thread"));
+
+        // Save socket before StopNetworkThread destroys it
+        FSocket* SavedSocket =
+            ConnectionSocket;
 
         StopNetworkThread();
 
-        // StopNetworkThread nulls the socket.
-        // If no new connection was accepted, bail.
-        if (!ConnectionSocket)
-        {
-            UE_LOG(
-                LogLiveSync,
-                Warning,
-                TEXT("StartNetworkThread: socket was destroyed"));
-
-            return;
-        }
+        // Restore socket for the new thread
+        ConnectionSocket =
+            SavedSocket;
     }
 
     // =====================================================
@@ -1925,6 +1950,11 @@ StartNetworkThread()
 
     NetworkRunnable->SetStats(
         &Stats);
+
+    // Phase 6I.1 Stage 2: configurable recv poll timeout
+    NetworkRunnable->SetRecvTimeoutMs(
+        CVarLiveSyncRecvTimeoutMs.
+            GetValueOnGameThread());
 
     PacketQueue.SetStats(
         &Stats);
@@ -1962,9 +1992,13 @@ StartNetworkThread()
             LIVE_SYNC_V3_DELETE_SIZE,
             LIVE_SYNC_V5_ASSET_DEF_SIZE,
             LIVE_SYNC_MAX_PACKET_SIZE);
+
+        bNetworkThreadStarting = false;
     }
     else
     {
+        bNetworkThreadStarting = false;
+
         UE_LOG(
             LogLiveSync,
             Error,
@@ -1980,6 +2014,8 @@ StartNetworkThread()
 void UUELiveSyncSubsystem::
 StopNetworkThread()
 {
+    bNetworkThreadStarting = false;
+
     if (!NetworkRunnable &&
         !NetworkThread)
     {

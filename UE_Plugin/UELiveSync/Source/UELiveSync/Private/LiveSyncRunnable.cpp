@@ -44,6 +44,16 @@ FLiveSyncRunnable::FLiveSyncRunnable(
 }
 
 
+void FLiveSyncRunnable::
+SetRecvTimeoutMs(int32 InMs)
+{
+    RecvTimeoutMs =
+        InMs > 0
+            ? InMs
+            : 10;  // fallback to 10ms if 0 or negative
+}
+
+
 // =========================================================
 // MAIN THREAD LOOP
 // =========================================================
@@ -92,7 +102,7 @@ uint32 FLiveSyncRunnable::Run()
 
             FTimespan::
             FromMilliseconds(
-                10)))
+                RecvTimeoutMs)))
         {
             ConsecutiveIdleWaits++;
 

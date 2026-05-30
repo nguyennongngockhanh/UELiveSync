@@ -1298,6 +1298,22 @@ class LiveSyncClient:
             _delete_sequences.clear()
             print("[DELETE] Sequence tracker cleared on disconnect")
 
+        # Phase 6I.1 Stage 2: drain send queue on reconnect
+        # to avoid sending stale packets from the previous
+        # connection on the new socket.
+        if not self._send_queue.empty():
+            drained = 0
+            while not self._send_queue.empty():
+                try:
+                    self._send_queue.get_nowait()
+                    drained += 1
+                except queue.Empty:
+                    break
+            print(
+                f"[LIFECYCLE] Drained {drained} stale packet(s) "
+                "from send queue on disconnect"
+            )
+
     # =====================================================
     # PUBLIC API (thread-safe)
     # =====================================================

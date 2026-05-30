@@ -420,6 +420,9 @@ private:
     FLiveSyncRunnable* NetworkRunnable =
         nullptr;
 
+    // Phase 6I.1 Stage 2: guards against concurrent StartNetworkThread calls
+    std::atomic<bool> bNetworkThreadStarting{false};
+
     // =====================================================
     // THREAD → GAME QUEUE
     // =====================================================

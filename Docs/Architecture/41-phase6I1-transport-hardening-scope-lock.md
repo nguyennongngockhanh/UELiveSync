@@ -1,9 +1,9 @@
 # Phase 6I.1 — Transport Hardening Scope Lock
 
 > **Created**: 2026-05-30 · **Updated**: 2026-05-30
-> **Status**: STAGE 1B VERIFIED — Observability implemented and live-validated
+> **Status**: STAGE 2 VERIFIED — Lifecycle hardening implemented and live-validated
 > **Predecessors**: Rename (STABILIZED, Phase 6A/6B · `0x0C`) · Visibility (STABILIZED, Phase 6C · `0x0B`) · Collection (IMPLEMENTED, Phase 6F · `0x0F`) · Hierarchy (IN PROGRESS, Phase 6D · `0x0D`)
-> **Next**: Stage 1C Lifecycle Hardening — socket timeout, keepalive
+> **Next**: Phase 7A — Static Mesh Identity Mapping
 >
 > This document defines the **hard scope boundaries** for the first Phase 6I
 > sub-slice: transport/protocol hardening.
@@ -270,16 +270,16 @@ Phase 6I.1 is **complete** when:
 
 | File | Stage | What |
 |------|-------|------|
-| `UE_Plugin/.../LiveSyncRunnable.cpp` | 1 | Recv timeout, keepalive, object-count cap |
-| `UE_Plugin/.../LiveSyncRunnable.h` | 1 | New CVar binding, timeout member |
-| `UE_Plugin/.../UELiveSyncSubsystem.cpp` | 1, 2 | Max-size re-check, transport stats, StartNetworkThread fix |
-| `UE_Plugin/.../UELiveSyncSubsystem.h` | 1, 2 | Transport stats counters, StartNetworkThread guard |
-| `UE_Plugin/.../SyncTypes.h` | 1, 2 | `ETransportError` enum, `LIVE_SYNC_MAX_OBJECTS_PER_PACKET`, transport stats struct |
-| `Blender_Addon/network.py` | 1, 2 | Keepalive, queue drain on reconnect, high-water warning |
-| `Blender_Addon/sync.py` | 2 | (none — transport-only changes in network.py) |
+| `UE_Plugin/.../LiveSyncRunnable.cpp` | 1, 2 | Object-count cap, configurable Wait() timeout |
+| `UE_Plugin/.../LiveSyncRunnable.h` | 1, 2 | SetRecvTimeoutMs(), RecvTimeoutMs member |
+| `UE_Plugin/.../UELiveSyncSubsystem.cpp` | 1, 2 | Max-size re-check, transport stats, StartNetworkThread atomic guard, RecvTimeoutMs CVar |
+| `UE_Plugin/.../UELiveSyncSubsystem.h` | 1, 2 | Transport stats counters, bNetworkThreadStarting atomic |
+| `UE_Plugin/.../SyncTypes.h` | 1, 2 | `ETransportError` enum, `LIVE_SYNC_MAX_OBJECTS_PER_PACKET` |
+| `Blender_Addon/network.py` | 1, 2 | Queue high-water warning, send queue drain on reconnect |
 | `tests/` | 0, 1, 2 | Stage validation test files |
 | `Docs/Architecture/41-phase6I1-transport-hardening-scope-lock.md` | 0 | This document |
-| `tests/phase6I1_observability_validation.py` | 1 | Stage 1B validation: MalformedPackets gaps, CVar, high-water |
+| `tests/phase6I1_observability_validation.py` | 1 | Stage 1B validation |
+| `tests/phase6I1_lifecycle_validation.py` | 2 | Stage 2 validation |
 
 ## 11. Validation Record — Stage 1B
 
@@ -293,4 +293,20 @@ Phase 6I.1 is **complete** when:
 | **UE log confirmation** | MalformedPackets now increments on all 10 newly-patched paths. TransportVerbose CVar registered. |
 | **Editor health** | No crash, no assert, no check failure. |
 | **Stage 1B status** | **VERIFIED** |
+
+## 12. Validation Record — Stage 2
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-30 |
+| **Command** | `python3 tests/phase6I1_lifecycle_validation.py` |
+| **Result** | **22/22 PASS** |
+| **Stage 1A regression** | `python3 tests/phase6I1_bounds_validation.py`: 24/24 PASS |
+| **Stage 1B regression** | `python3 tests/phase6I1_observability_validation.py`: 43/43 PASS |
+| **Fuzz regression** | `python3 tests/phase5c_fuzz_protocol.py`: 37/39 PASS (same 2 pre-existing TCP sendall failures) |
+| **UE log confirmation** | 17 connection events handled. `RecvTimeoutMs` CVar registered (default 5000ms). Atomic thread-start guard compiled. |
+| **Known limitation** | TCP keepalive not exposed in UE5.7 FSocket API — no `SetKeepAlive()` method. `SetReceiveTimeout(ESocketReceiveTimeout)` also absent. Recv timeout achieved via configurable `Wait()` polling. |
+| **Editor health** | No crash, no assert, no check failure. |
+| **Stage 2 status** | **VERIFIED** |
+
 | `Docs/Architecture/42-phase6I1-transport-hardening-design.md` | 0 | Vertical slice design (next) |

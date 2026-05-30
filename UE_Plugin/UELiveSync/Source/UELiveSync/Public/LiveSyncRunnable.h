@@ -43,6 +43,9 @@ public:
     void SetStats(
         FLiveSyncStats* InStats);
 
+    void SetRecvTimeoutMs(
+        int32 InMs);
+
     virtual uint32 Run() override;
 
     virtual void Stop() override;
@@ -54,6 +57,8 @@ private:
     FLiveSyncQueue* PacketQueue;
 
     FLiveSyncStats* StatsRef = nullptr;
+
+    int32 RecvTimeoutMs = 5000;
 
     std::atomic<bool> bRunThread{false};
 

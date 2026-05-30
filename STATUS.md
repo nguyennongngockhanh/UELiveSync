@@ -47,7 +47,7 @@
 
 ## Current Roadmap
 
-1. **Phase 6I.1 — Transport Hardening** (Stage 1A: VERIFIED · Stage 1B: VERIFIED)
+1. **Phase 6I.1 — Transport Hardening** (Stage 1A: VERIFIED · Stage 1B: VERIFIED · Stage 2: VERIFIED)
 2. **Phase 7A — Static Mesh Identity Mapping**
 3. **Phase 7B — Asset Registry + Material Mapping**
 4. **Phase 7C — Geometry/Modifier Pipeline**
@@ -71,8 +71,18 @@
 - **Validation**: 43/43 observability tests PASS, 24/24 bounds tests PASS (no regression), 37/39 fuzz tests PASS (same 2 pre-existing TCP sendall failures)
 - **UE log**: All newly-patched paths confirmed to produce log output. No crash/assert/check failure.
 
+## Stage 2 — Lifecycle Hardening (VERIFIED)
+
+- **C1**: Socket recv timeout — `UE.LiveSync.RecvTimeoutMs` CVar (default 5000ms), configurable  `Wait()` polling in network thread
+- **C2**: TCP keepalive — not exposed in UE5.7 FSocket API; skipped (noted in scope doc)
+- **C3**: Blender send queue drained on reconnect — stale packets cleared from `_send_queue` in `_close_internal()`
+- **C4**: `StartNetworkThread` double-accept guard — atomic `compare_exchange_strong` prevents concurrent entry; socket preserved across restart
+- **Validation**: 22/22 lifecycle tests PASS, 24/24 Stage 1A PASS, 43/43 Stage 1B PASS, 37/39 fuzz PASS (no regressions)
+- **UE log**: 17 connection events handled without crash. Guard not triggered (normal sequential connection pattern).
+
 ## Recent Changes
 
+- **Phase 6I.1 Stage 2**: Lifecycle hardening implemented and VERIFIED — 22/22 tests PASS, configurable recv timeout, atomic thread-start guard, Blender queue drain on reconnect
 - **Phase 6I.1 Stage 1B**: Observability implemented and VERIFIED — 43/43 tests PASS, 10 MalformedPackets gaps patched, ETransportError enum, TransportVerbose CVar, Blender queue high-water warning
 - **Phase 6I.1 Stage 1A**: Bounds hardening implemented and VERIFIED — 24/24 bounds tests PASS, 10/10 rejection messages confirmed in UE log, no regressions
 - `SyncTypes.h`: Fixed UHT error — moved `#include <atomic>` before `.generated.h`
