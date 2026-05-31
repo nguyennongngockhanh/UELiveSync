@@ -133,3 +133,73 @@ static constexpr double
 static constexpr int32
     ASSET_DEF_OBJECT_SIZE = 33;
 // GUID(16) + IdentityHash(16, 2×uint64) + PrimitiveFallback(1, uint8)
+
+// =========================================================
+// MATERIAL IDENTITY (Phase 7B)
+// =========================================================
+// 16-byte POD key for Blender material datablock identity.
+// xxHash64 of the Blender material name (slot.material.name).
+// Deterministic across sessions. NOT stable across material renames.
+// =========================================================
+
+struct FMaterialIdentityRef
+{
+    uint64 High = 0;
+    uint64 Low  = 0;
+
+    bool operator==(
+        const FMaterialIdentityRef& Other) const
+    {
+        return High == Other.High &&
+               Low  == Other.Low;
+    }
+
+    bool operator!=(
+        const FMaterialIdentityRef& Other) const
+    {
+        return !(*this == Other);
+    }
+
+    bool IsValid() const
+    {
+        return High != 0 || Low != 0;
+    }
+};
+
+
+inline uint32 GetTypeHash(
+    const FMaterialIdentityRef& Ref)
+{
+    return HashCombine(
+        GetTypeHash(Ref.High),
+        GetTypeHash(Ref.Low));
+}
+
+
+// =========================================================
+// MATERIAL SLOT REF (Phase 7B)
+// =========================================================
+// Ordered pair: slot index + material identity.
+// Slot index maps 1:1 from Blender material_slots[slot_index]
+// to UStaticMeshComponent material slots.
+// =========================================================
+
+struct FMaterialSlotRef
+{
+    int8                SlotIndex   = -1;  // -1 = unassigned
+    FMaterialIdentityRef Identity;
+
+    bool IsValid() const
+    {
+        return SlotIndex >= 0 &&
+               Identity.IsValid();
+    }
+};
+
+
+// =========================================================
+// MATERIAL DIAGNOSTICS (Phase 7B, reserved)
+// =========================================================
+
+static constexpr int32
+    MAX_MATERIAL_SLOTS = 8;

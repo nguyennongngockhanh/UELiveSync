@@ -49,6 +49,7 @@ try:
         PT_Collection,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
+        get_material_identity_hash,
         serialize_asset_identity,
         serialize_collection_identity,
         serialize_collection_membership,
@@ -104,6 +105,7 @@ except ImportError:
         PT_Collection,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
+        get_material_identity_hash,
         serialize_asset_identity,
         serialize_collection_identity,
         serialize_collection_membership,
@@ -134,6 +136,12 @@ last_sent_transforms = {}
 # Phase 5D: Per-GUID last mesh identity for change detection
 # Stores (identity_low, identity_high, mesh_name)
 _last_mesh_identity = {}
+
+# Phase 7B: Per-GUID last material slot identities for change detection
+# Maps guid -> {slot_index: (material_identity_low, material_identity_high)}
+# NOTE: Material packets are NOT sent yet — change detection is reserved
+# for Phase 7B Stage 2 when PT_Material wire support is added.
+_last_material_identity = {}
 
 # Phase 6: Per-GUID last object name for rename detection
 _last_object_names = {}
@@ -1735,6 +1743,7 @@ def start_sync():
     global _last_parent_guid
     global _last_collection_state  # Phase 6F
     global _last_mesh_identity  # Phase 7A: clear stale mesh identity cache
+    global _last_material_identity  # Phase 7B: clear stale material identity cache
 
     print("[LiveSync] Start button pressed — entering start_sync()", flush=True)
 
@@ -1746,6 +1755,7 @@ def start_sync():
         _last_parent_guid.clear()
         _last_collection_state.clear()
         _last_mesh_identity.clear()  # Phase 7A: prevent stale suppression across sessions
+        _last_material_identity.clear()  # Phase 7B: prevent stale material suppression
 
         print("[LiveSync] State cleared, starting collection replay recording", flush=True)
 
@@ -1843,9 +1853,11 @@ def stop_sync():
     global _known_guids
     global _last_collection_state  # Phase 6F
     global _last_mesh_identity  # Phase 7A: clear stale mesh identity cache
+    global _last_material_identity  # Phase 7B: clear stale material identity cache
 
     timer_running = False
     _last_mesh_identity.clear()  # Phase 7A: prevent stale suppression across sessions
+    _last_material_identity.clear()  # Phase 7B: prevent stale material suppression
     _last_object_names.clear()
     _last_visibility_state.clear()
     _last_parent_guid.clear()

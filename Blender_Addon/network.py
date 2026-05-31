@@ -234,6 +234,57 @@ def serialize_asset_identity(guid_obj, identity_low, identity_high, primitive_ty
 
 
 # =========================================================
+# MATERIAL IDENTITY HELPERS (Phase 7B)
+# =========================================================
+
+def get_material_identity_hash(material):
+    """Return (low: int, high: int).
+
+    xxHash64 of the Blender material datablock name.
+    Deterministic across sessions. NOT stable across material renames.
+
+    If material is None or has no name, returns (0, 0).
+    """
+    if material is None:
+        return (0, 0)
+
+    name_bytes = material.name.encode("utf-8")
+    hash_value = xxh64(name_bytes)
+
+    low = hash_value & 0xFFFFFFFFFFFFFFFF
+    high = (hash_value >> 64) & 0xFFFFFFFFFFFFFFFF
+
+    return (low, high)
+
+
+def get_object_material_slots(obj):
+    """Return a dict mapping slot_index -> (material_low, material_high).
+
+    Extracts material identity for each material slot on a Blender object.
+    Slots with no material assigned return (0, 0).
+    Only MESH objects with material_slots are processed.
+
+    Returns {} for non-MESH or data-less objects.
+    """
+    if obj.type != 'MESH' or obj.data is None:
+        return {}
+
+    if not hasattr(obj, "material_slots"):
+        return {}
+
+    slots = {}
+    for slot_index, slot in enumerate(obj.material_slots):
+        mat = slot.material
+        if mat is not None:
+            low, high = get_material_identity_hash(mat)
+        else:
+            low, high = (0, 0)
+        slots[slot_index] = (low, high)
+
+    return slots
+
+
+# =========================================================
 # GLOBAL STATE
 # =========================================================
 
