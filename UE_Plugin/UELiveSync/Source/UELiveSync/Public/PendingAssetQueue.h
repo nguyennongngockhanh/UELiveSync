@@ -134,6 +134,11 @@ public:
     }
 
 
+    // Intentionally a no-op. Staleness is checked at the
+    // AssetMetadata level via FAssetMetadata::HasTimedOut()
+    // during ResolvePendingAssets() (Phase 7A Stage 2).
+    // This queue has no access to metadata timestamps, so
+    // entry eviction is driven by the owning subsystem.
     void CleanupStale(
         double Now)
     {

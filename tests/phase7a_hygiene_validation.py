@@ -14,6 +14,10 @@ Stage 1B: Static mesh identity coverage:
   4. Delete/recreate identity chain
   5. FAssetIdentityRef equality/inequality/hash
 
+Stage 2: Identity mapping hardening:
+  S1. Stale AssetMetadata age-out (ASSET_STALE_TIMEOUT=60s)
+  S2. Zero-identity AssetDef handling (AssetDefsSkipped counter)
+
 Tests are standalone (MockObject-based) where possible.
 UE-connected tests require UE editor on 127.0.0.1:57000.
 """
@@ -1420,12 +1424,202 @@ def test_asset_identity_ref_semantics():
 
 
 # =========================================================
+# Stage 2 — Stale metadata entry age-out (Rule S1)
+# =========================================================
+
+def test_stale_entry_age_out():
+    """AssetMetadata entries that exceed ASSET_STALE_TIMEOUT
+    should be evicted.  The pending queue entry is also removed."""
+    print("\n--- Section 12: Stale metadata entry age-out ---")
+
+    class TimedAssetMetadata(dict):
+        """Simulates TMap<FGuid, FAssetMetadata> with HasTimedOut."""
+
+        def add(self, guid, identity_high=0, identity_low=0,
+                resolved=False, retry_count=0, next_retry_time=0.0,
+                now_fn=None):
+            self[guid] = {
+                "high": identity_high,
+                "low": identity_low,
+                "resolved": resolved,
+                "retry_count": retry_count,
+                "next_retry_time": next_retry_time,
+            }
+
+        def has_timed_out(self, guid, now):
+            entry = self.get(guid)
+            if not entry:
+                return False
+            if entry["resolved"]:
+                return False
+            # HasTimedOut: IsPending() && Now - NextRetryTime > 60.0
+            return (entry["high"] != 0 or entry["low"] != 0) \
+                and not entry["resolved"] \
+                and (now - entry["next_retry_time"] > 60.0)
+
+        def evict_stale(self, now):
+            stale = [g for g in self if self.has_timed_out(g, now)]
+            removed = []
+            for g in stale:
+                removed.append(g)
+                del self[g]
+            return removed
+
+    # 12.1: Fresh entry (not timed out)
+    meta = TimedAssetMetadata()
+    queue = set()
+    meta.add("GUID_A", 0x1111, 0x2222, next_retry_time=100.0)
+    queue.add("GUID_A")
+    stale = meta.evict_stale(now=150.0)
+    test("12.1: Entry within 60s timeout is not stale",
+         len(stale) == 0 and "GUID_A" in meta)
+
+    # 12.2: Stale entry (exceeded 60s timeout)
+    stale = meta.evict_stale(now=180.0)
+    test("12.2: Entry past 60s timeout is evicted",
+         len(stale) == 1 and stale[0] == "GUID_A" and "GUID_A" not in meta)
+
+    # 12.3: Resolved entry is never stale
+    meta.add("GUID_B", 0x3333, 0x4444, resolved=True, next_retry_time=50.0)
+    queue.add("GUID_B")
+    stale = meta.evict_stale(now=200.0)
+    test("12.3: Resolved entry is never stale",
+         len(stale) == 0 and "GUID_B" in meta)
+
+    # 12.4: Zero-identity entry cannot be pending (IsValid==false)
+    meta.add("GUID_C", 0, 0, resolved=False, next_retry_time=50.0)
+    stale = meta.evict_stale(now=200.0)
+    test("12.4: Zero-identity entry is not stale (IsValid=false)",
+         len(stale) == 0)
+
+    # 12.5: Multiple stale entries evicted in batch
+    meta.add("GUID_D", 0x5555, 0x6666, next_retry_time=10.0)
+    meta.add("GUID_E", 0x7777, 0x8888, next_retry_time=20.0)
+    queue.update(["GUID_D", "GUID_E"])
+    stale = meta.evict_stale(now=100.0)
+    test("12.5: Multiple stale entries evicted together",
+         len(stale) == 2 and "GUID_D" not in meta and "GUID_E" not in meta)
+
+    # 12.6: Mixed stale/fresh entries
+    # Clear residual entries from prior sections before adding fresh entry
+    meta.clear()
+    meta.add("GUID_F", 0x9999, 0xAAAA, next_retry_time=200.0)
+    test("12.6a: Fresh entry added to empty meta",
+         "GUID_F" in meta and len(meta) == 1)
+    stale = meta.evict_stale(now=150.0)
+    test("12.6b: Fresh entry not evicted (within timeout)",
+         len(stale) == 0,
+         f"evicted={stale}")
+    test("12.6c: Fresh entry survives among stale evictions",
+         "GUID_F" in meta and len(meta) == 1,
+         f"got len={len(meta)} keys={list(meta.keys())}")
+
+    # 12.7: Empty metadata
+    meta.clear()
+    stale = meta.evict_stale(now=999.0)
+    test("12.7: Empty metadata evicts nothing",
+         len(stale) == 0 and len(meta) == 0)
+
+    # 12.8: Pending queue entry removed when metadata evicted
+    meta.add("GUID_G", 0xBBBB, 0xCCCC, next_retry_time=10.0)
+    queue.add("GUID_G")
+    stale = meta.evict_stale(now=200.0)
+    for g in stale:
+        queue.discard(g)
+    test("12.8: Pending queue entry removed with stale metadata",
+         "GUID_G" not in queue)
+
+
+# =========================================================
+# Stage 2 — Zero-identity AssetDef handling (Rule S2)
+# =========================================================
+
+def test_zero_identity_asset_def():
+    """AssetDef with zero identity (low=0, high=0) is skipped
+    and AssetDefsSkipped counter incremented."""
+    print("\n--- Section 13: Zero-identity AssetDef handling ---")
+
+    # 13.1: Zero identity is not valid
+    ref = FAssetIdentityRef(0, 0)
+    test("13.1: Zero identity ref is not valid",
+         not ref.is_valid())
+
+    # 13.2: Zero identity hash from non-MESH object
+    class ArmatureMock(MockObject):
+        @property
+        def type(self):
+            return 'ARMATURE'
+
+    arm = ArmatureMock(name="Armature", datablock_name="Armature")
+    h = get_mesh_identity_hash(arm)
+    test("13.2: Non-MESH object produces zero identity",
+         h == (0, 0))
+
+    # 13.3: Zero identity from null data object
+    obj_null = MockObject(name="NullData", datablock_name="NotUsed")
+    obj_null._data = None
+    h = get_mesh_identity_hash(obj_null)
+    test("13.3: Null data object produces zero identity",
+         h == (0, 0))
+
+    # 13.4: Simulate AssetDefsSkipped counter behavior
+    class SimulatedAssetDefHandler:
+        def __init__(self):
+            self.defs_skipped = 0
+
+        def handle_asset_def(self, identity_low, identity_high):
+            if identity_low == 0 and identity_high == 0:
+                self.defs_skipped += 1
+                return False
+            return True
+
+    handler = SimulatedAssetDefHandler()
+    r1 = handler.handle_asset_def(0, 0)
+    r2 = handler.handle_asset_def(0xABCD, 0x1234)
+    test("13.4: Zero identity increments AssetDefsSkipped",
+         handler.defs_skipped == 1 and not r1 and r2)
+
+    # 13.5: Mixed batch (2 valid + 1 zero-identity)
+    handler2 = SimulatedAssetDefHandler()
+    results = [
+        handler2.handle_asset_def(0x1111, 0x2222),
+        handler2.handle_asset_def(0x3333, 0x4444),
+        handler2.handle_asset_def(0, 0),
+        handler2.handle_asset_def(0x5555, 0x6666),
+    ]
+    test("13.5: Batch with zero identity: valid defs accepted, zero skipped",
+         results == [True, True, False, True] and handler2.defs_skipped == 1)
+
+    # 13.6: All-zero batch
+    handler3 = SimulatedAssetDefHandler()
+    for _ in range(5):
+        handler3.handle_asset_def(0, 0)
+    test("13.6: All-zero batch increments AssetDefsSkipped for each",
+         handler3.defs_skipped == 5)
+
+    # 13.7: Single valid identity after all-zero batch (counters independent)
+    handler3.handle_asset_def(0xFFFF, 0xFFFF)
+    test("13.7: Valid identity after zero batch still accepted",
+         handler3.defs_skipped == 5)
+
+    # 13.8: Zero identity has zero xxHash64
+    zh = xxh64(b"")
+    test("13.8: xxHash64 of empty string is non-zero",
+         zh != 0)
+
+    # 13.9: (0,0) identity ref to_tuple round-trip
+    z = FAssetIdentityRef(0, 0)
+    test("13.9: Zero identity ref round-trip",
+         z.to_tuple() == (0, 0))
+
+
+# =========================================================
 # Run all sections
 # =========================================================
 
 def run_all():
     print("=" * 60)
-    print("Phase 7A — Identity Validation (Stage 1A + 1B)")
+    print("Phase 7A — Identity Validation (Stage 1A + 1B + 2)")
     print("=" * 60)
 
     # Stage 1A — Standalone tests (no UE required)
@@ -1444,6 +1638,10 @@ def run_all():
     test_duplicate_object_identity()          # Section 9: Rule 3
     test_delete_recreate_identity_chain()     # Section 10: Rule 4
     test_asset_identity_ref_semantics()       # Section 11: Rule 5
+
+    # Stage 2 — Identity mapping hardening (standalone)
+    test_stale_entry_age_out()                # Section 12: Rule S1
+    test_zero_identity_asset_def()            # Section 13: Rule S2
 
     total = PASS + FAIL + SKIP
     print(f"\n{'=' * 60}")

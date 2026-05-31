@@ -8057,6 +8057,27 @@ ResolvePendingAssets()
         FPlatformTime::Seconds();
     int32 ResolvedThisTick = 0;
 
+    // Phase 7A Stage 2: Evict stale metadata entries that have
+    // exceeded ASSET_STALE_TIMEOUT (60s) without resolution.
+    // Prevents unbounded accumulation in AssetMetadata when
+    // deleted GUIDs or orphaned entries are never cleaned.
+    {
+        TArray<FGuid> StaleKeys;
+        for (const auto& Pair : AssetMetadata)
+        {
+            if (Pair.Value.HasTimedOut(Now))
+            {
+                StaleKeys.Add(Pair.Key);
+            }
+        }
+        for (const FGuid& Key : StaleKeys)
+        {
+            AssetMetadata.Remove(Key);
+            PendingAssetQueue.Remove(Key);
+            Stats.StaleEvictions++;
+        }
+    }
+
     FGuid Guid;
 
     // Phase 5E fix: ResolvedThisTick is incremented at the TOP
