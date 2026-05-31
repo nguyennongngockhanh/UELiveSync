@@ -513,7 +513,45 @@ When `HasMaterialSlotIndices` flag is set:
 | 2.6 | Transport-stress test with large payloads | 🕐 Deferred | Requires placeholder content browser data |
 | 2.7 | Vertex color extraction | 🕐 Deferred | Requires schema extension |
 | 2.8 | Multi-UV-layer support | 🕐 Deferred | Requires schema extension |
-| 2.9 | Full regression | ✅ Done | 1020/1020 standalone tests PASS |
+| 2.9 | Full regression | ✅ Done | 1020/1020 standalone tests PASS (Stage 2 final closeout: 2026-05-31) |
+| 2.10 | Stage 2 closeout validation | ✅ Done | All 11 suites executed; PASS totals confirmed; UE runtime SKIPPED (no editor) |
+| 2.11 | STATUS.md update | ✅ Done | COMPLETE-STANDALONE / PENDING UE RUNTIME |
+| 2.12 | Architecture doc closeout record | ✅ Done | This entry |
+
+---
+
+### Final Closeout Validation Record (2026-05-31)
+
+**11 suites executed** — all standalone tests PASS:
+
+| Suite | Tests | Result |
+|-------|-------|--------|
+| Phase 7C Stage 1A — Mesh Protocol + Extraction | 47 | **47/47 PASS** |
+| Phase 7C Stage 1B — PT_Mesh Handler + Reassembly | 43 | **43/43 PASS** |
+| Phase 7C Stage 1C — ProceduralMesh Reconstruction | 18 | **18/18 PASS** |
+| Phase 7C Stage 1D — Blender Geometry Streaming | 27 | **27/27 PASS** |
+| Phase 7B Stage 1A — Asset Registry Hygiene | 44 (1 skip) | **43/44 PASS** |
+| Phase 7B Stage 1B — Material Identity Foundation | 70 | **70/70 PASS** |
+| Phase 7B Stage 1C — PT_Material Wire + Handler | 49 | **49/49 PASS** |
+| Phase 7B Stage 1D — Material Resolution + Assignment | 49 | **49/49 PASS** |
+| Phase 7A — Identity Hygiene (all stages) | 138 (2 skips) | **136/138 PASS** |
+| Phase 6G — Identity Stability | 121 | **121/121 PASS** |
+| Phase 6E — Delete Validation | 320 | **320/320 PASS** |
+
+**Totals**: 135/135 Phase 7C standalone · 1020/1020 grand total standalone
+
+**UE runtime validation**: SKIPPED — port 57000 connection refused (no UE editor running).
+
+**Deferred items** (not implemented in Phase 7C, explicitly out of scope):
+- Normal extraction + packing
+- UV layer extraction
+- Vertex color extraction
+- Compression / delta streaming
+- Geometry chunk reassembly timeout
+- Geometry replay/snapshot integration
+- Transport-stress test with large payloads
+- Multi-UV-layer support
+- High-performance streaming (Phase 8)
 
 ---
 

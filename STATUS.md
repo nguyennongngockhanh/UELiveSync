@@ -50,8 +50,8 @@
 1. ~~**Phase 6I.1 — Transport Hardening**~~ **COMPLETE** ✅
 2. ~~**Phase 7A — Static Mesh Identity Mapping**~~ **COMPLETE** ✅
 3. ~~**Phase 7B — Asset Registry + Material Mapping**~~ **COMPLETE** ✅
-4. ~~**Phase 7C — Geometry/Modifier Pipeline**~~ **COMPLETE** ✅
-5. **Phase 8 — High Performance Streaming** ← NEXT
+4. ~~**Phase 7C — Geometry/Modifier Pipeline**~~ **COMPLETE-STANDALONE / PENDING UE RUNTIME** ✅
+5. **Phase 8 — High Performance Streaming** ← NEXT (hold until UE runtime validated)
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
@@ -190,7 +190,22 @@
 - `_last_geometry_version` cache; automatic depsgraph evaluation + version hash comparison in `check_updates()`; PT_Mesh chunk send on geometry change; `start_sync()`/`stop_sync()` cache cleanup; non-MESH skip; delete cleanup
 - **Validation**: 27/27 PASS
 
-### Closeout Regression
+### Stage 2 — Final Closeout Validation (2026-05-31)
+
+**Commands executed**:
+```
+python3 tests/phase7c_mesh_protocol_extraction.py        # Stage 1A
+python3 tests/phase7c_mesh_handler_reassembly.py         # Stage 1B
+python3 tests/phase7c_mesh_reconstruction.py             # Stage 1C
+python3 tests/phase7c_geometry_streaming.py              # Stage 1D
+python3 tests/phase7b_asset_registry_hygiene.py          # Phase 7B Stage 1A
+python3 tests/phase7b_material_identity_foundation.py    # Phase 7B Stage 1B
+python3 tests/phase7b_material_wire_handler.py           # Phase 7B Stage 1C
+python3 tests/phase7b_material_resolution_assignment.py  # Phase 7B Stage 1D
+python3 tests/phase7a_hygiene_validation.py              # Phase 7A hygiene
+python3 tests/phase6g_identity_stability.py              # Phase 6G
+python3 tests/phase6e_delete_validation.py               # Phase 6E
+```
 
 | Suite | Result | Notes |
 |-------|--------|-------|
@@ -198,16 +213,21 @@
 | Phase 7C Stage 1B | **43/43 PASS** | |
 | Phase 7C Stage 1C | **18/18 PASS** | |
 | Phase 7C Stage 1D | **27/27 PASS** | |
-| Phase 7B (all stages) | **211/211 PASS** | 1 skipped (no UE) |
-| Phase 7A hygiene | **136/136 PASS** | 2 skipped (no UE) |
+| Phase 7B Stage 1A | **43/44 PASS** | 1 skipped (no UE) |
+| Phase 7B Stage 1B | **70/70 PASS** | |
+| Phase 7B Stage 1C | **49/49 PASS** | |
+| Phase 7B Stage 1D | **49/49 PASS** | |
+| Phase 7A hygiene | **136/138 PASS** | 2 skipped (no UE) |
 | Phase 6G identity stability | **121/121 PASS** | |
 | Phase 6E delete validation | **320/320 PASS** | |
 | **Phase 7C standalone** | **135/135 PASS** | 47 + 43 + 18 + 27 |
 | **Grand total (all standalone)** | **1020/1020 PASS** | 674 (7A) + 211 (7B) + 135 (7C) |
 
-**UE runtime validation**: Pending — no UE editor available for port 57000 connectivity test. All standalone tests PASS.
+**UE runtime validation**: SKIPPED — port 57000 connection refused (no UE editor running) at 2026-05-31. Do not fake PASS. UE runtime validation required before Phase 8 can start.
 
-**Phase 7C is now COMPLETE.** 🏁
+**Hard constraints verified**: No new features added. No runtime code modified. No UV/normal/vertex color support implemented. No compression/delta streaming. No Phase 8 work started. No packet type values or protocol version changed.
+
+**Phase 7C is now COMPLETE-STANDALONE.** 🏁 (UE runtime validation pending)
 
 ---
 
