@@ -38,7 +38,7 @@ def _compute_protocol_signature():
     import struct as _s
     for size in (24, 22, 80, 81, 16, 33, 28):
         h = _fnv(h, size)
-    for pt in (0x01, 0x03, 0x04, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F):
+    for pt in (0x01, 0x03, 0x04, 0x05, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F):
         h = _fnv(h, pt)
     return h
 
@@ -67,6 +67,7 @@ PT_Rename = 0x0C
 PT_Hierarchy = 0x0D
 PT_Delete_V5 = 0x0E  # Phase 6E: lifecycle/delete (V5+, 28-byte fixed payload)
 PT_Collection = 0x0F  # Phase 6F: collection/group replication (metadata-only)
+PT_Material = 0x05   # Phase 7B: material slot identity
 
 # Collection packet versioning (Phase 6F Stage 5)
 COLLECTION_PACKET_VERSION_V1 = 0x01
@@ -282,6 +283,51 @@ def get_object_material_slots(obj):
         slots[slot_index] = (low, high)
 
     return slots
+
+
+# =========================================================
+# MATERIAL PACKET CONSTANTS (Phase 7B Stage 1C)
+# =========================================================
+
+# Per-slot wire size: SlotIndex(1) + MaterialLow(8) + MaterialHigh(8)
+LIVE_SYNC_V5_MATERIAL_SLOT_SIZE = 17
+
+# Per-object base size: GUID(16) + SlotCount(1)
+LIVE_SYNC_V5_MATERIAL_OBJECT_BASE_SIZE = 17
+
+MAX_MATERIAL_SLOTS = 8
+
+
+def serialize_material_slots(guid_obj, slots):
+    """Serialize material slot data for one object into PT_Material wire format.
+
+    Args:
+        guid_obj: uuid.UUID of the target object.
+        slots: dict mapping slot_index -> (material_low, material_high)
+
+    Returns:
+        bytes payload for one object in PT_Material batch.
+    """
+    payload = bytearray()
+
+    # GUID (4 × uint32 LE)
+    a = guid_obj.time_low
+    b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
+    c = (guid_obj.clock_seq_hi_variant << 24) | (guid_obj.clock_seq_low << 16) | ((guid_obj.node >> 32) & 0xFFFF)
+    d = guid_obj.node & 0xFFFFFFFF
+    payload.extend(struct.pack("<IIII", a, b, c, d))
+
+    # Slot count (clamped to MAX_MATERIAL_SLOTS)
+    slot_count = min(len(slots), MAX_MATERIAL_SLOTS)
+    payload.extend(struct.pack("<B", slot_count))
+
+    # Per-slot data: SlotIndex(1) + MaterialLow(8) + MaterialHigh(8)
+    for slot_index in range(slot_count):
+        low, high = slots.get(slot_index, (0, 0))
+        payload.extend(struct.pack("<B", slot_index & 0xFF))
+        payload.extend(struct.pack("<QQ", low & 0xFFFFFFFFFFFFFFFF, high & 0xFFFFFFFFFFFFFFFF))
+
+    return bytes(payload)
 
 
 # =========================================================

@@ -376,6 +376,19 @@ private:
         const FSoftObjectPath& Path);
 
     // =====================================================
+    // MATERIAL RESOLUTION (Phase 7B Stage 1C)
+    // =====================================================
+
+    /** Parse and store material slot metadata from PT_Material.
+     *  Does NOT call SetMaterial() — that is deferred to Stage 2.
+     *  Each entry maps GUID → array of (SlotIndex, FMaterialIdentityRef).
+     */
+    void HandleMaterialDef(
+        const FGuid& Guid,
+        const TArray<FMaterialSlotRef>& Slots,
+        uint32 ObjectCount);
+
+    // =====================================================
     // ACTOR CACHE
     // =====================================================
 
@@ -628,6 +641,17 @@ private:
 
     // Pending resolution queue
     FPendingAssetQueue PendingAssetQueue;
+
+    // =====================================================
+    // MATERIAL METADATA (Phase 7B Stage 1C)
+    // =====================================================
+
+    // Per-GUID material slot metadata: GUID → array of FMaterialSlotRef.
+    // Populated by HandleMaterialDef. Consumed by future Stage 2 resolution.
+    TMap<FGuid, TArray<FMaterialSlotRef>> MaterialMetadata;
+
+    // Count of PT_Material packets received and processed this session
+    int32 MaterialDefsReceived = 0;
 
     // =====================================================
     // HIERARCHY DIAGNOSTICS (verbose-only, temporary)

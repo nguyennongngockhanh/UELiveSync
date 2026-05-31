@@ -992,6 +992,8 @@ ConsoleReset()
     AssetMetadata.Empty();
     AssetPathCache.Empty();
     PendingAssetQueue.Empty();
+    MaterialMetadata.Empty();
+    MaterialDefsReceived = 0;
 
     ReconnectHistory.Empty();
     OverflowHistory.Empty();

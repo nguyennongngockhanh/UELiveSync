@@ -53,6 +53,7 @@ try:
         serialize_asset_identity,
         serialize_collection_identity,
         serialize_collection_membership,
+        serialize_material_slots,
         COLLECTION_OP_ADD,
         COLLECTION_OP_REMOVE,
         COLLECTION_OP_MOVE,
@@ -66,6 +67,10 @@ try:
         compute_full_snapshot_hash,
         compute_collection_membership_hash,
         make_collection_subheader,
+        start_world_replay_recording,
+        clear_world_replay_stream,
+        record_world_entry,
+        set_world_replay_enabled,
     )
 except ImportError:
     from network import (
@@ -103,12 +108,14 @@ except ImportError:
         PT_Delete_V5,
         PT_Visibility,
         PT_Collection,
+        PT_Material,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
         get_material_identity_hash,
         serialize_asset_identity,
         serialize_collection_identity,
         serialize_collection_membership,
+        serialize_material_slots,
         COLLECTION_OP_ADD,
         COLLECTION_OP_REMOVE,
         COLLECTION_OP_MOVE,
@@ -960,6 +967,7 @@ def check_updates():
     vis_payloads_to_send = []
     hierarchies_to_send = []
     collection_payloads_to_send = []
+    material_payloads_to_send = []
 
     # =====================================================
     # SCENE SCAN (only when object count changes or
@@ -1256,6 +1264,30 @@ def check_updates():
         _last_parent_guid[guid] = current_parent_guid
 
         # =================================================
+        # Phase 7B Stage 1C: Material slot identity detection
+        # Sends PT_Material only when slot identities change.
+        # Suppressed on first send (prevents emit on startup/reconnect)
+        # and when no change is detected.
+        #
+        # NOTE: Material packets are stored but NOT assigned to UE
+        # components yet. SetMaterial() is deferred to Stage 2.
+        # =================================================
+
+        current_slots = get_object_material_slots(obj)
+        prev_slots = _last_material_identity.get(guid)
+        is_first_material = (prev_slots is None)
+
+        if not is_first_material and current_slots != prev_slots:
+            material_payloads_to_send.append(
+                serialize_material_slots(guid_obj, current_slots)
+            )
+            if _verbose_logging:
+                print(f"[MATERIAL][DIAG] Material change detected guid={guid}")
+                print(f"[MATERIAL][DIAG] Slots={current_slots}")
+
+        _last_material_identity[guid] = current_slots
+
+        # =================================================
         # Phase 6F: Collection membership detection
         # Build current collection membership and diff against
         # last known state. Emit ADD/REMOVE for each change.
@@ -1431,6 +1463,21 @@ def check_updates():
         send_objects(
             collection_payloads_to_send,
             packet_type=PT_Collection,
+            version=LIVE_SYNC_VERSION_V5
+        )
+
+    # =====================================================
+    # SEND MATERIAL PACKETS (Phase 7B Stage 1C — PT_Material)
+    # =====================================================
+
+    if material_payloads_to_send:
+
+        if _verbose_logging:
+            print(f"[MATERIAL][SEND] Sending {len(material_payloads_to_send)} material slot packet(s)")
+
+        send_objects(
+            material_payloads_to_send,
+            packet_type=PT_Material,
             version=LIVE_SYNC_VERSION_V5
         )
 

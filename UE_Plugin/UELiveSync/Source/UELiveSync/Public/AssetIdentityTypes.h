@@ -203,3 +203,11 @@ struct FMaterialSlotRef
 
 static constexpr int32
     MAX_MATERIAL_SLOTS = 8;
+
+static constexpr int32
+    LIVE_SYNC_V5_MATERIAL_SLOT_SIZE = 17;
+// SlotIndex(1) + MaterialLow(8) + MaterialHigh(8) = 17 bytes per slot
+
+static constexpr int32
+    LIVE_SYNC_V5_MATERIAL_OBJECT_BASE_SIZE = 17;
+// GUID(16) + SlotCount(1) = 17 bytes base, then N × SLOT_SIZE per slot

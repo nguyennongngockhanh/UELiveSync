@@ -304,6 +304,9 @@ TrackPerDomainPacket(uint8 PacketType)
     case 0x0F: // PT_Collection
         Phase6IPerSecondCollections++;
         break;
+    case 0x05: // PT_Material (Phase 7B)
+        // No per-second counter yet — added when material throughput tracking is needed
+        break;
     default:
         break;
     }

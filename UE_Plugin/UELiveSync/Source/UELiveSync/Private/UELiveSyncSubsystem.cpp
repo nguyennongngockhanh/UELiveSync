@@ -3212,28 +3212,141 @@ ProcessBinaryPacket(
     if (PacketType == 0x0F)
     {
         TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessCollectionPackets);
+        Stats.TrackedObjects = 0;
 
-        Stats.CollectionPacketsReceived.fetch_add(
-            1,
-            std::memory_order_relaxed);
-
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[COLLECTION][DIAG] Packet received: ObjectCount=%u Flags=0x%02X"),
-            ObjectCount, PacketFlags);
-
-        // ---- PHASE 6F STAGE 5: Read collection sub-header if present ----
-        // Backward-compatible: Stage 4 packets lack the sub-header.
-        // The packet header flags byte indicates presence via bit 0.
-        if (PacketFlags & COLLECTION_PACKET_FLAG_HAS_SUBHEADER)
+        // Phase 6F: Collection/Group replication
+        for (uint32 i = 0; i < ObjectCount; i++)
         {
-            if (Ptr + LIVE_SYNC_COLLECTION_SUBHEADER_SIZE > PacketEnd)
+            if (Ptr + 30 > PacketEnd)
             {
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[COLLECTION] Truncated sub-header: needs %d bytes but only %lld available"),
-                    LIVE_SYNC_COLLECTION_SUBHEADER_SIZE, (int64)(PacketEnd - Ptr));
                 Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[COLLECTION] Truncated packet at object %u/%u"),
+                    i, ObjectCount);
                 return;
             }
+
+            // Skip over the collection header for non-create ops
+            static constexpr int32 COLLECTION_MEMBERSHIP_SIZE = 30;
+            static constexpr int32 COLLECTION_IDENTITY_SIZE = 46;
+
+            // Determine payload size for this object
+            int32 ObjSize;
+            uint8 OpType = Ptr[24];
+
+            if (OpType == 0x06 || OpType == 0x07 || OpType == 0x08)
+            {
+                ObjSize = COLLECTION_IDENTITY_SIZE;
+            }
+            else
+            {
+                ObjSize = COLLECTION_MEMBERSHIP_SIZE;
+            }
+
+            if (Ptr + ObjSize > PacketEnd)
+            {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[COLLECTION] Truncated packet (size=%d) at object %u/%u"),
+                    ObjSize, i, ObjectCount);
+                return;
+            }
+
+            FGuid Guid;
+            FMemory::Memcpy(&Guid, Ptr, sizeof(FGuid));
+            Ptr += sizeof(FGuid);
+
+            HandleCollection(Ptr, ObjSize - sizeof(FGuid), Guid);
+            Ptr += (ObjSize - sizeof(FGuid));
+        }
+
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // MATERIAL PACKET (Phase 7B Stage 1C)
+    // =====================================================
+    // Wire format per object:
+    //   GUID(16) + SlotCount(1) + N × [SlotIndex(1) + MaterialLow(8) + MaterialHigh(8)]
+    //
+    // SlotCount > MAX_MATERIAL_SLOTS (8) is rejected with
+    // MalformedPackets++ and a logged warning. Zero-slot packets
+    // are accepted (clear existing material metadata).
+    // Material assignment (SetMaterial) is NOT performed — see Stage 2.
+    // =====================================================
+
+    if (PacketType == 0x05)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessMaterialPackets);
+
+        for (uint32 i = 0; i < ObjectCount; i++)
+        {
+            // Minimum: GUID(16) + SlotCount(1)
+            if (Ptr + LIVE_SYNC_V5_MATERIAL_OBJECT_BASE_SIZE > PacketEnd)
+            {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MATERIAL] Truncated packet at object %u/%u"),
+                    i, ObjectCount);
+                return;
+            }
+
+            FGuid Guid;
+            FMemory::Memcpy(&Guid, Ptr, sizeof(FGuid));
+            Ptr += sizeof(FGuid);
+
+            uint8 SlotCount = *Ptr;
+            Ptr += sizeof(uint8);
+
+            if (SlotCount > MAX_MATERIAL_SLOTS)
+            {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MATERIAL] SlotCount=%d exceeds MAX_MATERIAL_SLOTS=%d "
+                         "for GUID=%s \u2014 rejecting"),
+                    SlotCount, MAX_MATERIAL_SLOTS,
+                    *Guid.ToString(EGuidFormats::Digits));
+                return;
+            }
+
+            TArray<FMaterialSlotRef> Slots;
+            Slots.Reserve(SlotCount);
+
+            for (uint8 s = 0; s < SlotCount; s++)
+            {
+                if (Ptr + LIVE_SYNC_V5_MATERIAL_SLOT_SIZE > PacketEnd)
+                {
+                    Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[MATERIAL] Truncated slot %u/%u for GUID=%s"),
+                        s, SlotCount,
+                        *Guid.ToString(EGuidFormats::Digits));
+                    return;
+                }
+
+                FMaterialSlotRef Slot;
+                Slot.SlotIndex = static_cast<int8>(*Ptr);
+                Ptr += sizeof(uint8);
+
+                uint64 Low, High;
+                FMemory::Memcpy(&Low, Ptr, sizeof(uint64));
+                Ptr += sizeof(uint64);
+                FMemory::Memcpy(&High, Ptr, sizeof(uint64));
+                Ptr += sizeof(uint64);
+
+                Slot.Identity.High = High;
+                Slot.Identity.Low = Low;
+
+                Slots.Add(Slot);
+            }
+
+            HandleMaterialDef(Guid, Slots, ObjectCount);
+        }
+
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
 
             uint8 SubVersion;
             uint8 SubReserved;
@@ -8316,6 +8429,50 @@ CacheAssetPath(
     AssetPathCache.Add(
         Identity,
         Path);
+}
+
+
+// =========================================================
+// HANDLE MATERIAL DEF (Phase 7B Stage 1C)
+// =========================================================
+// Skeleton: parses and stores material slot metadata per GUID.
+// Does NOT call SetMaterial() — that is deferred to Stage 2.
+// Overwrites previous metadata for the same GUID on each packet.
+// Zero-slot packets are stored (clears previous metadata).
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleMaterialDef(
+    const FGuid& Guid,
+    const TArray<FMaterialSlotRef>& Slots,
+    uint32 ObjectCount)
+{
+    CHECK_GAME_THREAD();
+
+    if (!Guid.IsValid())
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MATERIAL] Skipping invalid GUID"));
+        return;
+    }
+
+    MaterialMetadata.Add(
+        Guid,
+        Slots);
+
+    MaterialDefsReceived++;
+
+    if (bEnableVerboseSyncLogs)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("[MaterialDef] GUID=%s Slots=%d TotalReceived=%d"),
+            *Guid.ToString(
+                EGuidFormats::Digits),
+            Slots.Num(),
+            MaterialDefsReceived);
+    }
 }
 
 

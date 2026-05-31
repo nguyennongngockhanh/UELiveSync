@@ -1418,6 +1418,7 @@ static constexpr uint32
     // Packet types
     H = fnv(H, 0x01); H = fnv(H, 0x03);
     H = fnv(H, 0x04); H = fnv(H, 0x07);
+    H = fnv(H, 0x05); // PT_Material
     H = fnv(H, 0x08); H = fnv(H, 0x09);
     H = fnv(H, 0x0A); H = fnv(H, 0x0B); H = fnv(H, 0x0C); H = fnv(H, 0x0D);
     H = fnv(H, 0x0E); // PT_Delete_V5
