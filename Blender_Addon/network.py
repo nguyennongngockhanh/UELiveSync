@@ -38,7 +38,7 @@ def _compute_protocol_signature():
     import struct as _s
     for size in (24, 22, 80, 81, 16, 33, 28):
         h = _fnv(h, size)
-    for pt in (0x01, 0x03, 0x04, 0x05, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F):
+    for pt in (0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F):
         h = _fnv(h, pt)
     return h
 
@@ -68,6 +68,7 @@ PT_Hierarchy = 0x0D
 PT_Delete_V5 = 0x0E  # Phase 6E: lifecycle/delete (V5+, 28-byte fixed payload)
 PT_Collection = 0x0F  # Phase 6F: collection/group replication (metadata-only)
 PT_Material = 0x05   # Phase 7B: material slot identity
+PT_Mesh = 0x06       # Phase 7C: mesh geometry chunk
 
 # Collection packet versioning (Phase 6F Stage 5)
 COLLECTION_PACKET_VERSION_V1 = 0x01
@@ -336,6 +337,180 @@ def serialize_material_slots(guid_obj, slots):
 
 _sequence_id = 0
 _seq_lock = threading.Lock()
+
+
+# =========================================================
+# GEOMETRY CONSTANTS (Phase 7C)
+# =========================================================
+
+# PT_Mesh chunk header: GUID(16) + VersionHash(64) + ChunkIndex(4) + ChunkCount(4) + Flags(1) = 89 bytes
+LIVE_SYNC_V5_MESH_CHUNK_HEADER_SIZE = 89
+
+# Per-chunk payload flags (bitmask)
+MESH_CHUNK_FLAG_HAS_POSITIONS     = 0x01  # Chunk contains vertex positions
+MESH_CHUNK_FLAG_HAS_TRIANGLES     = 0x02  # Chunk contains triangle indices
+MESH_CHUNK_FLAG_HAS_MATERIAL_IDX  = 0x04  # Chunk contains per-triangle material indices
+MESH_CHUNK_FLAG_HAS_NORMALS       = 0x08  # Reserved for Stage 2
+MESH_CHUNK_FLAG_HAS_UVS           = 0x10  # Reserved for Stage 2
+MESH_CHUNK_FLAG_FIRST_CHUNK       = 0x20  # First chunk of multi-chunk mesh
+MESH_CHUNK_FLAG_LAST_CHUNK        = 0x40  # Last chunk of multi-chunk mesh
+
+
+def extract_evaluated_mesh_data(obj):
+    """Extract evaluated mesh geometry from a Blender object.
+
+    Uses the dependency graph to get the modifier-applied mesh,
+    then extracts vertex positions, triangle indices, and per-triangle
+    material slot indices.
+
+    Returns a dict:
+        {
+            "vertices": [(x, y, z), ...],
+            "triangles": [(v0, v1, v2), ...],
+            "material_indices": [mat_idx_per_triangle, ...],
+            "vertex_count": int,
+            "triangle_count": int,
+        }
+    Returns None if obj is not a MESH, has no data, or extraction fails.
+    """
+    try:
+        import bpy
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        if depsgraph is None:
+            return None
+
+        evaluated_obj = obj.evaluated_get(depsgraph)
+        if evaluated_obj is None:
+            return None
+
+        if evaluated_obj.type != 'MESH':
+            return None
+
+        mesh = evaluated_obj.to_mesh()
+        if mesh is None:
+            return None
+
+        mesh_data = {
+            "vertices": [],
+            "triangles": [],
+            "material_indices": [],
+            "vertex_count": 0,
+            "triangle_count": 0,
+        }
+
+        # Vertex positions
+        mesh_data["vertices"] = [
+            (v.co.x, v.co.y, v.co.z) for v in mesh.vertices
+        ]
+        mesh_data["vertex_count"] = len(mesh.vertices)
+
+        # Triangle topology + per-face material index
+        mesh.calc_loop_triangles()
+        for tri in mesh.loop_triangles:
+            mesh_data["triangles"].append(
+                (tri.vertices[0], tri.vertices[1], tri.vertices[2])
+            )
+            mesh_data["material_indices"].append(tri.material_index)
+
+        mesh_data["triangle_count"] = len(mesh.loop_triangles)
+
+        # Cleanup
+        evaluated_obj.to_mesh_clear()
+
+        return mesh_data
+
+    except (ImportError, AttributeError, RuntimeError, ReferenceError) as e:
+        # Outside Blender or no depsgraph available
+        return None
+
+
+def compute_geometry_version_hash(vertices, triangles, material_indices):
+    """Return SHA-256 hex digest of deterministic geometry byte stream.
+
+    Hashes: vertex count + vertex positions + triangle count +
+    triangle indices + material indices (all as packed LE bytes).
+
+    Deterministic across sessions for identical mesh content.
+    CHANGES when vertex positions, topology, or material assignment changes.
+    """
+    import hashlib
+    h = hashlib.sha256()
+
+    # Vertex count (uint32 LE)
+    h.update(struct.pack("<I", len(vertices)))
+
+    # Vertex positions (float32 x 3 per vertex)
+    for v in vertices:
+        h.update(struct.pack("<fff", v[0], v[1], v[2]))
+
+    # Triangle count (uint32 LE)
+    h.update(struct.pack("<I", len(triangles)))
+
+    # Triangle indices (uint32 x 3 per triangle)
+    for t in triangles:
+        h.update(struct.pack("<III", t[0], t[1], t[2]))
+
+    # Material indices (int32 per triangle)
+    for m in material_indices:
+        h.update(struct.pack("<i", m))
+
+    return h.hexdigest()
+
+
+def serialize_mesh_chunk(guid_obj, version_hash, chunk_index, chunk_count,
+                          vertices, triangles, material_indices, flags=0):
+    """Serialize one PT_Mesh chunk to bytes.
+
+    Args:
+        guid_obj: uuid.UUID of the target object.
+        version_hash: str — hex digest from compute_geometry_version_hash.
+        chunk_index: int — 0-based index of this chunk.
+        chunk_count: int — total number of chunks for this mesh.
+        vertices: list of (x, y, z) tuples.
+        triangles: list of (v0, v1, v2) tuples.
+        material_indices: list of int — per-triangle material slot index.
+        flags: bitmask of MESH_CHUNK_FLAG_* values.
+
+    Returns:
+        bytes — the complete chunk payload (header + data blocks).
+    """
+    payload = bytearray()
+
+    # GUID (4 × uint32 LE)
+    a = guid_obj.time_low
+    b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
+    c = (guid_obj.clock_seq_hi_variant << 24) | (guid_obj.clock_seq_low << 16) | ((guid_obj.node >> 32) & 0xFFFF)
+    d = guid_obj.node & 0xFFFFFFFF
+    payload.extend(struct.pack("<IIII", a, b, c, d))
+
+    # Geometry version hash (32 bytes = SHA-256 hex decoded to bytes)
+    version_bytes = version_hash.encode("ascii")
+    if len(version_bytes) != 64:
+        version_bytes = version_bytes.ljust(64, b'\x00')[:64]
+    payload.extend(version_bytes)
+
+    # Chunk index + chunk count (uint32 LE)
+    payload.extend(struct.pack("<II", chunk_index, chunk_count))
+
+    # Flags (uint8)
+    payload.extend(struct.pack("<B", flags))
+
+    # Vertex count (uint32 LE) + positions
+    payload.extend(struct.pack("<I", len(vertices)))
+    for v in vertices:
+        payload.extend(struct.pack("<fff", v[0], v[1], v[2]))
+
+    # Triangle count (uint32 LE) + indices
+    payload.extend(struct.pack("<I", len(triangles)))
+    for t in triangles:
+        payload.extend(struct.pack("<III", t[0], t[1], t[2]))
+
+    # Material indices (uint32 count + int32 per triangle)
+    payload.extend(struct.pack("<I", len(material_indices)))
+    for m in material_indices:
+        payload.extend(struct.pack("<i", m))
+
+    return bytes(payload)
 
 
 # =========================================================
