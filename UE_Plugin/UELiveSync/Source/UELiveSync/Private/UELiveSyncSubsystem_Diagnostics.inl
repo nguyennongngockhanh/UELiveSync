@@ -658,6 +658,24 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  AssetMetadata:       %d"),
+        AssetMetadata.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  AssetPathCache:      %d"),
+        AssetPathCache.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  PendingAssetQueue:   %d"),
+        PendingAssetQueue.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  SeqId:               %llu"),
         LastSequenceId);
 

@@ -56,6 +56,14 @@ inline uint32 GetTypeHash(
 struct FAssetMetadata
 {
     FAssetIdentityRef Identity;
+
+    // NOTE: ResolvedPath is currently stored but NOT consumed by the
+    // runtime resolution path.  ResolvePendingAssets() looks up the
+    // path from AssetPathCache instead.  This field is reserved for
+    // future Phase 7B asset registry integration where per-GUID
+    // resolved path tracking becomes necessary (e.g. material mapping
+    // or mesh variant fallback).  Currently populated with the default
+    // empty FSoftObjectPath and never written.
     FSoftObjectPath   ResolvedPath;
     int32             RetryCount       = 0;
     double            NextRetryTime    = 0.0;

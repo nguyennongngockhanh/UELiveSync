@@ -8291,13 +8291,31 @@ CacheAssetPath(
     const FAssetIdentityRef& Identity,
     const FSoftObjectPath& Path)
 {
-    if (Identity.IsValid() &&
-        !Path.IsNull())
+    if (!Identity.IsValid() ||
+        Path.IsNull())
     {
-        AssetPathCache.Add(
-            Identity,
-            Path);
+        return;
     }
+
+    FSoftObjectPath* Existing =
+        AssetPathCache.Find(Identity);
+
+    if (Existing && *Existing != Path)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("[AssetRegistry] Identity collision: 0x%llx%llx "
+                 "was \"%s\" now \"%s\" \u2014 overwriting"),
+            Identity.High,
+            Identity.Low,
+            *Existing->ToString(),
+            *Path.ToString());
+    }
+
+    AssetPathCache.Add(
+        Identity,
+        Path);
 }
 
 
