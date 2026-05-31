@@ -400,6 +400,23 @@ private:
         const FSoftObjectPath& Path);
 
     // =====================================================
+    // MESH CHUNK REASSEMBLY (Phase 7C Stage 1B)
+    // =====================================================
+
+    /** Parse, validate, and store one PT_Mesh chunk.
+     *  Accumulates chunks in PendingMeshReassembly until
+     *  all chunks for a given (GUID, VersionHash) arrive.
+     *  Does NOT build mesh sections — deferred to Stage 1C.
+     */
+    void HandleMeshChunk(
+        const FGuid& Guid,
+        const FString& VersionHash,
+        uint32 ChunkIndex,
+        uint32 ChunkCount,
+        uint8 Flags,
+        const TArrayView<const uint8>& Payload);
+
+    // =====================================================
     // ACTOR CACHE
     // =====================================================
 
@@ -668,6 +685,37 @@ private:
 
     // Count of successful SetMaterial() calls this session
     int32 MaterialAssignmentsSucceeded = 0;
+
+    // =====================================================
+    // MESH CHUNK REASSEMBLY DATA (Phase 7C Stage 1B)
+    // =====================================================
+
+    /** Tracks accumulated chunks for one mesh reconstruction. */
+    struct FMeshReassemblyState
+    {
+        FString    VersionHash;
+        uint32     ChunkCount     = 0;
+        uint32     ChunksReceived = 0;
+        uint8      Flags          = 0;
+        double     FirstChunkTime = 0.0;
+
+        // ChunkIndex → raw payload bytes
+        TMap<uint32, TArray<uint8>> Chunks;
+
+        bool IsComplete() const
+        {
+            return ChunkCount > 0 && ChunksReceived >= ChunkCount;
+        }
+    };
+
+    // GUID → reassembly state
+    TMap<FGuid, FMeshReassemblyState> PendingMeshReassembly;
+
+    // Total PT_Mesh chunks received this session
+    uint32 MeshChunksReceived = 0;
+
+    // Total reassemblies completed this session
+    uint32 MeshReassembliesCompleted = 0;
 
     // =====================================================
     // HIERARCHY DIAGNOSTICS (verbose-only, temporary)

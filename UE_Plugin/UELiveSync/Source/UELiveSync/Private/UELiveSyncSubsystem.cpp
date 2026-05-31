@@ -3496,6 +3496,129 @@ ProcessBinaryPacket(
     }
 
     // =====================================================
+    // MESH CHUNK PACKET (Phase 7C Stage 1B)
+    // =====================================================
+    // Wire format per object:
+    //   Header:  GUID(16) + VersionHash(64) + ChunkIndex(4) + ChunkCount(4) + Flags(1) = 89 bytes
+    //   Payload: follows header (variable-length data blocks)
+    //
+    // Chunks are accumulated in PendingMeshReassembly by (GUID, VersionHash).
+    // No mesh sections are built — deferred to Stage 1C.
+    // =====================================================
+
+    if (PacketType == 0x06)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessMeshChunkPackets);
+
+        for (uint32 i = 0; i < ObjectCount; i++)
+        {
+            // Minimum: entire header must fit
+            if (Ptr + LIVE_SYNC_V5_MESH_CHUNK_HEADER_SIZE > PacketEnd)
+            {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH] Truncated chunk header at object %u/%u"),
+                    i, ObjectCount);
+                return;
+            }
+
+            FGuid Guid;
+            FMemory::Memcpy(&Guid, Ptr, sizeof(FGuid));
+            Ptr += sizeof(FGuid);
+
+            // Version hash (64 bytes of ASCII hex)
+            FString VersionHash;
+            {
+                ANSICHAR HashBuf[LIVE_SYNC_V5_MESH_VERSION_HASH_SIZE + 1] = {};
+                FMemory::Memcpy(HashBuf, Ptr, LIVE_SYNC_V5_MESH_VERSION_HASH_SIZE);
+                HashBuf[LIVE_SYNC_V5_MESH_VERSION_HASH_SIZE] = '\0';
+                VersionHash = ANSI_TO_TCHAR(HashBuf);
+                Ptr += LIVE_SYNC_V5_MESH_VERSION_HASH_SIZE;
+            }
+
+            if (VersionHash.Len() != LIVE_SYNC_V5_MESH_VERSION_HASH_SIZE)
+            {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH] Invalid version hash length (%d) for GUID=%s"),
+                    VersionHash.Len(),
+                    *Guid.ToString(EGuidFormats::Digits));
+                return;
+            }
+
+            if (!Guid.IsValid())
+            {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH] Invalid GUID in chunk"));
+                return;
+            }
+
+            uint32 ChunkIndex;
+            uint32 ChunkCount;
+            FMemory::Memcpy(&ChunkIndex, Ptr, sizeof(uint32));
+            Ptr += sizeof(uint32);
+            FMemory::Memcpy(&ChunkCount, Ptr, sizeof(uint32));
+            Ptr += sizeof(uint32);
+
+            uint8 Flags = *Ptr;
+            Ptr += sizeof(uint8);
+
+            // Validate chunk count
+            if (ChunkCount == 0)
+            {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH] ChunkCount=0 for GUID=%s"),
+                    *Guid.ToString(EGuidFormats::Digits));
+                return;
+            }
+
+            // Validate chunk index
+            if (ChunkIndex >= ChunkCount)
+            {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH] ChunkIndex=%d >= ChunkCount=%d for GUID=%s"),
+                    ChunkIndex, ChunkCount,
+                    *Guid.ToString(EGuidFormats::Digits));
+                return;
+            }
+
+            // Remaining bytes after header = payload
+            const int32 PayloadSize =
+                static_cast<int32>(PacketEnd - Ptr);
+
+            if (PayloadSize < 0)
+            {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH] Negative payload size for GUID=%s"),
+                    *Guid.ToString(EGuidFormats::Digits));
+                return;
+            }
+
+            TArrayView<const uint8> PayloadView(
+                Ptr, PayloadSize);
+
+            HandleMeshChunk(
+                Guid,
+                VersionHash,
+                ChunkIndex,
+                ChunkCount,
+                Flags,
+                PayloadView);
+
+            Ptr += PayloadSize;
+        }
+
+        Stats.PacketsProcessed.fetch_add(
+            1,
+            std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
     // UNKNOWN PACKET TYPE — skip gracefully
     // =====================================================
 
@@ -8652,6 +8775,124 @@ ResolvePendingMaterials()
         {
             It.RemoveCurrent();
         }
+    }
+}
+
+
+// =========================================================
+// HANDLE MESH CHUNK (Phase 7C Stage 1B)
+// =========================================================
+// Validates and accumulates one PT_Mesh chunk.  Chunks for the
+// same (GUID, VersionHash) are stored in PendingMeshReassembly.
+// When all chunks arrive (ChunksReceived >= ChunkCount), the
+// entry is marked complete but NO mesh sections are built.
+// Stage 1C will consume completed reassemblies.
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleMeshChunk(
+    const FGuid& Guid,
+    const FString& VersionHash,
+    uint32 ChunkIndex,
+    uint32 ChunkCount,
+    uint8 Flags,
+    const TArrayView<const uint8>& Payload)
+{
+    CHECK_GAME_THREAD();
+
+    if (!Guid.IsValid())
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH] HandleMeshChunk: invalid GUID"));
+        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    if (ChunkCount == 0 || ChunkIndex >= ChunkCount)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH] HandleMeshChunk: invalid chunk index/count "
+                 "(%u/%u) for GUID=%s"),
+            ChunkIndex, ChunkCount,
+            *Guid.ToString(EGuidFormats::Digits));
+        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // Enforce max concurrent reassemblies
+    if (PendingMeshReassembly.Num() >= MAX_CONCURRENT_MESH_REASSEMBLIES &&
+        !PendingMeshReassembly.Contains(Guid))
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH] Too many pending reassemblies (%d) \u2014 "
+                 "rejecting chunk for GUID=%s"),
+            PendingMeshReassembly.Num(),
+            *Guid.ToString(EGuidFormats::Digits));
+        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    FMeshReassemblyState& State =
+        PendingMeshReassembly.FindOrAdd(Guid);
+
+    // First chunk for this mesh
+    if (State.ChunkCount == 0)
+    {
+        State.VersionHash = VersionHash;
+        State.ChunkCount  = ChunkCount;
+        State.Flags       = Flags;
+        State.FirstChunkTime = FPlatformTime::Seconds();
+    }
+    else
+    {
+        // Reject conflicting version hash or chunk count
+        if (State.VersionHash != VersionHash ||
+            State.ChunkCount != ChunkCount)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH] Conflicting version hash or count for "
+                     "GUID=%s (existing=%s/%u new=%s/%u)"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *State.VersionHash, State.ChunkCount,
+                *VersionHash, ChunkCount);
+            PendingMeshReassembly.Remove(Guid);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+
+    // Reject duplicate chunk
+    if (State.Chunks.Contains(ChunkIndex))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MESH] Duplicate chunk %u/%u for GUID=%s"),
+            ChunkIndex, ChunkCount,
+            *Guid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    // Store chunk payload
+    TArray<uint8>& StoredPayload =
+        State.Chunks.Add(ChunkIndex);
+    StoredPayload.Append(
+        Payload.GetData(),
+        Payload.Num());
+
+    State.ChunksReceived++;
+    MeshChunksReceived++;
+
+    // Check completion
+    if (State.IsComplete())
+    {
+        MeshReassembliesCompleted++;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MESH] Reassembly complete for GUID=%s "
+                 "(%u/%u chunks) \u2014 %d total chunks received this session"),
+            *Guid.ToString(EGuidFormats::Digits),
+            State.ChunksReceived,
+            State.ChunkCount,
+            MeshChunksReceived);
     }
 }
 

@@ -694,6 +694,24 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  PendingMeshReasm:    %d"),
+        PendingMeshReassembly.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MeshChunksRcv:       %d"),
+        MeshChunksReceived);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MeshReasmCmpl:       %d"),
+        MeshReassembliesCompleted);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  SeqId:               %llu"),
         LastSequenceId);
 
@@ -1014,6 +1032,10 @@ ConsoleReset()
     MaterialPathCache.Empty();
     MaterialDefsReceived = 0;
     MaterialAssignmentsSucceeded = 0;
+
+    PendingMeshReassembly.Empty();
+    MeshChunksReceived = 0;
+    MeshReassembliesCompleted = 0;
 
     ReconnectHistory.Empty();
     OverflowHistory.Empty();

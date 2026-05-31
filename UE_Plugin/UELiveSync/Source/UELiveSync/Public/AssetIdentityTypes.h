@@ -204,6 +204,43 @@ struct FMaterialSlotRef
 static constexpr int32
     MAX_MATERIAL_SLOTS = 8;
 
+// =========================================================
+// MESH CHUNK CONSTANTS (Phase 7C)
+// =========================================================
+// PT_Mesh chunk header layout:
+//   GUID(16) + VersionHash(64) + ChunkIndex(4) + ChunkCount(4) + Flags(1) = 89 bytes
+
+static constexpr int32
+    LIVE_SYNC_V5_MESH_CHUNK_HEADER_SIZE = 89;
+
+static constexpr int32
+    LIVE_SYNC_V5_MESH_VERSION_HASH_SIZE = 64;
+
+static constexpr uint32
+    MAX_CONCURRENT_MESH_REASSEMBLIES = 16;
+
+// Chunk flags (bitmask)
+static constexpr uint8
+    MESH_CHUNK_FLAG_HAS_POSITIONS     = 0x01;
+
+static constexpr uint8
+    MESH_CHUNK_FLAG_HAS_TRIANGLES     = 0x02;
+
+static constexpr uint8
+    MESH_CHUNK_FLAG_HAS_MATERIAL_IDX  = 0x04;
+
+static constexpr uint8
+    MESH_CHUNK_FLAG_HAS_NORMALS       = 0x08;
+
+static constexpr uint8
+    MESH_CHUNK_FLAG_HAS_UVS           = 0x10;
+
+static constexpr uint8
+    MESH_CHUNK_FLAG_FIRST_CHUNK       = 0x20;
+
+static constexpr uint8
+    MESH_CHUNK_FLAG_LAST_CHUNK        = 0x40;
+
 static constexpr int32
     LIVE_SYNC_V5_MATERIAL_SLOT_SIZE = 17;
 // SlotIndex(1) + MaterialLow(8) + MaterialHigh(8) = 17 bytes per slot

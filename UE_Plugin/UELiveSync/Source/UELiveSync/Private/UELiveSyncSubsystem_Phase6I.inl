@@ -307,6 +307,9 @@ TrackPerDomainPacket(uint8 PacketType)
     case 0x05: // PT_Material (Phase 7B)
         // No per-second counter yet — added when material throughput tracking is needed
         break;
+    case 0x06: // PT_Mesh (Phase 7C)
+        // No per-second counter yet — geometry throughput tracking deferred
+        break;
     default:
         break;
     }
