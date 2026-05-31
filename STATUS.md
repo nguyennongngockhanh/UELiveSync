@@ -105,15 +105,16 @@
 
 | Suite | Result | Notes |
 |-------|--------|-------|
-| Phase 7A hygiene (new) | **40/40 PASS** | 2 skipped (no UE) |
+| Phase 7A hygiene (Stage 1A) | **40/40 PASS** | 2 skipped (no UE) |
+| Phase 7A identity coverage (Stage 1B) | **77/77 PASS** | 5 new sections (7–11), standalone |
 | Phase 6G identity stability | **121/121 PASS** | Full regression |
-| Phase 6E delete validation | **320/320 PASS** | Includes new §49 metadata cleanup tests |
+| Phase 6E delete validation | **320/320 PASS** | Includes §49 metadata cleanup tests |
 | Phase 6D hierarchy | **97/97 PASS** | 7 skipped (no UE) |
 | Phase 6 visibility | **0/0 FAIL** | 12 skipped (no UE), pre-existing |
 | Phase 6 rename | **0/1 FAIL** | Pre-existing: `rename_reconnect_storm` requires UE |
 | Phase 5D asset identity | **0/1 FAIL** | Pre-existing: no UE editor to connect to |
 | Phase 6I.1 bounds | — | Skipped (no UE), pre-existing |
-| **Total (standalone)** | **578/578 PASS** | 0 regressions from Phase 7A changes |
+| **Total (standalone)** | **655/655 PASS** | 0 regressions from Phase 7A changes |
 
 ### Stage 2 — Identity Hygiene (PENDING — future work)
 - **2.1**: `AssetMetadata` periodic age-out verification test (stale entries evicted after 60s)
@@ -127,6 +128,7 @@
 
 ## Recent Changes
 
+- **Phase 7A Stage 1B**: Identity coverage hardening implemented and VERIFIED — 77 tests across 5 identity rules: shared datablock identity, mesh datablock rename, duplicate object rule, delete/recreate chain, `FAssetIdentityRef` semantics. 655/655 standalone tests PASS, 0 regressions.
 - **Phase 7A Stage 1A**: Identity hygiene fixes implemented and VERIFIED — `HandleDelete`/`OnActorDestroyed` now clean `AssetMetadata`, truncated `PT_AssetDef` increments `MalformedPackets`, Blender `_last_mesh_identity` cleared on start/stop. 578/578 standalone tests PASS, 0 regressions.
 - `Blender_Addon/sync.py`: +4 lines — `_last_mesh_identity` global + clear in `start_sync()`/`stop_sync()`
 - `UELiveSyncSubsystem.cpp`: +11 lines — `AssetMetadata.Remove` + `PendingAssetQueue.Remove` in `HandleDelete` and `OnActorDestroyed`; `MalformedPackets.fetch_add` in truncated `PT_AssetDef` path

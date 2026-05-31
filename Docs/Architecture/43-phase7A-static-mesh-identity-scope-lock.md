@@ -275,15 +275,17 @@ regenerates. This is a safety net, not a normal flow.
 
 **Validation gate**: 578/578 standalone tests PASS, 0 regressions. See §15.3 for gap items deferred to Stage 1B.
 
-### Stage 1B — Identity Coverage Hardening (PENDING)
+### Stage 1B — Identity Coverage Hardening ✅ VERIFIED (2026-05-31)
 
-| Step | Description |
-|------|-------------|
-| 1B.1 | Add validation tests for: shared datablock identity (two Blender objs, same mesh, one `PT_AssetDef`), mesh datablock rename propagation, delete/recreate identity chain integrity |
-| 1B.2 | Add validation tests for duplicate detection: `Shift+D` duplicate, GUID collision recovery |
-| 1B.3 | Update `ETransportError` usage to cover asset-def parse errors if needed (was added in Phase 6I.1 Stage 1B) |
+| Step | Section | Tests | Description |
+|------|---------|-------|-------------|
+| 1B.1 | §7 | 14 | Shared datablock identity: two objs sharing `obj.data` → same `FAssetIdentityRef`, distinct GUIDs; null data; non-MESH; xxHash64 cross-impl validation |
+| 1B.2 | §8 | 13 | Mesh datablock rename: renaming `obj.data` changes identity hash, GUID unchanged; owner hash diverges; multi-object; empty/unicode/long names |
+| 1B.3 | §9 | 10 | Duplicate object: inherits GUID → collision detected → new GUID; shared mesh identity; multi-duplicate; different mesh divergence |
+| 1B.4 | §10 | 17 | Delete/recreate chain: metadata clean on delete; new GUID on recreate; identity re-emission; path cache survival; multi-cycle |
+| 1B.5 | §11 | 23 | `FAssetIdentityRef` semantics: equality/inequality; hash stability; dict/set; `is_valid`; `to_tuple`; max uint64; path cache simulation |
 
-**Validation gate**: All existing Phase 5/6 validation suites pass. New Stage 1B tests pass.
+**Validation gate**: 77/77 Stage 1B standalone tests PASS. All prior suites pass. Zero regressions.
 
 ### Stage 2 — Identity Hygiene (PENDING)
 
@@ -305,8 +307,8 @@ Phase 7A is **complete** when:
 1. This scope lock document is finalised and merged
 2. All Stage 0/1A/1B/2 items are implemented and merged
 3. `MalformedPackets` increments on truncated `PT_AssetDef` paths (✅ Stage 1A)
-4. Identity model rules (§§5–7) are validated by automated tests
-5. All prior Phase 5D/6/6I.1 validation suites pass with zero regressions (✅ 578/578 PASS as of Stage 1A)
+4. Identity model rules (§§5–7) are validated by automated tests (✅ Stage 1B: 77/77 tests, 5 rules covered)
+5. All prior Phase 5D/6/6I.1 validation suites pass with zero regressions (✅ 655/655 PASS as of Stage 1B)
 6. No new packet types, no protocol version bump, no runtime code changes outside the scope of §9
 7. No Phase 7B (material mapping) or Phase 7C (geometry pipeline) work was started
 
@@ -425,19 +427,27 @@ Completed 2026-05-31. Inspected: `sync.py`, `network.py`, `AssetIdentityTypes.h`
 - Impact: After stop→start, stale identity cache may suppress first-tick PT_AssetDef emission
 - Fix: Add `_last_mesh_identity.clear()` to both `start_sync()` and `stop_sync()`
 
-### 15.3 — Test Coverage Gaps
+### 15.3 — Test Coverage Gaps (Stage 1B Resolved)
 
-| # | Missing Test | Priority |
-|---|-------------|----------|
-| G1 | Shared datablock → identical `FAssetIdentityRef` (two objects, same `obj.data`) | High |
-| G2 | Mesh datablock rename → new identity hash → new PT_AssetDef emitted | High |
-| G3 | Delete/recreate chain: V5 delete → CREATE → PT_AssetDef → resolve | High |
-| G4 | `HandleDelete` V5 `AssetMetadata` cleanup | Critical |
-| G5 | `OnActorDestroyed` `AssetMetadata` cleanup | Medium |
-| G6 | PT_AssetDef truncation `MalformedPackets` counter | High |
-| G7 | `FAssetIdentityRef` comparison/hashing | Low |
-| G8 | `PendingAssetQueue.CleanupStale()` no-op | Low |
+| # | Test | Priority | Status |
+|---|------|----------|--------|
+| G1 | Shared datablock → identical `FAssetIdentityRef` (two objects, same `obj.data`) | High | ✅ Stage 1B §7 |
+| G2 | Mesh datablock rename → new identity hash effects | High | ✅ Stage 1B §8 |
+| G3 | Delete/recreate chain: V5 delete → CREATE → PT_AssetDef → resolve | High | ✅ Stage 1B §10 |
+| G4 | `HandleDelete` V5 `AssetMetadata` cleanup | Critical | ✅ Stage 1A |
+| G5 | `OnActorDestroyed` `AssetMetadata` cleanup | Medium | ✅ Stage 1A |
+| G6 | PT_AssetDef truncation `MalformedPackets` counter | High | ✅ Stage 1A |
+| G7 | `FAssetIdentityRef` comparison/hashing | Low | ✅ Stage 1B §11 |
+| G8 | `PendingAssetQueue.CleanupStale()` no-op | Low | 🕐 Stage 2 |
 
-### 15.4 — Files Changed During Audit
+### 15.4 — Files Changed
 
-**None.** Stage 0 is audit-only; zero source files modified.
+| File | Stage | What |
+|------|-------|------|
+| `UE_Plugin/.../UELiveSyncSubsystem.cpp` | 1A | `MalformedPackets` add; `AssetMetadata.Remove` in `HandleDelete` + `OnActorDestroyed` |
+| `Blender_Addon/sync.py` | 1A | `_last_mesh_identity` global + clear in start/stop |
+| `tests/phase7a_hygiene_validation.py` | 1A, 1B | Stage 1A (40 tests) + Stage 1B (77 tests = §7–11 covering all 5 identity rules) |
+| `tests/phase5d_validation_A_asset_identity.py` | 1A | Truncated/zero-length PT_AssetDef wire tests |
+| `tests/phase6e_delete_validation.py` | 1A | §49 AssetMetadata cleanup on delete (12 tests) |
+| `STATUS.md` | 1B | Updated validation table to 655/655 PASS |
+| `Docs/Architecture/43-phase7A-static-mesh-identity-scope-lock.md` | 0, 1A, 1B | This document |
