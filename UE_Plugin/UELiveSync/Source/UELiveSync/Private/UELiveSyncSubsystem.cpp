@@ -55,6 +55,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "LiveSyncRunnable.h"
 
 #include "Components/StaticMeshComponent.h"
+#include "Materials/MaterialInterface.h"
 
 #include "Engine/StaticMesh.h"
 
@@ -1767,6 +1768,13 @@ bool UUELiveSyncSubsystem::Tick(
                 ResolvePendingAssets();
             }
             UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingAssets"));
+
+            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingMaterials"));
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingMaterials);
+                ResolvePendingMaterials();
+            }
+            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingMaterials"));
         }
         else
         {
@@ -8433,6 +8441,43 @@ CacheAssetPath(
 
 
 // =========================================================
+// CACHE MATERIAL PATH (Phase 7B Stage 1D)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+CacheMaterialPath(
+    const FMaterialIdentityRef& Identity,
+    const FSoftObjectPath& Path)
+{
+    if (!Identity.IsValid() ||
+        Path.IsNull())
+    {
+        return;
+    }
+
+    FSoftObjectPath* Existing =
+        MaterialPathCache.Find(Identity);
+
+    if (Existing && *Existing != Path)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("[MaterialRegistry] Identity collision: "
+                 "0x%llx%llx was \"%s\" now \"%s\" \u2014 overwriting"),
+            Identity.High,
+            Identity.Low,
+            *Existing->ToString(),
+            *Path.ToString());
+    }
+
+    MaterialPathCache.Add(
+        Identity,
+        Path);
+}
+
+
+// =========================================================
 // HANDLE MATERIAL DEF (Phase 7B Stage 1C)
 // =========================================================
 // Skeleton: parses and stores material slot metadata per GUID.
@@ -8472,6 +8517,141 @@ HandleMaterialDef(
                 EGuidFormats::Digits),
             Slots.Num(),
             MaterialDefsReceived);
+    }
+}
+
+
+// =========================================================
+// RESOLVE PENDING MATERIALS (Phase 7B Stage 1D)
+// =========================================================
+// Called per tick.  Iterates all MaterialMetadata entries and
+// resolves FMaterialIdentityRef → UMaterialInterface via
+// MaterialPathCache.  Calls AssignMaterial for each resolved
+// slot.  Does NOT retry — if MaterialPathCache has no entry
+// for a given identity, that slot is silently skipped.
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ResolvePendingMaterials()
+{
+    CHECK_GAME_THREAD();
+
+    if (MaterialMetadata.Num() == 0)
+    {
+        return;
+    }
+
+    for (auto It = MaterialMetadata.CreateIterator(); It; ++It)
+    {
+        const FGuid& Guid = It.Key();
+        const TArray<FMaterialSlotRef>& Slots = It.Value();
+
+        AActor* Actor = FindActorFast(Guid);
+        if (!Actor)
+        {
+            continue;
+        }
+
+        UStaticMeshComponent* MeshComp =
+            Actor->FindComponentByClass<
+                UStaticMeshComponent>();
+
+        if (!MeshComp)
+        {
+            MeshComp =
+                Actor->GetRootComponent() ?
+                    Cast<UStaticMeshComponent>(
+                        Actor->GetRootComponent())
+                    : nullptr;
+        }
+
+        if (!MeshComp)
+        {
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Verbose,
+                    TEXT("[MaterialResolve] No mesh component for "
+                         "GUID=%s \u2014 skipping"),
+                    *Guid.ToString(
+                        EGuidFormats::Digits));
+            }
+            continue;
+        }
+
+        bool bAnyValidUnresolved = false;
+
+        for (const FMaterialSlotRef& Slot : Slots)
+        {
+            if (!Slot.IsValid())
+            {
+                // Null/zero-identity slot — skip (preserves
+                // existing UE material for this slot)
+                continue;
+            }
+
+            FSoftObjectPath* Path =
+                MaterialPathCache.Find(Slot.Identity);
+
+            if (!Path || Path->IsNull())
+            {
+                bAnyValidUnresolved = true;
+                continue;
+            }
+
+            UMaterialInterface* Mat =
+                Cast<UMaterialInterface>(
+                    Path->TryLoad());
+
+            if (!Mat)
+            {
+                bAnyValidUnresolved = true;
+
+                if (bEnableVerboseSyncLogs)
+                {
+                    UE_LOG(
+                        LogLiveSync,
+                        Verbose,
+                        TEXT("[MaterialResolve] Failed to load "
+                             "material for slot %d on GUID=%s"),
+                        Slot.SlotIndex,
+                        *Guid.ToString(
+                            EGuidFormats::Digits));
+                }
+                continue;
+            }
+
+            MeshComp->SetMaterial(
+                Slot.SlotIndex,
+                Mat);
+
+            MaterialAssignmentsSucceeded++;
+
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Log,
+                    TEXT("[MaterialResolve] Set slot %d on "
+                         "GUID=%s \u2014 %s"),
+                    Slot.SlotIndex,
+                    *Guid.ToString(
+                        EGuidFormats::Digits),
+                    *Path->ToString());
+            }
+        }
+
+        // Keep metadata if any valid slot remains unresolved.
+        // This ensures tick re-scanning can pick up the slot
+        // once its path appears in MaterialPathCache (e.g.
+        // after a console command or delayed asset discovery).
+        // Entry is removed only when all valid slots have been
+        // assigned or the slot list is empty (explicit clear).
+        if (!bAnyValidUnresolved)
+        {
+            It.RemoveCurrent();
+        }
     }
 }
 

@@ -376,17 +376,28 @@ private:
         const FSoftObjectPath& Path);
 
     // =====================================================
-    // MATERIAL RESOLUTION (Phase 7B Stage 1C)
+    // MATERIAL RESOLUTION (Phase 7B Stage 1C/1D)
     // =====================================================
 
-    /** Parse and store material slot metadata from PT_Material.
-     *  Does NOT call SetMaterial() — that is deferred to Stage 2.
-     *  Each entry maps GUID → array of (SlotIndex, FMaterialIdentityRef).
-     */
+    /** Parse and store material slot metadata from PT_Material. */
     void HandleMaterialDef(
         const FGuid& Guid,
         const TArray<FMaterialSlotRef>& Slots,
         uint32 ObjectCount);
+
+    /** Resolve pending material identities to UMaterialInterface paths
+     *  and call SetMaterial on component slots. Runs per tick.
+     *  Does NOT maintain a retry queue — each tick iterates all
+     *  unresolved entries. Resolution is path-cache driven.
+     */
+    void ResolvePendingMaterials();
+
+    /** Register a material identity → path mapping in MaterialPathCache.
+     *  Logs a warning on identity collision (same identity, different path).
+     */
+    void CacheMaterialPath(
+        const FMaterialIdentityRef& Identity,
+        const FSoftObjectPath& Path);
 
     // =====================================================
     // ACTOR CACHE
@@ -643,15 +654,20 @@ private:
     FPendingAssetQueue PendingAssetQueue;
 
     // =====================================================
-    // MATERIAL METADATA (Phase 7B Stage 1C)
+    // MATERIAL METADATA (Phase 7B Stage 1C/1D)
     // =====================================================
 
     // Per-GUID material slot metadata: GUID → array of FMaterialSlotRef.
-    // Populated by HandleMaterialDef. Consumed by future Stage 2 resolution.
     TMap<FGuid, TArray<FMaterialSlotRef>> MaterialMetadata;
+
+    // Material identity → resolved path cache (dedup)
+    TMap<FMaterialIdentityRef, FSoftObjectPath> MaterialPathCache;
 
     // Count of PT_Material packets received and processed this session
     int32 MaterialDefsReceived = 0;
+
+    // Count of successful SetMaterial() calls this session
+    int32 MaterialAssignmentsSucceeded = 0;
 
     // =====================================================
     // HIERARCHY DIAGNOSTICS (verbose-only, temporary)

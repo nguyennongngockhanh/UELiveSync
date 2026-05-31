@@ -676,6 +676,24 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  MaterialMetadata:    %d"),
+        MaterialMetadata.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MaterialPathCache:   %d"),
+        MaterialPathCache.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MatAssignments:      %d"),
+        MaterialAssignmentsSucceeded);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  SeqId:               %llu"),
         LastSequenceId);
 
@@ -993,7 +1011,9 @@ ConsoleReset()
     AssetPathCache.Empty();
     PendingAssetQueue.Empty();
     MaterialMetadata.Empty();
+    MaterialPathCache.Empty();
     MaterialDefsReceived = 0;
+    MaterialAssignmentsSucceeded = 0;
 
     ReconnectHistory.Empty();
     OverflowHistory.Empty();
