@@ -1734,6 +1734,7 @@ def start_sync():
     global _last_visibility_state
     global _last_parent_guid
     global _last_collection_state  # Phase 6F
+    global _last_mesh_identity  # Phase 7A: clear stale mesh identity cache
 
     print("[LiveSync] Start button pressed — entering start_sync()", flush=True)
 
@@ -1744,6 +1745,7 @@ def start_sync():
         _last_visibility_state.clear()
         _last_parent_guid.clear()
         _last_collection_state.clear()
+        _last_mesh_identity.clear()  # Phase 7A: prevent stale suppression across sessions
 
         print("[LiveSync] State cleared, starting collection replay recording", flush=True)
 
@@ -1840,8 +1842,10 @@ def stop_sync():
     global _last_parent_guid
     global _known_guids
     global _last_collection_state  # Phase 6F
+    global _last_mesh_identity  # Phase 7A: clear stale mesh identity cache
 
     timer_running = False
+    _last_mesh_identity.clear()  # Phase 7A: prevent stale suppression across sessions
     _last_object_names.clear()
     _last_visibility_state.clear()
     _last_parent_guid.clear()

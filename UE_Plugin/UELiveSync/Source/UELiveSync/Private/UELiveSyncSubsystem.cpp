@@ -2769,6 +2769,7 @@ ProcessBinaryPacket(
             if (Ptr + LIVE_SYNC_V5_ASSET_DEF_SIZE
                 > PacketEnd)
             {
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
 
@@ -5349,6 +5350,10 @@ OnActorDestroyed(
         TransformStates.Remove(
             Guid);
 
+        // Phase 7A: Clean asset metadata on external actor destruction
+        AssetMetadata.Remove(Guid);
+        PendingAssetQueue.Remove(Guid);
+
         if (bEnableVerboseSyncLogs)
         {
             UE_LOG(
@@ -7519,6 +7524,12 @@ HandleDelete(
 
     // Stage 5: Remove from ActorCache
     ActorCache.Remove(TargetGuid);
+
+    // Stage 5: Clean asset metadata and pending resolution (Phase 7A)
+    if (AssetMetadata.Remove(TargetGuid))
+    {
+        PendingAssetQueue.Remove(TargetGuid);
+    }
 
     // Stage 5: Destroy the actor
     TargetActor->Destroy();

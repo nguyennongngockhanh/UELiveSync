@@ -87,8 +87,52 @@
 | Collection semantic (existing) | **10/10 PASS** | |
 | **Total** | **151/153 PASS** | 2 known, non-regression |
 
+## Phase 7A — Static Mesh Identity Mapping (COMPLETE)
+
+### Stage 0 — Audit & Documentation (VERIFIED)
+- **0.1**: Scope lock document written
+- **0.2**: Phase 5D identity tests audited against identity model rules
+- **0.3**: `FAssetIdentityRef` consumers documented (creation, comparison, hashing, storage)
+- **0.4**: `AssetMetadata` age-out rules verified against delete/recreate identity chain
+- **Validation**: Zero source files modified; 24 identity rules inspected; 3 critical issues found
+
+### Stage 1A — Identity Hygiene Fixes (VERIFIED)
+- **C1**: `HandleDelete` (V5) now cleans `AssetMetadata` + `PendingAssetQueue` on delete
+- **C1b**: `OnActorDestroyed` cleans `AssetMetadata` + `PendingAssetQueue` on external destruction
+- **C2**: Truncated `PT_AssetDef` payload path now increments `MalformedPackets` counter
+- **C3**: `_last_mesh_identity` cleared in Blender `start_sync()` / `stop_sync()`
+- **Validation**:
+
+| Suite | Result | Notes |
+|-------|--------|-------|
+| Phase 7A hygiene (new) | **40/40 PASS** | 2 skipped (no UE) |
+| Phase 6G identity stability | **121/121 PASS** | Full regression |
+| Phase 6E delete validation | **320/320 PASS** | Includes new §49 metadata cleanup tests |
+| Phase 6D hierarchy | **97/97 PASS** | 7 skipped (no UE) |
+| Phase 6 visibility | **0/0 FAIL** | 12 skipped (no UE), pre-existing |
+| Phase 6 rename | **0/1 FAIL** | Pre-existing: `rename_reconnect_storm` requires UE |
+| Phase 5D asset identity | **0/1 FAIL** | Pre-existing: no UE editor to connect to |
+| Phase 6I.1 bounds | — | Skipped (no UE), pre-existing |
+| **Total (standalone)** | **578/578 PASS** | 0 regressions from Phase 7A changes |
+
+### Stage 2 — Identity Hygiene (PENDING — future work)
+- **2.1**: `AssetMetadata` periodic age-out verification test (stale entries evicted after 60s)
+- **2.2**: `PendingAssetQueue` bounds (2048 max) and overflow behavior test
+- **2.3**: Identity-mapping section in `UE.LiveSync.Stats` console output
+- **2.4**: Full Phase 5D/6/6I.1 validation suites regression
+
+---
+
+## Phase 6I.1 Final Closeout Regression (archived above)
+
 ## Recent Changes
 
+- **Phase 7A Stage 1A**: Identity hygiene fixes implemented and VERIFIED — `HandleDelete`/`OnActorDestroyed` now clean `AssetMetadata`, truncated `PT_AssetDef` increments `MalformedPackets`, Blender `_last_mesh_identity` cleared on start/stop. 578/578 standalone tests PASS, 0 regressions.
+- `Blender_Addon/sync.py`: +4 lines — `_last_mesh_identity` global + clear in `start_sync()`/`stop_sync()`
+- `UELiveSyncSubsystem.cpp`: +11 lines — `AssetMetadata.Remove` + `PendingAssetQueue.Remove` in `HandleDelete` and `OnActorDestroyed`; `MalformedPackets.fetch_add` in truncated `PT_AssetDef` path
+- `tests/phase7a_hygiene_validation.py`: New test file — 40 tests covering C1/C2/C3
+- `tests/phase5d_validation_A_asset_identity.py`: +24 lines — truncated/zero-length `PT_AssetDef` wire tests
+- `tests/phase6e_delete_validation.py`: +52 lines — §49 AssetMetadata cleanup on delete (12 tests)
 - **Phase 6I.1 Stage 2**: Lifecycle hardening implemented and VERIFIED — 22/22 tests PASS, configurable recv timeout, atomic thread-start guard, Blender queue drain on reconnect
 - **Phase 6I.1 Stage 1B**: Observability implemented and VERIFIED — 43/43 tests PASS, 10 MalformedPackets gaps patched, ETransportError enum, TransportVerbose CVar, Blender queue high-water warning
 - **Phase 6I.1 Stage 1A**: Bounds hardening implemented and VERIFIED — 24/24 bounds tests PASS, 10/10 rejection messages confirmed in UE log, no regressions
