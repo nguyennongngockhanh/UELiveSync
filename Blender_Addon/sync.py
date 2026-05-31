@@ -71,6 +71,12 @@ try:
         clear_world_replay_stream,
         record_world_entry,
         set_world_replay_enabled,
+        PT_Mesh,
+        extract_evaluated_mesh_data,
+        compute_geometry_version_hash,
+        serialize_mesh_chunk,
+        MESH_CHUNK_FLAG_FIRST_CHUNK,
+        MESH_CHUNK_FLAG_LAST_CHUNK,
     )
 except ImportError:
     from network import (
@@ -129,6 +135,12 @@ except ImportError:
         compute_full_snapshot_hash,
         compute_collection_membership_hash,
         make_collection_subheader,
+        PT_Mesh,
+        extract_evaluated_mesh_data,
+        compute_geometry_version_hash,
+        serialize_mesh_chunk,
+        MESH_CHUNK_FLAG_FIRST_CHUNK,
+        MESH_CHUNK_FLAG_LAST_CHUNK,
     )
 
 
@@ -146,9 +158,13 @@ _last_mesh_identity = {}
 
 # Phase 7B: Per-GUID last material slot identities for change detection
 # Maps guid -> {slot_index: (material_identity_low, material_identity_high)}
-# NOTE: Material packets are NOT sent yet — change detection is reserved
-# for Phase 7B Stage 2 when PT_Material wire support is added.
 _last_material_identity = {}
+
+# Phase 7C: Per-GUID last geometry version hash for change detection
+# Maps guid -> SHA-256 hex string of evaluated mesh geometry.
+# Cleared on start_sync, stop_sync, and object delete.
+# None means "not yet evaluated".
+_last_geometry_version = {}
 
 # Phase 6: Per-GUID last object name for rename detection
 _last_object_names = {}
@@ -968,6 +984,7 @@ def check_updates():
     hierarchies_to_send = []
     collection_payloads_to_send = []
     material_payloads_to_send = []
+    mesh_payloads_to_send = []
 
     # =====================================================
     # SCENE SCAN (only when object count changes or
@@ -1047,6 +1064,8 @@ def check_updates():
             _last_parent_guid.pop(guid, None)
             _last_mesh_identity.pop(guid, None)
             _last_collection_state.pop(guid, None)  # Phase 6F: cleanup collection state
+            _last_material_identity.pop(guid, None)  # Phase 7B
+            _last_geometry_version.pop(guid, None)  # Phase 7C
 
             if _verbose_logging:
                 print(f"[DELETE] Detected: GUID={guid} — emitted V5 delete")
@@ -1071,6 +1090,8 @@ def check_updates():
             _last_object_names.pop(guid, None)
             _last_visibility_state.pop(guid, None)
             _last_parent_guid.pop(guid, None)
+            _last_material_identity.pop(guid, None)  # Phase 7B
+            _last_geometry_version.pop(guid, None)  # Phase 7C
             _last_collection_state.pop(guid, None)  # Phase 6F: cleanup collection state
 
             deletes_to_send.append(
@@ -1288,6 +1309,58 @@ def check_updates():
         _last_material_identity[guid] = current_slots
 
         # =================================================
+        # Phase 7C Stage 1D: Geometry change detection
+        # Evaluates the depsgraph mesh and sends PT_Mesh
+        # chunks when the geometry version hash changes.
+        #
+        # Suppressed on first send (is_first_send) to avoid
+        # flooding on reconnect. _last_geometry_version
+        # is None for new objects, triggering a first-tick
+        # evaluation without emission.
+        #
+        # Only processes MESH objects with valid data.
+        # Skips silently if depsgraph evaluation fails
+        # (e.g. outside Blender, no context, error state).
+        # =================================================
+
+        if is_first_send:
+            _last_geometry_version.pop(guid, None)
+        else:
+            try:
+                mesh_data = extract_evaluated_mesh_data(obj)
+                if mesh_data is not None:
+                    current_hash = compute_geometry_version_hash(
+                        mesh_data["vertices"],
+                        mesh_data["triangles"],
+                        mesh_data["material_indices"],
+                    )
+                    prev_hash = _last_geometry_version.get(guid)
+                    if prev_hash is not None and current_hash != prev_hash:
+                        version_hash = current_hash
+                        chunk_flags = (
+                            MESH_CHUNK_FLAG_FIRST_CHUNK |
+                            MESH_CHUNK_FLAG_LAST_CHUNK
+                        )
+                        chunk_payload = serialize_mesh_chunk(
+                            guid_obj,
+                            version_hash,
+                            0,   # chunk_index
+                            1,   # chunk_count
+                            mesh_data["vertices"],
+                            mesh_data["triangles"],
+                            mesh_data["material_indices"],
+                            flags=chunk_flags,
+                        )
+                        mesh_payloads_to_send.append(chunk_payload)
+                        if _verbose_logging:
+                            print(f"[GEOMETRY][DIAG] Geometry change detected guid={guid}")
+                            print(f"[GEOMETRY][DIAG] Verts={mesh_data['vertex_count']} Tris={mesh_data['triangle_count']}")
+                    _last_geometry_version[guid] = current_hash
+            except Exception:
+                if _verbose_logging:
+                    print(f"[GEOMETRY][WARN] Geometry extraction failed for guid={guid}")
+
+        # =================================================
         # Phase 6F: Collection membership detection
         # Build current collection membership and diff against
         # last known state. Emit ADD/REMOVE for each change.
@@ -1478,6 +1551,21 @@ def check_updates():
         send_objects(
             material_payloads_to_send,
             packet_type=PT_Material,
+            version=LIVE_SYNC_VERSION_V5
+        )
+
+    # =====================================================
+    # SEND MESH CHUNK PACKETS (Phase 7C Stage 1D — PT_Mesh)
+    # =====================================================
+
+    if mesh_payloads_to_send:
+
+        if _verbose_logging:
+            print(f"[GEOMETRY][SEND] Sending {len(mesh_payloads_to_send)} mesh chunk packet(s)")
+
+        send_objects(
+            mesh_payloads_to_send,
+            packet_type=PT_Mesh,
             version=LIVE_SYNC_VERSION_V5
         )
 
@@ -1791,116 +1879,7 @@ def start_sync():
     global _last_collection_state  # Phase 6F
     global _last_mesh_identity  # Phase 7A: clear stale mesh identity cache
     global _last_material_identity  # Phase 7B: clear stale material identity cache
-
-    print("[LiveSync] Start button pressed — entering start_sync()", flush=True)
-
-    try:
-
-        last_sent_transforms.clear()
-        _last_object_names.clear()
-        _last_visibility_state.clear()
-        _last_parent_guid.clear()
-        _last_collection_state.clear()
-        _last_mesh_identity.clear()  # Phase 7A: prevent stale suppression across sessions
-        _last_material_identity.clear()  # Phase 7B: prevent stale material suppression
-
-        print("[LiveSync] State cleared, starting collection replay recording", flush=True)
-
-        # Phase 6F Stage 5: Start replay recording on sync start
-        start_collection_replay_recording()
-
-        tracked_objects.clear()
-
-        _sync_start_time = time.time()
-
-        _last_heartbeat_time = time.time()
-
-        _last_object_count = len(bpy.data.objects)
-
-        _scan_counter = 0
-
-        _sync_runtime_config()
-
-        _verbose_logging = _get_threshold(
-            "verbose_logging",
-            False
-        )
-
-        _network_set_verbose(
-            _verbose_logging
-        )
-
-        mesh_count = 0
-
-        for obj in bpy.data.objects:
-            if obj.type == 'MESH':
-                guid = ensure_unique_guid(obj, tracked_objects)
-                tracked_objects[guid] = (
-                    obj,
-                    UUID(guid)
-                )
-                mesh_count += 1
-
-        print(
-            f"[LiveSync] Scanned scene: {mesh_count} mesh objects tracked, "
-            f"{len(bpy.data.objects)} total objects",
-            flush=True
-        )
-
-        _reconcile_guids_on_load()
-
-        port = _get_threshold(
-            "server_port",
-            57000
-        )
-
-        print(
-            f"[LiveSync] Creating socket — connecting to 127.0.0.1:{port}",
-            flush=True
-        )
-
-        connect(port=port)
-
-        print("[LiveSync] connect() returned — socket/thread bootstrap complete", flush=True)
-
-        timer_running = True
-
-        if _timer_ref is not None:
-            try:
-                bpy.app.timers.unregister(_timer_ref)
-            except ValueError:
-                pass
-
-        _timer_ref = bpy.app.timers.register(
-            lambda: check_updates()
-        )
-
-        print("[LiveSync] Sync timer registered — main loop active", flush=True)
-
-        print("[LiveSync] Startup complete — UE Live Sync Started", flush=True)
-
-    except Exception:
-        traceback.print_exc()
-        msg = f"Startup failed: {traceback.format_exc()}"
-        print(f"[LiveSync] {msg}", flush=True)
-        set_critical_error(msg)
-
-
-# =========================================================
-# STOP SYNC
-# =========================================================
-
-def stop_sync():
-
-    global timer_running
-    global _timer_ref
-    global _last_object_names
-    global _last_visibility_state
-    global _last_parent_guid
-    global _known_guids
-    global _last_collection_state  # Phase 6F
-    global _last_mesh_identity  # Phase 7A: clear stale mesh identity cache
-    global _last_material_identity  # Phase 7B: clear stale material identity cache
+    global _last_geometry_version  # Phase 7C: clear stale geometry version cache
 
     timer_running = False
     _last_mesh_identity.clear()  # Phase 7A: prevent stale suppression across sessions
