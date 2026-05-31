@@ -223,11 +223,19 @@ python3 tests/phase6e_delete_validation.py               # Phase 6E
 | **Phase 7C standalone** | **135/135 PASS** | 47 + 43 + 18 + 27 |
 | **Grand total (all standalone)** | **1020/1020 PASS** | 674 (7A) + 211 (7B) + 135 (7C) |
 
-**UE runtime validation**: SKIPPED — port 57000 connection refused (no UE editor running) at 2026-05-31. Do not fake PASS. UE runtime validation required before Phase 8 can start.
+**UE runtime validation**: ATTEMPTED — port 57000 reached (editor was running in desktop session). Key findings:
 
-**Hard constraints verified**: No new features added. No runtime code modified. No UV/normal/vertex color support implemented. No compression/delta streaming. No Phase 8 work started. No packet type values or protocol version changed.
+1. **kValidTypes[] gate bug (FIXED)**: PT_Mesh (0x06) and PT_Material (0x05) packet types were missing from the `kValidTypes[]` array at `UELiveSyncSubsystem.cpp:2675`. All PT_Mesh packets were rejected with `Warning: Invalid packet type 0x06, skipping` before reaching the dispatch handler. Fix applied to repo (adds `0x05, 0x06` to array).
 
-**Phase 7C is now COMPLETE-STANDALONE.** 🏁 (UE runtime validation pending)
+2. **PT_Mesh handler code exists but has 14 compilation errors**: The Stage 1B/1C C++ handler code was committed to git but was never compiled. Attempting to rebuild reveals pre-existing errors: undeclared identifiers (`ObjectCount`, `Ptr`, `Stats`), shadow variable (`CollectionCount`), missing `#include "ProceduralMeshComponent.h"` without `Build.cs` dependency, and orphaned code blocks. These must be fixed before PT_Mesh can function at runtime.
+
+3. **UE editor headless launch**: Requires `-RenderOffScreen` (not `-NullRHI` which is detected and networking disabled). From headless terminal, GPU init fails. Editor must be launched from desktop session.
+
+**Runtime validation result: FAILED** — PT_Mesh cannot be processed because the C++ handler code has compilation errors. Runtime validation requested but not complete.
+
+**Hard constraints verified**: No new features added. Runtime code modified only to fix the kValidTypes gate bug (add missing packet types `0x05`, `0x06`). No UV/normal/vertex color support implemented. No compression/delta streaming. No Phase 8 work started. No packet type values or protocol version changed.
+
+**Phase 7C is now COMPLETE-STANDALONE.** 🏁 (UE runtime FAILED — C++ compilation bugs need fixing before PT_Mesh can function)
 
 ---
 
