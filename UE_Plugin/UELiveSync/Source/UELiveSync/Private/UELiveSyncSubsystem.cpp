@@ -56,6 +56,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
+#include "ProceduralMeshComponent.h"
 
 #include "Engine/StaticMesh.h"
 
@@ -1775,6 +1776,13 @@ bool UUELiveSyncSubsystem::Tick(
                 ResolvePendingMaterials();
             }
             UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingMaterials"));
+
+            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ReconstructCompletedMeshes"));
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ReconstructCompletedMeshes);
+                ReconstructCompletedMeshes();
+            }
+            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ReconstructCompletedMeshes"));
         }
         else
         {
@@ -8893,6 +8901,288 @@ HandleMeshChunk(
             State.ChunksReceived,
             State.ChunkCount,
             MeshChunksReceived);
+    }
+}
+
+
+// =========================================================
+// RECONSTRUCT COMPLETED MESHES (Phase 7C Stage 1C)
+// =========================================================
+// Called per tick.  Iterates PendingMeshReassembly, finds
+// completed entries (IsComplete && !bReconstructed), decodes
+// the minimal payload (vertices, triangles, material indices),
+// and builds one or more ProceduralMeshComponent sections.
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ReconstructCompletedMeshes()
+{
+    CHECK_GAME_THREAD();
+
+    TArray<FGuid> Reconstructed;
+
+    for (auto& Pair : PendingMeshReassembly)
+    {
+        FMeshReassemblyState& State = Pair.Value;
+
+        if (!State.IsComplete() || State.bReconstructed)
+        {
+            continue;
+        }
+
+        const FGuid& Guid = Pair.Key;
+
+        AActor* Actor = FindActorFast(Guid);
+        if (!Actor)
+        {
+            // Actor not yet spawned — skip; will retry on next tick
+            continue;
+        }
+
+        // Find or create ProceduralMeshComponent
+        UProceduralMeshComponent* ProcMesh =
+            Actor->FindComponentByClass<
+                UProceduralMeshComponent>();
+
+        if (!ProcMesh)
+        {
+            ProcMesh =
+                NewObject<UProceduralMeshComponent>(
+                    Actor);
+
+            if (Actor->GetRootComponent())
+            {
+                ProcMesh->SetupAttachment(
+                    Actor->GetRootComponent());
+            }
+            else
+            {
+                Actor->SetRootComponent(
+                    ProcMesh);
+            }
+
+            ProcMesh->RegisterComponent();
+        }
+
+        // Decode payload from all chunks in order
+        TArray<FVector>   Vertices;
+        TArray<int32>     Triangles;
+        TArray<int32>     MaterialIndices;
+
+        // Determine total vertex/triangle count first
+        int32 TotalVertices = 0;
+        int32 TotalTriangles = 0;
+
+        for (uint32 i = 0; i < State.ChunkCount; i++)
+        {
+            const TArray<uint8>* ChunkData =
+                State.Chunks.Find(i);
+
+            if (!ChunkData)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH] Missing chunk %u/%u for GUID=%s "
+                         "\u2014 skipping reconstruction"),
+                    i, State.ChunkCount,
+                    *Guid.ToString(EGuidFormats::Digits));
+                return;
+            }
+
+            const uint8* Data = ChunkData->GetData();
+            int32 DataLen = ChunkData->Num();
+
+            int32 Offset = 0;
+
+            // Vertex count (uint32 LE)
+            if (Offset + 4 > DataLen) { return; }
+            int32 VCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+            TotalVertices += VCount;
+
+            // Skip vertex positions (we'll build them in the second pass)
+            int32 VertexBytes = VCount * 12;
+            if (Offset + VertexBytes > DataLen) { return; }
+            Offset += VertexBytes;
+
+            // Triangle count (uint32 LE)
+            if (Offset + 4 > DataLen) { return; }
+            int32 TCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+            TotalTriangles += TCount;
+
+            // Skip triangle indices
+            int32 TriBytes = TCount * 12;
+            if (Offset + TriBytes > DataLen) { return; }
+            Offset += TriBytes;
+
+            // Material index count (uint32 LE)
+            if (Offset + 4 > DataLen) { return; }
+            int32 MCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+
+            // Skip material indices
+            int32 MatBytes = MCount * 4;
+            if (Offset + MatBytes > DataLen) { return; }
+            Offset += MatBytes;
+        }
+
+        if (TotalVertices == 0 || TotalTriangles == 0)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MESH] Empty geometry for GUID=%s "
+                     "\u2014 skipping reconstruction"),
+                *Guid.ToString(EGuidFormats::Digits));
+            State.bReconstructed = true;
+            Reconstructed.Add(Guid);
+            continue;
+        }
+
+        // Second pass: extract actual data
+        Vertices.Reserve(TotalVertices);
+        Triangles.Reserve(TotalTriangles);
+        MaterialIndices.Reserve(TotalTriangles);
+        int32 VertexBase = 0;
+
+        for (uint32 i = 0; i < State.ChunkCount; i++)
+        {
+            const TArray<uint8>& ChunkData = *State.Chunks.Find(i);
+            const uint8* Data = ChunkData.GetData();
+            int32 Offset = 0;
+
+            // Vertex count
+            int32 VCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+
+            // Vertex positions (float32 x 3 per vertex)
+            for (int32 v = 0; v < VCount; v++)
+            {
+                const float* F = reinterpret_cast<const float*>(Data + Offset);
+                Vertices.Add(FVector(F[0], F[1], F[2]));
+                Offset += 12;
+            }
+
+            // Triangle count
+            int32 TCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+
+            // Triangle indices (int32 x 3 per triangle)
+            for (int32 t = 0; t < TCount; t++)
+            {
+                const int32* Idx = reinterpret_cast<const int32*>(Data + Offset);
+                Triangles.Add(Idx[0] + VertexBase);
+                Triangles.Add(Idx[1] + VertexBase);
+                Triangles.Add(Idx[2] + VertexBase);
+                Offset += 12;
+            }
+
+            // Material index count
+            int32 MCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+
+            // Material indices (int32 per triangle)
+            for (int32 m = 0; m < MCount; m++)
+            {
+                const int32 MatIdx = *reinterpret_cast<const int32*>(Data + Offset);
+                MaterialIndices.Add(MatIdx);
+                Offset += 4;
+            }
+
+            VertexBase += VCount;
+        }
+
+        // Build mesh sections grouped by material index
+        int32 NumSections = 0;
+
+        if (MaterialIndices.Num() == Triangles.Num() / 3)
+        {
+            // Group triangles by material index
+            TMap<int32, TArray<int32>> MaterialGroups;
+            for (int32 t = 0; t < Triangles.Num() / 3; t++)
+            {
+                int32 MatIdx = (t < MaterialIndices.Num())
+                    ? MaterialIndices[t]
+                    : 0;
+                MaterialGroups.FindOrAdd(MatIdx).Add(t);
+            }
+
+            for (auto& Group : MaterialGroups)
+            {
+                int32 SectionIndex = Group.Key;
+                const TArray<int32>& TriIndices = Group.Value;
+
+                TArray<FVector> SectionVerts;
+                TArray<int32> SectionTris;
+                TArray<FVector> SectionNormals;
+                TArray<FVector2D> SectionUVs;
+                TArray<FColor> SectionColors;
+                TArray<FProcMeshTangent> SectionTangents;
+
+                // Build per-section vertex/triangle data
+                TMap<int32, int32> VMap;
+                for (int32 triIdx : TriIndices)
+                {
+                    int32 BaseIdx = triIdx * 3;
+                    for (int32 j = 0; j < 3; j++)
+                    {
+                        int32 OrigIdx = Triangles[BaseIdx + j];
+                        int32* NewIdx = VMap.Find(OrigIdx);
+                        if (!NewIdx)
+                        {
+                            NewIdx = &VMap.Add(OrigIdx, SectionVerts.Num());
+                            SectionVerts.Add(Vertices[OrigIdx]);
+                        }
+                        SectionTris.Add(*NewIdx);
+                    }
+                }
+
+                ProcMesh->CreateMeshSection(
+                    SectionIndex,
+                    SectionVerts,
+                    SectionTris,
+                    SectionNormals,
+                    SectionUVs,
+                    SectionColors,
+                    SectionTangents,
+                    true);
+
+                NumSections++;
+            }
+        }
+        else
+        {
+            // No per-triangle material data — single section
+            ProcMesh->CreateMeshSection(
+                0,
+                Vertices,
+                Triangles,
+                TArray<FVector>(),
+                TArray<FVector2D>(),
+                TArray<FColor>(),
+                TArray<FProcMeshTangent>(),
+                true);
+
+            NumSections = 1;
+        }
+
+        MeshSectionsBuilt += NumSections;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MESH] Reconstructed GUID=%s: %d verts, %d tris, "
+                 "%d sections, %d total sections built this session"),
+            *Guid.ToString(EGuidFormats::Digits),
+            TotalVertices,
+            TotalTriangles,
+            NumSections,
+            MeshSectionsBuilt);
+
+        State.bReconstructed = true;
+        Reconstructed.Add(Guid);
+    }
+
+    // Remove fully reconstructed entries from pending map
+    for (const FGuid& Guid : Reconstructed)
+    {
+        PendingMeshReassembly.Remove(Guid);
     }
 }
 

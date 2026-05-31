@@ -712,6 +712,12 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  MeshSectionsBuilt:   %d"),
+        MeshSectionsBuilt);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  SeqId:               %llu"),
         LastSequenceId);
 
@@ -1036,6 +1042,7 @@ ConsoleReset()
     PendingMeshReassembly.Empty();
     MeshChunksReceived = 0;
     MeshReassembliesCompleted = 0;
+    MeshSectionsBuilt = 0;
 
     ReconnectHistory.Empty();
     OverflowHistory.Empty();

@@ -400,14 +400,10 @@ private:
         const FSoftObjectPath& Path);
 
     // =====================================================
-    // MESH CHUNK REASSEMBLY (Phase 7C Stage 1B)
+    // MESH CHUNK REASSEMBLY (Phase 7C Stage 1B/1C)
     // =====================================================
 
-    /** Parse, validate, and store one PT_Mesh chunk.
-     *  Accumulates chunks in PendingMeshReassembly until
-     *  all chunks for a given (GUID, VersionHash) arrive.
-     *  Does NOT build mesh sections — deferred to Stage 1C.
-     */
+    /** Parse, validate, and store one PT_Mesh chunk. */
     void HandleMeshChunk(
         const FGuid& Guid,
         const FString& VersionHash,
@@ -415,6 +411,13 @@ private:
         uint32 ChunkCount,
         uint8 Flags,
         const TArrayView<const uint8>& Payload);
+
+    /** Tick handler: consumes completed mesh reassemblies and
+     *  builds UProceduralMeshComponent sections.  Iterates
+     *  PendingMeshReassembly and processes IsComplete() entries
+     *  that have not yet been reconstructed.
+     */
+    void ReconstructCompletedMeshes();
 
     // =====================================================
     // ACTOR CACHE
@@ -698,6 +701,7 @@ private:
         uint32     ChunksReceived = 0;
         uint8      Flags          = 0;
         double     FirstChunkTime = 0.0;
+        bool       bReconstructed = false;  // Stage 1C: set after mesh sections built
 
         // ChunkIndex → raw payload bytes
         TMap<uint32, TArray<uint8>> Chunks;
@@ -716,6 +720,9 @@ private:
 
     // Total reassemblies completed this session
     uint32 MeshReassembliesCompleted = 0;
+
+    // Total mesh sections built successfully this session
+    uint32 MeshSectionsBuilt = 0;
 
     // =====================================================
     // HIERARCHY DIAGNOSTICS (verbose-only, temporary)
