@@ -49,8 +49,8 @@
 
 1. ~~**Phase 6I.1 — Transport Hardening**~~ **COMPLETE** ✅
 2. ~~**Phase 7A — Static Mesh Identity Mapping**~~ **COMPLETE** ✅
-3. **Phase 7B — Asset Registry + Material Mapping** ← NEXT
-4. **Phase 7C — Geometry/Modifier Pipeline**
+3. ~~**Phase 7B — Asset Registry + Material Mapping**~~ **COMPLETE** ✅
+4. **Phase 7C — Geometry/Modifier Pipeline** ← NEXT
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
@@ -106,14 +106,6 @@
 | Suite | Result | Notes |
 |-------|--------|-------|
 | Phase 7A hygiene (Stage 1A) | **40/40 PASS** | 2 skipped (no UE) |
-| Phase 7A identity coverage (Stage 1B) | **77/77 PASS** | 5 new sections (7–11), standalone |
-| Phase 6G identity stability | **121/121 PASS** | Full regression |
-| Phase 6E delete validation | **320/320 PASS** | Includes §49 metadata cleanup tests |
-| Phase 6D hierarchy | **97/97 PASS** | 7 skipped (no UE) |
-| Phase 6 visibility | **0/0 FAIL** | 12 skipped (no UE), pre-existing |
-| Phase 6 rename | **0/1 FAIL** | Pre-existing: `rename_reconnect_storm` requires UE |
-| Phase 5D asset identity | **0/1 FAIL** | Pre-existing: no UE editor to connect to |
-| Phase 6I.1 bounds | — | Skipped (no UE), pre-existing |
 | Phase 7A identity coverage (Stage 1B) | **77/77 PASS** | 5 identity rules, standalone |
 | Phase 7A identity hardening (Stage 2) | **21/21 PASS** | §§12–13: stale age-out + zero-identity |
 | Phase 6G identity stability | **121/121 PASS** | Full regression |
@@ -135,10 +127,58 @@
 
 ---
 
+## Phase 7B — Asset Registry + Material Mapping (COMPLETE)
+
+### Stage 1A — Asset Registry Hygiene (VERIFIED)
+- **AR5**: Collision warning in `CacheAssetPath` on identity overwrite
+- **AR6**: `DumpState` includes `AssetMetadata` / `AssetPathCache` / `PendingAssetQueue` counts
+- **AR10**: `FAssetMetadata.ResolvedPath` documented as pending
+- **Validation**: 43/43 PASS (1 skipped: no UE)
+
+### Stage 1B — Material Identity Foundation (VERIFIED)
+- `FMaterialIdentityRef` / `FMaterialSlotRef` structs; `MAX_MATERIAL_SLOTS`; Blender `get_material_identity_hash()` / `get_object_material_slots()`; `_last_material_identity` cache
+- **Validation**: 70/70 PASS
+
+### Stage 1C — PT_Material Wire + Handler Skeleton (VERIFIED)
+- `PT_Material = 0x05` wire format; FNV protocol signature updated (both sides); `HandleMaterialDef` parser + `MaterialMetadata` storage; SlotCount rejection (>8); `TrackPerDomainPacket` entry
+- **Validation**: 49/49 PASS
+
+### Stage 1D — Material Resolution + Assignment (VERIFIED)
+- `MaterialPathCache` with collision warning; `ResolvePendingMaterials()` tick handler; `SetMaterial(slot, material)` on component; Metadata kept until all valid slots resolved; ConsoleReset + DumpState coverage
+- **Validation**: 49/49 PASS
+
+### Closeout Regression
+
+| Suite | Result | Notes |
+|-------|--------|-------|
+| Phase 7B Stage 1A | **43/43 PASS** | 1 skipped (no UE) |
+| Phase 7B Stage 1B | **70/70 PASS** | |
+| Phase 7B Stage 1C | **49/49 PASS** | |
+| Phase 7B Stage 1D | **49/49 PASS** | |
+| Phase 7A hygiene | **136/136 PASS** | 2 skipped (no UE) |
+| Phase 6G identity stability | **121/121 PASS** | |
+| Phase 6E delete validation | **320/320 PASS** | |
+| Phase 6D hierarchy | **97/97 PASS** | 7 skipped (no UE) |
+| Phase 6 rename | **0/1 FAIL** | Pre-existing: no UE |
+| Phase 6 visibility | **0/0 FAIL** | 12 skipped (no UE) |
+| Phase 6F collection | **0/0 FAIL** | 9 skipped (no UE) |
+| Phase 6I.1 bounds | — | Skipped (no UE) |
+| Phase 5D asset identity | **0/1 FAIL** | Pre-existing: no UE |
+| **Total (Phase 7B standalone)** | **211/211 PASS** | 43 + 70 + 49 + 49 |
+| **Grand total (all standalone)** | **885/885 PASS** | 674 (7A) + 211 (7B) |
+
+**Phase 7B is now COMPLETE.** 🏁
+
+---
+
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
 
+- **Phase 7B Stage 1D**: Material resolution + assignment implemented and VERIFIED — `MaterialPathCache` with collision warning, `ResolvePendingMaterials()` tick handler calls `SetMaterial()` per slot, metadata preserved until all slots resolved. 49/49 tests PASS. **Phase 7B COMPLETE.** 🏁
+- **Phase 7B Stage 1C**: PT_Material wire + handler skeleton implemented and VERIFIED — wire format (0x05), protocol signature sync, `HandleMaterialDef` parser, SlotCount rejection (>8). 49/49 tests PASS.
+- **Phase 7B Stage 1B**: Material identity foundation implemented and VERIFIED — `FMaterialIdentityRef`, `FMaterialSlotRef`, `MAX_MATERIAL_SLOTS=8`, Blender hashing/extraction helpers. 70/70 tests PASS.
+- **Phase 7B Stage 1A**: Asset registry hygiene implemented and VERIFIED — collision warning in `CacheAssetPath`, DumpState diagnostics, `ResolvedPath` documented. 43/43 tests PASS.
 - **Phase 7A Stage 2**: Identity mapping hardening implemented and VERIFIED — stale AssetMetadata age-out scan in `ResolvePendingAssets()` with `StaleEvictions` counter; `PendingAssetQueue.CleanupStale()` documented; 21 new tests. 674/674 standalone tests PASS, 0 regressions. **Phase 7A COMPLETE.** 🏁
 - **Phase 7A Stage 1B**: Identity coverage hardening implemented and VERIFIED — 77 tests across 5 identity rules: shared datablock identity, mesh datablock rename, duplicate object rule, delete/recreate chain, `FAssetIdentityRef` semantics. 655/655 standalone tests PASS, 0 regressions.
 - **Phase 7A Stage 1A**: Identity hygiene fixes implemented and VERIFIED — `HandleDelete`/`OnActorDestroyed` now clean `AssetMetadata`, truncated `PT_AssetDef` increments `MalformedPackets`, Blender `_last_mesh_identity` cleared on start/stop. 578/578 standalone tests PASS, 0 regressions.
