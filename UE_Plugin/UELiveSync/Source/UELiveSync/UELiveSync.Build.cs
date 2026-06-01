@@ -43,7 +43,8 @@ public class UELiveSync : ModuleRules
 				"Networking",
 
 				"Json",
-				"JsonUtilities"
+				"JsonUtilities",
+				"ProceduralMeshComponent"
 			}
 		);
 

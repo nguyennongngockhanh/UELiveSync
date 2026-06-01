@@ -741,3 +741,68 @@ Completed 2026-05-31. Inspected: `UELiveSyncSubsystem.cpp`, `UELiveSyncSubsystem
 ### 17.5 — Files Changed During Audit
 
 **None.** Stage 0 is audit-only; zero source files modified.
+
+---
+
+## Appendix A — Phase 7C.R Runtime Repair Record (2026-06-01)
+
+### Root Cause
+
+The Phase 7C standalone tests (Stage 1A–1D) passed 135/135, but the UE C++ code
+was never compiled by the engine. Two classes of defect prevented PT_Mesh from
+working at runtime:
+
+1. **kValidTypes[] gate** (fixed in 4a32180): `0x05` (PT_Material) and `0x06`
+   (PT_Mesh) were missing from `kValidTypes[]`, causing all mesh packets to be
+   rejected before reaching the dispatch handler.
+
+2. **Uncompiled C++ code**: The PT_Mesh handler code had 14 pre-existing
+   compilation errors and was never validated by the UE build system.
+
+### Fixes Applied
+
+| # | File | Line(s) | Fix |
+|---|------|---------|-----|
+| 1 | `UELiveSyncSubsystem.cpp` | 3367–3504 | Deleted orphaned duplicate PT_Collection handler block. This unguarded code intercepted ALL packet types with an early `return`, making PT_Mesh (0x06) handler unreachable. |
+| 2 | `UELiveSyncSubsystem.cpp` | 3275 | Fixed `HandleCollection(Ptr, …)` → correct field-by-field parsing with `HandleCollection(Guid, OpType, OpFlags, SeqNum, Timestamp, …)`. Previous call passed raw pointer + size to a typed function. |
+| 3 | `UELiveSyncSubsystem.cpp` | 3251 | Fixed OpType offset: `Ptr[24]` → `Ptr[16]` (GUID is 16 bytes). |
+| 4 | `UELiveSyncSubsystem.cpp` | 3253–3260 | Fixed inverted collection size logic: membership ops (0x01–0x04) = 46 bytes, identity ops = 30 bytes. |
+| 5 | `UELiveSyncSubsystem.cpp` | 3264, 3246 | Renamed `OpType` → `ObjOpType` (first declaration) to avoid redeclaration; orphaned `CollectionCount` variable deleted with the removed orphaned block. |
+| 6 | `UELiveSync.Build.cs` | 47 | Added `"ProceduralMeshComponent"` to `PrivateDependencyModuleNames`. |
+| 7 | — | — | Verified includes: `ProceduralMeshComponent.h` and `Materials/MaterialInterface.h` already present. |
+
+### Validation
+
+| Suite | Result |
+|-------|--------|
+| Phase 7C Stage 1A (protocol) | 47/47 PASS |
+| Phase 7C Stage 1B (reassembly) | 43/43 PASS |
+| Phase 7C Stage 1C (reconstruction) | 18/18 PASS |
+| Phase 7C Stage 1D (streaming) | 27/27 PASS |
+| Phase 7B material wire | 49/49 PASS |
+| Phase 7B material identity | 70/70 PASS |
+
+### Build + Runtime Validation Status
+
+| Check | Result |
+|-------|--------|
+| UE 5.7.4 C++ compile | **PASS** — 0 errors, 0 warnings after dependency fix |
+| Plugin load | **PASS** — LogLiveSync tick pipeline confirmed (ReconstructCompletedMeshes per frame) |
+| Port 57000 listening | **BLOCKED** — GPU process crashes NVIDIA RTX 5080 (error_code=1002) within ~10s of editor launch. Pre-existing environment limitation (see STATUS.md). Editor must run in a working desktop session. |
+| Live PT_Mesh packet validation | **PENDING** — requires stable editor session. Send PT_Mesh via test script or Blender, confirm reassembly completes and ProceduralMeshComponent is created/reused. |
+
+### Lessons
+
+Standalone Python tests exercise the protocol and Blender-side logic but provide
+zero coverage of UE C++ compilation. Future phases with C++ code must include
+a UE build step before marking standalone tests as sufficient for phase
+completion. The Phase 7C.R repair was necessary because no UE compile was
+performed during Stage 1B–1C development.
+
+### Phase 7C Current Status
+
+**BUILD VERIFIED / PLUGIN LOAD VERIFIED / PT_MESH RUNTIME VALIDATION PENDING** —
+Phase 7C will remain in this status until live PT_Mesh packet validation
+(connect from Blender or test script, send PT_Mesh, confirm reassembly +
+ProceduralMeshComponent creation) is confirmed in a working UE editor session.
+Phase 8 remains ON HOLD until Phase 7C runtime validation passes.

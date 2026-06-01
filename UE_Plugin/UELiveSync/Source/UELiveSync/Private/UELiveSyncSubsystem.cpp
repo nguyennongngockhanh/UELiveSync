@@ -3228,7 +3228,6 @@ ProcessBinaryPacket(
     if (PacketType == 0x0F)
     {
         TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessCollectionPackets);
-        Stats.TrackedObjects = 0;
 
         // Phase 6F: Collection/Group replication
         for (uint32 i = 0; i < ObjectCount; i++)
@@ -3242,22 +3241,11 @@ ProcessBinaryPacket(
                 return;
             }
 
-            // Skip over the collection header for non-create ops
-            static constexpr int32 COLLECTION_MEMBERSHIP_SIZE = 30;
-            static constexpr int32 COLLECTION_IDENTITY_SIZE = 46;
-
             // Determine payload size for this object
-            int32 ObjSize;
-            uint8 OpType = Ptr[24];
-
-            if (OpType == 0x06 || OpType == 0x07 || OpType == 0x08)
-            {
-                ObjSize = COLLECTION_IDENTITY_SIZE;
-            }
-            else
-            {
-                ObjSize = COLLECTION_MEMBERSHIP_SIZE;
-            }
+            uint8 ObjOpType = Ptr[16];
+            int32 ObjSize = (ObjOpType >= 0x01 && ObjOpType <= 0x04)
+                ? LIVE_SYNC_COLLECTION_MEMBERSHIP_SIZE
+                : LIVE_SYNC_COLLECTION_BASE_SIZE;
 
             if (Ptr + ObjSize > PacketEnd)
             {
@@ -3272,8 +3260,30 @@ ProcessBinaryPacket(
             FMemory::Memcpy(&Guid, Ptr, sizeof(FGuid));
             Ptr += sizeof(FGuid);
 
-            HandleCollection(Ptr, ObjSize - sizeof(FGuid), Guid);
-            Ptr += (ObjSize - sizeof(FGuid));
+            uint8 OpType = *Ptr;
+            Ptr += sizeof(uint8);
+
+            uint8 OpFlags = *Ptr;
+            Ptr += sizeof(uint8);
+
+            uint32 SeqNum;
+            FMemory::Memcpy(&SeqNum, Ptr, sizeof(uint32));
+            Ptr += sizeof(uint32);
+
+            double Timestamp;
+            FMemory::Memcpy(&Timestamp, Ptr, sizeof(double));
+            Ptr += sizeof(double);
+
+            FGuid CollectionGuid;
+            const bool bIsMembershipOp = (OpType >= 0x01 && OpType <= 0x04);
+            if (bIsMembershipOp)
+            {
+                FMemory::Memcpy(&CollectionGuid, Ptr, sizeof(FGuid));
+                Ptr += sizeof(FGuid);
+            }
+
+            HandleCollection(Guid, OpType, OpFlags, SeqNum, Timestamp,
+                             bIsMembershipOp ? &CollectionGuid : nullptr);
         }
 
         Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
@@ -3361,145 +3371,6 @@ ProcessBinaryPacket(
         }
 
         Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-            uint8 SubVersion;
-            uint8 SubReserved;
-            FMemory::Memcpy(&SubVersion, Ptr, sizeof(uint8));
-            Ptr += sizeof(uint8);
-            FMemory::Memcpy(&SubReserved, Ptr, sizeof(uint8));
-            Ptr += sizeof(uint8);
-
-            // Validate known version; reject unknown future versions
-            if (SubVersion != COLLECTION_PACKET_VERSION_V1)
-            {
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[COLLECTION] Unsupported packet version 0x%02X — rejecting"),
-                    SubVersion);
-                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-                return;
-            }
-
-            if (bEnableVerboseSyncLogs)
-            {
-                UE_LOG(LogLiveSync, Verbose,
-                    TEXT("[COLLECTION][SUBHEADER] Version=0x%02X Reserved=0x%02X"),
-                    SubVersion, SubReserved);
-            }
-        }
-
-        const int32 CollectionCount = ObjectCount;
-
-        for (uint32 i = 0; i < CollectionCount; i++)
-        {
-            // ---- Save object start for replay recording ----
-            const uint8* ObjStart = Ptr;
-
-            // ---- BOUNDARY CHECK: Can we read OpType? ----
-            if (Ptr + LIVE_SYNC_COLLECTION_BASE_SIZE > PacketEnd)
-            {
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[COLLECTION] Truncated packet: needs %d bytes but only %lld available (obj %u)"),
-                    LIVE_SYNC_COLLECTION_BASE_SIZE, (int64)(PacketEnd - Ptr), i);
-                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-                return;
-            }
-
-            // ---- Read TargetGuid ----
-            FGuid TargetGuid;
-            FMemory::Memcpy(&TargetGuid, Ptr, sizeof(FGuid));
-            Ptr += sizeof(FGuid);
-
-            // ---- ALL-ZERO GUID CHECK ----
-            if (!TargetGuid.IsValid())
-            {
-                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[COLLECTION] Malformed packet — all-zero GUID at object index %u"), i);
-                continue;
-            }
-
-            // ---- Read OpType to determine variant ----
-            uint8 OpType;
-            FMemory::Memcpy(&OpType, Ptr, sizeof(uint8));
-            Ptr += sizeof(uint8);
-
-            // ---- VALIDATE OP-TYPE RANGE ----
-            // Valid range: COLLECTION_OP_ADD (0x01) through
-            // COLLECTION_OP_COLLECTION_REPARENT (0x08).
-            if (OpType < 0x01 || OpType > 0x08)
-            {
-                Stats.MalformedPackets.fetch_add(
-                    1, std::memory_order_relaxed);
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[COLLECTION] Invalid op-type "
-                         "0x%02X at object index %u"),
-                    OpType, i);
-                return;
-            }
-
-            uint8 OpFlags;
-            FMemory::Memcpy(&OpFlags, Ptr, sizeof(uint8));
-            Ptr += sizeof(uint8);
-
-            uint32 CollectionSequence;
-            FMemory::Memcpy(&CollectionSequence, Ptr, sizeof(uint32));
-            Ptr += sizeof(uint32);
-
-            double CollectionTimestamp;
-            FMemory::Memcpy(&CollectionTimestamp, Ptr, sizeof(double));
-            Ptr += sizeof(double);
-
-            // ---- Determine variant and parse CollectionGuid if needed ----
-            // Membership ops (ADD/REMOVE/MOVE/CLEAR = 0x01-0x04) carry
-            // an additional 16-byte CollectionGuid after the base 30 bytes.
-            const bool bIsMembershipOp = (OpType >= 0x01 && OpType <= 0x04);
-            FGuid CollectionGuid;
-
-            if (bIsMembershipOp)
-            {
-                if (Ptr + sizeof(FGuid) > PacketEnd)
-                {
-                    UE_LOG(LogLiveSync, Warning,
-                        TEXT("[COLLECTION] Truncated membership packet: needs 46 bytes but only %lld available (obj %u)"),
-                        (int64)(PacketEnd - (Ptr - LIVE_SYNC_COLLECTION_BASE_SIZE)), i);
-                    Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-                    return;
-                }
-
-                FMemory::Memcpy(&CollectionGuid, Ptr, sizeof(FGuid));
-                Ptr += sizeof(FGuid);
-            }
-
-            // ---- Record to replay ring buffer (Stage 5/6) ----
-            const int32 ObjSize = bIsMembershipOp
-                ? LIVE_SYNC_COLLECTION_MEMBERSHIP_SIZE
-                : LIVE_SYNC_COLLECTION_BASE_SIZE;
-            RecordCollectionReplayPayload(ObjStart, ObjSize, CollectionSequence);
-
-            // ── Unified world replay recording (Phase 6G) ──
-            {
-                FWorldReplayEntry WorldEntry;
-                WorldEntry.Domain = EWorldReplayDomain::Collection;
-                WorldEntry.PacketType = 0x0F;
-                WorldEntry.Guid = TargetGuid;
-                WorldEntry.SecondaryGuid = CollectionGuid;
-                WorldEntry.Sequence = CollectionSequence;
-                WorldEntry.Timestamp = CollectionTimestamp;
-                WorldEntry.Payload.Append(ObjStart, ObjSize);
-                WorldEntry.Checksum = CollectionReplayChecksum(ObjStart, ObjSize);
-                RecordWorldReplayEntry(WorldEntry);
-            }
-
-            HandleCollection(TargetGuid, OpType, OpFlags,
-                             CollectionSequence, CollectionTimestamp,
-                             bIsMembershipOp ? &CollectionGuid : nullptr);
-        }
-
-        Stats.PacketsProcessed.fetch_add(
-            1,
-            std::memory_order_relaxed);
         return;
     }
 
