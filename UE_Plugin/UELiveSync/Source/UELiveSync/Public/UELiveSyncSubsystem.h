@@ -420,6 +420,20 @@ private:
     void ReconstructCompletedMeshes();
 
     // =====================================================
+    // PLAYBACK STATE (Phase 7C)
+    // =====================================================
+
+    void HandlePlaybackState(
+        const FPlaybackStatePayload& Payload);
+
+    // =====================================================
+    // ACTIVE CAMERA (Phase 7D)
+    // =====================================================
+
+    void HandleActiveCamera(
+        const FActiveCameraPayload& Payload);
+
+    // =====================================================
     // ACTOR CACHE
     // =====================================================
 
@@ -723,6 +737,52 @@ private:
 
     // Total mesh sections built successfully this session
     uint32 MeshSectionsBuilt = 0;
+
+    // =====================================================
+    // PLAYBACK STATE (Phase 7C)
+    // =====================================================
+
+    // Most recently received and applied playback state (PLAY=0/PAUSE=1/STOP=2)
+    uint8 LastPlaybackState = 0;
+
+    // Whether a playback state packet has been received at least once
+    bool bHasPlaybackState = false;
+
+    // Sequence number of the last applied playback packet
+    uint32 LastPlaybackSequence = 0;
+
+    // Timestamp of the last applied playback packet
+    double LastPlaybackTimestamp = 0.0;
+
+    // =====================================================
+    // CAPABILITY NEGOTIATION (Phase 9)
+    // =====================================================
+
+    // Capability bitmask received from Blender via PT_CapabilityAnnounce
+    uint32 RemoteCapabilities = 0;
+
+    // Whether a PT_CapabilityResponse has been sent back to Blender
+    // (reset on each new announce)
+    bool bCapabilityResponseSent = false;
+
+    // =====================================================
+    // ACTIVE CAMERA STATE (Phase 7D)
+    // =====================================================
+
+    // Whether the most recent applied GUID is a non-null camera
+    bool bHasActiveCamera = false;
+
+    // Whether any active camera packet has ever been received (used for stale-check gating)
+    bool bHasEverReceivedActiveCamera = false;
+
+    // GUID of the last applied active camera (all-zero = no active camera)
+    FGuid LastActiveCameraGUID;
+
+    // Sequence number of the last applied active camera packet
+    uint32 LastActiveCameraSequence = 0;
+
+    // Timestamp of the last applied active camera packet
+    double LastActiveCameraTimestamp = 0.0;
 
     // =====================================================
     // HIERARCHY DIAGNOSTICS (verbose-only, temporary)

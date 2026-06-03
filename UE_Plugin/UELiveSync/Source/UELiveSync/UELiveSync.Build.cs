@@ -16,7 +16,6 @@ public class UELiveSync : ModuleRules
 
 		PrivateIncludePaths.AddRange(
 			new string[] {
-
 			}
 		);
 
@@ -44,7 +43,9 @@ public class UELiveSync : ModuleRules
 
 				"Json",
 				"JsonUtilities",
-				"ProceduralMeshComponent"
+				"ProceduralMeshComponent",
+
+				"UnrealEd"
 			}
 		);
 

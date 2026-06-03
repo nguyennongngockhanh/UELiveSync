@@ -44,14 +44,20 @@
   - **Visibility** (0x0B) — 15/15 PASS
   - **Collection** (0x0F) — IMPLEMENTED: 10/10 PASS, parser, handler, sequence tracking, replay recording, ConsoleReset lifecycle
   - **Hierarchy** (0x0D) — IN PROGRESS
+- **Phase 7A** — Scope Lock / Identity Hygiene (completed) ✅
+- **Phase 7B** — Timeline Sync (architecture complete, not implemented)
+- **Phase 7C** — Playback Sync (implemented) ✅
+- **Phase 7D** — Active Camera Sync (implemented) ✅
 
 ## Current Roadmap
 
 1. ~~**Phase 6I.1 — Transport Hardening**~~ **COMPLETE** ✅
-2. ~~**Phase 7A — Static Mesh Identity Mapping**~~ **COMPLETE** ✅
-3. ~~**Phase 7B — Asset Registry + Material Mapping**~~ **COMPLETE** ✅
-4. ~~**Phase 7C — Geometry/Modifier Pipeline**~~ **COMPLETE** ✅
-5. **Phase 8 — High Performance Streaming** ← NEXT (Phase 7C runtime verified)
+2. ~~**Phase 7A — Scope Lock / Identity Hygiene**~~ **COMPLETE** ✅
+3. **Phase 7B — Timeline Sync** — ARCHITECTURE COMPLETE, not implemented
+4. ~~**Phase 7C — Playback Sync**~~ **IMPLEMENTED** ✅
+5. ~~**Phase 7D — Active Camera Sync (0x15)**~~ **IMPLEMENTED** ✅
+6. **Phase 7E — Sequencer Keyframe Replication** (pending)
+7. **Phase 8 — High Performance Streaming** (ready)
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
@@ -249,9 +255,202 @@ UE log evidence:
 
 **Hard constraints verified**: No new features added. Phase 8 not started. No packet type values or protocol version changed. Architecture unchanged.
 
-**Phase 7C is now COMPLETE** ✅ — UE 5.7.4 C++ compile PASS, plugin load PASS, port 57000 PASS, PT_Mesh packet accept PASS, HandleMeshChunk PASS, malformed rejection PASS, standalone 254/254 PASS, regressions 233/233 PASS. PT_Mesh runtime validated end-to-end.
+**Phase 7C (mesh pipeline) is now COMPLETE** ✅ — UE 5.7.4 C++ compile PASS, plugin load PASS, port 57000 PASS, PT_Mesh packet accept PASS, HandleMeshChunk PASS, malformed rejection PASS, standalone 254/254 PASS, regressions 233/233 PASS. PT_Mesh runtime validated end-to-end.
 
-Phase 8 is READY TO START.
+---
+
+## Phase 7B — Timeline Sync (ARCHITECTURE COMPLETE)
+
+**Status**: Architecture complete. Implementation NOT IMPLEMENTED.
+
+### What exists
+- `PT_Timeline = 0x13` constant added to Blender `network.py` and UE `SyncTypes.h` EPacketType enum.
+- Protocol signature FNV hash updated on both sides to include `0x13`.
+- Slot reserved in `kValidTypes[]` and dispatch switch (pending implementation).
+- Architecture scoped and documented; no serialize, detect, or handler code written.
+
+### What does NOT exist
+- `serialize_timeline()` / `is_timeline_effective()` in Blender.
+- Timeline detection block in `sync.py`.
+- `HandleTimeline()` on UE side.
+- Wire payload format not yet defined.
+- No test suite.
+
+### Why Playback (0x14) was implemented before Timeline (0x13)
+Timeline sync was scoped and locked first. However, Playback sync was implemented independently and ahead of Timeline because:
+
+1. **Fewer editor-side dependencies** — Playback state (play/pause/stop) is a single bool exposed by Blender's public `bpy.context.screen.is_animation_playing` API. No timeline editing, keyframe iteration, or frame-accurate scrubbing is required.
+2. **Narrower wire format** — Fixed 14-byte payload vs. a complex variable-length timeline keyframe stream.
+3. **Immediate utility** — Playback sync is instantly useful for coordinating Blender ↔ UE animation preview without requiring the full Timeline protocol.
+4. **Validates the animation pipeline** — Playback packets exercise the same send/detect/store pathway that Timeline will later use, providing a production-tested foundation.
+
+Timeline sync remains the next Animation Pipeline phase after Playback stabilizes, and will build on the same detection architecture established by Phase 7C.
+
+---
+
+## Phase 7C — Playback Sync (IMPLEMENTED)
+
+**Status**: Full implementation complete. Wire format, Blender detection, UI preference, UE receive/storage handler, and 3 test suites (136 tests) all passing.
+
+### Overview
+Adds `PT_PlaybackState = 0x14` packet type for synchronizing Blender playback state (play/pause/stop) to UE5. UE side is **storage-only** — no Sequencer API calls yet. This validates the animation pipeline end-to-end before adding playback control side effects.
+
+### Stage 1 — Wire Format + Constants (VERIFIED)
+- `PT_PlaybackState = 0x14` in Blender `network.py` and UE `SyncTypes.h`.
+- `PLAYBACK_PLAY(0)`, `PLAYBACK_PAUSE(1)`, `PLAYBACK_STOP(2)` enum.
+- Fixed 14-byte payload: `uint8 State + uint8 bLoopEnabled + uint32 Sequence + double Timestamp`.
+- `serialize_playback_state()` — `struct.pack("<BBId", ...)` producing exactly 14 bytes.
+- Protocol signature FNV hash updated on both sides (includes `0x14` and payload size 14).
+- `PLAYBACK_PAYLOAD_SIZE = 14` constant.
+- **Validation**: 42/42 tests PASS.
+
+### Stage 2 — Blender Detection + Preference (VERIFIED)
+- `playback_sync: BoolProperty` in `__init__.py` (default OFF, update callback → `network.set_playback_enabled()`).
+- Wired into preferences `draw()` method.
+- `_playback_enabled`, `set_playback_enabled()`, `is_playback_effective()` in `network.py`.
+- `_last_playback_state` tracking in `sync.py`; detection block fires after heartbeat, sends on PLAY↔STOP transitions only (first tick initializes without sending).
+- `playback_packets_sent`, `playback_state_changes` counters in `dump_diagnostics()`.
+- `start_sync()` resets `_last_playback_state` to `PLAYBACK_STOP`.
+- **Validation**: 41/41 tests PASS.
+
+### Stage 3 — UE Receive + Storage Handler (VERIFIED)
+- `FPlaybackStatePayload` struct + `static_assert(sizeof == 14)` in `SyncTypes.h`.
+- `PlaybackPacketsReceived/Applied/Stale/Malformed` counters in `FLiveSyncStats`.
+- `HandlePlaybackState()` declaration + implementation with strict validation:
+  1. Size check (< 14 bytes → Malformed)
+  2. Enum range check (State > 2 → Malformed)
+  3. Sequence monotonicity (`Seq <= LastSeq` → Stale)
+  4. Apply: store `State/Sequence/Timestamp`, increment Applied.
+- `0x14` in `kValidTypes[]` and dispatch case (before material handler).
+- `LastPlaybackState`, `bHasPlaybackState`, `LastPlaybackSequence`, `LastPlaybackTimestamp` member vars.
+- ConsoleReset zeros all state + counters; ConsoleDumpState logs all 4 counters + last state/seq/ts.
+- Storage-only: no `ULevelSequencePlayer::Play/Pause/Stop` calls.
+- **Validation**: 53/53 tests PASS (simulated UE state machine).
+
+### Key Decisions
+- PAUSE vs STOP: Blender exposes `is_animation_playing` (bool) only; PAUSE cannot be distinguished from STOP. Both map to `PLAYBACK_STOP`. Enum reserves `PAUSE=1` for future use.
+- `bLoopEnabled` always 0 on wire; Blender loop state not reliably readable. Reserved for future.
+- Stale rejection uses scene-wide `LastPlaybackSequence` (same pattern as rename/hierarchy), not per-GUID.
+- Detect block fires after heartbeat, before auto-popup; sends only on `current != _last_playback_state` transitions.
+- `get_runtime_stats()` overlays module-level `playback_packets_sent`/`playback_state_changes` into returned dict.
+
+### Files Changed
+| File | Change |
+|------|--------|
+| `Blender_Addon/network.py` | `PT_PlaybackState=0x14`, `PLAYBACK_*` enum, `serialize_playback_state()`, globals, `set_playback_enabled()`, `is_playback_effective()`, runtime stats overlay, close-reset |
+| `Blender_Addon/__init__.py` | `playback_sync` BoolProperty (default OFF, update → `network.set_playback_enabled()`) |
+| `Blender_Addon/sync.py` | Playback imports, `_last_playback_state`, detection block in `check_updates()`, `dump_diagnostics()` stats, `start_sync()` reset |
+| `UE_Plugin/.../Public/SyncTypes.h` | `PT_PlaybackState=0x14`, `FPlaybackStatePayload`+`static_assert(14)`, 4 playback counters, protocol signature update |
+| `UE_Plugin/.../Public/UELiveSyncSubsystem.h` | `HandlePlaybackState()` decl, `LastPlaybackState`/`bHasPlaybackState`/`LastPlaybackSequence`/`LastPlaybackTimestamp` members |
+| `UE_Plugin/.../Private/UELiveSyncSubsystem.cpp` | `0x14` in `kValidTypes[]`, dispatch case with validation, `HandlePlaybackState()` implementation |
+| `UE_Plugin/.../Private/UELiveSyncSubsystem_Diagnostics.inl` | ConsoleReset + ConsoleDumpState for playback counters/state |
+| `tests/phase7c_playback_validation.py` | 42 tests — payload layout, enums, sequence, timestamps, preference gating |
+| `tests/phase7c_stage2_playback_detection.py` | 41 tests — syntax, preference, state machine simulation, duplicate suppression |
+| `tests/phase7c_stage3_ue_handler_validation.py` | 53 tests — size/seq/enum validation, cycles, reset, counter sanity |
+
+### Test Summary
+| Suite | Result |
+|-------|--------|
+| Phase 7C Stage 1 (wire) | **42/42 PASS** |
+| Phase 7C Stage 2 (detection) | **41/41 PASS** |
+| Phase 7C Stage 3 (UE handler) | **53/53 PASS** |
+| **Phase 7C total** | **136/136 PASS** |
+
+---
+
+## Phase 7D — Active Camera Sync (IMPLEMENTED)
+
+**Status**: Full implementation complete. All 6 test suites (364 tests) PASS. Wire format, capability negotiation, Blender detection, UE receive/storage handler, and opt-in viewport apply all implemented and validated.
+
+### Stage 1 — Wire Format + Constants (VERIFIED)
+- `PT_ActiveCamera = 0x15` in Blender `network.py` and UE `SyncTypes.h`.
+- `FActiveCameraPayload` — 28 bytes: `FGuid(16) + uint32 Sequence(4) + double Timestamp(8)`.
+- `static_assert(sizeof(FActiveCameraPayload) == 28)`.
+- `serialize_active_camera()` → `struct.pack("<16sId", ...)`.
+- `NULL_CAMERA_GUID = b'\x00' * 16` (all zero bytes = no active camera).
+- Protocol signature FNV hash updated on both sides.
+- `is_active_camera_effective()` gates on: pref ON + connected + cap_received + remote cap bit.
+- **Validation**: 53/53 tests PASS.
+
+### Stage 1B — Capability Announce/Response (VERIFIED)
+- `CAP_SUPPORTS_ACTIVE_CAMERA_SYNC = 0x40` in `ECapability` enum.
+- Blender announces `0x40`; UE stores + responds; Blender gates on remote `0x40`.
+- Reconnect: capabilities re-negotiated with clean state machine.
+- **Validation**: 37/37 tests PASS.
+
+### Stage 1C — Response Integration (VERIFIED)
+- Blender parses response cap bit `0x40` → `_remote_capabilities`; `is_active_camera_effective()` requires pref ON + connected + cap_received + remote bit set.
+- **Validation**: 41/41 tests PASS.
+
+### Stage 2 — Blender Detection (VERIFIED)
+- `active_camera_sync: BoolProperty` in `__init__.py` (default OFF, callback → `network.set_active_camera_enabled()`).
+- Detection block in `sync.py check_updates()`: polls `bpy.context.scene.camera`, resolves GUID via `ensure_guid()` → `UUID(hex).bytes`.
+- Null camera → `NULL_CAMERA_GUID`. First tick: `_last_active_camera_guid = None` suppresses send. Reconnect: `= b''` triggers resend.
+- `_camera_sequence` incremented per transition; diagnostics stats overlay.
+- **Validation**: 60/60 tests PASS.
+
+### Stage 3 — UE Receive + Storage Handler (VERIFIED)
+- `HandleActiveCamera()` validation chain: (1) size < 28 → Malformed, (2) `bHasEverReceivedActiveCamera && seq <= LastSeq` → Stale, (3) store GUID/seq/ts.
+- Null GUID → `bHasActiveCamera = false`, updates seq/ts, no viewport change, no fallback actor.
+- `bHasEverReceivedActiveCamera` flag separates stale-check gating from `bHasActiveCamera` ("currently has a non-null camera").
+- 4 counters: `ActiveCameraPacketsReceived/Applied/Stale/Malformed`.
+- ConsoleReset zeros all state + counters; ConsoleDumpState logs 10 lines.
+- **Validation**: 92/92 tests PASS.
+
+### Stage 4 — UE Viewport Apply (VERIFIED)
+- CVar `UE.LiveSync.ActiveCamera.ApplyToViewport` (default OFF).
+- When ON: `FindActorFast()` GUID → `Cast<ACameraActor>()` → `SetViewTarget()` on all level editor viewport clients.
+- Null GUID: safe, no viewport change. Missing GUID → `MissingGUID++`, warning. Non-camera → `NotCamera++`, warning.
+- `UnrealEd` dep added to `UELiveSync.Build.cs`; editor code guarded by `#if WITH_EDITOR`.
+- 3 counters: `ActiveCameraPacketsAppliedToViewport/MissingGUID/NotCamera`.
+- **Validation**: 81/81 tests PASS.
+
+### Key Decisions
+- **`bHasEverReceivedActiveCamera` vs `bHasActiveCamera`**: Separate stale-check gate from "currently has non-null camera". Null GUID keeps `bHasEverReceivedActiveCamera = true` to prevent duplicate null-GUID acceptance.
+- **CVar default OFF**: Viewport apply behind opt-in CVar. Zero-risk for existing users; storage-only by default.
+- **`ACameraActor` cast covers `ACineCameraActor`**: Single `Cast<ACameraActor>()` suffices (inheritance).
+- **Null GUID = "no active camera"**: Sets `bHasActiveCamera = false`; does not force arbitrary viewport target.
+- **Unidirectional Blender→UE**: No UE→Blender reverse camera sync.
+
+### Explicitly Out of Scope
+Camera transform, FOV, focal length, sensor size, focus distance, aperture, clip planes, camera type, DOF, lens settings, camera cuts track, Sequencer integration, multi-viewport sync, UE→Blender reverse, runtime viewport, ACineCameraActor spawn.
+
+### Test Summary
+| Suite | Result |
+|-------|--------|
+| Phase 7D Stage 1 (wire) | **53/53 PASS** |
+| Phase 7D Stage 1B (capability announce) | **37/37 PASS** |
+| Phase 7D Stage 1C (capability response) | **41/41 PASS** |
+| Phase 7D Stage 2 (detection) | **60/60 PASS** |
+| Phase 7D Stage 3 (UE handler) | **92/92 PASS** |
+| Phase 7D Stage 4 (viewport apply) | **81/81 PASS** |
+| **Phase 7D total** | **364/364 PASS** |
+
+---
+
+## Regression Status (Phase 7D Active Camera Closeout)
+
+| Suite | Result | Notes |
+|-------|--------|-------|
+| Phase 7D Stage 1 (wire) | **53/53 PASS** | |
+| Phase 7D Stage 1B (capability announce) | **37/37 PASS** | |
+| Phase 7D Stage 1C (capability response) | **41/41 PASS** | |
+| Phase 7D Stage 2 (detection) | **60/60 PASS** | |
+| Phase 7D Stage 3 (UE handler) | **92/92 PASS** | |
+| Phase 7D Stage 4 (viewport apply) | **81/81 PASS** | |
+| Phase 7C Stage 1 (playback wire) | **42/42 PASS** | |
+| Phase 7C Stage 2 (detection) | **41/41 PASS** | |
+| Phase 7C Stage 3 (UE handler) | **53/53 PASS** | |
+| Phase 7C (mesh) stages | **135/135 PASS** | 4 suites combined |
+| Phase 7B (material) stages | **211/211 PASS** | 4 suites combined |
+| Phase 7A hygiene | **136/136 PASS** | 2 skipped (no UE) |
+| Phase 6G identity stability | **121/121 PASS** | |
+| Phase 6E delete validation | **320/320 PASS** | |
+| Phase 6D hierarchy | **119/119 PASS** | 7 skipped (no UE) |
+| **Phase 7D standalone** | **364/364 PASS** | 53 + 37 + 41 + 60 + 92 + 81 |
+| **Grand total (all standalone)** | **1520/1520 PASS** | 1156 (prev) + 364 (7D) |
+
+**Zero regressions across all existing test suites.**
 
 ---
 
@@ -259,6 +458,16 @@ Phase 8 is READY TO START.
 
 ## Recent Changes
 
+- **Phase 7D Stage 4**: UE viewport apply implemented — CVar-gated `SetViewTarget()` on `ACameraActor` via `FindActorFast()`, editor-only `#if WITH_EDITOR`, `UnrealEd` dep, 3 counters `AppliedToViewport/MissingGUID/NotCamera`. 81/81 PASS.
+- **Phase 7D Stage 3**: UE receive + storage handler implemented — `HandleActiveCamera()` with size check, sequence monotonicity, null-GUID semantics, `bHasEverReceivedActiveCamera` stale-check gating. 92/92 PASS.
+- **Phase 7D Stage 2**: Blender detection implemented — `active_camera_sync` BoolProperty, `scene.camera` poll in `check_updates()`, null-GUID transitions, first-tick suppression, reconnect resend, diagnostics stats. 60/60 PASS.
+- **Phase 7D Stage 1C**: Capability response integration — Blender parses `0x40` response bit; `is_active_camera_effective()` requires remote cap + local pref + connected. 41/41 PASS.
+- **Phase 7D Stage 1B**: Capability announce/response — `CAP_SUPPORTS_ACTIVE_CAMERA_SYNC = 0x40` wired both sides, Blender gates on remote `0x40`. 37/37 PASS.
+- **Phase 7D Stage 1**: Active camera wire format — `PT_ActiveCamera = 0x15`, 28-byte `FActiveCameraPayload`, null-GUID convention, FNV signature update, `serialize_active_camera()`, `is_active_camera_effective()` gating. 53/53 PASS.
+- **Phase 7D Scope Lock**: Architecture document published — `Docs/Architecture/53-phase7d-camera-sync-scope-lock.md`. Defines `PT_ActiveCamera (0x15)` 28-byte wire format (CameraGUID + Sequence + Timestamp), Blender detection model, UE handler semantics, ownership model, failure-mode analysis, and 4 implementation stages. No code changes.
+- **Phase 7C Stage 3**: UE Playback state receive + storage handler implemented — `FPlaybackStatePayload` struct, `HandlePlaybackState()` with size/enum/sequence validation, 4 counters, ConsoleReset/DumpState, dispatch case. 53/53 PASS.
+- **Phase 7C Stage 2**: Blender playback detection + preference implemented — `playback_sync` BoolProperty in preferences, `_last_playback_state` tracking in `sync.py`, state-transition-only sends, `dump_diagnostics()` counters. 41/41 PASS.
+- **Phase 7C Stage 1**: Playback wire format + constants implemented — `PT_PlaybackState=0x14`, `PLAYBACK_*` enum, 14-byte fixed payload, `serialize_playback_state()`, protocol signature updated. 42/42 PASS.
 - **Phase 7C Stage 1D**: Blender geometry streaming activated — `_last_geometry_version` cache, depsgraph evaluation + version hash comparison in `check_updates()`, PT_Mesh chunk send on geometry change. 27/27 PASS.
 - **Phase 7C Stage 1C**: ProceduralMesh reconstruction implemented — `ReconstructCompletedMeshes()` tick handler with payload decode and `CreateMeshSection()` per material group. 18/18 PASS.
 - **Phase 7C Stage 1B**: PT_Mesh handler + reassembly skeleton implemented — UE parser, `HandleMeshChunk()` with validation, dedup, conflict rejection, max concurrent enforcement. 43/43 PASS.

@@ -231,6 +231,19 @@ enum EPacketType : uint8
     // Phase 6F: Collection/group replication (metadata-only grouping layer)
     // See Docs/Architecture/38-phase6F-collection-scope-lock.md
     PT_Collection     = 0x0F,  // Collection membership events (metadata, NOT scene graph)
+
+    // Phase 7C: Playback state notification (play/pause/stop/loop)
+    // See Docs/Architecture/52-phase7-animation-sequencer-scope-lock.md
+    PT_PlaybackState  = 0x14,  // Playback transport state (discrete event, NOT Sequencer control)
+
+    // Phase 7D: Active camera selection (GUID-only, no camera parameters)
+    // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md
+    PT_ActiveCamera   = 0x15,  // Active camera identity (event-driven, NOT state stream)
+
+    // Phase 9: Capability negotiation (announce/response)
+    // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md §9
+    PT_CapabilityAnnounce  = 0x11,  // Bitmask from Blender to UE
+    PT_CapabilityResponse  = 0x12,  // Bitmask from UE to Blender
 };
 
 // Phase 6: Provenance for editor-originating mutations
@@ -255,6 +268,78 @@ enum ELiveSyncPrimitiveType : uint8
     LSP_Empty    = 0x04,
 };
 
+// =========================================================
+// PLAYBACK STATE PAYLOAD (Phase 7C)
+// =========================================================
+
+// PT_PlaybackState (0x14) fixed-size payload: 14 bytes
+// Wire format:
+//   [0]    State        uint8   — PLAY=0, PAUSE=1, STOP=2
+//   [1]    bLoopEnabled uint8   — reserved (always 0 for now)
+//   [2-5]  Sequence     uint32  — monotonic counter (LE)
+//   [6-13] Timestamp    double  — time.time() at detection (LE)
+#pragma pack(push, 1)
+struct FPlaybackStatePayload
+{
+    uint8  State        = 0;
+    uint8  bLoopEnabled = 0;
+    uint32 Sequence     = 0;
+    double Timestamp    = 0.0;
+};
+
+static_assert(
+    sizeof(FPlaybackStatePayload) == 14,
+    "FPlaybackStatePayload must be exactly 14 bytes");
+
+
+// =========================================================
+// ACTIVE CAMERA PAYLOAD (Phase 7D)
+// =========================================================
+
+// PT_ActiveCamera (0x15) fixed-size payload: 28 bytes
+// Wire format:
+//   [0-15]  CameraGUID  FGuid   — camera object GUID (all-zero = no active camera)
+//   [16-19] Sequence    uint32  — global monotonic counter (LE)
+//   [20-27] Timestamp   double  — time.time() at detection (LE)
+//
+// See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md
+struct FActiveCameraPayload
+{
+    FGuid   CameraGUID   = FGuid();      // All zeros = no active camera
+    uint32  Sequence     = 0;            // Global monotonic counter
+    double  Timestamp    = 0.0;          // Blender detection time
+};
+
+static_assert(
+    sizeof(FActiveCameraPayload) == 28,
+    "FActiveCameraPayload must be exactly 28 bytes");
+
+
+// =========================================================
+// CAPABILITY ANNOUNCE / RESPONSE PAYLOADS (Phase 9)
+// =========================================================
+
+// PT_CapabilityAnnounce (0x11): uint32 bitmask of Blender's capabilities
+struct FCapabilityAnnouncePayload
+{
+    uint32 CapabilityMask = 0;
+};
+
+static_assert(
+    sizeof(FCapabilityAnnouncePayload) == 4,
+    "FCapabilityAnnouncePayload must be exactly 4 bytes");
+
+// PT_CapabilityResponse (0x12): uint32 bitmask of UE's capabilities
+struct FCapabilityResponsePayload
+{
+    uint32 CapabilityMask = 0;
+};
+
+static_assert(
+    sizeof(FCapabilityResponsePayload) == 4,
+    "FCapabilityResponsePayload must be exactly 4 bytes");
+
+#pragma pack(pop)
 
 // =========================================================
 // PACKET FLAGS (V3)
@@ -750,6 +835,26 @@ struct FLiveSyncStats
     double LastFloodWarningTime = 0.0;
     double LastQueuePressureTime = 0.0;
     double LastMetricsLogTime = 0.0;
+
+    // --- Phase 7C: Playback sync (game thread) ---
+    std::atomic<int32> PlaybackPacketsReceived{0};      // Total PT_PlaybackState packets received
+    std::atomic<int32> PlaybackPacketsApplied{0};       // Packets accepted (valid sequence + enum)
+    std::atomic<int32> PlaybackPacketsStale{0};          // Packets rejected (stale/duplicate sequence)
+    std::atomic<int32> PlaybackPacketsMalformed{0};      // Packets rejected (bad size or enum)
+
+    // --- Phase 7D: Active camera sync (game thread) ---
+    std::atomic<int32> ActiveCameraPacketsReceived{0};         // Total PT_ActiveCamera packets received
+    std::atomic<int32> ActiveCameraPacketsApplied{0};          // Packets accepted (valid sequence + GUID)
+    std::atomic<int32> ActiveCameraPacketsStale{0};             // Packets rejected (stale/duplicate sequence)
+    std::atomic<int32> ActiveCameraPacketsMalformed{0};         // Packets rejected (bad size)
+    std::atomic<int32> ActiveCameraPacketsAppliedToViewport{0}; // Successful viewport SetViewTarget calls
+    std::atomic<int32> ActiveCameraPacketsMissingGUID{0};       // GUID not found in ActorCache
+    std::atomic<int32> ActiveCameraPacketsNotCamera{0};         // Actor found but not a camera
+
+    // --- Phase 9: Capability negotiation (game thread) ---
+    std::atomic<int32> CapabilityAnnounceReceived{0};    // Total PT_CapabilityAnnounce packets received
+    std::atomic<int32> CapabilityResponseReceived{0};   // Total PT_CapabilityResponse packets received
+    std::atomic<int32> CapabilityPacketsMalformed{0};    // Packets rejected (bad size)
 };
 
 // =========================================================
@@ -1415,6 +1520,10 @@ static constexpr uint32
     H = fnv(H, 30); // LIVE_SYNC_COLLECTION_BASE_SIZE
     H = fnv(H, 46); // LIVE_SYNC_COLLECTION_MEMBERSHIP_SIZE
     H = fnv(H, COLLECTION_PACKET_VERSION_V1); // collection packet version
+    H = fnv(H, 14); // FPlaybackStatePayload (Phase 7C)
+    H = fnv(H, 28); // FActiveCameraPayload (Phase 7D)
+    H = fnv(H, 4);  // FCapabilityAnnouncePayload (Phase 9)
+    H = fnv(H, 4);  // FCapabilityResponsePayload (Phase 9)
     // Packet types
     H = fnv(H, 0x01); H = fnv(H, 0x03);
     H = fnv(H, 0x04); H = fnv(H, 0x07);
@@ -1424,6 +1533,10 @@ static constexpr uint32
     H = fnv(H, 0x0A); H = fnv(H, 0x0B); H = fnv(H, 0x0C); H = fnv(H, 0x0D);
     H = fnv(H, 0x0E); // PT_Delete_V5
     H = fnv(H, 0x0F); // PT_Collection
+    H = fnv(H, 0x11); // PT_CapabilityAnnounce (Phase 9)
+    H = fnv(H, 0x12); // PT_CapabilityResponse (Phase 9)
+    H = fnv(H, 0x14); // PT_PlaybackState (Phase 7C)
+    H = fnv(H, 0x15); // PT_ActiveCamera (Phase 7D)
 
     return H;
 }();
@@ -1482,3 +1595,22 @@ static_assert(
 static_assert(
     LIVE_SYNC_DELETE_V5_SIZE == 28,
     "V5+ delete must be exactly 28 bytes");
+
+static_assert(
+    sizeof(FPlaybackStatePayload) == 14,
+    "FPlaybackStatePayload must be exactly 14 bytes");
+
+static_assert(
+    sizeof(FActiveCameraPayload) == 28,
+    "FActiveCameraPayload must be exactly 28 bytes");
+
+// =========================================================
+// CAPABILITY BITS (Phase 9)
+// Reserved for future capability negotiation.
+// =========================================================
+
+constexpr uint32 CAP_SUPPORTS_ACTIVE_CAMERA_SYNC = 0x40;  // Bit 6: PT_ActiveCamera (0x15) supported
+
+// UE's local capability mask — sent in PT_CapabilityResponse.
+// OR together all bits this UE plugin version supports.
+constexpr uint32 UE_LOCAL_CAPABILITIES = CAP_SUPPORTS_ACTIVE_CAMERA_SYNC;

@@ -34,9 +34,16 @@
 DEFINE_LOG_CATEGORY(LogLiveSync);
 
 #include "Engine/Engine.h"
+
 #include "Engine/World.h"
 
 #include "GameFramework/Actor.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#include "LevelEditorViewport.h"
+#include "Camera/CameraActor.h"
+#endif
 
 #include "EngineUtils.h"
 
@@ -762,6 +769,18 @@ static TAutoConsoleVariable<int32>
         5000,
         TEXT("Socket receive timeout in milliseconds "
              "(default=5000). 0 = infinite (blocking)."),
+        ECVF_Default
+    );
+
+// Phase 7D Stage 4: apply active camera to editor viewport.
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncActiveCameraApplyToViewport(
+        TEXT("UE.LiveSync.ActiveCamera.ApplyToViewport"),
+        0,
+        TEXT("Apply active camera to editor viewport (1=on, 0=off). "
+             "Default 0 — storage-only mode. When enabled, resolves the "
+             "camera GUID through ActorCache and calls SetViewTarget on "
+             "the active level editor viewport."),
         ECVF_Default
     );
 
@@ -2154,6 +2173,10 @@ StopNetworkThread()
     GWorldReplayBuffer.Empty();
     GWorldSavedState.Clear();
 
+    // Phase 9: reset capability state on disconnect
+    RemoteCapabilities = 0;
+    bCapabilityResponseSent = false;
+
     UE_LOG(LogLiveSync, Log,
         TEXT("[HIERARCHY] PendingHierarchyAttachments cleared (StopNetworkThread)"));
 
@@ -2673,7 +2696,7 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F };
+            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x14, 0x15 };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
@@ -2736,6 +2759,76 @@ ProcessBinaryPacket(
         LastHeartbeatTime =
             FPlatformTime::Seconds();
 
+        return;
+    }
+
+    // =====================================================
+    // CAPABILITY ANNOUNCE (Phase 9 — PT_CapabilityAnnounce 0x11)
+    // =====================================================
+    // Payload: FCapabilityAnnouncePayload (4 bytes fixed)
+    //   CapabilityMask(4) uint32 LE — Blender's supported capabilities
+    //
+    // UE stores the mask in RemoteCapabilities for feature gating
+    // and increments the diagnostic counter.
+    // =====================================================
+
+    if (PacketType == 0x11)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessCapabilityAnnounce);
+
+        Stats.CapabilityAnnounceReceived.fetch_add(1, std::memory_order_relaxed);
+
+        if (ObjSize < sizeof(FCapabilityAnnouncePayload))
+        {
+            Stats.CapabilityPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CAP] Malformed announce: size %d < %d"),
+                ObjSize, sizeof(FCapabilityAnnouncePayload));
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        FCapabilityAnnouncePayload Payload;
+        Payload.CapabilityMask = *reinterpret_cast<const uint32*>(Ptr);
+
+        RemoteCapabilities = Payload.CapabilityMask;
+        bCapabilityResponseSent = true;
+
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[CAP] Announce received: mask=0x%08X"),
+            Payload.CapabilityMask);
+
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // CAPABILITY RESPONSE (Phase 9 — PT_CapabilityResponse 0x12)
+    // =====================================================
+    // Payload: FCapabilityResponsePayload (4 bytes fixed)
+    //   CapabilityMask(4) uint32 LE — UE's supported capabilities
+    //
+    // This packet is received when Blender echoes back a response
+    // from a previous connection. Increment counter and discard.
+    // =====================================================
+
+    if (PacketType == 0x12)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessCapabilityResponse);
+
+        Stats.CapabilityResponseReceived.fetch_add(1, std::memory_order_relaxed);
+
+        if (ObjSize < sizeof(FCapabilityResponsePayload))
+        {
+            Stats.CapabilityPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CAP] Malformed response: size %d < %d"),
+                ObjSize, sizeof(FCapabilityResponsePayload));
+        }
+
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
@@ -3286,6 +3379,121 @@ ProcessBinaryPacket(
                              bIsMembershipOp ? &CollectionGuid : nullptr);
         }
 
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // PLAYBACK STATE (Phase 7C — PT_PlaybackState 0x14)
+    // =====================================================
+    // Payload: FPlaybackStatePayload (14 bytes fixed)
+    //   State(1) + bLoopEnabled(1) + Sequence(4) + Timestamp(8)
+    //
+    // Validation:
+    //   - Payload size must be exactly 14 bytes
+    //   - State must be 0 (PLAY), 1 (PAUSE), or 2 (STOP)
+    //   - Sequence must be strictly greater than LastPlaybackSequence
+    //     (first packet with any sequence is accepted)
+    // =====================================================
+
+    if (PacketType == 0x14)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessPlaybackState);
+
+        Stats.PlaybackPacketsReceived.fetch_add(1, std::memory_order_relaxed);
+
+        if (ObjSize < sizeof(FPlaybackStatePayload))
+        {
+            Stats.PlaybackPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[PLAYBACK] Malformed packet: size %d < %d"),
+                ObjSize, sizeof(FPlaybackStatePayload));
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        FPlaybackStatePayload Payload;
+        Payload.State        = Ptr[0];
+        Payload.bLoopEnabled = Ptr[1];
+        Payload.Sequence     = *reinterpret_cast<const uint32*>(Ptr + 2);
+        Payload.Timestamp    = *reinterpret_cast<const double*>(Ptr + 6);
+
+        if (Payload.State > 2)
+        {
+            Stats.PlaybackPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[PLAYBACK] Malformed packet: invalid state %d"),
+                Payload.State);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        if (bHasPlaybackState && Payload.Sequence <= LastPlaybackSequence)
+        {
+            Stats.PlaybackPacketsStale.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[PLAYBACK] Stale packet: seq %u <= %u"),
+                Payload.Sequence, LastPlaybackSequence);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        HandlePlaybackState(Payload);
+        Stats.PlaybackPacketsApplied.fetch_add(1, std::memory_order_relaxed);
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // ACTIVE CAMERA PACKET (Phase 7D)
+    // =====================================================
+    // Wire format (28 bytes fixed):
+    //   CameraGUID(16) + Sequence(4) + Timestamp(8)
+    //
+    // Validation:
+    //   - Payload size must be exactly 28 bytes
+    //   - Sequence must be strictly greater than LastActiveCameraSequence
+    //     (first packet with any sequence is accepted)
+    //   - All-zero GUID is a valid null-camera signal
+    //   - No viewport SetViewTarget is called — storage only
+    // =====================================================
+
+    if (PacketType == 0x15)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessActiveCamera);
+
+        Stats.ActiveCameraPacketsReceived.fetch_add(1, std::memory_order_relaxed);
+
+        if (ObjSize < sizeof(FActiveCameraPayload))
+        {
+            Stats.ActiveCameraPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CAMERA] Malformed packet: size %d < %d"),
+                ObjSize, sizeof(FActiveCameraPayload));
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        FActiveCameraPayload Payload;
+        Payload.CameraGUID = *reinterpret_cast<const FGuid*>(Ptr + 0);
+        Payload.Sequence   = *reinterpret_cast<const uint32*>(Ptr + 16);
+        Payload.Timestamp  = *reinterpret_cast<const double*>(Ptr + 20);
+
+        if (bHasEverReceivedActiveCamera && Payload.Sequence <= LastActiveCameraSequence)
+        {
+            Stats.ActiveCameraPacketsStale.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[CAMERA] Stale packet: seq %u <= %u"),
+                Payload.Sequence, LastActiveCameraSequence);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        HandleActiveCamera(Payload);
+        Stats.ActiveCameraPacketsApplied.fetch_add(1, std::memory_order_relaxed);
         Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
         return;
     }
@@ -8480,7 +8688,118 @@ CacheMaterialPath(
 
 
 // =========================================================
-// HANDLE MATERIAL DEF (Phase 7B Stage 1C)
+// PLAYBACK STATE (Phase 7C)
+// =========================================================
+// Storage-only: accepts valid FPlaybackStatePayload, updates
+// LastPlaybackState, LastPlaybackSequence, and LastPlaybackTimestamp.
+// Does NOT call Sequencer or playback control APIs yet.
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandlePlaybackState(
+    const FPlaybackStatePayload& Payload)
+{
+    CHECK_GAME_THREAD();
+
+    LastPlaybackState = Payload.State;
+    LastPlaybackSequence = Payload.Sequence;
+    LastPlaybackTimestamp = Payload.Timestamp;
+    bHasPlaybackState = true;
+
+    UE_LOG(LogLiveSync, Verbose,
+        TEXT("[PLAYBACK] Applied: state=%d loop=%d seq=%u ts=%.3f"),
+        Payload.State, Payload.bLoopEnabled,
+        Payload.Sequence, Payload.Timestamp);
+}
+
+
+// =========================================================
+// ACTIVE CAMERA (Phase 7D)
+// =========================================================
+// Storage-only: accepts valid FActiveCameraPayload, updates
+// LastActiveCameraGUID, LastActiveCameraSequence, and
+// LastActiveCameraTimestamp.
+//
+// When CVar UE.LiveSync.ActiveCamera.ApplyToViewport is enabled,
+// additionally resolves the camera GUID through ActorCache and
+// applies it as the editor viewport view target.
+//
+// Null GUID (all-zero) clears stored state without touching the
+// viewport. Missing or non-camera GUIDs are logged and counted.
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleActiveCamera(
+    const FActiveCameraPayload& Payload)
+{
+    CHECK_GAME_THREAD();
+
+    LastActiveCameraGUID = Payload.CameraGUID;
+    LastActiveCameraSequence = Payload.Sequence;
+    LastActiveCameraTimestamp = Payload.Timestamp;
+    bHasActiveCamera = (Payload.CameraGUID != FGuid());
+    bHasEverReceivedActiveCamera = true;
+
+    UE_LOG(LogLiveSync, Verbose,
+        TEXT("[CAMERA] Applied: guid=%s seq=%u ts=%.3f hasCamera=%d"),
+        *Payload.CameraGUID.ToString(),
+        Payload.Sequence, Payload.Timestamp,
+        bHasActiveCamera ? 1 : 0);
+
+    if (!CVarLiveSyncActiveCameraApplyToViewport.GetValueOnGameThread())
+    {
+        return;
+    }
+
+    if (Payload.CameraGUID == FGuid())
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA] Null GUID — viewport unchanged"));
+        return;
+    }
+
+#if WITH_EDITOR
+    AActor* Found = FindActorFast(Payload.CameraGUID);
+    if (!Found)
+    {
+        Stats.ActiveCameraPacketsMissingGUID.fetch_add(1, std::memory_order_relaxed);
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA] GUID %s not found in ActorCache"),
+            *Payload.CameraGUID.ToString());
+        return;
+    }
+
+    ACameraActor* Camera = Cast<ACameraActor>(Found);
+    if (!Camera)
+    {
+        Stats.ActiveCameraPacketsNotCamera.fetch_add(1, std::memory_order_relaxed);
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA] Actor %s (%s) is not a CameraActor"),
+            *Found->GetName(), *Found->GetClass()->GetName());
+        return;
+    }
+
+    for (FEditorViewportClient* VC : GEditor->GetAllViewportClients())
+    {
+        if (VC && VC->IsLevelEditorClient())
+        {
+            VC->SetViewTarget(Camera);
+        }
+    }
+
+    Stats.ActiveCameraPacketsAppliedToViewport.fetch_add(1, std::memory_order_relaxed);
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA] Applied to viewport: %s"),
+        *Camera->GetName());
+#else
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA] ApplyToViewport skipped (non-editor build)"));
+#endif
+}
+
+
+// =========================================================
+// MATERIAL IDENTITY (Phase 7B Stage 1C)
 // =========================================================
 // Skeleton: parses and stores material slot metadata per GUID.
 // Does NOT call SetMaterial() — that is deferred to Stage 2.

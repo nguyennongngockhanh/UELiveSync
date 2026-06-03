@@ -36,13 +36,18 @@ def _compute_protocol_signature():
         h = _fnv(h, v & 0xFF)
         h = _fnv(h, (v >> 8) & 0xFF)
     import struct as _s
-    for size in (24, 22, 80, 81, 16, 33, 28):
+    for size in (24, 22, 80, 81, 16, 33, 28, 28, 4, 4):
         h = _fnv(h, size)
-    for pt in (0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F):
+    for pt in (0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15):
         h = _fnv(h, pt)
     return h
 
 LIVE_SYNC_PROTOCOL_SIG = _compute_protocol_signature()
+
+# Phase 7C: Playback state enum
+PLAYBACK_PLAY  = 0
+PLAYBACK_PAUSE = 1
+PLAYBACK_STOP  = 2
 
 # Verbose logging flag (set by sync.py from addon prefs)
 _network_verbose = False
@@ -50,6 +55,117 @@ _network_verbose = False
 def set_verbose(enabled):
     global _network_verbose
     _network_verbose = enabled
+
+
+# Phase 7C: playback preference toggle
+_playback_enabled = False
+
+def set_playback_enabled(enabled):
+    global _playback_enabled
+    _playback_enabled = enabled
+
+
+# Phase 7C: playback sync state globals
+_playback_sequence = 0
+_last_playback_state = None
+playback_packets_sent = 0
+playback_state_changes = 0
+
+
+def is_playback_effective():
+    """Playback sync is effective iff the user preference is enabled.
+    (Capability negotiation is not yet wired — this simplifies to pref check.)
+    """
+    return _playback_enabled
+
+
+# Phase 7D: active camera preference toggle
+_active_camera_enabled = False
+
+def set_active_camera_enabled(enabled):
+    global _active_camera_enabled
+    _active_camera_enabled = enabled
+
+
+def _send_announce():
+    """Send a PT_CapabilityAnnounce packet with _local_capabilities.
+
+    Designed to be called after connect/reconnect. Returns True if the
+    packet was enqueued successfully, False if no client is connected.
+    """
+    global _client
+    if _client is None or not _client.connected:
+        return False
+    payload = struct.pack('<I', _local_capabilities)
+    _client.send_packet(payload, packet_type=PT_CapabilityAnnounce)
+    return True
+
+
+def _try_recv_capability_response():
+    """Non-blocking attempt to read a PT_CapabilityResponse from the socket.
+
+    Sets _remote_capabilities and _capability_response_received on success.
+    Intended to be called from _idle_probe() after announce is sent.
+    Does nothing if response already received or no client is connected.
+    """
+    global _client, _remote_capabilities, _capability_response_received
+    if _client is None or not _client.connected or _capability_response_received:
+        return
+    sock = _client.sock
+    if sock is None:
+        return
+    try:
+        sock.setblocking(False)
+        header = sock.recv(24, socket.MSG_PEEK)
+        if len(header) < 24:
+            sock.setblocking(True)
+            return
+        magic, ver, pt, flags, seq_id, pkt_size, obj_count = \
+            struct.unpack('<I H B B Q I I', header)
+        if magic != LIVE_SYNC_MAGIC or pt != PT_CapabilityResponse:
+            sock.setblocking(True)
+            return
+        data = sock.recv(pkt_size)
+        sock.setblocking(True)
+        if len(data) >= 28:
+            payload_data = data[24:]
+            if len(payload_data) >= 4:
+                _remote_capabilities = \
+                    struct.unpack('<I', payload_data[:4])[0]
+                _capability_response_received = True
+                _client._remote_capabilities = _remote_capabilities
+                _client._capability_response_received = True
+    except (BlockingIOError, ConnectionResetError, BrokenPipeError):
+        try:
+            sock.setblocking(True)
+        except Exception:
+            pass
+    except Exception:
+        try:
+            sock.setblocking(True)
+        except Exception:
+            pass
+
+
+def is_active_camera_effective():
+    """Active camera sync is effective iff:
+      1. User preference is enabled
+      2. _client exists and is connected
+      3. Capability response has been received from UE
+      4. Remote capabilities include the active camera bit
+    """
+    global _client
+    if not _active_camera_enabled:
+        return False
+    if _client is None:
+        return False
+    if not getattr(_client, 'connected', False):
+        return False
+    if not getattr(_client, '_capability_response_received', False):
+        return False
+    remote = getattr(_client, '_remote_capabilities', 0)
+    return bool(remote & CAP_SUPPORTS_ACTIVE_CAMERA_SYNC)
+
 
 # Primitive type constants (1 byte, appended to CREATE packets only)
 PRIMITIVE_CUBE = 0x00
@@ -69,6 +185,31 @@ PT_Delete_V5 = 0x0E  # Phase 6E: lifecycle/delete (V5+, 28-byte fixed payload)
 PT_Collection = 0x0F  # Phase 6F: collection/group replication (metadata-only)
 PT_Material = 0x05   # Phase 7B: material slot identity
 PT_Mesh = 0x06       # Phase 7C: mesh geometry chunk
+PT_Timeline = 0x13   # Phase 7B: timeline/playhead frame sync
+PT_PlaybackState = 0x14  # Phase 7C: playback state (play/pause/stop/loop)
+PT_ActiveCamera = 0x15  # Phase 7D: active camera selection (GUID-only, no params)
+
+# Phase 9: Capability negotiation (announce/response)
+PT_CapabilityAnnounce  = 0x11  # Phase 9: capability bitmask from Blender to UE
+PT_CapabilityResponse  = 0x12  # Phase 9: capability bitmask from UE to Blender
+
+# Capability payload sizes (uint32 each)
+CAPABILITY_ANNOUNCE_PAYLOAD_SIZE  = 4
+CAPABILITY_RESPONSE_PAYLOAD_SIZE  = 4
+
+# =========================================================
+# CAPABILITY BITS (Phase 9, wired in capability announce/response)
+# =========================================================
+
+CAP_SUPPORTS_ACTIVE_CAMERA_SYNC = 0x40  # Bit 6: PT_ActiveCamera (0x15) supported
+
+# Local capabilities bitmask — sent to UE during capability announce.
+_local_capabilities = CAP_SUPPORTS_ACTIVE_CAMERA_SYNC
+
+# Remote capabilities received from UE via PT_CapabilityResponse.
+_remote_capabilities = 0
+_capability_response_received = False
+
 
 # Collection packet versioning (Phase 6F Stage 5)
 COLLECTION_PACKET_VERSION_V1 = 0x01
@@ -329,6 +470,55 @@ def serialize_material_slots(guid_obj, slots):
         payload.extend(struct.pack("<QQ", low & 0xFFFFFFFFFFFFFFFF, high & 0xFFFFFFFFFFFFFFFF))
 
     return bytes(payload)
+
+
+# =========================================================
+# PLAYBACK STATE SERIALIZATION (Phase 7C)
+# =========================================================
+
+# Payload: state(1) + loop_enabled(1) + sequence_number(4) + timestamp(8) = 14 bytes
+PLAYBACK_PAYLOAD_SIZE = 14
+
+def serialize_playback_state(state, sequence_number, timestamp, loop_enabled=0):
+    """Serialize playback state into fixed-size 14-byte payload.
+
+    Payload layout:
+      [0]    state         uint8    — PLAYBACK_PLAY/PAUSE/STOP
+      [1]    loop_enabled  uint8    — 0 or 1 (reserved, always 0 for now)
+      [2-5]  sequence      uint32 LE — monotonic counter
+      [6-13] timestamp     double LE — time.time() at detection
+
+    Returns bytes of length PLAYBACK_PAYLOAD_SIZE.
+    """
+    return struct.pack("<BBId", state & 0xFF, loop_enabled & 0xFF, sequence_number & 0xFFFFFFFF, timestamp)
+
+
+# =========================================================
+# ACTIVE CAMERA SERIALIZATION (Phase 7D)
+# =========================================================
+
+# Payload: guid(16) + sequence(4) + timestamp(8) = 28 bytes
+ACTIVE_CAMERA_PAYLOAD_SIZE = 28
+
+NULL_CAMERA_GUID = b'\x00' * 16
+
+def serialize_active_camera(guid_bytes, sequence, timestamp):
+    """Serialize active camera payload into fixed-size 28-byte payload.
+
+    Payload layout:
+      [0-15]  guid      bytes   — 16-byte camera object GUID (all-zero = no active camera)
+      [16-19] sequence  uint32 LE — monotonic global counter
+      [20-27] timestamp double LE — time.time() at detection
+
+    guid_bytes: 16 bytes from UUID(...).bytes, or NULL_CAMERA_GUID for no camera.
+    Returns bytes of length ACTIVE_CAMERA_PAYLOAD_SIZE.
+    """
+    return struct.pack(
+        "<16sId",
+        guid_bytes[:16].ljust(16, b'\x00'),
+        sequence & 0xFFFFFFFF,
+        timestamp
+    )
 
 
 # =========================================================
@@ -1190,6 +1380,9 @@ class LiveSyncClient:
         self._was_connected = False
         self.reconnected = False
 
+        self._capability_response_received = False
+        self._remote_capabilities = 0
+
         self._reconnect_attempts = 0
         self._reconnect_max_delay = 10.0
         self._reconnect_base_delay = 0.5
@@ -1208,6 +1401,8 @@ class LiveSyncClient:
             "bytes_sent": 0,
             "uptime": 0.0,
             "start_time": 0.0,
+            "playback_packets_sent": 0,
+            "playback_state_changes": 0,
         }
 
         self._thread = threading.Thread(
@@ -1277,6 +1472,9 @@ class LiveSyncClient:
                                     flush=True
                                 )
 
+                            # Phase 9: try to receive capability response
+                            _try_recv_capability_response()
+
                         except (
 
                             BrokenPipeError,
@@ -1297,6 +1495,9 @@ class LiveSyncClient:
             except queue.Empty:
 
                 self._idle_probe()
+
+                # Phase 9: try to receive capability response
+                _try_recv_capability_response()
 
                 continue
 
@@ -1372,6 +1573,11 @@ class LiveSyncClient:
                 f"obj_asset={_pstruct.calcsize('<IIII QQ B')}",
                 flush=True
             )
+
+            # Phase 9: reset capability state and send announce on connect
+            self._capability_response_received = False
+            self._remote_capabilities = 0
+            _send_announce()
 
         except ConnectionRefusedError:
 
@@ -1569,6 +1775,18 @@ class LiveSyncClient:
         if _delete_sequences:
             _delete_sequences.clear()
             print("[DELETE] Sequence tracker cleared on disconnect")
+
+        # Phase 7C: reset playback sequence on disconnect
+        global _playback_sequence, _last_playback_state
+        _playback_sequence = 0
+        _last_playback_state = None
+
+        # Phase 9: reset capability state on disconnect
+        global _remote_capabilities, _capability_response_received
+        _remote_capabilities = 0
+        _capability_response_received = False
+        self._remote_capabilities = 0
+        self._capability_response_received = False
 
         # Phase 6I.1 Stage 2: drain send queue on reconnect
         # to avoid sending stale packets from the previous
@@ -1998,6 +2216,10 @@ def get_runtime_stats():
     stats = dict(
         _client._runtime_stats
     )
+
+    # Overlay module-level playback counters (incremented by sync.py caller)
+    stats["playback_packets_sent"] = playback_packets_sent
+    stats["playback_state_changes"] = playback_state_changes
 
     if stats["start_time"] > 0.0:
 

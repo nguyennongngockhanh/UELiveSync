@@ -635,6 +635,38 @@ uint32 FLiveSyncRunnable::Run()
             TotalPayloadRead);
 
         // =================================================
+        // CAPABILITY ANNOUNCE — respond immediately
+        // =================================================
+        // When we receive a PT_CapabilityAnnounce from Blender,
+        // send back a PT_CapabilityResponse with UE's supported
+        // capabilities before enqueueing the announce for the
+        // game thread. This keeps response latency minimal.
+        //
+        // The response is a single uint32: UE_LOCAL_CAPABILITIES.
+        // =================================================
+
+        if (PacketType == PT_CapabilityAnnounce &&
+            PayloadSize >= (int32)sizeof(uint32))
+        {
+            const uint32 UECaps =
+                UE_LOCAL_CAPABILITIES;
+
+            const uint8* CapPayload =
+                reinterpret_cast<const uint8*>(&UECaps);
+
+            bool bSent = SendPacket(
+                PT_CapabilityResponse,
+                CapPayload,
+                sizeof(uint32));
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAP] Responded to announce "
+                     "with mask=0x%08X send=%s"),
+                UECaps,
+                bSent ? TEXT("OK") : TEXT("FAILED"));
+        }
+
+        // =================================================
         // BUILD FINAL PACKET
         // =================================================
 
@@ -784,4 +816,85 @@ void FLiveSyncRunnable::Stop()
 {
     bRunThread =
         false;
+}
+
+
+// ======================================================
+// SEND PACKET (thread-safe, called from network thread)
+// ======================================================
+// Builds a V3 packet header + payload and sends it via Socket.
+// Returns true if the full packet was sent successfully.
+// ======================================================
+
+bool FLiveSyncRunnable::SendPacket(
+    uint8 InPacketType,
+    const uint8* InPayload,
+    int32 InPayloadSize)
+{
+    if (!Socket)
+    {
+        return false;
+    }
+
+    FPacketHeaderV3 Header;
+    Header.Magic       = LIVE_SYNC_MAGIC;
+    Header.Version     = LIVE_SYNC_VERSION_V3;
+    Header.PacketType  = InPacketType;
+    Header.Flags       = 0;
+    Header.SequenceId  = 0;
+    Header.PacketSize  = sizeof(FPacketHeaderV3) + InPayloadSize;
+    Header.ObjectCount = 1;
+
+    int32 TotalSent = 0;
+    int32 TotalSize = Header.PacketSize;
+
+    // Send header
+    const uint8* HeaderBytes =
+        reinterpret_cast<const uint8*>(&Header);
+
+    while (TotalSent < (int32)sizeof(FPacketHeaderV3))
+    {
+        int32 BytesSent = 0;
+        bool bOk = Socket->Send(
+            HeaderBytes + TotalSent,
+            sizeof(FPacketHeaderV3) - TotalSent,
+            BytesSent);
+
+        if (!bOk || BytesSent <= 0)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEND] Header send failed: "
+                     "type=0x%02x size=%d"),
+                InPacketType, InPayloadSize);
+            return false;
+        }
+        TotalSent += BytesSent;
+    }
+
+    // Send payload
+    TotalSent = 0;
+    while (TotalSent < InPayloadSize)
+    {
+        int32 BytesSent = 0;
+        bool bOk = Socket->Send(
+            InPayload + TotalSent,
+            InPayloadSize - TotalSent,
+            BytesSent);
+
+        if (!bOk || BytesSent <= 0)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEND] Payload send failed: "
+                     "type=0x%02x sent=%d/%d"),
+                InPacketType, TotalSent, InPayloadSize);
+            return false;
+        }
+        TotalSent += BytesSent;
+    }
+
+    UE_LOG(LogLiveSync, Verbose,
+        TEXT("[SEND] Sent packet type=0x%02x size=%d"),
+        InPacketType, TotalSize);
+
+    return true;
 }

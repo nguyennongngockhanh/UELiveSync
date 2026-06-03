@@ -77,6 +77,23 @@ try:
         serialize_mesh_chunk,
         MESH_CHUNK_FLAG_FIRST_CHUNK,
         MESH_CHUNK_FLAG_LAST_CHUNK,
+        PT_PlaybackState,
+        serialize_playback_state,
+        is_playback_effective,
+        set_playback_enabled,
+        PLAYBACK_PLAY,
+        PLAYBACK_PAUSE,
+        PLAYBACK_STOP,
+        _playback_sequence as _net_playback_sequence,
+        playback_packets_sent as _net_playback_packets_sent,
+        playback_state_changes as _net_playback_state_changes,
+        PT_ActiveCamera,
+        serialize_active_camera,
+        ACTIVE_CAMERA_PAYLOAD_SIZE,
+        NULL_CAMERA_GUID,
+        is_active_camera_effective,
+        set_active_camera_enabled,
+        _active_camera_enabled,
     )
 except ImportError:
     from network import (
@@ -141,6 +158,23 @@ except ImportError:
         serialize_mesh_chunk,
         MESH_CHUNK_FLAG_FIRST_CHUNK,
         MESH_CHUNK_FLAG_LAST_CHUNK,
+        PT_PlaybackState,
+        serialize_playback_state,
+        is_playback_effective,
+        set_playback_enabled,
+        PLAYBACK_PLAY,
+        PLAYBACK_PAUSE,
+        PLAYBACK_STOP,
+        _playback_sequence as _net_playback_sequence,
+        playback_packets_sent as _net_playback_packets_sent,
+        playback_state_changes as _net_playback_state_changes,
+        PT_ActiveCamera,
+        serialize_active_camera,
+        ACTIVE_CAMERA_PAYLOAD_SIZE,
+        NULL_CAMERA_GUID,
+        is_active_camera_effective,
+        set_active_camera_enabled,
+        _active_camera_enabled,
     )
 
 
@@ -207,6 +241,15 @@ _last_critical_error = ""
 
 _sync_start_time = 0.0
 
+# Phase 7C: local tracking of last-sent playback state for transition detection
+_last_playback_state = None
+
+# Phase 7D Stage 2: active camera detection state machine
+_last_active_camera_guid = None  # None=uninitialized, b''=reconnect, bytes=last sent
+_active_camera_sequence = 0
+_active_camera_packets_sent = 0
+_active_camera_state_changes = 0
+
 # Centralized runtime metrics (all diagnostics/UI should read from here)
 _runtime_stats = {
     "tracked_objects": 0,
@@ -222,6 +265,10 @@ _runtime_stats = {
     "bytes_sent": 0,
     "reconnect_escalated": False,
     "has_critical_error": False,
+    "playback_packets_sent": 0,
+    "playback_state_changes": 0,
+    "active_camera_packets_sent": 0,
+    "active_camera_state_changes": 0,
     "last_heartbeat_time": 0.0,
     "heartbeat_interval": 5.0,
     "scan_interval": 300,
@@ -801,6 +848,10 @@ def check_updates():
     global _last_object_count
     global _scan_counter
     global _known_guids
+    global _last_active_camera_guid
+    global _active_camera_sequence
+    global _active_camera_packets_sent
+    global _active_camera_state_changes
 
     if not timer_running:
         return 0.016
@@ -848,9 +899,11 @@ def check_updates():
         global _known_guids
         global _last_collection_state
         global _collection_anti_loop_guids
+        global _last_active_camera_guid
         _known_guids.clear()
         _last_collection_state.clear()
         _collection_anti_loop_guids.clear()
+        _last_active_camera_guid = b''  # Phase 7D: resend on next tick
 
         if _verbose_logging:
             print(
@@ -1617,6 +1670,69 @@ def check_updates():
         _last_heartbeat_time = now
 
     # =====================================================
+    # PLAYBACK STATE DETECTION (Phase 7C)
+    # =====================================================
+
+    if is_playback_effective():
+
+        try:
+            screen = bpy.context.screen
+            is_playing = screen.is_animation_playing
+        except (AttributeError, RuntimeError, TypeError):
+            is_playing = False
+
+        current_state = PLAYBACK_PLAY if is_playing else PLAYBACK_STOP
+
+        if current_state != _last_playback_state and _last_playback_state is not None:
+            payload = serialize_playback_state(
+                current_state,
+                _net_playback_sequence + 1,
+                time.time(),
+            )
+            send_objects([payload], packet_type=PT_PlaybackState, version=5)
+            _net_playback_sequence += 1
+            _net_playback_packets_sent += 1
+            _net_playback_state_changes += 1
+            _runtime_stats["playback_packets_sent"] = _net_playback_packets_sent
+            _runtime_stats["playback_state_changes"] = _net_playback_state_changes
+
+        _last_playback_state = current_state
+
+    # =====================================================
+    # ACTIVE CAMERA DETECTION (Phase 7D Stage 2)
+    # =====================================================
+
+    if is_active_camera_effective():
+        try:
+            scene = bpy.context.scene
+            camera_obj = scene.camera
+        except (AttributeError, RuntimeError, TypeError):
+            camera_obj = None
+
+        if camera_obj is not None:
+            guid_hex = ensure_guid(camera_obj)
+            guid_bytes = UUID(guid_hex).bytes
+        else:
+            guid_bytes = NULL_CAMERA_GUID
+
+        if _last_active_camera_guid is None:
+            pass
+        elif _last_active_camera_guid == b'' or guid_bytes != _last_active_camera_guid:
+            _active_camera_sequence += 1
+            payload = serialize_active_camera(
+                guid_bytes,
+                _active_camera_sequence,
+                time.time(),
+            )
+            send_objects([payload], packet_type=PT_ActiveCamera, version=5)
+            _active_camera_packets_sent += 1
+            _active_camera_state_changes += 1
+            _runtime_stats["active_camera_packets_sent"] = _active_camera_packets_sent
+            _runtime_stats["active_camera_state_changes"] = _active_camera_state_changes
+
+        _last_active_camera_guid = guid_bytes
+
+    # =====================================================
     # AUTO-POPUP CRITICAL ERRORS
     # =====================================================
 
@@ -1831,6 +1947,14 @@ def dump_diagnostics():
     print(f"    Bytes sent:        {s['bytes_sent']}")
     print(f"    Last send:         {s['last_send_time']:.1f}")
 
+    print(f"  [Playback]")
+    print(f"    Packets sent:      {s['playback_packets_sent']}")
+    print(f"    State changes:     {s['playback_state_changes']}")
+
+    print(f"  [Active Camera]")
+    print(f"    Packets sent:      {s['active_camera_packets_sent']}")
+    print(f"    State changes:     {s['active_camera_state_changes']}")
+
     error = s["last_error"]
     severity = s["last_error_severity"]
     if error:
@@ -1880,6 +2004,11 @@ def start_sync():
     global _last_mesh_identity  # Phase 7A: clear stale mesh identity cache
     global _last_material_identity  # Phase 7B: clear stale material identity cache
     global _last_geometry_version  # Phase 7C: clear stale geometry version cache
+    global _last_playback_state  # Phase 7C: reset playback state
+    global _last_active_camera_guid  # Phase 7D: reset active camera tracking
+    global _active_camera_sequence
+    global _active_camera_packets_sent
+    global _active_camera_state_changes
 
     timer_running = False
     _last_mesh_identity.clear()  # Phase 7A: prevent stale suppression across sessions
@@ -1889,6 +2018,11 @@ def start_sync():
     _last_parent_guid.clear()
     _known_guids.clear()
     _last_collection_state.clear()  # Phase 6F
+    _last_playback_state = None  # Phase 7C: reset playback transition detector
+    _last_active_camera_guid = None  # Phase 7D: first tick sets baseline
+    _active_camera_sequence = 0
+    _active_camera_packets_sent = 0
+    _active_camera_state_changes = 0
 
     if _timer_ref is not None:
         try:

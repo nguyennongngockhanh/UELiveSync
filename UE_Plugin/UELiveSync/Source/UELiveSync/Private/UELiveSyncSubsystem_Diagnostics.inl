@@ -718,6 +718,130 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  [Playback] (Phase 7C)"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastPlaybackState:   %d"),
+        LastPlaybackState);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastPlaybackSeq:     %u"),
+        LastPlaybackSequence);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastPlaybackTs:      %.3f"),
+        LastPlaybackTimestamp);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  PlaybackRcv:         %d"),
+        Stats.PlaybackPacketsReceived.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  PlaybackApplied:     %d"),
+        Stats.PlaybackPacketsApplied.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  PlaybackStale:       %d"),
+        Stats.PlaybackPacketsStale.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  PlaybackMalformed:   %d"),
+        Stats.PlaybackPacketsMalformed.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  [ActiveCamera] (Phase 7D)"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  bHasActiveCamera:     %d"),
+        bHasActiveCamera);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  bHasEverRcvCamera:    %d"),
+        bHasEverReceivedActiveCamera);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastActiveCamGUID:    %s"),
+        *LastActiveCameraGUID.ToString());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastActiveCamSeq:     %u"),
+        LastActiveCameraSequence);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastActiveCamTs:      %.3f"),
+        LastActiveCameraTimestamp);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  ActiveCamRcv:         %d"),
+        Stats.ActiveCameraPacketsReceived.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  ActiveCamApplied:     %d"),
+        Stats.ActiveCameraPacketsApplied.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  ActiveCamStale:       %d"),
+        Stats.ActiveCameraPacketsStale.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  ActiveCamMalformed:   %d"),
+        Stats.ActiveCameraPacketsMalformed.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  ActiveCamViewport:    %d"),
+        Stats.ActiveCameraPacketsAppliedToViewport.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  ActiveCamMissGUID:    %d"),
+        Stats.ActiveCameraPacketsMissingGUID.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  ActiveCamNotCam:      %d"),
+        Stats.ActiveCameraPacketsNotCamera.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  SeqId:               %llu"),
         LastSequenceId);
 
@@ -1043,6 +1167,30 @@ ConsoleReset()
     MeshChunksReceived = 0;
     MeshReassembliesCompleted = 0;
     MeshSectionsBuilt = 0;
+
+    // Phase 7C: playback state reset
+    Stats.PlaybackPacketsReceived.store(0, std::memory_order_relaxed);
+    Stats.PlaybackPacketsApplied.store(0, std::memory_order_relaxed);
+    Stats.PlaybackPacketsStale.store(0, std::memory_order_relaxed);
+    Stats.PlaybackPacketsMalformed.store(0, std::memory_order_relaxed);
+    LastPlaybackState = 0;
+    LastPlaybackSequence = 0;
+    LastPlaybackTimestamp = 0.0;
+    bHasPlaybackState = false;
+
+    // Phase 7D: active camera state reset
+    Stats.ActiveCameraPacketsReceived.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraPacketsApplied.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraPacketsStale.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraPacketsMalformed.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraPacketsAppliedToViewport.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraPacketsMissingGUID.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraPacketsNotCamera.store(0, std::memory_order_relaxed);
+    LastActiveCameraGUID = FGuid();
+    LastActiveCameraSequence = 0;
+    LastActiveCameraTimestamp = 0.0;
+    bHasActiveCamera = false;
+    bHasEverReceivedActiveCamera = false;
 
     ReconnectHistory.Empty();
     OverflowHistory.Empty();

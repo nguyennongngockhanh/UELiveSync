@@ -46,6 +46,11 @@ public:
     void SetRecvTimeoutMs(
         int32 InMs);
 
+    bool SendPacket(
+        uint8 InPacketType,
+        const uint8* InPayload,
+        int32 InPayloadSize);
+
     virtual uint32 Run() override;
 
     virtual void Stop() override;

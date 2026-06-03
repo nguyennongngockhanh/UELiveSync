@@ -17,6 +17,7 @@ from bpy.props import (
     EnumProperty,
 )
 
+from . import network
 from . import sync
 
 
@@ -28,6 +29,16 @@ def _on_timing_update(self, context):
 
     # Sync cached config when user changes timing prefs
     sync._sync_runtime_config()
+
+
+def _on_playback_sync_update(self, context):
+
+    network.set_playback_enabled(self.playback_sync)
+
+
+def _on_active_camera_sync_update(self, context):
+
+    network.set_active_camera_enabled(self.active_camera_sync)
 
 
 # =========================================================
@@ -78,6 +89,20 @@ class UELIVESYNC_AP_preferences(
         name="Verbose Logging",
         default=False,
         description="Enable verbose sync logs",
+    )
+
+    playback_sync: BoolProperty(
+        name="Playback Sync",
+        default=False,
+        description="Sync play/pause/stop state to UE",
+        update=_on_playback_sync_update,
+    )
+
+    active_camera_sync: BoolProperty(
+        name="Active Camera Sync",
+        default=False,
+        description="Sync active scene camera selection to UE",
+        update=_on_active_camera_sync_update,
     )
 
     default_primitive: EnumProperty(
@@ -169,6 +194,14 @@ class UELIVESYNC_AP_preferences(
 
         layout.prop(
             self, "verbose_logging"
+        )
+
+        layout.prop(
+            self, "playback_sync"
+        )
+
+        layout.prop(
+            self, "active_camera_sync"
         )
 
 
@@ -444,9 +477,10 @@ class UELIVESYNC_PT_panel(
             )
 
             row = box.row()
+            # UI-only diagnostic counter; reconnect behavior lives in network.py.
             row.label(
-                text=f"Reconnects: {reconnect_count}",
-                icon='ERROR',
+                text=f"Reconnection count: {reconnect_count}",
+                icon='INFO',
             )
 
         else:
