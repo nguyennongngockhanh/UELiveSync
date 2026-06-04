@@ -36,6 +36,14 @@ DerivedDataCache/
 # project-level dev instructions (local only)
 AGENTS.md
 
+# Pi / OpenCode / AI agent config files
+.pi-local-rules.md
+*.pi*.md
+.opencodeignore
+.opencode/.env
+.env
+.env.*
+
 # tests (local only)
 tests/
 
@@ -47,3 +55,6 @@ tests/
 .opencode/
 .opencode.bak.*/
 **/node_modules/
+
+# Local AI / agent workflow docs
+Docs/TASK_PROMPT_TEMPLATES.md
