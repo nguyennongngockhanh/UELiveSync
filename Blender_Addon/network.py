@@ -36,9 +36,9 @@ def _compute_protocol_signature():
         h = _fnv(h, v & 0xFF)
         h = _fnv(h, (v >> 8) & 0xFF)
     import struct as _s
-    for size in (24, 22, 80, 81, 16, 33, 28, 28, 4, 4):
+    for size in (24, 22, 80, 81, 16, 33, 28, 28, 4, 4, 16, 32, 33, 40, 14, 25):
         h = _fnv(h, size)
-    for pt in (0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15):
+    for pt in (0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x18):
         h = _fnv(h, pt)
     return h
 
@@ -77,6 +77,37 @@ def is_playback_effective():
     (Capability negotiation is not yet wired — this simplifies to pref check.)
     """
     return _playback_enabled
+
+
+# Phase 7B: timeline preference toggle
+_timeline_enabled = False
+
+def set_timeline_enabled(enabled):
+    global _timeline_enabled, _last_timeline_sent, _timeline_sequence
+    _timeline_enabled = enabled
+    _last_timeline_sent = None
+    _timeline_sequence = 0
+
+
+def is_timeline_effective():
+    global _client
+    if not _timeline_enabled:
+        return False
+    if _client is None:
+        return False
+    if not getattr(_client, 'connected', False):
+        return False
+    if not getattr(_client, '_capability_response_received', False):
+        return False
+    remote = getattr(_client, '_remote_capabilities', 0)
+    return bool(remote & CAP_SUPPORTS_TIMELINE_SYNC)
+
+
+# Phase 7B: timeline sync state globals
+_timeline_sequence = 0
+_last_timeline_sent = None  # tuple (frame_current, frame_start, frame_end, fps_num, fps_den) or None
+timeline_packets_sent = 0
+timeline_state_changes = 0
 
 
 # Phase 7D: active camera preference toggle
@@ -167,6 +198,71 @@ def is_active_camera_effective():
     return bool(remote & CAP_SUPPORTS_ACTIVE_CAMERA_SYNC)
 
 
+# Phase 7E: sequencer ops preference toggle
+_sequencer_op_enabled = False
+
+def set_sequencer_op_enabled(enabled):
+    global _sequencer_op_enabled, _last_sequencer_op_state, _sequencer_op_sequence, _sequencer_op_packets_sent, _sequencer_op_state_changes
+    _sequencer_op_enabled = enabled
+    _last_sequencer_op_state = None
+    _sequencer_op_sequence = 0
+    _sequencer_op_packets_sent = 0
+    _sequencer_op_state_changes = 0
+
+
+def is_sequencer_ops_effective():
+    global _client
+    if not _sequencer_op_enabled:
+        return False
+    if _client is None:
+        return False
+    if not getattr(_client, 'connected', False):
+        return False
+    if not getattr(_client, '_capability_response_received', False):
+        return False
+    remote = getattr(_client, '_remote_capabilities', 0)
+    return bool(remote & CAP_SUPPORTS_SEQUENCER_OPS)
+
+
+# Phase 7E: sequencer ops state globals
+_sequencer_op_sequence = 0
+_last_sequencer_op_state = None
+_sequencer_op_packets_sent = 0
+_sequencer_op_state_changes = 0
+
+
+# Phase 7E Stage 7-8: keyframe sync preference toggle
+_keyframe_enabled = False
+
+def set_keyframe_enabled(enabled):
+    global _keyframe_enabled, _keyframe_sequence, _keyframe_packets_sent, _keyframes_sent
+    _keyframe_enabled = enabled
+    _keyframe_sequence = 0
+    _keyframe_packets_sent = 0
+    _keyframes_sent = 0
+
+
+def is_keyframe_effective():
+    global _client
+    if not _keyframe_enabled:
+        return False
+    if _client is None:
+        return False
+    if not getattr(_client, 'connected', False):
+        return False
+    if not getattr(_client, '_capability_response_received', False):
+        return False
+    remote = getattr(_client, '_remote_capabilities', 0)
+    return bool(remote & CAP_SUPPORTS_KEYFRAME_REPLICATION)
+
+
+# Phase 7E Stage 7-8: keyframe sync state globals
+_keyframe_sequence = 0
+_keyframe_packets_sent = 0
+_keyframes_sent = 0
+_animated_objects_scanned = 0
+
+
 # Primitive type constants (1 byte, appended to CREATE packets only)
 PRIMITIVE_CUBE = 0x00
 PRIMITIVE_SPHERE = 0x01
@@ -189,6 +285,21 @@ PT_Timeline = 0x13   # Phase 7B: timeline/playhead frame sync
 PT_PlaybackState = 0x14  # Phase 7C: playback state (play/pause/stop/loop)
 PT_ActiveCamera = 0x15  # Phase 7D: active camera selection (GUID-only, no params)
 
+# Phase 7E Stage 7: Keyframe replication (PT_Keyframe = 0x17)
+PT_Keyframe = 0x17  # Keyframe replication (fixed header + repeated entries)
+
+# Phase 7E: Sequencer ops (PT_SequencerOp = 0x18)
+# Wire format: fixed-size 16-byte common header + optional opcode payload.
+PT_SequencerOp = 0x18  # Sequencer operation (discrete event, NOT state stream)
+
+# Sequencer opcodes (must match SyncTypes.h ESequencerOpcode)
+SEQUENCER_OP_CREATE_SEQUENCE   = 0  # Create/replace sequence with frame range + FPS
+SEQUENCER_OP_ADD_POSSESSABLE   = 1  # Add possessable binding to sequence
+SEQUENCER_OP_REMOVE_POSSESSABLE = 2  # Remove possessable binding from sequence
+SEQUENCER_OP_ADD_CAMERA_CUT    = 3  # Add camera cut to sequence
+SEQUENCER_OP_CLEAR_SEQUENCE    = 4  # Clear all tracks/possessables from sequence
+SEQUENCER_OP_SET_FRAME_RANGE   = 5  # Update sequence frame range + FPS
+
 # Phase 9: Capability negotiation (announce/response)
 PT_CapabilityAnnounce  = 0x11  # Phase 9: capability bitmask from Blender to UE
 PT_CapabilityResponse  = 0x12  # Phase 9: capability bitmask from UE to Blender
@@ -201,10 +312,13 @@ CAPABILITY_RESPONSE_PAYLOAD_SIZE  = 4
 # CAPABILITY BITS (Phase 9, wired in capability announce/response)
 # =========================================================
 
-CAP_SUPPORTS_ACTIVE_CAMERA_SYNC = 0x40  # Bit 6: PT_ActiveCamera (0x15) supported
+CAP_SUPPORTS_TIMELINE_SYNC       = 0x10  # Bit 4: PT_Timeline (0x13) supported
+CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20  # Bit 5: PT_Keyframe (0x17) supported
+CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40  # Bit 6: PT_ActiveCamera (0x15) supported
+CAP_SUPPORTS_SEQUENCER_OPS       = 0x80  # Bit 7: PT_SequencerOp (0x18) supported
 
 # Local capabilities bitmask — sent to UE during capability announce.
-_local_capabilities = CAP_SUPPORTS_ACTIVE_CAMERA_SYNC
+_local_capabilities = CAP_SUPPORTS_TIMELINE_SYNC | CAP_SUPPORTS_KEYFRAME_REPLICATION | CAP_SUPPORTS_ACTIVE_CAMERA_SYNC | CAP_SUPPORTS_SEQUENCER_OPS
 
 # Remote capabilities received from UE via PT_CapabilityResponse.
 _remote_capabilities = 0
@@ -500,6 +614,33 @@ def serialize_playback_state(state, sequence_number, timestamp, loop_enabled=0):
 # Payload: guid(16) + sequence(4) + timestamp(8) = 28 bytes
 ACTIVE_CAMERA_PAYLOAD_SIZE = 28
 
+# =========================================================
+# TIMELINE SERIALIZATION (Phase 7B)
+# =========================================================
+
+# PT_Timeline (0x13) fixed-size payload: 36 bytes
+# Payload layout:
+#   [0-3]   frame_current  int32   — current frame number
+#   [4-7]   frame_start    int32   — timeline start frame
+#   [8-11]  frame_end      int32   — timeline end frame
+#   [12-15] fps_num        int32   — FPS numerator (e.g. 24)
+#   [16-19] fps_den        int32   — FPS denominator (e.g. 1)
+#   [20-23] sequence       uint32  — monotonic global counter (LE)
+#   [24-27] reserved       int32   — reserved for future use
+#   [28-35] timestamp      double  — time.time() at detection (LE)
+TIMELINE_PAYLOAD_SIZE = 36
+
+def serialize_timeline(frame_current, frame_start, frame_end,
+                       fps_num, fps_den, sequence, timestamp,
+                       reserved=0):
+    return struct.pack(
+        "<iiiiiIid",
+        frame_current, frame_start, frame_end,
+        fps_num, fps_den,
+        sequence & 0xFFFFFFFF,
+        reserved, timestamp
+    )
+
 NULL_CAMERA_GUID = b'\x00' * 16
 
 def serialize_active_camera(guid_bytes, sequence, timestamp):
@@ -519,6 +660,194 @@ def serialize_active_camera(guid_bytes, sequence, timestamp):
         sequence & 0xFFFFFFFF,
         timestamp
     )
+
+
+# =========================================================
+# SEQUENCER OP SERIALIZATION (Phase 7E)
+# =========================================================
+
+# PT_SequencerOp (0x18) fixed-size common header: 16 bytes
+# Wire format:
+#   [0]     opcode     uint8   — SEQUENCER_OP_* constant
+#   [1]     flags      uint8   — reserved (0 for now)
+#   [2-3]   reserved   uint16  — reserved for future use
+#   [4-7]   sequence   uint32 LE — monotonic global counter
+#   [8-15]  timestamp  double LE — time.time() at detection
+SEQUENCER_OP_COMMON_HEADER_SIZE = 16
+
+# Opcode payload sizes (excluding the 16-byte common header)
+SEQUENCER_OP_CREATE_SEQUENCE_PAYLOAD_SIZE   = 16  # frame_start(4) + frame_end(4) + fps_num(4) + fps_den(4)
+SEQUENCER_OP_ADD_POSSESSABLE_PAYLOAD_SIZE   = 17  # object_guid(16) + binding_type(1)
+SEQUENCER_OP_REMOVE_POSSESSABLE_PAYLOAD_SIZE = 16  # object_guid(16)
+SEQUENCER_OP_ADD_CAMERA_CUT_PAYLOAD_SIZE     = 24  # camera_guid(16) + frame_start(4) + frame_end(4)
+SEQUENCER_OP_CLEAR_SEQUENCE_PAYLOAD_SIZE     = 0   # no extra payload
+SEQUENCER_OP_SET_FRAME_RANGE_PAYLOAD_SIZE    = 16  # frame_start(4) + frame_end(4) + fps_num(4) + fps_den(4)
+
+SEQUENCER_OP_PAYLOAD_SIZES = {
+    SEQUENCER_OP_CREATE_SEQUENCE:   SEQUENCER_OP_CREATE_SEQUENCE_PAYLOAD_SIZE,
+    SEQUENCER_OP_ADD_POSSESSABLE:   SEQUENCER_OP_ADD_POSSESSABLE_PAYLOAD_SIZE,
+    SEQUENCER_OP_REMOVE_POSSESSABLE: SEQUENCER_OP_REMOVE_POSSESSABLE_PAYLOAD_SIZE,
+    SEQUENCER_OP_ADD_CAMERA_CUT:    SEQUENCER_OP_ADD_CAMERA_CUT_PAYLOAD_SIZE,
+    SEQUENCER_OP_CLEAR_SEQUENCE:    SEQUENCER_OP_CLEAR_SEQUENCE_PAYLOAD_SIZE,
+    SEQUENCER_OP_SET_FRAME_RANGE:   SEQUENCER_OP_SET_FRAME_RANGE_PAYLOAD_SIZE,
+}
+
+SEQUENCER_OP_MIN_OPCODE = SEQUENCER_OP_CREATE_SEQUENCE
+SEQUENCER_OP_MAX_OPCODE = SEQUENCER_OP_SET_FRAME_RANGE
+
+
+def _serialize_sequencer_op_common(opcode, sequence, timestamp, flags=0):
+    """Serialize the 16-byte common header for PT_SequencerOp."""
+    return struct.pack(
+        "<BBHI d",
+        opcode & 0xFF,
+        flags & 0xFF,
+        0,  # reserved uint16
+        sequence & 0xFFFFFFFF,
+        timestamp,
+    )
+
+
+def serialize_sequencer_op_create_sequence(sequence, timestamp,
+                                           frame_start, frame_end,
+                                           fps_num, fps_den, flags=0):
+    """Serialize a CREATE_SEQUENCE sequencer op.
+
+    Total payload: 16 (common) + 16 (payload) = 32 bytes
+    """
+    common = _serialize_sequencer_op_common(
+        SEQUENCER_OP_CREATE_SEQUENCE, sequence, timestamp, flags)
+    payload = struct.pack("<iiii", frame_start, frame_end, fps_num, fps_den)
+    return common + payload
+
+
+def serialize_sequencer_op_add_possessable(sequence, timestamp,
+                                           object_guid_bytes, binding_type,
+                                           flags=0):
+    """Serialize an ADD_POSSESSABLE sequencer op.
+
+    Total payload: 16 (common) + 17 (payload) = 33 bytes
+    """
+    common = _serialize_sequencer_op_common(
+        SEQUENCER_OP_ADD_POSSESSABLE, sequence, timestamp, flags)
+    payload = struct.pack(
+        "<16sB",
+        object_guid_bytes[:16].ljust(16, b'\x00'),
+        binding_type & 0xFF,
+    )
+    return common + payload
+
+
+def serialize_sequencer_op_remove_possessable(sequence, timestamp,
+                                              object_guid_bytes, flags=0):
+    """Serialize a REMOVE_POSSESSABLE sequencer op.
+
+    Total payload: 16 (common) + 16 (payload) = 32 bytes
+    """
+    common = _serialize_sequencer_op_common(
+        SEQUENCER_OP_REMOVE_POSSESSABLE, sequence, timestamp, flags)
+    payload = struct.pack(
+        "<16s",
+        object_guid_bytes[:16].ljust(16, b'\x00'),
+    )
+    return common + payload
+
+
+def serialize_sequencer_op_add_camera_cut(sequence, timestamp,
+                                          camera_guid_bytes, frame_start,
+                                          frame_end, flags=0):
+    """Serialize an ADD_CAMERA_CUT sequencer op.
+
+    Total payload: 16 (common) + 24 (payload) = 40 bytes
+    """
+    common = _serialize_sequencer_op_common(
+        SEQUENCER_OP_ADD_CAMERA_CUT, sequence, timestamp, flags)
+    payload = struct.pack(
+        "<16sii",
+        camera_guid_bytes[:16].ljust(16, b'\x00'),
+        frame_start, frame_end,
+    )
+    return common + payload
+
+
+def serialize_sequencer_op_clear_sequence(sequence, timestamp, flags=0):
+    """Serialize a CLEAR_SEQUENCE sequencer op.
+
+    Total payload: 16 (common) + 0 (payload) = 16 bytes
+    """
+    return _serialize_sequencer_op_common(
+        SEQUENCER_OP_CLEAR_SEQUENCE, sequence, timestamp, flags)
+
+
+def serialize_sequencer_op_set_frame_range(sequence, timestamp,
+                                           frame_start, frame_end,
+                                           fps_num, fps_den, flags=0):
+    """Serialize a SET_FRAME_RANGE sequencer op.
+
+    Total payload: 16 (common) + 16 (payload) = 32 bytes
+    """
+    common = _serialize_sequencer_op_common(
+        SEQUENCER_OP_SET_FRAME_RANGE, sequence, timestamp, flags)
+    payload = struct.pack("<iiii", frame_start, frame_end, fps_num, fps_den)
+    return common + payload
+
+
+# =========================================================
+# KEYFRAME REPLICATION (Phase 7E Stage 7 — PT_Keyframe 0x17)
+# =========================================================
+# Variable-size payload: 14-byte header + N × 25-byte entries.
+#
+# Header:
+#   [0-3]   Sequence     uint32 LE
+#   [4-11]  Timestamp    double LE
+#   [12]    KeyCount     uint8    (1-255)
+#   [13]    Flags        uint8
+#
+# Each entry:
+#   [0-15]  ObjectGUID   FGuid (16 bytes)
+#   [16-19] Frame        int32 LE
+#   [20-23] Value        float LE
+#   [24]    ChannelIndex uint8
+
+KEYFRAME_HEADER_SIZE = 14
+KEYFRAME_ENTRY_SIZE = 25
+KEYFRAME_MIN_KEYS = 1
+KEYFRAME_MAX_KEYS = 255
+KEYFRAME_MIN_CHANNEL = 0
+KEYFRAME_MAX_CHANNEL = 255
+
+# Phase 7E Stage 10A: Visibility keyframe channels (within PT_Keyframe)
+KEYFRAME_CHANNEL_VISIBILITY_VIEWPORT = 9   # hide_viewport → bool visible/hidden
+KEYFRAME_CHANNEL_VISIBILITY_RENDER = 10    # hide_render → bool renderable/not
+
+
+def serialize_keyframe(sequence, timestamp, entries, flags=0):
+    """Serialize a PT_Keyframe packet.
+    
+    entries: list of (guid_bytes, frame, value, channel_index) tuples.
+    
+    Total payload: 14 + N * 25 bytes.
+    """
+    count = len(entries)
+    if count < KEYFRAME_MIN_KEYS or count > KEYFRAME_MAX_KEYS:
+        raise ValueError(
+            f"Key count {count} out of range [{KEYFRAME_MIN_KEYS}, {KEYFRAME_MAX_KEYS}]")
+    
+    header = struct.pack("<IdBB",
+        sequence & 0xFFFFFFFF,
+        timestamp,
+        count & 0xFF,
+        flags & 0xFF)
+    
+    body = b''
+    for guid_bytes, frame, value, channel_index in entries:
+        body += struct.pack("<16sifB",
+            guid_bytes[:16].ljust(16, b'\x00'),
+            frame,
+            value,
+            channel_index & 0xFF)
+    
+    return header + body
 
 
 # =========================================================
@@ -1403,6 +1732,8 @@ class LiveSyncClient:
             "start_time": 0.0,
             "playback_packets_sent": 0,
             "playback_state_changes": 0,
+            "timeline_packets_sent": 0,
+            "timeline_state_changes": 0,
         }
 
         self._thread = threading.Thread(
@@ -1780,6 +2111,11 @@ class LiveSyncClient:
         global _playback_sequence, _last_playback_state
         _playback_sequence = 0
         _last_playback_state = None
+
+        # Phase 7B: reset timeline sequence on disconnect
+        global _timeline_sequence, _last_timeline_sent
+        _timeline_sequence = 0
+        _last_timeline_sent = None
 
         # Phase 9: reset capability state on disconnect
         global _remote_capabilities, _capability_response_received
@@ -2220,6 +2556,10 @@ def get_runtime_stats():
     # Overlay module-level playback counters (incremented by sync.py caller)
     stats["playback_packets_sent"] = playback_packets_sent
     stats["playback_state_changes"] = playback_state_changes
+
+    # Overlay module-level timeline counters (incremented by sync.py caller)
+    stats["timeline_packets_sent"] = timeline_packets_sent
+    stats["timeline_state_changes"] = timeline_state_changes
 
     if stats["start_time"] > 0.0:
 

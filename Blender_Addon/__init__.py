@@ -31,6 +31,21 @@ def _on_timing_update(self, context):
     sync._sync_runtime_config()
 
 
+def _on_timeline_sync_update(self, context):
+
+    network.set_timeline_enabled(self.timeline_sync)
+
+
+def _on_sequencer_ops_update(self, context):
+
+    network.set_sequencer_op_enabled(self.sequencer_ops)
+
+
+def _on_keyframe_sync_update(self, context):
+
+    network.set_keyframe_enabled(self.keyframe_sync)
+
+
 def _on_playback_sync_update(self, context):
 
     network.set_playback_enabled(self.playback_sync)
@@ -98,11 +113,32 @@ class UELIVESYNC_AP_preferences(
         update=_on_playback_sync_update,
     )
 
+    timeline_sync: BoolProperty(
+        name="Timeline Sync",
+        default=False,
+        description="Sync timeline frame range and FPS to UE",
+        update=_on_timeline_sync_update,
+    )
+
     active_camera_sync: BoolProperty(
         name="Active Camera Sync",
         default=False,
         description="Sync active scene camera selection to UE",
         update=_on_active_camera_sync_update,
+    )
+
+    sequencer_ops: BoolProperty(
+        name="Sequencer Ops",
+        default=False,
+        description="Sync sequencer operations (create sequence, add possessable, etc.) to UE",
+        update=_on_sequencer_ops_update,
+    )
+
+    keyframe_sync: BoolProperty(
+        name="Keyframe Sync",
+        default=False,
+        description="Sync transform keyframes (location, rotation, scale) to UE",
+        update=_on_keyframe_sync_update,
     )
 
     default_primitive: EnumProperty(
@@ -194,6 +230,10 @@ class UELIVESYNC_AP_preferences(
 
         layout.prop(
             self, "verbose_logging"
+        )
+
+        layout.prop(
+            self, "timeline_sync"
         )
 
         layout.prop(

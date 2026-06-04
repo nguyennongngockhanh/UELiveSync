@@ -25,7 +25,12 @@ public class UELiveSync : ModuleRules
 				"Core",
 				"CoreUObject",
 				"Engine",
-				"InputCore"
+				"InputCore",
+
+				// Phase 7E: Sequencer + Keyframe Replication
+				"LevelSequence",
+				"MovieScene",
+				"MovieSceneTracks",
 			}
 		);
 

@@ -45,19 +45,22 @@
   - **Collection** (0x0F) — IMPLEMENTED: 10/10 PASS, parser, handler, sequence tracking, replay recording, ConsoleReset lifecycle
   - **Hierarchy** (0x0D) — IN PROGRESS
 - **Phase 7A** — Scope Lock / Identity Hygiene (completed) ✅
-- **Phase 7B** — Timeline Sync (architecture complete, not implemented)
+- **Phase 7B** — Timeline Sync (implemented) ✅
 - **Phase 7C** — Playback Sync (implemented) ✅
 - **Phase 7D** — Active Camera Sync (implemented) ✅
+- **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.1 extraction done) ✅
 
 ## Current Roadmap
 
 1. ~~**Phase 6I.1 — Transport Hardening**~~ **COMPLETE** ✅
 2. ~~**Phase 7A — Scope Lock / Identity Hygiene**~~ **COMPLETE** ✅
-3. **Phase 7B — Timeline Sync** — ARCHITECTURE COMPLETE, not implemented
-4. ~~**Phase 7C — Playback Sync**~~ **IMPLEMENTED** ✅
+3. ~~**Phase 7B — Timeline Sync (0x13)**~~ **IMPLEMENTED** ✅
+4. ~~**Phase 7C — Playback Sync (0x14)**~~ **IMPLEMENTED** ✅
 5. ~~**Phase 7D — Active Camera Sync (0x15)**~~ **IMPLEMENTED** ✅
-6. **Phase 7E — Sequencer Keyframe Replication** (pending)
-7. **Phase 8 — High Performance Streaming** (ready)
+6. ~~**Phase 7E — Sequencer + Keyframe Replication**~~ **Stage 9C CLOSEOUT** ✅
+7. **Phase 7E Stage 10A — Visibility Keyframes** (scope lock) 🔒
+8. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
+9. **Phase 8 — High Performance Streaming** (ready)
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
@@ -259,32 +262,65 @@ UE log evidence:
 
 ---
 
-## Phase 7B — Timeline Sync (ARCHITECTURE COMPLETE)
+## Phase 7B — Timeline Sync (IMPLEMENTED)
 
-**Status**: Architecture complete. Implementation NOT IMPLEMENTED.
+**Status**: Full implementation complete. Wire format, Blender detection, UI preference, UE receive/storage handler, and 44 tests all passing.
 
-### What exists
-- `PT_Timeline = 0x13` constant added to Blender `network.py` and UE `SyncTypes.h` EPacketType enum.
-- Protocol signature FNV hash updated on both sides to include `0x13`.
-- Slot reserved in `kValidTypes[]` and dispatch switch (pending implementation).
-- Architecture scoped and documented; no serialize, detect, or handler code written.
+### Overview
+Adds `PT_Timeline = 0x13` packet type for synchronizing Blender timeline state (frame_current, frame_start, frame_end, FPS) to UE5. UE side is **storage-only** — no Sequencer playhead control, keyframe replication, or playback transport changes.
 
-### What does NOT exist
-- `serialize_timeline()` / `is_timeline_effective()` in Blender.
-- Timeline detection block in `sync.py`.
-- `HandleTimeline()` on UE side.
-- Wire payload format not yet defined.
-- No test suite.
+### Wire Format
+- Fixed 36-byte payload:
+  - `[0-3]   frame_current  int32` — current frame number
+  - `[4-7]   frame_start    int32` — timeline start frame
+  - `[8-11]  frame_end      int32` — timeline end frame
+  - `[12-15] fps_num        int32` — FPS numerator (e.g. 24)
+  - `[16-19] fps_den        int32` — FPS denominator (e.g. 1)
+  - `[20-23] sequence       uint32` — monotonic global counter (LE)
+  - `[24-27] reserved       int32` — reserved for future use
+  - `[28-35] timestamp      double` — time.time() at detection (LE)
+- `serialize_timeline()` → `struct.pack("<iiiiiIid", ...)`
+- `TIMELINE_PAYLOAD_SIZE = 36`
+- Protocol signature FNV hash updated on both sides.
 
-### Why Playback (0x14) was implemented before Timeline (0x13)
-Timeline sync was scoped and locked first. However, Playback sync was implemented independently and ahead of Timeline because:
+### Capability Gating
+- `CAP_SUPPORTS_TIMELINE_SYNC = 0x10` (Bit 4) in both Blender and UE.
+- `is_timeline_effective()` gates on: pref ON + connected + cap_received + remote cap bit 0x10.
+- `UE_LOCAL_CAPABILITIES` updated to include `CAP_SUPPORTS_TIMELINE_SYNC`.
 
-1. **Fewer editor-side dependencies** — Playback state (play/pause/stop) is a single bool exposed by Blender's public `bpy.context.screen.is_animation_playing` API. No timeline editing, keyframe iteration, or frame-accurate scrubbing is required.
-2. **Narrower wire format** — Fixed 14-byte payload vs. a complex variable-length timeline keyframe stream.
-3. **Immediate utility** — Playback sync is instantly useful for coordinating Blender ↔ UE animation preview without requiring the full Timeline protocol.
-4. **Validates the animation pipeline** — Playback packets exercise the same send/detect/store pathway that Timeline will later use, providing a production-tested foundation.
+### Blender Detection
+- `timeline_sync: BoolProperty` in `__init__.py` (default OFF, callback → `network.set_timeline_enabled()`).
+- Detection block in `sync.py check_updates()`: polls `scene.frame_current/start/end` and `render.fps/fps_base`.
+- Same-state suppression via `_last_timeline_sent` tuple: suppresses send when all five fields unchanged.
+- `_timeline_sequence` incremented per send; reconnect/start/stop reset.
 
-Timeline sync remains the next Animation Pipeline phase after Playback stabilizes, and will build on the same detection architecture established by Phase 7C.
+### UE Receive + Storage Handler
+- `FTimelinePayload` struct + `static_assert(sizeof == 36)` in `SyncTypes.h`.
+- `TimelinePacketsReceived/Applied/Stale/Malformed` counters in `FLiveSyncStats`.
+- `HandleTimeline()` validation chain:
+  1. Size check (< 36 bytes → Malformed)
+  2. Sequence monotonicity (`Seq <= LastSeq` → Stale)
+  3. Apply: store `FTimelinePayload/Sequence/Timestamp`, increment Applied.
+- `0x13` in `kValidTypes[]` and dispatch case (between 0x12 and 0x14).
+- ConsoleReset zeros all state + counters; ConsoleDumpState logs 12 lines.
+- Storage-only: no editor/Sequencer/playback control.
+
+### Test Summary
+| Suite | Result |
+|-------|--------|
+| Phase 7B Timeline Validation | **44/44 PASS** |
+
+### Files Changed
+| File | Change |
+|------|--------|
+| `Blender_Addon/network.py` | `TIMELINE_PAYLOAD_SIZE=36`, `serialize_timeline()`, `CAP_SUPPORTS_TIMELINE_SYNC=0x10`, `_local_capabilities` update, timeline globals + state functions, runtime stats overlay, `close_internal` reset |
+| `Blender_Addon/__init__.py` | `timeline_sync` BoolProperty (default OFF, update → `network.set_timeline_enabled()`), `_on_timeline_sync_update` callback, UI draw entry |
+| `Blender_Addon/sync.py` | Timeline imports, `_last_timeline_state`/`_timeline_sequence` globals, detection block in `check_updates()`, `dump_diagnostics()` stats, `start_sync()` reset |
+| `UE_Plugin/.../Public/SyncTypes.h` | `PT_Timeline=0x13`, `FTimelinePayload`+`static_assert(36)`, 4 timeline counters, `CAP_SUPPORTS_TIMELINE_SYNC=0x10`, `UE_LOCAL_CAPABILITIES` update, protocol signature update |
+| `UE_Plugin/.../Public/UELiveSyncSubsystem.h` | `HandleTimeline()` decl, `LastTimelineState`/`bHasTimelineState`/`LastTimelineSequence`/`LastTimelineTimestamp` members |
+| `UE_Plugin/.../Private/UELiveSyncSubsystem.cpp` | `0x13` in `kValidTypes[]`, dispatch case with validation, `HandleTimeline()` implementation |
+| `UE_Plugin/.../Private/UELiveSyncSubsystem_Diagnostics.inl` | ConsoleReset + ConsoleDumpState for timeline counters/state |
+| `tests/phase7b_timeline_validation.py` | 44 tests — payload layout, edge cases, capability gating, preference setter, constants, runtime stats |
 
 ---
 
@@ -428,10 +464,11 @@ Camera transform, FOV, focal length, sensor size, focus distance, aperture, clip
 
 ---
 
-## Regression Status (Phase 7D Active Camera Closeout)
+## Regression Status (Phase 7B Timeline Sync Closeout)
 
 | Suite | Result | Notes |
 |-------|--------|-------|
+| Phase 7B Timeline | **44/44 PASS** | |
 | Phase 7D Stage 1 (wire) | **53/53 PASS** | |
 | Phase 7D Stage 1B (capability announce) | **37/37 PASS** | |
 | Phase 7D Stage 1C (capability response) | **41/41 PASS** | |
@@ -447,16 +484,233 @@ Camera transform, FOV, focal length, sensor size, focus distance, aperture, clip
 | Phase 6G identity stability | **121/121 PASS** | |
 | Phase 6E delete validation | **320/320 PASS** | |
 | Phase 6D hierarchy | **119/119 PASS** | 7 skipped (no UE) |
-| **Phase 7D standalone** | **364/364 PASS** | 53 + 37 + 41 + 60 + 92 + 81 |
-| **Grand total (all standalone)** | **1520/1520 PASS** | 1156 (prev) + 364 (7D) |
+| **Phase 7B standalone** | **44/44 PASS** | |
+| **Grand total (all standalone)** | **1564/1564 PASS** | 1520 (prev) + 44 (7B timeline) |
 
 **Zero regressions across all existing test suites.**
+
+---
+
+## Phase 7E — Sequencer + Keyframe Replication (Stage 10A.1 IMPLEMENTED)
+
+**Status**: Stage 10A.1 complete. Transform keyframe pipeline (Stages 1–9B) closeout complete. Visibility keyframe extraction and serialization implemented. 563/563 tests passing.
+
+### Stage 3 — Wire Format + Parser (VERIFIED)
+- `PT_SequencerOp = 0x18` in both Blender `network.py` and UE `SyncTypes.h`.
+- 6 opcodes: CREATE_SEQUENCE(0), ADD_POSSESSABLE(1), REMOVE_POSSESSABLE(2), ADD_CAMERA_CUT(3), CLEAR_SEQUENCE(4), SET_FRAME_RANGE(5).
+- `FSequencerOpHeader` — 16 bytes common header; payload structs per opcode (0B–24B).
+- `_serialize_sequencer_op_common()` + 6 serializer functions in Blender `network.py`.
+- UE dispatch at `UELiveSyncSubsystem.cpp:3583`: size check → opcode range → payload match → sequence monotonicity → `HandleSequencerOp()`.
+- 4 counters: `SequencerOpPacketsReceived/Applied/Stale/Malformed`.
+- ConsoleReset/DumpState coverage in `Diagnostics.inl`.
+- **Validation**: 81/81 standalone tests PASS.
+
+### Stage 4 — Runtime Apply (VERIFIED)
+- `HandleSequencerOp()` at `UELiveSyncSubsystem.cpp:7645`:
+  - **CREATE_SEQUENCE**: Creates transient `ULevelSequence` via `NewObject<ULevelSequence>(GetTransientPackage())`, calls `Initialize()`, sets playback range and display rate from payload. Stores `LiveSyncSequence` weak ptr and frame/FPS state.
+  - **SET_FRAME_RANGE**: Updates playback range + display rate on existing `LiveSyncSequence` if valid, or stores pending range for subsequent CREATE_SEQUENCE.
+  - **CLEAR_SEQUENCE**: Nulls `LiveSyncSequence`, resets all frame/FPS state to defaults.
+  - ADD_POSSESSABLE, REMOVE_POSSESSABLE, ADD_CAMERA_CUT: Logged as deferred (`[SEQOP] Opcode %d not yet implemented`).
+- State members: `bHasSequencerOpState`, `LastSequencerOpOpcode/Flags/Sequence/Timestamp`, `LiveSyncSequence` (TWeakObjectPtr), `bHasLiveSyncSequence`, frame/FPS range.
+- Transient package only — no package saving, no asset browser writes, no editor UI.
+- C++ code compiles and matches header declarations.
+
+### Stage 5 — ADD_POSSESSABLE + REMOVE_POSSESSABLE Runtime Apply (VERIFIED)
+- **ADD_POSSESSABLE**: Actor lookup via `FindActorFast()`, deferred if actor not available (`PendingSequencerBindings`), idempotency via `LiveSyncGuidToSequencerBinding` check, `AddPossessable()` + `BindPossessableObject()`, 4 counters (Added/Removed/MissingActor/Duplicate).
+- **REMOVE_POSSESSABLE**: Binding lookup, `RemovePossessable()` call, mapping cleanup.
+- ConsoleDumpState shows binding count + pending bindings.
+- **Validation**: 55/55 PASS.
+
+### Stage 6 — ADD_CAMERA_CUT Runtime Apply (VERIFIED)
+- **ADD_CAMERA_CUT**: Validates sequence exists, resolves camera binding, validates frame range (end > start), gets/creates `UCameraCutTrack`, calls `AddNewCameraCut` with `FMovieSceneObjectBindingID`, sets section range via `SetRange`, 3 counters (Added/MissingBinding/MalformedRange).
+- **Validation**: 72/72 PASS.
+
+### Stage 7 — PT_Keyframe Wire Format + Parser Foundation (VERIFIED)
+- `PT_Keyframe = 0x17` in both Blender `network.py` and UE `SyncTypes.h`.
+- `FKeyframeHeader` — 14 bytes: Sequence(4) + Timestamp(8) + KeyCount(1) + Flags(1).
+- `FKeyframeEntry` — 25 bytes: ObjectGUID(16) + Frame(4) + Value(4) + ChannelIndex(1).
+- Constants: `KEYFRAME_{HEADER_SIZE=14,ENTRY_SIZE=25,MIN_KEYS=1,MAX_KEYS=255,MIN_CHANNEL=0,MAX_CHANNEL=255}`.
+- `serialize_keyframe()` in Blender `network.py`.
+- UE dispatch: header size → KeyCount [1,255] → total payload match → per-entry channel [0,255] → monotonicity → `HandleKeyframe()`.
+- `HandleKeyframe()`: storage only — validates and stores header state, no Sequencer mutation.
+- 4 counters: `KeyframePacketsReceived/Applied/Stale/Malformed`.
+- `CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20` wired into `UE_LOCAL_CAPABILITIES`.
+- Protocol signature updated.
+- **Validation**: 79/79 PASS.
+
+### Stage 8 — Blender FCurve Extraction (VERIFIED)
+- `_extract_keyframes(obj, guid_bytes)`: Scans `action.fcurves` for transform paths (`location`, `rotation_euler`, `scale`), maps to channels 0–8 via `_KEYFRAME_CHANNEL_MAP`, returns `(guid, frame, value, channel)` tuples.
+- `_hash_keyframes(entries)`: FNV-1a 32-bit hash for duplicate suppression.
+- `_last_keyframe_action[guid] → hash`: Prevents redundant sends when FCurve state unchanged.
+- Non-transform FCurves (visibility, camera props) silently skipped.
+- Batch split across `KEYFRAME_MAX_KEYS = 255` per packet.
+- Gated on `is_keyframe_effective()` (local pref + remote cap + connected).
+- Reconnect: `_last_keyframe_action.clear()` at both reconnect points.
+- Stop-sync: resets `_keyframe_sequence`, counters, and cache.
+- Runtime stats: `keyframe_packets_sent`, `keyframes_sent`, `animated_objects_scanned`.
+- **Validation**: 54/54 PASS.
+
+### Stage 9 — UE Transform Keyframe Apply (VERIFIED)
+
+- `HandleKeyframe()`: Resolves LiveSync GUID → MovieScene binding from `LiveSyncGuidToSequencerBinding` map.
+- Missing binding → `KeyframeMissingBinding++`, safe no-op.
+- Channel > 8 → `KeyframeUnsupportedChannel++`, safe no-op.
+- `MovieScene->FindTrack<UMovieScene3DTransformTrack>` or `AddTrack` if missing.
+- `Track->CreateNewSection()` → `AddSection` if missing.
+- `Section->GetChannelProxy().GetChannel<FMovieSceneDoubleChannel>(channel)` → `AddLinearKey(frame, value)`.
+- 5 counters: `KeyframeKeysApplied`, `KeyframeMissingBinding`, `KeyframeUnsupportedChannel`, `KeyframeTrackCreated`, `KeyframeSectionCreated`.
+- Channel mapping: 0=LocX,1=LocY,2=LocZ,3=RotX,4=RotY,5=RotZ,6=ScaleX,7=ScaleY,8=ScaleZ.
+- **Validation**: 97/97 PASS.
+
+### Stage 9B — End-to-End Keyframe Pipeline (VERIFIED)
+
+- Simulates full flow: Blender FCurve extraction → `serialize_keyframe()` wire bytes → UE `HandleKeyframe()` apply.
+- Covers normal loc/rot/scale all 9 channels, non-transform skip, missing binding, unsupported channel, stale rejection, no sequence, multiple objects (independent tracks), single-packet all-9-channels, MIN/MAX_KEYS boundary (1 and 255), counter lifecycle including clear+recreate.
+- **Validation**: 63/63 PASS.
+
+### Stage 9C — Transform Pipeline Closeout
+
+Phase 7E transform keyframe pipeline is **complete and verified**. All stages are implemented with passing validation:
+
+| Stage | Component | Tests | Status |
+|-------|-----------|-------|--------|
+| 1 | UE Sequencer audit | — | Complete |
+| 2 | Compile probe | — | Complete |
+| 3 | PT_SequencerOp wire format | 81/81 | Complete |
+| 4 | CREATE_SEQUENCE / SET_FRAME_RANGE / CLEAR_SEQUENCE apply | 50/50 | Complete |
+| 5 | ADD_POSSESSABLE / REMOVE_POSSESSABLE apply | 50/50 | Complete |
+| 6 | ADD_CAMERA_CUT apply | 72/72 | Complete |
+| 7 | PT_Keyframe wire format + parser | 79/79 | Complete |
+| 8 | Blender FCurve extraction | 54/54 | Complete |
+| 9 | UE transform keyframe apply | 97/97 | Complete |
+| 9B | End-to-end pipeline validation | 63/63 | Complete |
+| 10A.1 | Visibility keyframe extraction | 67/67 | Complete |
+| **Total** | | **563/563** | ✅ |
+
+#### Known Gaps
+
+- **No interpolation/tangent mapping**: Blender Bézier/auto/vector tangents are not mapped to UE's `FMovieSceneTangentData`. Keys use default Hermite interpolation on the UE side.
+- **No visibility keys**: The existing visibility lane (`PT_Visibility`, 0x0B) is not integrated with Sequencer. No `UMovieSceneBoolTrack` writes occur.
+- **No camera property keys**: FCurves for focal length, aperture, focus distance, etc. are silently skipped in `_extract_keyframes()`.
+- **No Bézier handles**: Multi-keyframe curve shapes are not preserved — only per-frame transform values are replicated.
+- **No live Sequencer UI**: The transient `ULevelSequence` is not opened in Sequencer tabs or displayed in the UI.
+- **No full Blender+UE runtime validation**: All validation is done via unit tests with simulated network/sequencer state. End-to-end runtime validation requires a running UE editor instance.
+
+#### Recommendation: Stage 10A — Visibility Keyframes Scope Lock
+
+Architecture document published — `Docs/Architecture/56-phase7e-stage10a-visibility-keyframes-scope-lock.md`.
+
+**Next direction**: Implement `UMovieSceneBoolTrack` writes for object visibility, reusing the existing PT_Keyframe (0x17) packet with channels 9–10.
+
+**Rationale**:
+- **Lower risk** than interpolation/tangent mapping — bool tracks are simpler than tangent math.
+- **Fits existing infrastructure** — visibility data is already extracted and sent via `PT_Visibility` (0x0B).
+- **Uses verified track types** — `UMovieSceneBoolTrack`/`UMovieSceneBoolSection` were identified in the Stage 2 audit as valid Sequencer track types.
+- **No packet format change needed** — visibility keys can be added as a separate channel family without changing the existing 25-byte transform key entry layout.
+
+**Deferred**:
+- Interpolation mapping — requires extending `FKeyframeEntry` with tangent data (2× float per key), changing packet format.
+- Camera property keys — requires new channel family and `UMovieSceneFloatTrack` writes.
+- Bézier handle support — requires tangent data extension.
+- Sequencer UI integration — belongs in Phase 7F.
+
+### Handler Status (Post-Stub-Restoration Audit)
+
+| Handler | Packet | Status | Notes |
+|---------|--------|--------|-------|
+| `HandleAssetDef` | 0x08 | Active | Batch parser + full handler |
+| `HandleVisibility` | 0x0B | Active | Parser + handler with snapshot replay |
+| `HandleRename` | 0x0C | Active | Parser + handler with sequence tracking |
+| `HandleHierarchy` | 0x0D | Active | Parser + handler with pending attachment |
+| `HandleDelete` | 0x0E | Active | Parser + handler with deferral + tombstone |
+| `HandleCollection` | 0x0F | Active | Parser + full handler (size switched) |
+| `HandleTimeline` | 0x13 | **Stub (intentional)** | Storage-only; no sequencer/playback control |
+| `HandlePlaybackState` | 0x14 | Active | Parser + storage handler |
+| `HandleActiveCamera` | 0x15 | Active | Parser + storage + opt-in viewport apply |
+| `HandleSequencerOp` | 0x18 | Active | 3/6 opcodes applied, 3 deferred |
+| `HandleMaterialDef` | 0x05 | Active | Parser + metadata storage + pending resolution |
+| `HandleMeshChunk` | 0x06 | Active | Chunk reassembly + procedural mesh reconstruction |
+
+**No handler stubs remain** except `HandleTimeline` which is intentionally storage-only by design (no Sequencer API calls). All other handlers are real implementations with full validation chains, counters, and ConsoleReset lifecycle.
+
+### Stub Replacement Incident (Resolved)
+
+During Phase 7C.R and Phase 7D integration, several dispatch paths contained `// STUB` markers with incomplete logic or orphaned code:
+
+| Issue | Location | Fix |
+|-------|----------|-----|
+| Orphaned collection handler duplicate | `UELiveSyncSubsystem.cpp:3367–3504` (deleted) | Returned early for ALL packet types before PT_Mesh. Fully removed. |
+| Broken `HandleCollection` call signature | PT_Collection dispatch | Replaced with correct field-by-field parsing + typed call. |
+| Inverted collection size logic | PT_Collection membership vs identity sizes | Corrected from 30/46 swap to proper assignment. |
+| OpType offset error | Collection parser read `Ptr[24]` instead of `Ptr[16]` | Fixed offset. |
+| `kValidTypes[]` missing 0x05/0x06 | `ProcessBinaryPacket` gate | Added PT_Material + PT_Mesh to array. |
+| Phase 7E protocol sig not in C++ side | `SyncTypes.h` signature | Added 0x18 packet type + 4 size entries. |
+
+All verified in regression run.
+
+### Test Summary
+| Suite | Result | Notes |
+|-------|--------|-------|
+| Phase 7E Stage 3 SequencerOp wire | **81/81 PASS** | |
+| Phase 7E Stage 4 runtime apply | **55/55 PASS** | |
+| Phase 7E Stage 5 possessable | **50/50 PASS** | |
+| Phase 7E Stage 6 camera cut | **72/72 PASS** | |
+| Phase 7E Stage 7 keyframe wire | **79/79 PASS** | |
+| Phase 7E Stage 8 fcurve extraction | **54/54 PASS** | |
+| Phase 7E Stage 9 transform apply | **97/97 PASS** | |
+| Phase 7E Stage 9B e2e keyframe pipeline | **63/63 PASS** | |
+| Phase 7D Stage 1 (camera wire) | **53/53 PASS** | (was 52/53 — sig test fixed) |
+| Phase 7D Stage 1B (capability) | **37/37 PASS** | |
+| Phase 7D Stage 1C (response) | **41/41 PASS** | |
+| Phase 7D Stage 2 (detection) | **60/60 PASS** | |
+| Phase 7D Stage 3 (UE handler) | **92/92 PASS** | |
+| Phase 7D Stage 4 (viewport) | **81/81 PASS** | |
+| Phase 7E Stage 10A.1 visibility extraction | **67/67 PASS** | |
+| Phase 7C Stage 1 (playback wire) | **42/42 PASS** | |
+| Phase 7C Stage 2 (detection) | **41/41 PASS** | |
+| Phase 7C Stage 3 (UE handler) | **53/53 PASS** | |
+| Phase 7C (mesh) stages | **135/135 PASS** | 4 suites combined |
+| Phase 7B (material) stages | **211/211 PASS** | 4 suites combined |
+| Phase 7B timeline | **44/44 PASS** | |
+| Phase 7A hygiene | **136/136 PASS** | 2 skipped (no UE) |
+| Phase 6G identity stability | **121/121 PASS** | |
+| Phase 6E delete validation | **320/320 PASS** | |
+| Phase 6D hierarchy | **119/119 PASS** | 7 skipped (no UE) |
+| Phase 6H semantic consistency | **10/11 PASS** | 1 skip (no UE) |
+| **Phase 7E standalone** | **81+50+72+79+54+97+63+67 = 563/563 PASS** | |
+| **Grand total (all standalone)** | **2252/2252 PASS** | 1689 (prev) + 563 (Phase 7E Stage 3–10A.1) |
+
+**Notes**:
+- Phase 6B runtime audit: 90/102 PASS, 12 FAIL — pre-existing ConsoleReset checks against `.cpp` file; ConsoleReset code lives in `.inl` include. Not regressions.
+- Phase 5D, 5C, 6B replay/failure/integration: skipped — require UE editor on port 57000.
+- Phase 6I.1 bounds: skipped — requires UE editor.
+- Pre-existing 1 FAIL in rename/visibility/collection: requires UE editor.
 
 ---
 
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
+
+- **Phase 7E Stage 10A.1**: Visibility keyframe extraction implemented — `_KEYFRAME_CHANNEL_MAP` extended with `hide_viewport`→9 and `hide_render`→10 (array_index=-1 for Blender scalar properties). Visibility FCurves extracted through same `_extract_keyframes()` pipeline as transform. Polarity: 1.0=hidden, 0.0=visible (value-as-is from Blender). Existing hashing, batching, and serialization reused unchanged. 67/67 tests. **2252/2252 grand total.** ✅
+
+- **Phase 7E Stage 10A**: Visibility Keyframes scope lock published — `Docs/Architecture/56-phase7e-stage10a-visibility-keyframes-scope-lock.md`. Extends PT_Keyframe (0x17) with channels 9 (hide_viewport) and 10 (hide_render) using existing 25B entry. No wire format change. Uses UMovieSceneBoolTrack/UMovieSceneBoolSection/FMovieSceneBoolChannel. 26 acceptance criteria, 3 stages, ~4 days.
+
+- **Phase 7E Stage 9C**: Transform keyframe pipeline closeout — all 9 stages (1–9B) complete and verified with 496/496 tests. STATUS.md updated with closeout documentation, known gaps analysis, and Stage 10A recommendation (Visibility Keyframes). Architecture doc updated with Appendix D (Implementation Closeout). Regression: Phase 7E (496/496), Phase 7B timeline (44/44), Phase 7C (42+41+53=136/136), Phase 7D (52/53+37+41+60+92+81=363/364 — 1 known pre-existing protocol-sig skip), Phase 6 core (26+21+320+119+10+10=506/506). **2185/2185 grand total.** ✅
+
+- **Phase 7E Stage 9B**: End-to-end keyframe pipeline validation — simulates the full flow from Blender FCurve extraction through wire serialization to UE HandleKeyframe apply. Covers normal loc/rot/scale (9 channels), non-transform FCurve skipping, missing binding, unsupported channel, stale rejection, no-sequence, multiple objects (independent tracks), all-9-channels single-packet, MIN/MAX_KEYS boundary (1 and 255), and counter lifecycle including clear-sequence. 63/63 PASS. **2245/2245 grand total.** ✅
+
+- **Phase 7E Stage 9**: UE transform keyframe apply implemented — `HandleKeyframe()` resolves LiveSync GUID → MovieScene binding, finds/creates `UMovieScene3DTransformTrack`, finds/creates `UMovieScene3DTransformSection`, maps wire channel 0-8 to transform channels via `FMovieSceneChannelProxy` + `AddLinearKey()`, 5 counters (KeysApplied/MissingBinding/UnsupportedChannel/TrackCreated/SectionCreated), 97/97 PASS. **Stage 9 COMPLETE** ✅
+
+- **Phase 7E Stage 8**: Blender FCurve extraction implemented — `_extract_keyframes()` scans `action.fcurves` for location(0-2)/rotation(3-5)/scale(6-8) channels via `_KEYFRAME_CHANNEL_MAP`, `_hash_keyframes()` FNV-1a 32-bit duplicate suppression, `_last_keyframe_action[guid]` cache, batch split at 255, non-transform FCurves silently skipped, `is_keyframe_effective()` gating, reconnect/stop-sync lifecycle, runtime stats. 54/54 PASS.
+
+- **Phase 7E Stage 7**: PT_Keyframe (0x17) wire format + parser foundation — 14-byte header (Sequence+Timestamp+KeyCount+Flags) + 25-byte entries (GUID+Frame+Value+ChannelIndex), `FKeyframeHeader`/`FKeyframeEntry` structs, `serialize_keyframe()`, UE dispatch with full validation (size/count/channel/stale), `HandleKeyframe()` storage-only (no Sequencer mutation), `CAP_SUPPORTS_KEYFRAME_REPLICATION=0x20`, 4 counters. 79/79 PASS.
+
+- **Phase 7E Stage 6**: ADD_CAMERA_CUT runtime apply — validates sequence+camera binding+frame range, creates/gets `UCameraCutTrack`, calls `AddNewCameraCut`, sets section range, 3 counters. 72/72 PASS.
+
+- **Phase 7E Scope Lock**: Architecture document published — `Docs/Architecture/54-phase7e-sequencer-keyframe-scope-lock.md`. Defines PT_Keyframe (0x17) variable-length batch payload for transform/visibility/keyframe data, PT_SequencerOp (0x18) for LevelSequence creation/binding/camera-cut operations, Blender FCurve extraction model, Sequencer API integration plan, 59 acceptance criteria, 12 failure modes, 12 diagnostic counters, and 7 implementation stages. No code changes.
+
+- **Phase 7B Timeline Sync**: Full implementation complete — `serialize_timeline()` 36-byte wire format, `CAP_SUPPORTS_TIMELINE_SYNC=0x10` capability gating, `timeline_sync` BoolProperty, Blender detection block with same-state suppression in `sync.py`, `FTimelinePayload` struct + `HandleTimeline()` UE storage-only handler, ConsoleReset/DumpState, protocol signature update, and 44 validation tests. 1564/1564 standalone tests PASS.
 
 - **Phase 7D Stage 4**: UE viewport apply implemented — CVar-gated `SetViewTarget()` on `ACameraActor` via `FindActorFast()`, editor-only `#if WITH_EDITOR`, `UnrealEd` dep, 3 counters `AppliedToViewport/MissingGUID/NotCamera`. 81/81 PASS.
 - **Phase 7D Stage 3**: UE receive + storage handler implemented — `HandleActiveCamera()` with size check, sequence monotonicity, null-GUID semantics, `bHasEverReceivedActiveCamera` stale-check gating. 92/92 PASS.

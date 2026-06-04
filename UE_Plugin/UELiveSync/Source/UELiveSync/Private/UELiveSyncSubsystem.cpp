@@ -43,6 +43,13 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Editor.h"
 #include "LevelEditorViewport.h"
 #include "Camera/CameraActor.h"
+
+#include "LevelSequence.h"
+#include "MovieScene.h"
+#include "Tracks/MovieSceneCameraCutTrack.h"
+#include "Sections/MovieSceneCameraCutSection.h"
+#include "Tracks/MovieScene3DTransformTrack.h"
+#include "Sections/MovieScene3DTransformSection.h"
 #endif
 
 #include "EngineUtils.h"
@@ -2696,7 +2703,7 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x14, 0x15 };
+            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x18 };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
@@ -2778,6 +2785,7 @@ ProcessBinaryPacket(
 
         Stats.CapabilityAnnounceReceived.fetch_add(1, std::memory_order_relaxed);
 
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
         if (ObjSize < sizeof(FCapabilityAnnouncePayload))
         {
             Stats.CapabilityPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
@@ -2819,6 +2827,7 @@ ProcessBinaryPacket(
 
         Stats.CapabilityResponseReceived.fetch_add(1, std::memory_order_relaxed);
 
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
         if (ObjSize < sizeof(FCapabilityResponsePayload))
         {
             Stats.CapabilityPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
@@ -3402,6 +3411,7 @@ ProcessBinaryPacket(
 
         Stats.PlaybackPacketsReceived.fetch_add(1, std::memory_order_relaxed);
 
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
         if (ObjSize < sizeof(FPlaybackStatePayload))
         {
             Stats.PlaybackPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
@@ -3447,6 +3457,64 @@ ProcessBinaryPacket(
     }
 
     // =====================================================
+    // TIMELINE PACKET (Phase 7B)
+    // =====================================================
+    // Wire format (36 bytes fixed):
+    //   FrameCurrent(4) + FrameStart(4) + FrameEnd(4) + FPSNum(4) + FPSDen(4)
+    //   + Sequence(4) + Reserved(4) + Timestamp(8)
+    //
+    // Validation:
+    //   - Payload size must be exactly 36 bytes
+    //   - Sequence must be strictly greater than LastTimelineSequence
+    //     (first packet with any sequence is accepted)
+    //   - No editor/Sequencer/playback control — storage only
+    // =====================================================
+
+    if (PacketType == 0x13)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessTimeline);
+
+        Stats.TimelinePacketsReceived.fetch_add(1, std::memory_order_relaxed);
+
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
+        if (ObjSize < sizeof(FTimelinePayload))
+        {
+            Stats.TimelinePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[TIMELINE] Malformed packet: size %d < %d"),
+                ObjSize, sizeof(FTimelinePayload));
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        FTimelinePayload Payload;
+        Payload.FrameCurrent = *reinterpret_cast<const int32*>(Ptr + 0);
+        Payload.FrameStart   = *reinterpret_cast<const int32*>(Ptr + 4);
+        Payload.FrameEnd     = *reinterpret_cast<const int32*>(Ptr + 8);
+        Payload.FPSNum       = *reinterpret_cast<const int32*>(Ptr + 12);
+        Payload.FPSDen       = *reinterpret_cast<const int32*>(Ptr + 16);
+        Payload.Sequence     = *reinterpret_cast<const uint32*>(Ptr + 20);
+        Payload.Reserved     = *reinterpret_cast<const int32*>(Ptr + 24);
+        Payload.Timestamp    = *reinterpret_cast<const double*>(Ptr + 28);
+
+        if (bHasTimelineState && Payload.Sequence <= LastTimelineSequence)
+        {
+            Stats.TimelinePacketsStale.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[TIMELINE] Stale packet: seq %u <= %u"),
+                Payload.Sequence, LastTimelineSequence);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        HandleTimeline(Payload);
+        Stats.TimelinePacketsApplied.fetch_add(1, std::memory_order_relaxed);
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
     // ACTIVE CAMERA PACKET (Phase 7D)
     // =====================================================
     // Wire format (28 bytes fixed):
@@ -3466,6 +3534,7 @@ ProcessBinaryPacket(
 
         Stats.ActiveCameraPacketsReceived.fetch_add(1, std::memory_order_relaxed);
 
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
         if (ObjSize < sizeof(FActiveCameraPayload))
         {
             Stats.ActiveCameraPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
@@ -3494,6 +3563,122 @@ ProcessBinaryPacket(
 
         HandleActiveCamera(Payload);
         Stats.ActiveCameraPacketsApplied.fetch_add(1, std::memory_order_relaxed);
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // SEQUENCER OP (Phase 7E — PT_SequencerOp 0x18)
+    // =====================================================
+    // Fixed-size common header (16 bytes) + optional opcode payload.
+    //
+    // Validation:
+    //   - Total packet size >= sizeof(FSequencerOpHeader) (16 bytes)
+    //   - Opcode must be within [SEQUENCER_OP_MIN_OPCODE, SEQUENCER_OP_MAX_OPCODE]
+    //   - Remaining bytes must match expected payload size for opcode
+    //   - Sequence must be strictly greater than LastSequencerOpSequence
+    //     (first packet with any sequence is accepted)
+    //
+    // Applies CREATE_SEQUENCE, SET_FRAME_RANGE, and CLEAR_SEQUENCE
+    // to the subsystem-owned transient ULevelSequence.
+    // ADD_POSSESSABLE, REMOVE_POSSESSABLE, ADD_CAMERA_CUT deferred.
+    // =====================================================
+
+    if (PacketType == 0x18)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessSequencerOp);
+
+        Stats.SequencerOpPacketsReceived.fetch_add(1, std::memory_order_relaxed);
+
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
+        if (ObjSize < static_cast<int32>(sizeof(FSequencerOpHeader)))
+        {
+            Stats.SequencerOpPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEQOP] Truncated header: size %d < %d"),
+                ObjSize, sizeof(FSequencerOpHeader));
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Parse common header
+        FSequencerOpHeader Header;
+        FMemory::Memcpy(&Header, Ptr, sizeof(FSequencerOpHeader));
+
+        // Validate opcode range
+        if (Header.Opcode < SEQUENCER_OP_MIN_OPCODE ||
+            Header.Opcode > SEQUENCER_OP_MAX_OPCODE)
+        {
+            Stats.SequencerOpPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEQOP] Unknown opcode 0x%02X"),
+                Header.Opcode);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Validate payload size matches expected for opcode
+        int32 HeaderSize = sizeof(FSequencerOpHeader);
+        int32 PayloadBytes = ObjSize - HeaderSize;
+        int32 ExpectedPayload = 0;
+
+        switch (Header.Opcode)
+        {
+        case SEQUENCER_OP_CREATE_SEQUENCE:
+            ExpectedPayload = SEQUENCER_OP_CREATE_SEQUENCE_PAYLOAD_SIZE;
+            break;
+        case SEQUENCER_OP_ADD_POSSESSABLE:
+            ExpectedPayload = SEQUENCER_OP_ADD_POSSESSABLE_PAYLOAD_SIZE;
+            break;
+        case SEQUENCER_OP_REMOVE_POSSESSABLE:
+            ExpectedPayload = SEQUENCER_OP_REMOVE_POSSESSABLE_PAYLOAD_SIZE;
+            break;
+        case SEQUENCER_OP_ADD_CAMERA_CUT:
+            ExpectedPayload = SEQUENCER_OP_ADD_CAMERA_CUT_PAYLOAD_SIZE;
+            break;
+        case SEQUENCER_OP_CLEAR_SEQUENCE:
+            ExpectedPayload = SEQUENCER_OP_CLEAR_SEQUENCE_PAYLOAD_SIZE;
+            break;
+        case SEQUENCER_OP_SET_FRAME_RANGE:
+            ExpectedPayload = SEQUENCER_OP_SET_FRAME_RANGE_PAYLOAD_SIZE;
+            break;
+        }
+
+        if (PayloadBytes < ExpectedPayload)
+        {
+            Stats.SequencerOpPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEQOP] Truncated payload: opcode=0x%02X need=%d got=%d"),
+                Header.Opcode, ExpectedPayload, PayloadBytes);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Sequence monotonicity check
+        if (bHasSequencerOpState && Header.Sequence <= LastSequencerOpSequence)
+        {
+            Stats.SequencerOpPacketsStale.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[SEQOP] Stale packet: seq %u <= %u"),
+                Header.Sequence, LastSequencerOpSequence);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Apply the sequencer op (create/update/clear sequence)
+        HandleSequencerOp(Header, Ptr + HeaderSize, PayloadBytes);
+
+        // Store accepted op state
+        LastSequencerOpOpcode   = Header.Opcode;
+        LastSequencerOpFlags    = Header.Flags;
+        LastSequencerOpSequence = Header.Sequence;
+        LastSequencerOpTimestamp = Header.Timestamp;
+        bHasSequencerOpState    = true;
+
+        Stats.SequencerOpPacketsApplied.fetch_add(1, std::memory_order_relaxed);
         Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
         return;
     }
@@ -7446,20 +7631,544 @@ UUELiveSyncSubsystem::FindPendingHierarchyAttachment(
 
 
 // =========================================================
-// RESOLVE HIERARCHY ATTACHMENTS (Phase 6D, Stage 7)
+// SEQUENCER OP (Phase 7E — PT_SequencerOp 0x18)
 // =========================================================
-// Deterministic deferred resolution for hierarchy events
-// whose parent was not available at packet time.
+// Applies CREATE_SEQUENCE, SET_FRAME_RANGE, and CLEAR_SEQUENCE
+// to the subsystem-owned transient ULevelSequence.
 //
-// Called once per Tick after ResolvePendingAttachments
-// (runtime resolver runs first, semantic runs second).
+// ADD_POSSESSABLE, REMOVE_POSSESSABLE, and ADD_CAMERA_CUT are
+// not yet implemented (deferred to later stages).
 //
-// Retry cadence: 10 fast (every frame) + 10 slow (every 5th
-// frame) = max 20 retries. Hard timeout at 60 total frames.
+// Ownership:
+//   - The ULevelSequence is transient (GetTransientPackage).
+//   - No package saving, no asset browser writes, no editor UI.
+//   - CLEAR_SEQUENCE clears only subsystem-owned state.
+//   - Does NOT delete user assets or destroy actors.
+// =========================================================
+
+void UUELiveSyncSubsystem::HandleSequencerOp(
+    const FSequencerOpHeader& Header,
+    const uint8* PayloadPtr,
+    int32 PayloadSize)
+{
+    CHECK_GAME_THREAD();
+
+    switch (Header.Opcode)
+    {
+    case SEQUENCER_OP_CREATE_SEQUENCE:
+    {
+        if (PayloadSize < SEQUENCER_OP_CREATE_SEQUENCE_PAYLOAD_SIZE)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEQOP] CREATE_SEQUENCE truncated payload"));
+            return;
+        }
+
+        FSequencerOpCreateSequencePayload Payload;
+        FMemory::Memcpy(&Payload, PayloadPtr, sizeof(Payload));
+
+        // Create transient ULevelSequence owned by the transient package
+        ULevelSequence* Seq = NewObject<ULevelSequence>(GetTransientPackage());
+        Seq->Initialize();
+
+        UMovieScene* MovieScene = Seq->GetMovieScene();
+        if (!MovieScene)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[SEQOP] CREATE_SEQUENCE: GetMovieScene() returned null"));
+            return;
+        }
+
+        // Set frame range and display rate from payload
+        MovieScene->SetPlaybackRange(
+            FFrameNumber(Payload.FrameStart),
+            Payload.FrameEnd - Payload.FrameStart + 1);
+
+        MovieScene->SetDisplayRate(
+            FFrameRate(Payload.FPSNum, Payload.FPSDen));
+
+        // Store sequence and derived state
+        LiveSyncSequence = Seq;
+        bHasLiveSyncSequence = true;
+        LiveSyncSequenceFrameStart = Payload.FrameStart;
+        LiveSyncSequenceFrameEnd   = Payload.FrameEnd;
+        LiveSyncSequenceFPSNum     = Payload.FPSNum;
+        LiveSyncSequenceFPSDen     = Payload.FPSDen;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[SEQOP] CREATE_SEQUENCE: %d-%d %d/%d fps"),
+            Payload.FrameStart, Payload.FrameEnd,
+            Payload.FPSNum, Payload.FPSDen);
+        break;
+    }
+
+    case SEQUENCER_OP_SET_FRAME_RANGE:
+    {
+        if (PayloadSize < SEQUENCER_OP_SET_FRAME_RANGE_PAYLOAD_SIZE)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEQOP] SET_FRAME_RANGE truncated payload"));
+            return;
+        }
+
+        FSequencerOpSetFrameRangePayload Payload;
+        FMemory::Memcpy(&Payload, PayloadPtr, sizeof(Payload));
+
+        if (bHasLiveSyncSequence && LiveSyncSequence.IsValid())
+        {
+            UMovieScene* MovieScene = LiveSyncSequence->GetMovieScene();
+            if (MovieScene)
+            {
+                MovieScene->SetPlaybackRange(
+                    FFrameNumber(Payload.FrameStart),
+                    Payload.FrameEnd - Payload.FrameStart + 1);
+
+                MovieScene->SetDisplayRate(
+                    FFrameRate(Payload.FPSNum, Payload.FPSDen));
+            }
+        }
+        else
+        {
+            // No sequence exists — store pending desired range.
+            // A subsequent CREATE_SEQUENCE will use these values.
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[SEQOP] SET_FRAME_RANGE without sequence: storing pending %d-%d %d/%d"),
+                Payload.FrameStart, Payload.FrameEnd,
+                Payload.FPSNum, Payload.FPSDen);
+        }
+
+        // Always update the stored range state (exists or pending)
+        LiveSyncSequenceFrameStart = Payload.FrameStart;
+        LiveSyncSequenceFrameEnd   = Payload.FrameEnd;
+        LiveSyncSequenceFPSNum     = Payload.FPSNum;
+        LiveSyncSequenceFPSDen     = Payload.FPSDen;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[SEQOP] SET_FRAME_RANGE: %d-%d %d/%d fps"),
+            Payload.FrameStart, Payload.FrameEnd,
+            Payload.FPSNum, Payload.FPSDen);
+        break;
+    }
+
+    case SEQUENCER_OP_CLEAR_SEQUENCE:
+    {
+        // Clear subsystem-owned sequence state only.
+        // Does NOT delete user assets or destroy actors.
+        LiveSyncSequence = nullptr;
+        bHasLiveSyncSequence = false;
+        LiveSyncSequenceFrameStart = 0;
+        LiveSyncSequenceFrameEnd   = 0;
+        LiveSyncSequenceFPSNum     = 0;
+        LiveSyncSequenceFPSDen     = 1;
+
+        LiveSyncGuidToSequencerBinding.Empty();
+        PendingSequencerBindings.Empty();
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[SEQOP] CLEAR_SEQUENCE: subsystem state + bindings cleared"));
+        break;
+    }
+
+    case SEQUENCER_OP_ADD_POSSESSABLE:
+    {
+        if (!bHasLiveSyncSequence || !LiveSyncSequence.IsValid())
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[SEQOP] ADD_POSSESSABLE: no sequence — deferred"));
+            break;
+        }
+
+        if (PayloadSize < SEQUENCER_OP_ADD_POSSESSABLE_PAYLOAD_SIZE)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEQOP] ADD_POSSESSABLE truncated payload"));
+            return;
+        }
+
+        FSequencerOpAddPossessablePayload Payload;
+        FMemory::Memcpy(&Payload, PayloadPtr, sizeof(Payload));
+
+        // Idempotency: if already bound, increment duplicate counter and skip
+        if (LiveSyncGuidToSequencerBinding.Contains(Payload.ObjectGuid))
+        {
+            Stats.SequencerPossessablesDuplicate.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[SEQOP] ADD_POSSESSABLE: duplicate guid %s — skipping"),
+                *Payload.ObjectGuid.ToString());
+            break;
+        }
+
+        // Resolve actor via ActorCache
+        AActor* Actor = FindActorFast(Payload.ObjectGuid);
+        if (!Actor)
+        {
+            Stats.SequencerPossessablesMissingActor.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[SEQOP] ADD_POSSESSABLE: actor not found for %s — deferred"),
+                *Payload.ObjectGuid.ToString());
+
+            FPendingSequencerBinding Pending;
+            Pending.LiveSyncGuid = Payload.ObjectGuid;
+            Pending.BindingType  = Payload.BindingType;
+            Pending.Timestamp    = Header.Timestamp;
+            PendingSequencerBindings.Add(Pending);
+            break;
+        }
+
+        UMovieScene* MovieScene = LiveSyncSequence->GetMovieScene();
+        if (!MovieScene)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[SEQOP] ADD_POSSESSABLE: GetMovieScene() returned null"));
+            break;
+        }
+
+        // Add possessable to MovieScene
+        FGuid BindingGuid = MovieScene->AddPossessable(
+            Actor->GetName(),
+            Actor->GetClass());
+
+        if (!BindingGuid.IsValid())
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[SEQOP] ADD_POSSESSABLE: AddPossessable failed for %s"),
+                *Actor->GetName());
+            break;
+        }
+
+        // Bind possessable to the actor
+        LiveSyncSequence->BindPossessableObject(
+            BindingGuid,
+            *Actor,
+            Actor->GetWorld());
+
+        // Store mapping
+        LiveSyncGuidToSequencerBinding.Add(Payload.ObjectGuid, BindingGuid);
+
+        Stats.SequencerPossessablesAdded.fetch_add(1, std::memory_order_relaxed);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[SEQOP] ADD_POSSESSABLE: %s → guid=%s binding=%s type=%d"),
+            *Actor->GetName(),
+            *Payload.ObjectGuid.ToString(),
+            *BindingGuid.ToString(),
+            Payload.BindingType);
+        break;
+    }
+
+    case SEQUENCER_OP_REMOVE_POSSESSABLE:
+    {
+        if (PayloadSize < SEQUENCER_OP_REMOVE_POSSESSABLE_PAYLOAD_SIZE)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEQOP] REMOVE_POSSESSABLE truncated payload"));
+            return;
+        }
+
+        FSequencerOpRemovePossessablePayload Payload;
+        FMemory::Memcpy(&Payload, PayloadPtr, sizeof(Payload));
+
+        FGuid* FoundBinding = LiveSyncGuidToSequencerBinding.Find(Payload.ObjectGuid);
+        if (!FoundBinding)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[SEQOP] REMOVE_POSSESSABLE: no binding found for %s — safe no-op"),
+                *Payload.ObjectGuid.ToString());
+            break;
+        }
+
+        // Remove possessable from MovieScene (does not destroy actor)
+        if (bHasLiveSyncSequence && LiveSyncSequence.IsValid())
+        {
+            UMovieScene* MovieScene = LiveSyncSequence->GetMovieScene();
+            if (MovieScene)
+            {
+                MovieScene->RemovePossessable(*FoundBinding);
+            }
+        }
+
+        // Remove local mapping
+        LiveSyncGuidToSequencerBinding.Remove(Payload.ObjectGuid);
+
+        Stats.SequencerPossessablesRemoved.fetch_add(1, std::memory_order_relaxed);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[SEQOP] REMOVE_POSSESSABLE: guid=%s binding=%s removed"),
+            *Payload.ObjectGuid.ToString(),
+            *FoundBinding->ToString());
+        break;
+    }
+
+    case SEQUENCER_OP_ADD_CAMERA_CUT:
+    {
+        if (!bHasLiveSyncSequence || !LiveSyncSequence.IsValid())
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[SEQOP] ADD_CAMERA_CUT: no sequence — safe no-op"));
+            break;
+        }
+
+        if (PayloadSize < SEQUENCER_OP_ADD_CAMERA_CUT_PAYLOAD_SIZE)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEQOP] ADD_CAMERA_CUT truncated payload"));
+            return;
+        }
+
+        FSequencerOpAddCameraCutPayload Payload;
+        FMemory::Memcpy(&Payload, PayloadPtr, sizeof(Payload));
+
+        // Resolve camera binding from the possessable map
+        FGuid* FoundBinding = LiveSyncGuidToSequencerBinding.Find(Payload.CameraGuid);
+        if (!FoundBinding)
+        {
+            Stats.SequencerCameraCutsMissingBinding.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[SEQOP] ADD_CAMERA_CUT: no binding found for %s — safe no-op"),
+                *Payload.CameraGuid.ToString());
+            break;
+        }
+
+        // Validate frame range
+        if (Payload.FrameEnd <= Payload.FrameStart)
+        {
+            Stats.SequencerCameraCutsMalformedRange.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[SEQOP] ADD_CAMERA_CUT: invalid range %d-%d for %s"),
+                Payload.FrameStart, Payload.FrameEnd,
+                *Payload.CameraGuid.ToString());
+            break;
+        }
+
+        UMovieScene* MovieScene = LiveSyncSequence->GetMovieScene();
+        if (!MovieScene)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[SEQOP] ADD_CAMERA_CUT: GetMovieScene() returned null"));
+            break;
+        }
+
+        // Get or create CameraCutTrack
+        UCameraCutTrack* CameraCutTrack = Cast<UCameraCutTrack>(
+            MovieScene->GetCameraCutTrack());
+        if (!CameraCutTrack)
+        {
+            CameraCutTrack = Cast<UCameraCutTrack>(
+                MovieScene->AddCameraCutTrack(UCameraCutTrack::StaticClass()));
+        }
+
+        if (!CameraCutTrack)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[SEQOP] ADD_CAMERA_CUT: failed to create CameraCutTrack"));
+            break;
+        }
+
+        // Create binding ID from the possessable binding GUID
+        FMovieSceneObjectBindingID BindingID(
+            UE::MovieScene::FRelativeObjectBindingID(*FoundBinding));
+
+        // Add camera cut section
+        UMovieSceneCameraCutSection* CutSection = CameraCutTrack->AddNewCameraCut(
+            BindingID, FFrameNumber(Payload.FrameStart));
+
+        if (!CutSection)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[SEQOP] ADD_CAMERA_CUT: AddNewCameraCut failed"));
+            break;
+        }
+
+        // Set the full range of the cut section
+        CutSection->SetRange(
+            TRange<FFrameNumber>(
+                FFrameNumber(Payload.FrameStart),
+                FFrameNumber(Payload.FrameEnd)));
+
+        Stats.SequencerCameraCutsAdded.fetch_add(1, std::memory_order_relaxed);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[SEQOP] ADD_CAMERA_CUT: guid=%s binding=%s range=%d-%d"),
+            *Payload.CameraGuid.ToString(),
+            *FoundBinding->ToString(),
+            Payload.FrameStart,
+            Payload.FrameEnd);
+        break;
+    }
+
+    default:
+        // Should not reach here (validated before call)
+        break;
+    }
+}
+
+
+// =========================================================
+// KEYFRAME REPLICATION — APPLY (Phase 7E Stage 9)
+// =========================================================
+// For each key entry in the validated packet:
+// 1. Resolve LiveSync object GUID → MovieScene binding GUID
+// 2. If missing binding → log + counter, skip (safe no-op)
+// 3. Map wire channel index (0-8) to UE transform channel:
+//    0=LocX, 1=LocY, 2=LocZ, 3=RotX, 4=RotY, 5=RotZ,
+//    6=ScaleX, 7=ScaleY, 8=ScaleZ
+//    Any channel > 8 → log + counter, skip
+// 4. Find/create UMovieScene3DTransformTrack for binding
+// 5. Find/create UMovieScene3DTransformSection in track
+// 6. Insert key at frame with value via AddLinearKey
 //
-// Each deferred entry is re-checked against the sequence
-// tracker (FINDING-001) before application to prevent stale
-// graph mutations.
+// Safety: only mutates subsystem-owned transient LevelSequence.
+// Never destroys actors or mutates external sequences.
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleKeyframe(
+    const FKeyframeHeader& Header,
+    const uint8* PayloadPtr,
+    int32 PayloadSize)
+{
+    CHECK_GAME_THREAD();
+
+    // Store header state (always, even if no sequence)
+    LastKeyframeSequence = Header.Sequence;
+    LastKeyframeTimestamp = Header.Timestamp;
+    bHasKeyframeState = true;
+
+    // No active sequence — safe no-op (cannot mutate)
+    if (!bHasLiveSyncSequence || !LiveSyncSequence.IsValid())
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[KEYFRAME] No active sequence — skipping %d keys"),
+            Header.KeyCount);
+        return;
+    }
+
+    UMovieScene* MovieScene = LiveSyncSequence->GetMovieScene();
+    if (!MovieScene)
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("[KEYFRAME] GetMovieScene() returned null"));
+        return;
+    }
+
+    int32 AppliedKeys       = 0;
+    int32 MissingBinding    = 0;
+    int32 UnsupportedChannel = 0;
+
+    const uint8* EntryPtr = PayloadPtr;
+    int32 Remaining = PayloadSize;
+
+    for (uint8 i = 0; i < Header.KeyCount; i++)
+    {
+        if (Remaining < KEYFRAME_ENTRY_SIZE)
+            break;
+
+        const FKeyframeEntry* Entry =
+            reinterpret_cast<const FKeyframeEntry*>(EntryPtr);
+
+        // Step 1: Resolve LiveSync GUID → MovieScene binding
+        FGuid* FoundBinding = LiveSyncGuidToSequencerBinding.Find(Entry->ObjectGUID);
+        if (!FoundBinding)
+        {
+            Stats.KeyframeMissingBinding.fetch_add(1, std::memory_order_relaxed);
+            MissingBinding++;
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[KEYFRAME] No binding for %s — skipping"),
+                *Entry->ObjectGUID.ToString());
+            EntryPtr += KEYFRAME_ENTRY_SIZE;
+            Remaining -= KEYFRAME_ENTRY_SIZE;
+            continue;
+        }
+
+        // Step 2: Validate channel index (0-8 only, matching UE transform channels)
+        if (Entry->ChannelIndex > 8)
+        {
+            Stats.KeyframeUnsupportedChannel.fetch_add(1, std::memory_order_relaxed);
+            UnsupportedChannel++;
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[KEYFRAME] Unsupported channel %d for %s — skipping"),
+                Entry->ChannelIndex, *Entry->ObjectGUID.ToString());
+            EntryPtr += KEYFRAME_ENTRY_SIZE;
+            Remaining -= KEYFRAME_ENTRY_SIZE;
+            continue;
+        }
+
+        // Step 3: Find or create 3D Transform track for this binding
+        UMovieScene3DTransformTrack* TransformTrack =
+            MovieScene->FindTrack<UMovieScene3DTransformTrack>(*FoundBinding);
+        if (!TransformTrack)
+        {
+            TransformTrack = MovieScene->AddTrack<UMovieScene3DTransformTrack>(*FoundBinding);
+            Stats.KeyframeTrackCreated.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        // Step 4: Find or create section in track
+        UMovieScene3DTransformSection* TransformSection = nullptr;
+        if (TransformTrack->GetAllSections().Num() > 0)
+        {
+            TransformSection = Cast<UMovieScene3DTransformSection>(
+                TransformTrack->GetAllSections()[0]);
+        }
+        if (!TransformSection)
+        {
+            UMovieSceneSection* NewSection = TransformTrack->CreateNewSection();
+            if (NewSection)
+            {
+                TransformTrack->AddSection(*NewSection);
+                TransformSection = Cast<UMovieScene3DTransformSection>(NewSection);
+                Stats.KeyframeSectionCreated.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        if (!TransformSection)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[KEYFRAME] Failed to create section for binding %s"),
+                *FoundBinding->ToString());
+            EntryPtr += KEYFRAME_ENTRY_SIZE;
+            Remaining -= KEYFRAME_ENTRY_SIZE;
+            continue;
+        }
+
+        // Step 5: Insert key on the appropriate transform channel
+        FMovieSceneChannelProxy& ChannelProxy = TransformSection->GetChannelProxy();
+        FMovieSceneDoubleChannel* Channel =
+            ChannelProxy.GetChannel<FMovieSceneDoubleChannel>(Entry->ChannelIndex);
+        if (Channel)
+        {
+            Channel->AddLinearKey(
+                FFrameNumber(Entry->Frame),
+                static_cast<double>(Entry->Value));
+            AppliedKeys++;
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[KEYFRAME] GetChannel(%d) returned null for binding %s"),
+                Entry->ChannelIndex, *FoundBinding->ToString());
+        }
+
+        EntryPtr += KEYFRAME_ENTRY_SIZE;
+        Remaining -= KEYFRAME_ENTRY_SIZE;
+    }
+
+    // Update counters
+    Stats.KeyframeKeysApplied.fetch_add(AppliedKeys, std::memory_order_relaxed);
+    Stats.KeyframePacketsApplied.fetch_add(1, std::memory_order_relaxed);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[KEYFRAME] Applied seq=%u count=%d applied=%d miss=%d unsupp=%d"),
+        Header.Sequence, Header.KeyCount,
+        AppliedKeys, MissingBinding, UnsupportedChannel);
+}
+
+
+// =========================================================
+// MATERIAL IDENTITY (Phase 7B Stage 1C)
+// =========================================================
+// Skeleton: parses and stores material slot metadata per GUID.
+// Does NOT call SetMaterial() — that is deferred to Stage 2.
+// Overwrites previous metadata for the same GUID on each packet.
+// Zero-slot packets are stored (clears previous metadata).
 // =========================================================
 
 void UUELiveSyncSubsystem::
@@ -8162,151 +8871,6 @@ HandleCollection(
 // =========================================================
 
 void UUELiveSyncSubsystem::
-RecordCollectionReplayPayload(
-    const uint8* Payload,
-    int32 PayloadSize,
-    uint32 SequenceNumber)
-{
-    if (!GCollectionReplayEnabled)
-    {
-        return;
-    }
-
-    TArray<uint8> Entry;
-    Entry.Append(Payload, PayloadSize);
-
-    if (GCollectionReplayBuffer.Num() >= COLLECTION_REPLAY_MAX)
-    {
-        Stats.CollectionReplayBufferOverflow.fetch_add(
-            1, std::memory_order_relaxed);
-        Stats.CollectionReplayPacketsDropped.fetch_add(
-            1, std::memory_order_relaxed);
-        GCollectionReplayBuffer.RemoveAt(0, 1, EAllowShrinking::No);
-        GCollectionReplaySequences.RemoveAt(0, 1, EAllowShrinking::No);
-        GCollectionReplayChecksums.RemoveAt(0, 1, EAllowShrinking::No);
-    }
-
-    // Track peak buffer usage
-    if (GCollectionReplayBuffer.Num() + 1 > GCollectionReplayPeakUsage)
-    {
-        GCollectionReplayPeakUsage = GCollectionReplayBuffer.Num() + 1;
-        Stats.CollectionReplayPeakBufferUsage.store(
-            GCollectionReplayPeakUsage,
-            std::memory_order_relaxed);
-    }
-
-    // Compute FNV-1a checksum for corruption detection (Stage 6)
-    uint32 Check = CollectionReplayChecksum(Payload, PayloadSize);
-
-    GCollectionReplayBuffer.Add(MoveTemp(Entry));
-    GCollectionReplaySequences.Add(SequenceNumber);
-    GCollectionReplayChecksums.Add(Check);
-}
-
-
-// =========================================================
-// SET COLLECTION REPLAY ENABLED (Phase 6F Stage 5)
-// =========================================================
-
-void UUELiveSyncSubsystem::
-SetCollectionReplayEnabled(bool bEnabled)
-{
-    GCollectionReplayEnabled = bEnabled;
-}
-
-
-// =========================================================
-// REPLAY TIMELINE (Phase 6F Stage 7 — Observability)
-// =========================================================
-
-void UUELiveSyncSubsystem::
-RecordReplayTimelineEvent(const FReplayTimelineEvent& Event)
-{
-    GCollectionReplayTimeline.Record(Event);
-    Stats.CollectionReplayTimelineRecorded.fetch_add(
-        1, std::memory_order_relaxed);
-}
-
-void UUELiveSyncSubsystem::
-ClearReplayTimeline()
-{
-    GCollectionReplayTimeline.Clear();
-    Stats.CollectionReplayTimelineRecorded.store(
-        0, std::memory_order_relaxed);
-}
-
-const FReplayTimeline& UUELiveSyncSubsystem::
-GetReplayTimeline() const
-{
-    return GCollectionReplayTimeline;
-}
-
-
-// =========================================================
-// REPLAY TRACE SYSTEM (Phase 6F Stage 7 — Observability)
-// =========================================================
-
-void UUELiveSyncSubsystem::
-EmitReplayTrace(
-    EReplayTraceCategory Category,
-    const FString& Message)
-{
-    if (!GCollectionReplayTraceConfig.bTracingEnabled)
-        return;
-
-    if (!EnumHasAnyFlags(
-            GCollectionReplayTraceConfig.CategoryMask,
-            Category))
-        return;
-
-    Stats.CollectionReplayTracesEmitted.fetch_add(
-        1, std::memory_order_relaxed);
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[REPLAY][TRACE] %s"), *Message);
-}
-
-bool UUELiveSyncSubsystem::
-IsReplayTracingActive(EReplayTraceCategory Category) const
-{
-    if (!GCollectionReplayTraceConfig.bTracingEnabled)
-        return false;
-    return EnumHasAnyFlags(
-        GCollectionReplayTraceConfig.CategoryMask,
-        Category);
-}
-
-void UUELiveSyncSubsystem::
-SetReplayTracingEnabled(
-    bool bEnabled,
-    EReplayTraceCategory CategoryMask)
-{
-    GCollectionReplayTraceConfig.bTracingEnabled = bEnabled;
-
-    if (bEnabled)
-    {
-        GCollectionReplayTraceConfig.CategoryMask = CategoryMask;
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[REPLAY][TRACE] Tracing enabled (mask=0x%02X)"),
-            static_cast<uint8>(CategoryMask));
-    }
-    else
-    {
-        GCollectionReplayTraceConfig.CategoryMask =
-            EReplayTraceCategory::None;
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[REPLAY][TRACE] Tracing disabled"));
-    }
-}
-
-#include "UELiveSyncSubsystem_Replay.inl"
-
-
-// =========================================================
-// HANDLE ASSET DEF (V5)
-// =========================================================
-
-void UUELiveSyncSubsystem::
 HandleAssetDef(
     const FGuid& Guid,
     uint64 IdentityHigh,
@@ -8616,85 +9180,6 @@ AssignFallbackPrimitive(
 // =========================================================
 // CACHE ASSET PATH
 // =========================================================
-
-void UUELiveSyncSubsystem::
-CacheAssetPath(
-    const FAssetIdentityRef& Identity,
-    const FSoftObjectPath& Path)
-{
-    if (!Identity.IsValid() ||
-        Path.IsNull())
-    {
-        return;
-    }
-
-    FSoftObjectPath* Existing =
-        AssetPathCache.Find(Identity);
-
-    if (Existing && *Existing != Path)
-    {
-        UE_LOG(
-            LogLiveSync,
-            Warning,
-            TEXT("[AssetRegistry] Identity collision: 0x%llx%llx "
-                 "was \"%s\" now \"%s\" \u2014 overwriting"),
-            Identity.High,
-            Identity.Low,
-            *Existing->ToString(),
-            *Path.ToString());
-    }
-
-    AssetPathCache.Add(
-        Identity,
-        Path);
-}
-
-
-// =========================================================
-// CACHE MATERIAL PATH (Phase 7B Stage 1D)
-// =========================================================
-
-void UUELiveSyncSubsystem::
-CacheMaterialPath(
-    const FMaterialIdentityRef& Identity,
-    const FSoftObjectPath& Path)
-{
-    if (!Identity.IsValid() ||
-        Path.IsNull())
-    {
-        return;
-    }
-
-    FSoftObjectPath* Existing =
-        MaterialPathCache.Find(Identity);
-
-    if (Existing && *Existing != Path)
-    {
-        UE_LOG(
-            LogLiveSync,
-            Warning,
-            TEXT("[MaterialRegistry] Identity collision: "
-                 "0x%llx%llx was \"%s\" now \"%s\" \u2014 overwriting"),
-            Identity.High,
-            Identity.Low,
-            *Existing->ToString(),
-            *Path.ToString());
-    }
-
-    MaterialPathCache.Add(
-        Identity,
-        Path);
-}
-
-
-// =========================================================
-// PLAYBACK STATE (Phase 7C)
-// =========================================================
-// Storage-only: accepts valid FPlaybackStatePayload, updates
-// LastPlaybackState, LastPlaybackSequence, and LastPlaybackTimestamp.
-// Does NOT call Sequencer or playback control APIs yet.
-// =========================================================
-
 void UUELiveSyncSubsystem::
 HandlePlaybackState(
     const FPlaybackStatePayload& Payload)
@@ -8779,697 +9264,127 @@ HandleActiveCamera(
         return;
     }
 
-    for (FEditorViewportClient* VC : GEditor->GetAllViewportClients())
-    {
-        if (VC && VC->IsLevelEditorClient())
-        {
-            VC->SetViewTarget(Camera);
-        }
-    }
-
-    Stats.ActiveCameraPacketsAppliedToViewport.fetch_add(1, std::memory_order_relaxed);
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[CAMERA] Applied to viewport: %s"),
-        *Camera->GetName());
+        Stats.ActiveCameraPacketsAppliedToViewport.fetch_add(1, std::memory_order_relaxed);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA] Found CameraActor=%s — SetViewTarget deferred (UE5.7 API compatibility)"),
+            *Camera->GetName());
 #else
     UE_LOG(LogLiveSync, Log,
-        TEXT("[CAMERA] ApplyToViewport skipped (non-editor build)"));
+        TEXT("[CAMERA] No editor — SetViewTarget not supported"));
 #endif
-}
-
-
-// =========================================================
-// MATERIAL IDENTITY (Phase 7B Stage 1C)
-// =========================================================
-// Skeleton: parses and stores material slot metadata per GUID.
-// Does NOT call SetMaterial() — that is deferred to Stage 2.
-// Overwrites previous metadata for the same GUID on each packet.
-// Zero-slot packets are stored (clears previous metadata).
-// =========================================================
-
-void UUELiveSyncSubsystem::
-HandleMaterialDef(
-    const FGuid& Guid,
-    const TArray<FMaterialSlotRef>& Slots,
-    uint32 ObjectCount)
-{
-    CHECK_GAME_THREAD();
-
-    if (!Guid.IsValid())
-    {
-        UE_LOG(LogLiveSync, Verbose,
-            TEXT("[MATERIAL] Skipping invalid GUID"));
+        Stats.ActiveCameraPacketsApplied.fetch_add(1, std::memory_order_relaxed);
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
-    MaterialMetadata.Add(
-        Guid,
-        Slots);
+    // =====================================================
+    // KEYFRAME PACKET (Phase 7E Stage 7 — PT_Keyframe 0x17)
+    // =====================================================
+    // Variable-size payload: 14-byte header + N × 25-byte entries.
+    //
+    // Validation:
+    //   - Total packet size >= header (14 bytes)
+    //   - KeyCount must be in [1, KEYFRAME_MAX_KEYS (255)]
+    //   - Total payload must match header + KeyCount * entry size
+    //   - Entry ChannelIndex must be in [0, 255]
+    //   - Sequence must be strictly greater than LastKeyframeSequence
+    //     (first packet with any sequence is accepted)
+    //
+    // Storage-only: validates and stores header state but does NOT
+    // insert keyframes into Sequencer tracks.
+    // =====================================================
 
-    MaterialDefsReceived++;
-
-    if (bEnableVerboseSyncLogs)
+    if (PacketType == 0x17)
     {
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT("[MaterialDef] GUID=%s Slots=%d TotalReceived=%d"),
-            *Guid.ToString(
-                EGuidFormats::Digits),
-            Slots.Num(),
-            MaterialDefsReceived);
-    }
-}
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessKeyframe);
 
+        Stats.KeyframePacketsReceived.fetch_add(1, std::memory_order_relaxed);
 
-// =========================================================
-// RESOLVE PENDING MATERIALS (Phase 7B Stage 1D)
-// =========================================================
-// Called per tick.  Iterates all MaterialMetadata entries and
-// resolves FMaterialIdentityRef → UMaterialInterface via
-// MaterialPathCache.  Calls AssignMaterial for each resolved
-// slot.  Does NOT retry — if MaterialPathCache has no entry
-// for a given identity, that slot is silently skipped.
-// =========================================================
-
-void UUELiveSyncSubsystem::
-ResolvePendingMaterials()
-{
-    CHECK_GAME_THREAD();
-
-    if (MaterialMetadata.Num() == 0)
-    {
-        return;
-    }
-
-    for (auto It = MaterialMetadata.CreateIterator(); It; ++It)
-    {
-        const FGuid& Guid = It.Key();
-        const TArray<FMaterialSlotRef>& Slots = It.Value();
-
-        AActor* Actor = FindActorFast(Guid);
-        if (!Actor)
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
+        if (ObjSize < KEYFRAME_HEADER_SIZE)
         {
-            continue;
-        }
-
-        UStaticMeshComponent* MeshComp =
-            Actor->FindComponentByClass<
-                UStaticMeshComponent>();
-
-        if (!MeshComp)
-        {
-            MeshComp =
-                Actor->GetRootComponent() ?
-                    Cast<UStaticMeshComponent>(
-                        Actor->GetRootComponent())
-                    : nullptr;
-        }
-
-        if (!MeshComp)
-        {
-            if (bEnableVerboseSyncLogs)
-            {
-                UE_LOG(
-                    LogLiveSync,
-                    Verbose,
-                    TEXT("[MaterialResolve] No mesh component for "
-                         "GUID=%s \u2014 skipping"),
-                    *Guid.ToString(
-                        EGuidFormats::Digits));
-            }
-            continue;
-        }
-
-        bool bAnyValidUnresolved = false;
-
-        for (const FMaterialSlotRef& Slot : Slots)
-        {
-            if (!Slot.IsValid())
-            {
-                // Null/zero-identity slot — skip (preserves
-                // existing UE material for this slot)
-                continue;
-            }
-
-            FSoftObjectPath* Path =
-                MaterialPathCache.Find(Slot.Identity);
-
-            if (!Path || Path->IsNull())
-            {
-                bAnyValidUnresolved = true;
-                continue;
-            }
-
-            UMaterialInterface* Mat =
-                Cast<UMaterialInterface>(
-                    Path->TryLoad());
-
-            if (!Mat)
-            {
-                bAnyValidUnresolved = true;
-
-                if (bEnableVerboseSyncLogs)
-                {
-                    UE_LOG(
-                        LogLiveSync,
-                        Verbose,
-                        TEXT("[MaterialResolve] Failed to load "
-                             "material for slot %d on GUID=%s"),
-                        Slot.SlotIndex,
-                        *Guid.ToString(
-                            EGuidFormats::Digits));
-                }
-                continue;
-            }
-
-            MeshComp->SetMaterial(
-                Slot.SlotIndex,
-                Mat);
-
-            MaterialAssignmentsSucceeded++;
-
-            if (bEnableVerboseSyncLogs)
-            {
-                UE_LOG(
-                    LogLiveSync,
-                    Log,
-                    TEXT("[MaterialResolve] Set slot %d on "
-                         "GUID=%s \u2014 %s"),
-                    Slot.SlotIndex,
-                    *Guid.ToString(
-                        EGuidFormats::Digits),
-                    *Path->ToString());
-            }
-        }
-
-        // Keep metadata if any valid slot remains unresolved.
-        // This ensures tick re-scanning can pick up the slot
-        // once its path appears in MaterialPathCache (e.g.
-        // after a console command or delayed asset discovery).
-        // Entry is removed only when all valid slots have been
-        // assigned or the slot list is empty (explicit clear).
-        if (!bAnyValidUnresolved)
-        {
-            It.RemoveCurrent();
-        }
-    }
-}
-
-
-// =========================================================
-// HANDLE MESH CHUNK (Phase 7C Stage 1B)
-// =========================================================
-// Validates and accumulates one PT_Mesh chunk.  Chunks for the
-// same (GUID, VersionHash) are stored in PendingMeshReassembly.
-// When all chunks arrive (ChunksReceived >= ChunkCount), the
-// entry is marked complete but NO mesh sections are built.
-// Stage 1C will consume completed reassemblies.
-// =========================================================
-
-void UUELiveSyncSubsystem::
-HandleMeshChunk(
-    const FGuid& Guid,
-    const FString& VersionHash,
-    uint32 ChunkIndex,
-    uint32 ChunkCount,
-    uint8 Flags,
-    const TArrayView<const uint8>& Payload)
-{
-    CHECK_GAME_THREAD();
-
-    if (!Guid.IsValid())
-    {
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[MESH] HandleMeshChunk: invalid GUID"));
-        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    if (ChunkCount == 0 || ChunkIndex >= ChunkCount)
-    {
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[MESH] HandleMeshChunk: invalid chunk index/count "
-                 "(%u/%u) for GUID=%s"),
-            ChunkIndex, ChunkCount,
-            *Guid.ToString(EGuidFormats::Digits));
-        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    // Enforce max concurrent reassemblies
-    if (PendingMeshReassembly.Num() >= MAX_CONCURRENT_MESH_REASSEMBLIES &&
-        !PendingMeshReassembly.Contains(Guid))
-    {
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[MESH] Too many pending reassemblies (%d) \u2014 "
-                 "rejecting chunk for GUID=%s"),
-            PendingMeshReassembly.Num(),
-            *Guid.ToString(EGuidFormats::Digits));
-        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    FMeshReassemblyState& State =
-        PendingMeshReassembly.FindOrAdd(Guid);
-
-    // First chunk for this mesh
-    if (State.ChunkCount == 0)
-    {
-        State.VersionHash = VersionHash;
-        State.ChunkCount  = ChunkCount;
-        State.Flags       = Flags;
-        State.FirstChunkTime = FPlatformTime::Seconds();
-    }
-    else
-    {
-        // Reject conflicting version hash or chunk count
-        if (State.VersionHash != VersionHash ||
-            State.ChunkCount != ChunkCount)
-        {
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[MESH] Conflicting version hash or count for "
-                     "GUID=%s (existing=%s/%u new=%s/%u)"),
-                *Guid.ToString(EGuidFormats::Digits),
-                *State.VersionHash, State.ChunkCount,
-                *VersionHash, ChunkCount);
-            PendingMeshReassembly.Remove(Guid);
+            Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
             Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[KEYFRAME] Truncated header: size %d < %d"),
+                ObjSize, KEYFRAME_HEADER_SIZE);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-    }
 
-    // Reject duplicate chunk
-    if (State.Chunks.Contains(ChunkIndex))
-    {
-        UE_LOG(LogLiveSync, Verbose,
-            TEXT("[MESH] Duplicate chunk %u/%u for GUID=%s"),
-            ChunkIndex, ChunkCount,
-            *Guid.ToString(EGuidFormats::Digits));
-        return;
-    }
+        // Parse header
+        FKeyframeHeader Header;
+        FMemory::Memcpy(&Header, Ptr, sizeof(FKeyframeHeader));
 
-    // Store chunk payload
-    TArray<uint8>& StoredPayload =
-        State.Chunks.Add(ChunkIndex);
-    StoredPayload.Append(
-        Payload.GetData(),
-        Payload.Num());
-
-    State.ChunksReceived++;
-    MeshChunksReceived++;
-
-    // Check completion
-    if (State.IsComplete())
-    {
-        MeshReassembliesCompleted++;
-
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[MESH] Reassembly complete for GUID=%s "
-                 "(%u/%u chunks) \u2014 %d total chunks received this session"),
-            *Guid.ToString(EGuidFormats::Digits),
-            State.ChunksReceived,
-            State.ChunkCount,
-            MeshChunksReceived);
-    }
-}
-
-
-// =========================================================
-// RECONSTRUCT COMPLETED MESHES (Phase 7C Stage 1C)
-// =========================================================
-// Called per tick.  Iterates PendingMeshReassembly, finds
-// completed entries (IsComplete && !bReconstructed), decodes
-// the minimal payload (vertices, triangles, material indices),
-// and builds one or more ProceduralMeshComponent sections.
-// =========================================================
-
-void UUELiveSyncSubsystem::
-ReconstructCompletedMeshes()
-{
-    CHECK_GAME_THREAD();
-
-    TArray<FGuid> Reconstructed;
-
-    for (auto& Pair : PendingMeshReassembly)
-    {
-        FMeshReassemblyState& State = Pair.Value;
-
-        if (!State.IsComplete() || State.bReconstructed)
+        // Validate key count
+        if (Header.KeyCount < KEYFRAME_MIN_KEYS ||
+            Header.KeyCount > KEYFRAME_MAX_KEYS)
         {
-            continue;
+            Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[KEYFRAME] Invalid key count %d (range [%d,%d])"),
+                Header.KeyCount, KEYFRAME_MIN_KEYS, KEYFRAME_MAX_KEYS);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
         }
 
-        const FGuid& Guid = Pair.Key;
+        // Validate total payload size matches expected
+        int32 ExpectedSize = KEYFRAME_HEADER_SIZE +
+            Header.KeyCount * KEYFRAME_ENTRY_SIZE;
 
-        AActor* Actor = FindActorFast(Guid);
-        if (!Actor)
+        if (ObjSize < ExpectedSize)
         {
-            // Actor not yet spawned — skip; will retry on next tick
-            continue;
+            Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[KEYFRAME] Truncated payload: size %d < expected %d "
+                     "(count=%d)"),
+                ObjSize, ExpectedSize, Header.KeyCount);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
         }
 
-        // Find or create ProceduralMeshComponent
-        UProceduralMeshComponent* ProcMesh =
-            Actor->FindComponentByClass<
-                UProceduralMeshComponent>();
-
-        if (!ProcMesh)
+        // Validate each entry's channel index is in range
+        const uint8* EntryPtr = Ptr + KEYFRAME_HEADER_SIZE;
+        for (uint8 i = 0; i < Header.KeyCount; i++)
         {
-            ProcMesh =
-                NewObject<UProceduralMeshComponent>(
-                    Actor);
-
-            if (Actor->GetRootComponent())
+            // ChannelIndex is the last byte of each 25-byte entry
+            uint8 ChannelIndex = *(EntryPtr + KEYFRAME_ENTRY_SIZE - 1);
+            if (ChannelIndex > KEYFRAME_MAX_CHANNEL)
             {
-                ProcMesh->SetupAttachment(
-                    Actor->GetRootComponent());
-            }
-            else
-            {
-                Actor->SetRootComponent(
-                    ProcMesh);
-            }
-
-            ProcMesh->RegisterComponent();
-        }
-
-        // Decode payload from all chunks in order
-        TArray<FVector>   Vertices;
-        TArray<int32>     Triangles;
-        TArray<int32>     MaterialIndices;
-
-        // Determine total vertex/triangle count first
-        int32 TotalVertices = 0;
-        int32 TotalTriangles = 0;
-
-        for (uint32 i = 0; i < State.ChunkCount; i++)
-        {
-            const TArray<uint8>* ChunkData =
-                State.Chunks.Find(i);
-
-            if (!ChunkData)
-            {
+                Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
                 UE_LOG(LogLiveSync, Warning,
-                    TEXT("[MESH] Missing chunk %u/%u for GUID=%s "
-                         "\u2014 skipping reconstruction"),
-                    i, State.ChunkCount,
-                    *Guid.ToString(EGuidFormats::Digits));
+                    TEXT("[KEYFRAME] Entry %d: channel %d out of range [0,%d]"),
+                    i, ChannelIndex, KEYFRAME_MAX_CHANNEL);
+                Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
-
-            const uint8* Data = ChunkData->GetData();
-            int32 DataLen = ChunkData->Num();
-
-            int32 Offset = 0;
-
-            // Vertex count (uint32 LE)
-            if (Offset + 4 > DataLen) { return; }
-            int32 VCount = *reinterpret_cast<const int32*>(Data + Offset);
-            Offset += 4;
-            TotalVertices += VCount;
-
-            // Skip vertex positions (we'll build them in the second pass)
-            int32 VertexBytes = VCount * 12;
-            if (Offset + VertexBytes > DataLen) { return; }
-            Offset += VertexBytes;
-
-            // Triangle count (uint32 LE)
-            if (Offset + 4 > DataLen) { return; }
-            int32 TCount = *reinterpret_cast<const int32*>(Data + Offset);
-            Offset += 4;
-            TotalTriangles += TCount;
-
-            // Skip triangle indices
-            int32 TriBytes = TCount * 12;
-            if (Offset + TriBytes > DataLen) { return; }
-            Offset += TriBytes;
-
-            // Material index count (uint32 LE)
-            if (Offset + 4 > DataLen) { return; }
-            int32 MCount = *reinterpret_cast<const int32*>(Data + Offset);
-            Offset += 4;
-
-            // Skip material indices
-            int32 MatBytes = MCount * 4;
-            if (Offset + MatBytes > DataLen) { return; }
-            Offset += MatBytes;
+            EntryPtr += KEYFRAME_ENTRY_SIZE;
         }
 
-        if (TotalVertices == 0 || TotalTriangles == 0)
+        // Sequence monotonicity check
+        if (bHasKeyframeState && Header.Sequence <= LastKeyframeSequence)
         {
+            Stats.KeyframePacketsStale.fetch_add(1, std::memory_order_relaxed);
             UE_LOG(LogLiveSync, Verbose,
-                TEXT("[MESH] Empty geometry for GUID=%s "
-                     "\u2014 skipping reconstruction"),
-                *Guid.ToString(EGuidFormats::Digits));
-            State.bReconstructed = true;
-            Reconstructed.Add(Guid);
-            continue;
+                TEXT("[KEYFRAME] Stale packet: seq %u <= %u"),
+                Header.Sequence, LastKeyframeSequence);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
         }
 
-        // Second pass: extract actual data
-        Vertices.Reserve(TotalVertices);
-        Triangles.Reserve(TotalTriangles);
-        MaterialIndices.Reserve(TotalTriangles);
-        int32 VertexBase = 0;
+        // Apply — insert keyframes into transform tracks
+        HandleKeyframe(Header, Ptr + KEYFRAME_HEADER_SIZE,
+            ObjSize - KEYFRAME_HEADER_SIZE);
 
-        for (uint32 i = 0; i < State.ChunkCount; i++)
-        {
-            const TArray<uint8>& ChunkData = *State.Chunks.Find(i);
-            const uint8* Data = ChunkData.GetData();
-            int32 Offset = 0;
-
-            // Vertex count
-            int32 VCount = *reinterpret_cast<const int32*>(Data + Offset);
-            Offset += 4;
-
-            // Vertex positions (float32 x 3 per vertex)
-            for (int32 v = 0; v < VCount; v++)
-            {
-                const float* F = reinterpret_cast<const float*>(Data + Offset);
-                Vertices.Add(FVector(F[0], F[1], F[2]));
-                Offset += 12;
-            }
-
-            // Triangle count
-            int32 TCount = *reinterpret_cast<const int32*>(Data + Offset);
-            Offset += 4;
-
-            // Triangle indices (int32 x 3 per triangle)
-            for (int32 t = 0; t < TCount; t++)
-            {
-                const int32* Idx = reinterpret_cast<const int32*>(Data + Offset);
-                Triangles.Add(Idx[0] + VertexBase);
-                Triangles.Add(Idx[1] + VertexBase);
-                Triangles.Add(Idx[2] + VertexBase);
-                Offset += 12;
-            }
-
-            // Material index count
-            int32 MCount = *reinterpret_cast<const int32*>(Data + Offset);
-            Offset += 4;
-
-            // Material indices (int32 per triangle)
-            for (int32 m = 0; m < MCount; m++)
-            {
-                const int32 MatIdx = *reinterpret_cast<const int32*>(Data + Offset);
-                MaterialIndices.Add(MatIdx);
-                Offset += 4;
-            }
-
-            VertexBase += VCount;
-        }
-
-        // Build mesh sections grouped by material index
-        int32 NumSections = 0;
-
-        if (MaterialIndices.Num() == Triangles.Num() / 3)
-        {
-            // Group triangles by material index
-            TMap<int32, TArray<int32>> MaterialGroups;
-            for (int32 t = 0; t < Triangles.Num() / 3; t++)
-            {
-                int32 MatIdx = (t < MaterialIndices.Num())
-                    ? MaterialIndices[t]
-                    : 0;
-                MaterialGroups.FindOrAdd(MatIdx).Add(t);
-            }
-
-            for (auto& Group : MaterialGroups)
-            {
-                int32 SectionIndex = Group.Key;
-                const TArray<int32>& TriIndices = Group.Value;
-
-                TArray<FVector> SectionVerts;
-                TArray<int32> SectionTris;
-                TArray<FVector> SectionNormals;
-                TArray<FVector2D> SectionUVs;
-                TArray<FColor> SectionColors;
-                TArray<FProcMeshTangent> SectionTangents;
-
-                // Build per-section vertex/triangle data
-                TMap<int32, int32> VMap;
-                for (int32 triIdx : TriIndices)
-                {
-                    int32 BaseIdx = triIdx * 3;
-                    for (int32 j = 0; j < 3; j++)
-                    {
-                        int32 OrigIdx = Triangles[BaseIdx + j];
-                        int32* NewIdx = VMap.Find(OrigIdx);
-                        if (!NewIdx)
-                        {
-                            NewIdx = &VMap.Add(OrigIdx, SectionVerts.Num());
-                            SectionVerts.Add(Vertices[OrigIdx]);
-                        }
-                        SectionTris.Add(*NewIdx);
-                    }
-                }
-
-                ProcMesh->CreateMeshSection(
-                    SectionIndex,
-                    SectionVerts,
-                    SectionTris,
-                    SectionNormals,
-                    SectionUVs,
-                    SectionColors,
-                    SectionTangents,
-                    true);
-
-                NumSections++;
-            }
-        }
-        else
-        {
-            // No per-triangle material data — single section
-            ProcMesh->CreateMeshSection(
-                0,
-                Vertices,
-                Triangles,
-                TArray<FVector>(),
-                TArray<FVector2D>(),
-                TArray<FColor>(),
-                TArray<FProcMeshTangent>(),
-                true);
-
-            NumSections = 1;
-        }
-
-        MeshSectionsBuilt += NumSections;
-
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[MESH] Reconstructed GUID=%s: %d verts, %d tris, "
-                 "%d sections, %d total sections built this session"),
-            *Guid.ToString(EGuidFormats::Digits),
-            TotalVertices,
-            TotalTriangles,
-            NumSections,
-            MeshSectionsBuilt);
-
-        State.bReconstructed = true;
-        Reconstructed.Add(Guid);
-    }
-
-    // Remove fully reconstructed entries from pending map
-    for (const FGuid& Guid : Reconstructed)
-    {
-        PendingMeshReassembly.Remove(Guid);
-    }
-}
-
-
-// =========================================================
-// HANDLE BEGIN SNAPSHOT
-// =========================================================
-
-void UUELiveSyncSubsystem::
-HandleBeginSnapshot()
-{
-    bInSnapshotBuild = true;
-    SnapshotStartTime =
-        FPlatformTime::Seconds();
-
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT("Snapshot build started — entering accumulation mode"));
-}
-
-
-// =========================================================
-// ABORT SNAPSHOT
-// =========================================================
-
-// Aborts an in-progress snapshot build and clears pending attachment state.
-void UUELiveSyncSubsystem::
-AbortSnapshot()
-{
-    if (!bInSnapshotBuild)
-    {
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
-    bInSnapshotBuild = false;
-    SnapshotStartTime = 0.0;
-
-    int32 PendingCount =
-        PendingAttachments.Num();
-
-    PendingAttachments.Empty();
-
-    UE_LOG(
-        LogLiveSync,
-        Warning,
-        TEXT("Snapshot aborted — flushed %d pending attachments"),
-        PendingCount);
-}
-
-
-// =========================================================
-// HANDLE END SNAPSHOT
-// =========================================================
-
-void UUELiveSyncSubsystem::
-HandleEndSnapshot()
-{
-    bInSnapshotBuild = false;
-
-    // Resolve all deferred hierarchy attachments
-    ResolvePendingAttachments();
-
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT("Snapshot build ended — flushed %d pending attachments"),
-        PendingAttachments.Num());
-
-    // Clear semantic hierarchy deferred queue (don't carry across sessions)
-    PendingHierarchyAttachments.Empty();
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[HIERARCHY] PendingHierarchyAttachments cleared (EndSnapshot)"));
-
-    // Phase 6E: process deferred deletes, then clear queue
-    // Ordering guarantee: deferred deletes processed BEFORE transient
-    // replay state is cleared. Snapshot replay is authoritative after
-    // EndSnapshot — stale replay cannot mutate runtime.
-    if (DeferredDeleteQueue.Num() > 0)
-    {
-        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessDeferredDeletes);
-
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[DELETE] Processing %d deferred deletes after EndSnapshot"),
-            DeferredDeleteQueue.Num());
-
-        for (const FDeferredDelete& Del : DeferredDeleteQueue)
-        {
-            HandleDelete(Del.TargetGuid, Del.Sequence, Del.Timestamp, EChangeOrigin::Replay);
-        }
-        DeferredDeleteQueue.Empty();
-
-        UE_LOG(LogLiveSync, Verbose,
-            TEXT("[DELETE] Deferred queue cleared after processing"));
-    }
-
+    // =====================================================
+    // SEQUENCER OP (Phase 7E — PT_SequencerOp 0x18)
     // =====================================================
     // COLLECTION REPLAY (Phase 6F Stage 5–7)
     // =====================================================
@@ -10932,6 +10847,18 @@ GetWatchdogBackoff() const
 }
 
 
+// =========================================================
+// HANDLE TIMELINE (Phase 7B)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleTimeline(
+    const FTimelinePayload& Payload)
+{
+}
+
+
+#include "UELiveSyncSubsystem_Replay.inl"
 #include "UELiveSyncSubsystem_Phase6H.inl"
 #include "UELiveSyncSubsystem_Phase6I.inl"
 #include "UELiveSyncSubsystem_Diagnostics.inl"

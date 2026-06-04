@@ -232,6 +232,10 @@ enum EPacketType : uint8
     // See Docs/Architecture/38-phase6F-collection-scope-lock.md
     PT_Collection     = 0x0F,  // Collection membership events (metadata, NOT scene graph)
 
+    // Phase 7B: Timeline frame state (frame_current, start, end, FPS)
+    // See Docs/Architecture/52-phase7-animation-sequencer-scope-lock.md
+    PT_Timeline       = 0x13,  // Timeline/playhead state (event-driven, NOT Sequencer control)
+
     // Phase 7C: Playback state notification (play/pause/stop/loop)
     // See Docs/Architecture/52-phase7-animation-sequencer-scope-lock.md
     PT_PlaybackState  = 0x14,  // Playback transport state (discrete event, NOT Sequencer control)
@@ -239,6 +243,14 @@ enum EPacketType : uint8
     // Phase 7D: Active camera selection (GUID-only, no camera parameters)
     // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md
     PT_ActiveCamera   = 0x15,  // Active camera identity (event-driven, NOT state stream)
+
+    // Phase 7E: Sequencer operations (discrete events, NOT state stream)
+    // See Docs/Architecture/54-phase7e-sequencer-keyframe-scope-lock.md
+    PT_SequencerOp    = 0x18,  // Sequencer operation (create, add possessable, etc.)
+
+    // Phase 7E Stage 7: Keyframe replication (discrete events, NOT state stream)
+    // See Docs/Architecture/54-phase7e-sequencer-keyframe-scope-lock.md
+    PT_Keyframe       = 0x17,  // Keyframe replication (fixed header + repeated entries)
 
     // Phase 9: Capability negotiation (announce/response)
     // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md §9
@@ -267,6 +279,191 @@ enum ELiveSyncPrimitiveType : uint8
     LSP_Plane    = 0x03,
     LSP_Empty    = 0x04,
 };
+
+// =========================================================
+// SEQUENCER OPCODES (Phase 7E — PT_SequencerOp = 0x18)
+// =========================================================
+
+enum ESequencerOpcode : uint8
+{
+    SEQUENCER_OP_CREATE_SEQUENCE    = 0,  // Create/replace sequence with frame range + FPS
+    SEQUENCER_OP_ADD_POSSESSABLE    = 1,  // Add possessable binding to sequence
+    SEQUENCER_OP_REMOVE_POSSESSABLE = 2,  // Remove possessable binding from sequence
+    SEQUENCER_OP_ADD_CAMERA_CUT     = 3,  // Add camera cut to sequence
+    SEQUENCER_OP_CLEAR_SEQUENCE     = 4,  // Clear all tracks/possessables from sequence
+    SEQUENCER_OP_SET_FRAME_RANGE    = 5,  // Update sequence frame range + FPS
+};
+
+static constexpr uint8 SEQUENCER_OP_MIN_OPCODE = 0;
+static constexpr uint8 SEQUENCER_OP_MAX_OPCODE = 5;
+
+// Common header for all PT_SequencerOp packets (16 bytes fixed)
+// Wire format:
+//   [0]     opcode     uint8
+//   [1]     flags      uint8
+//   [2-3]   reserved   uint16
+//   [4-7]   sequence   uint32 LE
+//   [8-15]  timestamp  double LE
+#pragma pack(push, 1)
+struct FSequencerOpHeader
+{
+    uint8  Opcode    = 0;
+    uint8  Flags     = 0;
+    uint16 Reserved  = 0;
+    uint32 Sequence  = 0;
+    double Timestamp = 0.0;
+};
+#pragma pack(pop)
+
+static_assert(
+    sizeof(FSequencerOpHeader) == 16,
+    "FSequencerOpHeader must be exactly 16 bytes");
+
+// Opcode payload sizes (bytes beyond the 16-byte common header)
+static constexpr int32 SEQUENCER_OP_CREATE_SEQUENCE_PAYLOAD_SIZE   = 16;
+static constexpr int32 SEQUENCER_OP_ADD_POSSESSABLE_PAYLOAD_SIZE   = 17;
+static constexpr int32 SEQUENCER_OP_REMOVE_POSSESSABLE_PAYLOAD_SIZE = 16;
+static constexpr int32 SEQUENCER_OP_ADD_CAMERA_CUT_PAYLOAD_SIZE     = 24;
+static constexpr int32 SEQUENCER_OP_CLEAR_SEQUENCE_PAYLOAD_SIZE     = 0;
+static constexpr int32 SEQUENCER_OP_SET_FRAME_RANGE_PAYLOAD_SIZE    = 16;
+
+// CREATE_SEQUENCE payload: 16 bytes
+//   [0-3]   frame_start  int32 LE
+//   [4-7]   frame_end    int32 LE
+//   [8-11]  fps_num      int32 LE
+//   [12-15] fps_den      int32 LE
+#pragma pack(push, 1)
+struct FSequencerOpCreateSequencePayload
+{
+    int32 FrameStart = 0;
+    int32 FrameEnd   = 0;
+    int32 FPSNum     = 0;
+    int32 FPSDen     = 1;
+};
+#pragma pack(pop)
+
+static_assert(
+    sizeof(FSequencerOpCreateSequencePayload) == 16,
+    "FSequencerOpCreateSequencePayload must be exactly 16 bytes");
+
+// ADD_POSSESSABLE payload: 17 bytes
+//   [0-15]  ObjectGuid     FGuid (16 bytes)
+//   [16]    BindingType    uint8
+#pragma pack(push, 1)
+struct FSequencerOpAddPossessablePayload
+{
+    FGuid  ObjectGuid  = FGuid();
+    uint8  BindingType = 0;
+};
+#pragma pack(pop)
+
+static_assert(
+    sizeof(FSequencerOpAddPossessablePayload) == 17,
+    "FSequencerOpAddPossessablePayload must be exactly 17 bytes");
+
+// REMOVE_POSSESSABLE payload: 16 bytes
+//   [0-15]  ObjectGuid     FGuid (16 bytes)
+#pragma pack(push, 1)
+struct FSequencerOpRemovePossessablePayload
+{
+    FGuid ObjectGuid = FGuid();
+};
+#pragma pack(pop)
+
+static_assert(
+    sizeof(FSequencerOpRemovePossessablePayload) == 16,
+    "FSequencerOpRemovePossessablePayload must be exactly 16 bytes");
+
+// ADD_CAMERA_CUT payload: 24 bytes
+//   [0-15]  CameraGuid   FGuid (16 bytes)
+//   [16-19] FrameStart   int32 LE
+//   [20-23] FrameEnd     int32 LE
+#pragma pack(push, 1)
+struct FSequencerOpAddCameraCutPayload
+{
+    FGuid  CameraGuid = FGuid();
+    int32  FrameStart = 0;
+    int32  FrameEnd   = 0;
+};
+#pragma pack(pop)
+
+static_assert(
+    sizeof(FSequencerOpAddCameraCutPayload) == 24,
+    "FSequencerOpAddCameraCutPayload must be exactly 24 bytes");
+
+// SET_FRAME_RANGE payload: 16 bytes
+//   [0-3]   frame_start  int32 LE
+//   [4-7]   frame_end    int32 LE
+//   [8-11]  fps_num      int32 LE
+//   [12-15] fps_den      int32 LE
+#pragma pack(push, 1)
+struct FSequencerOpSetFrameRangePayload
+{
+    int32 FrameStart = 0;
+    int32 FrameEnd   = 0;
+    int32 FPSNum     = 0;
+    int32 FPSDen     = 1;
+};
+#pragma pack(pop)
+
+static_assert(
+    sizeof(FSequencerOpSetFrameRangePayload) == 16,
+    "FSequencerOpSetFrameRangePayload must be exactly 16 bytes");
+
+
+// =========================================================
+// KEYFRAME REPLICATION (Phase 7E Stage 7 — PT_Keyframe 0x17)
+// =========================================================
+
+// Variable-size payload: fixed header + N × 25-byte entries.
+//
+// Header (14 bytes fixed):
+//   [0-3]   Sequence     uint32 LE — monotonic, used for stale detection
+//   [4-11]  Timestamp    double LE — detection time
+//   [12]    KeyCount     uint8    — number of key entries (1–KEYFRAME_MAX_KEYS)
+//   [13]    Flags        uint8    — reserved
+//
+// Each entry (25 bytes fixed):
+//   [0-15]  ObjectGUID   FGuid (16 bytes)
+//   [16-19] Frame        int32 LE
+//   [20-23] Value        float LE
+//   [24]    ChannelIndex uint8    — which channel (e.g. location_X=0, rotation_Z=5, etc.)
+
+#pragma pack(push, 1)
+struct FKeyframeHeader
+{
+    uint32 Sequence   = 0;
+    double Timestamp  = 0.0;
+    uint8  KeyCount   = 0;
+    uint8  Flags      = 0;
+};
+#pragma pack(pop)
+
+static constexpr int32 KEYFRAME_HEADER_SIZE = 14;
+static constexpr int32 KEYFRAME_ENTRY_SIZE  = 25; // 16 + 4 + 4 + 1
+static constexpr int32 KEYFRAME_MIN_KEYS   = 1;
+static constexpr int32 KEYFRAME_MAX_KEYS   = 255;
+static constexpr int32 KEYFRAME_MIN_CHANNEL = 0;
+static constexpr int32 KEYFRAME_MAX_CHANNEL = 255;
+
+static_assert(
+    sizeof(FKeyframeHeader) == KEYFRAME_HEADER_SIZE,
+    "FKeyframeHeader must be exactly 14 bytes");
+
+#pragma pack(push, 1)
+struct FKeyframeEntry
+{
+    FGuid  ObjectGUID   = FGuid();
+    int32  Frame        = 0;
+    float  Value        = 0.0f;
+    uint8  ChannelIndex = 0;
+};
+#pragma pack(pop)
+
+static_assert(
+    sizeof(FKeyframeEntry) == KEYFRAME_ENTRY_SIZE,
+    "FKeyframeEntry must be exactly 25 bytes");
+
 
 // =========================================================
 // PLAYBACK STATE PAYLOAD (Phase 7C)
@@ -313,6 +510,37 @@ struct FActiveCameraPayload
 static_assert(
     sizeof(FActiveCameraPayload) == 28,
     "FActiveCameraPayload must be exactly 28 bytes");
+
+
+// =========================================================
+// TIMELINE PAYLOAD (Phase 7B)
+// =========================================================
+
+// PT_Timeline (0x13) fixed-size payload: 36 bytes
+// Wire format:
+//   [0-3]   frame_current  int32   — current frame number
+//   [4-7]   frame_start    int32   — timeline start frame
+//   [8-11]  frame_end      int32   — timeline end frame
+//   [12-15] fps_num        int32   — FPS numerator (e.g. 24)
+//   [16-19] fps_den        int32   — FPS denominator (e.g. 1)
+//   [20-23] sequence       uint32  — monotonic global counter (LE)
+//   [24-27] reserved       int32   — reserved for future use
+//   [28-35] timestamp      double  — time.time() at detection (LE)
+struct FTimelinePayload
+{
+    int32  FrameCurrent = 0;
+    int32  FrameStart   = 0;
+    int32  FrameEnd     = 0;
+    int32  FPSNum       = 0;
+    int32  FPSDen       = 1;
+    uint32 Sequence     = 0;
+    int32  Reserved     = 0;
+    double Timestamp    = 0.0;
+};
+
+static_assert(
+    sizeof(FTimelinePayload) == 36,
+    "FTimelinePayload must be exactly 36 bytes");
 
 
 // =========================================================
@@ -842,6 +1070,12 @@ struct FLiveSyncStats
     std::atomic<int32> PlaybackPacketsStale{0};          // Packets rejected (stale/duplicate sequence)
     std::atomic<int32> PlaybackPacketsMalformed{0};      // Packets rejected (bad size or enum)
 
+    // --- Phase 7B: Timeline sync (game thread) ---
+    std::atomic<int32> TimelinePacketsReceived{0};     // Total PT_Timeline packets received
+    std::atomic<int32> TimelinePacketsApplied{0};      // Packets accepted (valid sequence)
+    std::atomic<int32> TimelinePacketsStale{0};         // Packets rejected (stale/duplicate sequence)
+    std::atomic<int32> TimelinePacketsMalformed{0};     // Packets rejected (bad size)
+
     // --- Phase 7D: Active camera sync (game thread) ---
     std::atomic<int32> ActiveCameraPacketsReceived{0};         // Total PT_ActiveCamera packets received
     std::atomic<int32> ActiveCameraPacketsApplied{0};          // Packets accepted (valid sequence + GUID)
@@ -850,6 +1084,32 @@ struct FLiveSyncStats
     std::atomic<int32> ActiveCameraPacketsAppliedToViewport{0}; // Successful viewport SetViewTarget calls
     std::atomic<int32> ActiveCameraPacketsMissingGUID{0};       // GUID not found in ActorCache
     std::atomic<int32> ActiveCameraPacketsNotCamera{0};         // Actor found but not a camera
+
+    // --- Phase 7E: Sequencer ops (game thread) ---
+    std::atomic<int32> SequencerOpPacketsReceived{0};    // Total PT_SequencerOp packets received
+    std::atomic<int32> SequencerOpPacketsApplied{0};     // Packets accepted (valid opcode + sequence)
+    std::atomic<int32> SequencerOpPacketsStale{0};       // Packets rejected (stale/duplicate sequence)
+    std::atomic<int32> SequencerOpPacketsMalformed{0};   // Packets rejected (bad size or unknown opcode)
+    std::atomic<int32> SequencerPossessablesAdded{0};    // Successful AddPossessable calls
+    std::atomic<int32> SequencerPossessablesRemoved{0};  // Successful possessable removals
+    std::atomic<int32> SequencerPossessablesMissingActor{0}; // ADD_POSSESSABLE with no actor found
+    std::atomic<int32> SequencerPossessablesDuplicate{0};    // Duplicate ADD_POSSESSABLE (same LiveSync GUID)
+    std::atomic<int32> SequencerCameraCutsAdded{0};         // Successful AddCameraCut calls
+    std::atomic<int32> SequencerCameraCutsMissingBinding{0};// ADD_CAMERA_CUT with no binding found
+    std::atomic<int32> SequencerCameraCutsMalformedRange{0};// ADD_CAMERA_CUT with invalid frame range
+
+    // --- Phase 7E Stage 7: Keyframe replication (game thread) ---
+    std::atomic<int32> KeyframePacketsReceived{0};     // Total PT_Keyframe packets received
+    std::atomic<int32> KeyframePacketsApplied{0};      // Packets accepted (valid size, count, sequence)
+    std::atomic<int32> KeyframePacketsStale{0};         // Packets rejected (stale/duplicate sequence)
+    std::atomic<int32> KeyframePacketsMalformed{0};     // Packets rejected (bad size, count, or entries)
+
+    // --- Phase 7E Stage 9: Keyframe apply counters ---
+    std::atomic<int32> KeyframeKeysApplied{0};          // Keys inserted into transform channels
+    std::atomic<int32> KeyframeMissingBinding{0};       // Key entries with unresolvable binding
+    std::atomic<int32> KeyframeUnsupportedChannel{0};   // Key entries with channel > 8
+    std::atomic<int32> KeyframeTrackCreated{0};         // New transform tracks created
+    std::atomic<int32> KeyframeSectionCreated{0};       // New transform sections created
 
     // --- Phase 9: Capability negotiation (game thread) ---
     std::atomic<int32> CapabilityAnnounceReceived{0};    // Total PT_CapabilityAnnounce packets received
@@ -1521,9 +1781,18 @@ static constexpr uint32
     H = fnv(H, 46); // LIVE_SYNC_COLLECTION_MEMBERSHIP_SIZE
     H = fnv(H, COLLECTION_PACKET_VERSION_V1); // collection packet version
     H = fnv(H, 14); // FPlaybackStatePayload (Phase 7C)
+    H = fnv(H, 36); // FTimelinePayload (Phase 7B)
     H = fnv(H, 28); // FActiveCameraPayload (Phase 7D)
     H = fnv(H, 4);  // FCapabilityAnnouncePayload (Phase 9)
     H = fnv(H, 4);  // FCapabilityResponsePayload (Phase 9)
+    // Phase 7E — SequencerOp total packet sizes (header + payload per opcode)
+    H = fnv(H, 16); // CLEAR_SEQUENCE: header only
+    H = fnv(H, 32); // CREATE_SEQUENCE / REMOVE_POSSESSABLE / SET_FRAME_RANGE: header + 16
+    H = fnv(H, 33); // ADD_POSSESSABLE: header + 17
+    H = fnv(H, 40); // ADD_CAMERA_CUT: header + 24
+    // Phase 7E Stage 7 — PT_Keyframe sizes
+    H = fnv(H, 14); // KEYFRAME_HEADER_SIZE
+    H = fnv(H, 25); // KEYFRAME_ENTRY_SIZE
     // Packet types
     H = fnv(H, 0x01); H = fnv(H, 0x03);
     H = fnv(H, 0x04); H = fnv(H, 0x07);
@@ -1535,8 +1804,11 @@ static constexpr uint32
     H = fnv(H, 0x0F); // PT_Collection
     H = fnv(H, 0x11); // PT_CapabilityAnnounce (Phase 9)
     H = fnv(H, 0x12); // PT_CapabilityResponse (Phase 9)
+    H = fnv(H, 0x13); // PT_Timeline (Phase 7B)
     H = fnv(H, 0x14); // PT_PlaybackState (Phase 7C)
     H = fnv(H, 0x15); // PT_ActiveCamera (Phase 7D)
+    H = fnv(H, 0x17); // PT_Keyframe (Phase 7E Stage 7)
+    H = fnv(H, 0x18); // PT_SequencerOp (Phase 7E)
 
     return H;
 }();
@@ -1605,12 +1877,34 @@ static_assert(
     "FActiveCameraPayload must be exactly 28 bytes");
 
 // =========================================================
+// SEQUENCER OP STATE (Phase 7E)
+// =========================================================
+
+struct FSequencerOpState
+{
+    uint8  LastOpcode    = 0;
+    uint8  LastFlags     = 0;
+    uint32 LastSequence  = 0;
+    double LastTimestamp = 0.0;
+
+    bool bHasState = false;
+};
+
+
+// =========================================================
 // CAPABILITY BITS (Phase 9)
 // Reserved for future capability negotiation.
 // =========================================================
 
-constexpr uint32 CAP_SUPPORTS_ACTIVE_CAMERA_SYNC = 0x40;  // Bit 6: PT_ActiveCamera (0x15) supported
+constexpr uint32 CAP_SUPPORTS_TIMELINE_SYNC       = 0x10;  // Bit 4: PT_Timeline (0x13) supported
+constexpr uint32 CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20;  // Bit 5: PT_Keyframe (0x17) supported
+constexpr uint32 CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40;  // Bit 6: PT_ActiveCamera (0x15) supported
+constexpr uint32 CAP_SUPPORTS_SEQUENCER_OPS       = 0x80;  // Bit 7: PT_SequencerOp (0x18) supported
 
 // UE's local capability mask — sent in PT_CapabilityResponse.
 // OR together all bits this UE plugin version supports.
-constexpr uint32 UE_LOCAL_CAPABILITIES = CAP_SUPPORTS_ACTIVE_CAMERA_SYNC;
+constexpr uint32 UE_LOCAL_CAPABILITIES =
+    CAP_SUPPORTS_TIMELINE_SYNC |
+    CAP_SUPPORTS_KEYFRAME_REPLICATION |
+    CAP_SUPPORTS_ACTIVE_CAMERA_SYNC |
+    CAP_SUPPORTS_SEQUENCER_OPS;

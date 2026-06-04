@@ -18,6 +18,7 @@
 
 
 class FSocket;
+class ULevelSequence;
 
 class FRunnableThread;
 
@@ -420,6 +421,13 @@ private:
     void ReconstructCompletedMeshes();
 
     // =====================================================
+    // TIMELINE STATE (Phase 7B)
+    // =====================================================
+
+    void HandleTimeline(
+        const FTimelinePayload& Payload);
+
+    // =====================================================
     // PLAYBACK STATE (Phase 7C)
     // =====================================================
 
@@ -432,6 +440,21 @@ private:
 
     void HandleActiveCamera(
         const FActiveCameraPayload& Payload);
+
+    // =====================================================
+    // SEQUENCER OP (Phase 7E)
+    // =====================================================
+
+    void HandleSequencerOp(
+        const FSequencerOpHeader& Header,
+        const uint8* PayloadPtr,
+        int32 PayloadSize);
+
+    // Phase 7E Stage 7: Keyframe replication — validate and store, no sequencer mutation
+    void HandleKeyframe(
+        const FKeyframeHeader& Header,
+        const uint8* PayloadPtr,
+        int32 PayloadSize);
 
     // =====================================================
     // ACTOR CACHE
@@ -755,6 +778,22 @@ private:
     double LastPlaybackTimestamp = 0.0;
 
     // =====================================================
+    // TIMELINE STATE (Phase 7B)
+    // =====================================================
+
+    // Most recently received and applied timeline frame state
+    FTimelinePayload LastTimelineState;
+
+    // Whether a timeline packet has been received at least once
+    bool bHasTimelineState = false;
+
+    // Sequence number of the last applied timeline packet
+    uint32 LastTimelineSequence = 0;
+
+    // Timestamp of the last applied timeline packet
+    double LastTimelineTimestamp = 0.0;
+
+    // =====================================================
     // CAPABILITY NEGOTIATION (Phase 9)
     // =====================================================
 
@@ -783,6 +822,64 @@ private:
 
     // Timestamp of the last applied active camera packet
     double LastActiveCameraTimestamp = 0.0;
+
+    // =====================================================
+    // SEQUENCER OP STATE (Phase 7E)
+    // =====================================================
+
+    // Whether a PT_SequencerOp packet has been received at least once
+    bool bHasSequencerOpState = false;
+
+    // Opcode of the last applied sequencer op
+    uint8 LastSequencerOpOpcode = 0;
+
+    // Flags of the last applied sequencer op
+    uint8 LastSequencerOpFlags = 0;
+
+    // Sequence number of the last applied sequencer op
+    uint32 LastSequencerOpSequence = 0;
+
+    // Timestamp of the last applied sequencer op
+    double LastSequencerOpTimestamp = 0.0;
+
+    // =====================================================
+    // KEYFRAME STATE (Phase 7E Stage 7)
+    // =====================================================
+
+    // Whether a PT_Keyframe packet has been received at least once
+    bool bHasKeyframeState = false;
+
+    // Sequence number of the last applied keyframe packet
+    uint32 LastKeyframeSequence = 0;
+
+    // Timestamp of the last applied keyframe packet
+    double LastKeyframeTimestamp = 0.0;
+
+    // Transient ULevelSequence owned by this subsystem
+    TWeakObjectPtr<ULevelSequence> LiveSyncSequence;
+
+    // Whether LiveSyncSequence has been created and is valid
+    bool bHasLiveSyncSequence = false;
+
+    // Frame range of the live sync sequence
+    int32 LiveSyncSequenceFrameStart = 0;
+    int32 LiveSyncSequenceFrameEnd   = 0;
+
+    // Display rate of the live sync sequence
+    int32 LiveSyncSequenceFPSNum = 0;
+    int32 LiveSyncSequenceFPSDen = 1;
+
+    // LiveSync object GUID → MovieScene binding GUID mapping
+    TMap<FGuid, FGuid> LiveSyncGuidToSequencerBinding;
+
+    // Pending bindings for ADD_POSSESSABLE where actor was not yet in ActorCache
+    struct FPendingSequencerBinding
+    {
+        FGuid LiveSyncGuid;
+        uint8 BindingType;
+        double Timestamp;
+    };
+    TArray<FPendingSequencerBinding> PendingSequencerBindings;
 
     // =====================================================
     // HIERARCHY DIAGNOSTICS (verbose-only, temporary)

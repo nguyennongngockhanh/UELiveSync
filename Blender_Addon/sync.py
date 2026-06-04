@@ -1,6 +1,7 @@
 import sys
 import bpy
 import hashlib
+import struct
 import time
 import traceback
 import uuid
@@ -87,6 +88,11 @@ try:
         _playback_sequence as _net_playback_sequence,
         playback_packets_sent as _net_playback_packets_sent,
         playback_state_changes as _net_playback_state_changes,
+        PT_Timeline,
+        serialize_timeline,
+        TIMELINE_PAYLOAD_SIZE,
+        is_timeline_effective,
+        set_timeline_enabled,
         PT_ActiveCamera,
         serialize_active_camera,
         ACTIVE_CAMERA_PAYLOAD_SIZE,
@@ -94,6 +100,48 @@ try:
         is_active_camera_effective,
         set_active_camera_enabled,
         _active_camera_enabled,
+        PT_SequencerOp,
+        is_sequencer_ops_effective,
+        set_sequencer_op_enabled,
+        SEQUENCER_OP_COMMON_HEADER_SIZE,
+        SEQUENCER_OP_CREATE_SEQUENCE,
+        SEQUENCER_OP_ADD_POSSESSABLE,
+        SEQUENCER_OP_REMOVE_POSSESSABLE,
+        SEQUENCER_OP_ADD_CAMERA_CUT,
+        SEQUENCER_OP_CLEAR_SEQUENCE,
+        SEQUENCER_OP_SET_FRAME_RANGE,
+        SEQUENCER_OP_MIN_OPCODE,
+        SEQUENCER_OP_MAX_OPCODE,
+        SEQUENCER_OP_PAYLOAD_SIZES,
+        SEQUENCER_OP_CREATE_SEQUENCE_PAYLOAD_SIZE,
+        SEQUENCER_OP_ADD_POSSESSABLE_PAYLOAD_SIZE,
+        SEQUENCER_OP_REMOVE_POSSESSABLE_PAYLOAD_SIZE,
+        SEQUENCER_OP_ADD_CAMERA_CUT_PAYLOAD_SIZE,
+        SEQUENCER_OP_CLEAR_SEQUENCE_PAYLOAD_SIZE,
+        SEQUENCER_OP_SET_FRAME_RANGE_PAYLOAD_SIZE,
+        serialize_sequencer_op_create_sequence,
+        serialize_sequencer_op_add_possessable,
+        serialize_sequencer_op_remove_possessable,
+        serialize_sequencer_op_add_camera_cut,
+        serialize_sequencer_op_clear_sequence,
+        serialize_sequencer_op_set_frame_range,
+        _sequencer_op_sequence as _net_sequencer_op_sequence,
+        _sequencer_op_packets_sent as _net_sequencer_op_packets_sent,
+        _sequencer_op_state_changes as _net_sequencer_op_state_changes,
+        PT_Keyframe,
+        is_keyframe_effective,
+        set_keyframe_enabled,
+        serialize_keyframe,
+        KEYFRAME_HEADER_SIZE,
+        KEYFRAME_ENTRY_SIZE,
+        KEYFRAME_MAX_KEYS,
+        KEYFRAME_MAX_CHANNEL,
+        KEYFRAME_CHANNEL_VISIBILITY_VIEWPORT,
+        KEYFRAME_CHANNEL_VISIBILITY_RENDER,
+        _keyframe_sequence as _net_keyframe_sequence,
+        _keyframe_packets_sent as _net_keyframe_packets_sent,
+        _keyframes_sent as _net_keyframes_sent,
+        _animated_objects_scanned as _net_animated_objects_scanned,
     )
 except ImportError:
     from network import (
@@ -168,6 +216,11 @@ except ImportError:
         _playback_sequence as _net_playback_sequence,
         playback_packets_sent as _net_playback_packets_sent,
         playback_state_changes as _net_playback_state_changes,
+        PT_Timeline,
+        serialize_timeline,
+        TIMELINE_PAYLOAD_SIZE,
+        is_timeline_effective,
+        set_timeline_enabled,
         PT_ActiveCamera,
         serialize_active_camera,
         ACTIVE_CAMERA_PAYLOAD_SIZE,
@@ -175,6 +228,20 @@ except ImportError:
         is_active_camera_effective,
         set_active_camera_enabled,
         _active_camera_enabled,
+        PT_Keyframe,
+        is_keyframe_effective,
+        set_keyframe_enabled,
+        serialize_keyframe,
+        KEYFRAME_HEADER_SIZE,
+        KEYFRAME_ENTRY_SIZE,
+        KEYFRAME_MAX_KEYS,
+        KEYFRAME_MAX_CHANNEL,
+        KEYFRAME_CHANNEL_VISIBILITY_VIEWPORT,
+        KEYFRAME_CHANNEL_VISIBILITY_RENDER,
+        _keyframe_sequence as _net_keyframe_sequence,
+        _keyframe_packets_sent as _net_keyframe_packets_sent,
+        _keyframes_sent as _net_keyframes_sent,
+        _animated_objects_scanned as _net_animated_objects_scanned,
     )
 
 
@@ -244,11 +311,30 @@ _sync_start_time = 0.0
 # Phase 7C: local tracking of last-sent playback state for transition detection
 _last_playback_state = None
 
+# Phase 7B: timeline detection state machine
+_last_timeline_state = None  # None=uninitialized, else tuple(fc, fs, fe, fps_n, fps_d)
+_timeline_sequence = 0
+_timeline_packets_sent = 0
+_timeline_state_changes = 0
+
 # Phase 7D Stage 2: active camera detection state machine
 _last_active_camera_guid = None  # None=uninitialized, b''=reconnect, bytes=last sent
 _active_camera_sequence = 0
 _active_camera_packets_sent = 0
 _active_camera_state_changes = 0
+
+# Phase 7E: sequencer ops state (no detection yet — storage only)
+_sequencer_op_sequence = 0
+_sequencer_op_packets_sent = 0
+_sequencer_op_state_changes = 0
+
+# Phase 7E Stage 8: keyframe extraction state
+_keyframe_sequence = 0
+_keyframe_packets_sent = 0
+_keyframes_sent = 0
+_animated_objects_scanned = 0
+# GUID → (action_name, action_hash) for duplicate suppression
+_last_keyframe_action = {}
 
 # Centralized runtime metrics (all diagnostics/UI should read from here)
 _runtime_stats = {
@@ -267,8 +353,15 @@ _runtime_stats = {
     "has_critical_error": False,
     "playback_packets_sent": 0,
     "playback_state_changes": 0,
+    "timeline_packets_sent": 0,
+    "timeline_state_changes": 0,
     "active_camera_packets_sent": 0,
     "active_camera_state_changes": 0,
+    "sequencer_op_packets_sent": 0,
+    "sequencer_op_state_changes": 0,
+    "keyframe_packets_sent": 0,
+    "keyframes_sent": 0,
+    "animated_objects_scanned": 0,
     "last_heartbeat_time": 0.0,
     "heartbeat_interval": 5.0,
     "scan_interval": 300,
@@ -770,6 +863,77 @@ def get_transform(obj):
 
 
 # =========================================================
+# KEYFRAME EXTRACTION (Phase 7E Stage 8)
+# =========================================================
+
+# Channel mapping: (data_path, array_index) → channel index
+# Transform channels 0–8: location(0-2), rotation_euler(3-5), scale(6-8)
+# Visibility channels 9–10: hide_viewport(9), hide_render(10)
+# Channels 11–255 reserved for future extension.
+_KEYFRAME_CHANNEL_MAP = {
+    ("location", 0): 0,  # locX
+    ("location", 1): 1,  # locY
+    ("location", 2): 2,  # locZ
+    ("rotation_euler", 0): 3,  # rotX
+    ("rotation_euler", 1): 4,  # rotY
+    ("rotation_euler", 2): 5,  # rotZ
+    ("scale", 0): 6,  # scaleX
+    ("scale", 1): 7,  # scaleY
+    ("scale", 2): 8,  # scaleZ
+    ("hide_viewport", -1): 9,   # viewport visibility (bool: 0=visible, 1=hidden)
+    ("hide_render", -1): 10,    # render visibility (bool: 0=renderable, 1=not)
+}
+
+
+def _extract_keyframes(obj, guid_bytes):
+    """Extract transform and visibility keyframes from Blender object's FCurves.
+
+    Returns list of (guid_bytes, frame, value, channel_index) tuples.
+    Supports:
+      - Channels 0-2: location (locX, locY, locZ)
+      - Channels 3-5: rotation_euler (rotX, rotY, rotZ)
+      - Channels 6-8: scale (scaleX, scaleY, scaleZ)
+      - Channel 9: hide_viewport (0.0=visible, 1.0=hidden)
+      - Channel 10: hide_render (0.0=renderable, 1.0=not)
+    Skips unsupported FCurves (camera props, hide_select, etc.).
+    Returns empty list if no animation data or no supported FCurves.
+    """
+    if not obj.animation_data or not obj.animation_data.action:
+        return []
+
+    entries = []
+    for fcurve in obj.animation_data.action.fcurves:
+        channel = _KEYFRAME_CHANNEL_MAP.get(
+            (fcurve.data_path, fcurve.array_index))
+        if channel is None:
+            continue
+        for kp in fcurve.keyframe_points:
+            entries.append((
+                guid_bytes,
+                int(kp.co.x),
+                float(kp.co.y),
+                channel,
+            ))
+    return entries
+
+
+def _hash_keyframes(entries):
+    """Compute FNV-1a 32-bit hash of keyframe entries for duplicate detection."""
+    if not entries:
+        return 0
+    h = 2166136261
+    for guid_bytes, frame, value, channel in entries:
+        for b in guid_bytes:
+            h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+        h = ((h ^ (frame & 0xFFFFFFFF)) * 16777619) & 0xFFFFFFFF
+        val_bytes = struct.pack("<f", value)
+        for b in val_bytes:
+            h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+        h = ((h ^ channel) * 16777619) & 0xFFFFFFFF
+    return h
+
+
+# =========================================================
 # SCENE SCAN (detect new/deleted objects)
 # =========================================================
 
@@ -852,6 +1016,13 @@ def check_updates():
     global _active_camera_sequence
     global _active_camera_packets_sent
     global _active_camera_state_changes
+    global _sequencer_op_packets_sent
+    global _sequencer_op_state_changes
+    global _keyframe_sequence
+    global _keyframe_packets_sent
+    global _keyframes_sent
+    global _animated_objects_scanned
+    global _last_keyframe_action
 
     if not timer_running:
         return 0.016
@@ -900,10 +1071,12 @@ def check_updates():
         global _last_collection_state
         global _collection_anti_loop_guids
         global _last_active_camera_guid
+        global _last_keyframe_action
         _known_guids.clear()
         _last_collection_state.clear()
         _collection_anti_loop_guids.clear()
         _last_active_camera_guid = b''  # Phase 7D: resend on next tick
+        _last_keyframe_action.clear()  # Phase 7E Stage 8: resend keyframes on reconnect
 
         if _verbose_logging:
             print(
@@ -1482,6 +1655,55 @@ def check_updates():
         # Clear anti-loop guard for this GUID after processing
         _collection_anti_loop_guids.discard(guid)
 
+        # =================================================
+        # Phase 7E Stage 8: Transform keyframe extraction
+        # Scans FCurves for location/rotation/scale channels,
+        # batches into PT_Keyframe packets, suppresses
+        # duplicates via action/key hash.
+        # =================================================
+
+        if is_keyframe_effective() and not is_first_send:
+            try:
+                kf_entries = _extract_keyframes(obj, guid_obj.bytes)
+            except Exception:
+                kf_entries = []
+
+            if kf_entries:
+                _animated_objects_scanned += 1
+                kf_hash = _hash_keyframes(kf_entries)
+                prev_hash = _last_keyframe_action.get(guid)
+
+                if prev_hash is None or kf_hash != prev_hash:
+                    _last_keyframe_action[guid] = kf_hash
+
+                    # Batch into PT_Keyframe packets (max KEYFRAME_MAX_KEYS per packet)
+                    for batch_start in range(0, len(kf_entries), KEYFRAME_MAX_KEYS):
+                        batch = kf_entries[batch_start:batch_start + KEYFRAME_MAX_KEYS]
+                        _keyframe_sequence += 1
+                        try:
+                            serialized = serialize_keyframe(
+                                _keyframe_sequence,
+                                time.time(),
+                                batch,
+                            )
+                            send_objects(
+                                [serialized],
+                                packet_type=PT_Keyframe,
+                                version=5,
+                            )
+                            _keyframe_packets_sent += 1
+                            _keyframes_sent += len(batch)
+                            _runtime_stats["keyframe_packets_sent"] = _keyframe_packets_sent
+                            _runtime_stats["keyframes_sent"] = _keyframes_sent
+                            _runtime_stats["animated_objects_scanned"] = _animated_objects_scanned
+                        except Exception:
+                            if _verbose_logging:
+                                print(
+                                    f"[KEYFRAME][WARN] Send failed guid={guid} "
+                                    f"batch_start={batch_start}",
+                                    flush=True,
+                                )
+
     # =====================================================
     # SEND DELETE PACKETS (Phase 6E V5 — identity-destruction)
     # =====================================================
@@ -1697,6 +1919,40 @@ def check_updates():
             _runtime_stats["playback_state_changes"] = _net_playback_state_changes
 
         _last_playback_state = current_state
+
+    # =====================================================
+    # TIMELINE DETECTION (Phase 7B)
+    # =====================================================
+
+    if is_timeline_effective():
+        try:
+            scene = bpy.context.scene
+            fc = scene.frame_current
+            fs = scene.frame_start
+            fe = scene.frame_end
+            fps_num = scene.render.fps
+            fps_den = scene.render.fps_base
+        except (AttributeError, RuntimeError, TypeError):
+            fc = fs = fe = fps_num = 0
+            fps_den = 1
+
+        current_tl = (fc, fs, fe, fps_num, fps_den)
+
+        if _last_timeline_state is None:
+            pass
+        elif current_tl != _last_timeline_state:
+            _timeline_sequence += 1
+            payload = serialize_timeline(
+                fc, fs, fe, fps_num, fps_den,
+                _timeline_sequence, time.time(),
+            )
+            send_objects([payload], packet_type=PT_Timeline, version=5)
+            _timeline_packets_sent += 1
+            _timeline_state_changes += 1
+            _runtime_stats["timeline_packets_sent"] = _timeline_packets_sent
+            _runtime_stats["timeline_state_changes"] = _timeline_state_changes
+
+        _last_timeline_state = current_tl
 
     # =====================================================
     # ACTIVE CAMERA DETECTION (Phase 7D Stage 2)
@@ -1951,6 +2207,10 @@ def dump_diagnostics():
     print(f"    Packets sent:      {s['playback_packets_sent']}")
     print(f"    State changes:     {s['playback_state_changes']}")
 
+    print(f"  [Timeline]")
+    print(f"    Packets sent:      {s['timeline_packets_sent']}")
+    print(f"    State changes:     {s['timeline_state_changes']}")
+
     print(f"  [Active Camera]")
     print(f"    Packets sent:      {s['active_camera_packets_sent']}")
     print(f"    State changes:     {s['active_camera_state_changes']}")
@@ -2005,6 +2265,10 @@ def start_sync():
     global _last_material_identity  # Phase 7B: clear stale material identity cache
     global _last_geometry_version  # Phase 7C: clear stale geometry version cache
     global _last_playback_state  # Phase 7C: reset playback state
+    global _last_timeline_state  # Phase 7B: reset timeline tracking
+    global _timeline_sequence
+    global _timeline_packets_sent
+    global _timeline_state_changes
     global _last_active_camera_guid  # Phase 7D: reset active camera tracking
     global _active_camera_sequence
     global _active_camera_packets_sent
@@ -2018,11 +2282,20 @@ def start_sync():
     _last_parent_guid.clear()
     _known_guids.clear()
     _last_collection_state.clear()  # Phase 6F
+    _last_keyframe_action.clear()  # Phase 7E Stage 8
     _last_playback_state = None  # Phase 7C: reset playback transition detector
+    _last_timeline_state = None  # Phase 7B: reset timeline transition detector
+    _timeline_sequence = 0
+    _timeline_packets_sent = 0
+    _timeline_state_changes = 0
     _last_active_camera_guid = None  # Phase 7D: first tick sets baseline
     _active_camera_sequence = 0
     _active_camera_packets_sent = 0
     _active_camera_state_changes = 0
+    _keyframe_sequence = 0
+    _keyframe_packets_sent = 0
+    _keyframes_sent = 0
+    _animated_objects_scanned = 0
 
     if _timer_ref is not None:
         try:

@@ -765,6 +765,78 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  [Timeline] (Phase 7B)"));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  bHasTimelineState:    %d"),
+        bHasTimelineState);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastTimelineFC:       %d"),
+        LastTimelineState.FrameCurrent);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastTimelineFS:       %d"),
+        LastTimelineState.FrameStart);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastTimelineFE:       %d"),
+        LastTimelineState.FrameEnd);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastTimelineFPS:      %d/%d"),
+        LastTimelineState.FPSNum,
+        LastTimelineState.FPSDen);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastTimelineSeq:      %u"),
+        LastTimelineSequence);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  LastTimelineTs:       %.3f"),
+        LastTimelineTimestamp);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TimelineRcv:          %d"),
+        Stats.TimelinePacketsReceived.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TimelineApplied:      %d"),
+        Stats.TimelinePacketsApplied.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TimelineStale:        %d"),
+        Stats.TimelinePacketsStale.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TimelineMalformed:    %d"),
+        Stats.TimelinePacketsMalformed.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  [ActiveCamera] (Phase 7D)"));
 
     UE_LOG(
@@ -838,6 +910,189 @@ ConsoleDumpState()
         Log,
         TEXT("  ActiveCamNotCam:      %d"),
         Stats.ActiveCameraPacketsNotCamera.load(std::memory_order_relaxed));
+
+    // =====================================================
+    // SEQUENCER OP (Phase 7E)
+    // =====================================================
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  SequencerOp:"));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    HasState:          %d"),
+        bHasSequencerOpState ? 1 : 0);
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    LastOpcode:        %d"),
+        static_cast<int32>(LastSequencerOpOpcode));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    LastFlags:         %d"),
+        static_cast<int32>(LastSequencerOpFlags));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    LastSequence:      %u"),
+        LastSequencerOpSequence);
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    LastTimestamp:     %.3f"),
+        LastSequencerOpTimestamp);
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    PacketsReceived:   %d"),
+        Stats.SequencerOpPacketsReceived.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    PacketsApplied:    %d"),
+        Stats.SequencerOpPacketsApplied.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    PacketsStale:      %d"),
+        Stats.SequencerOpPacketsStale.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    PacketsMalformed:  %d"),
+        Stats.SequencerOpPacketsMalformed.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    HasLiveSeq:        %d"),
+        bHasLiveSyncSequence ? 1 : 0);
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    LiveSeqStart:      %d"),
+        LiveSyncSequenceFrameStart);
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    LiveSeqEnd:        %d"),
+        LiveSyncSequenceFrameEnd);
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    LiveSeqFPS:        %d/%d"),
+        LiveSyncSequenceFPSNum, LiveSyncSequenceFPSDen);
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    PossessAdded:      %d"),
+        Stats.SequencerPossessablesAdded.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    PossessRemoved:    %d"),
+        Stats.SequencerPossessablesRemoved.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    PossessMissing:    %d"),
+        Stats.SequencerPossessablesMissingActor.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    PossessDupes:      %d"),
+        Stats.SequencerPossessablesDuplicate.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    BindingCount:      %d"),
+        LiveSyncGuidToSequencerBinding.Num());
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    PendingBindings:   %d"),
+        PendingSequencerBindings.Num());
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    CutsAdded:        %d"),
+        Stats.SequencerCameraCutsAdded.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    CutsMissingBind:  %d"),
+        Stats.SequencerCameraCutsMissingBinding.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    CutsMalformedRng: %d"),
+        Stats.SequencerCameraCutsMalformedRange.load(std::memory_order_relaxed));
+
+    // Keyframe replication (Phase 7E Stage 7)
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFReceived:       %d"),
+        Stats.KeyframePacketsReceived.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFApplied:        %d"),
+        Stats.KeyframePacketsApplied.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFStale:          %d"),
+        Stats.KeyframePacketsStale.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFMalformed:      %d"),
+        Stats.KeyframePacketsMalformed.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFLastSequence:   %u"),
+        LastKeyframeSequence);
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFLastTimestamp:  %.3f"),
+        LastKeyframeTimestamp);
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFHasState:       %d"),
+        bHasKeyframeState ? 1 : 0);
+
+    // Keyframe apply (Phase 7E Stage 9)
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFKeysApplied:    %d"),
+        Stats.KeyframeKeysApplied.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFMissingBind:    %d"),
+        Stats.KeyframeMissingBinding.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFUnsuppChan:     %d"),
+        Stats.KeyframeUnsupportedChannel.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFTracksCreated:  %d"),
+        Stats.KeyframeTrackCreated.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFSectionsCre:    %d"),
+        Stats.KeyframeSectionCreated.load(std::memory_order_relaxed));
 
     UE_LOG(
         LogLiveSync,
@@ -1178,6 +1433,16 @@ ConsoleReset()
     LastPlaybackTimestamp = 0.0;
     bHasPlaybackState = false;
 
+    // Phase 7B: timeline state reset
+    Stats.TimelinePacketsReceived.store(0, std::memory_order_relaxed);
+    Stats.TimelinePacketsApplied.store(0, std::memory_order_relaxed);
+    Stats.TimelinePacketsStale.store(0, std::memory_order_relaxed);
+    Stats.TimelinePacketsMalformed.store(0, std::memory_order_relaxed);
+    LastTimelineState = FTimelinePayload();
+    LastTimelineSequence = 0;
+    LastTimelineTimestamp = 0.0;
+    bHasTimelineState = false;
+
     // Phase 7D: active camera state reset
     Stats.ActiveCameraPacketsReceived.store(0, std::memory_order_relaxed);
     Stats.ActiveCameraPacketsApplied.store(0, std::memory_order_relaxed);
@@ -1191,6 +1456,46 @@ ConsoleReset()
     LastActiveCameraTimestamp = 0.0;
     bHasActiveCamera = false;
     bHasEverReceivedActiveCamera = false;
+
+    // Sequencer op (Phase 7E)
+    Stats.SequencerOpPacketsReceived.store(0, std::memory_order_relaxed);
+    Stats.SequencerOpPacketsApplied.store(0, std::memory_order_relaxed);
+    Stats.SequencerOpPacketsStale.store(0, std::memory_order_relaxed);
+    Stats.SequencerOpPacketsMalformed.store(0, std::memory_order_relaxed);
+    Stats.SequencerPossessablesAdded.store(0, std::memory_order_relaxed);
+    Stats.SequencerPossessablesRemoved.store(0, std::memory_order_relaxed);
+    Stats.SequencerPossessablesMissingActor.store(0, std::memory_order_relaxed);
+    Stats.SequencerPossessablesDuplicate.store(0, std::memory_order_relaxed);
+    Stats.SequencerCameraCutsAdded.store(0, std::memory_order_relaxed);
+    Stats.SequencerCameraCutsMissingBinding.store(0, std::memory_order_relaxed);
+    Stats.SequencerCameraCutsMalformedRange.store(0, std::memory_order_relaxed);
+    LastSequencerOpOpcode = 0;
+    LastSequencerOpFlags = 0;
+    LastSequencerOpSequence = 0;
+    LastSequencerOpTimestamp = 0.0;
+    bHasSequencerOpState = false;
+    LiveSyncSequence = nullptr;
+    bHasLiveSyncSequence = false;
+    LiveSyncSequenceFrameStart = 0;
+    LiveSyncSequenceFrameEnd = 0;
+    LiveSyncSequenceFPSNum = 0;
+    LiveSyncSequenceFPSDen = 1;
+    LiveSyncGuidToSequencerBinding.Empty();
+    PendingSequencerBindings.Empty();
+
+    // Keyframe state (Phase 7E Stage 7)
+    Stats.KeyframePacketsReceived.store(0, std::memory_order_relaxed);
+    Stats.KeyframePacketsApplied.store(0, std::memory_order_relaxed);
+    Stats.KeyframePacketsStale.store(0, std::memory_order_relaxed);
+    Stats.KeyframePacketsMalformed.store(0, std::memory_order_relaxed);
+    Stats.KeyframeKeysApplied.store(0, std::memory_order_relaxed);
+    Stats.KeyframeMissingBinding.store(0, std::memory_order_relaxed);
+    Stats.KeyframeUnsupportedChannel.store(0, std::memory_order_relaxed);
+    Stats.KeyframeTrackCreated.store(0, std::memory_order_relaxed);
+    Stats.KeyframeSectionCreated.store(0, std::memory_order_relaxed);
+    LastKeyframeSequence = 0;
+    LastKeyframeTimestamp = 0.0;
+    bHasKeyframeState = false;
 
     ReconnectHistory.Empty();
     OverflowHistory.Empty();

@@ -1339,6 +1339,53 @@ DumpWorldReplayState() const
 // =========================================================
 
 void UUELiveSyncSubsystem::
+EmitReplayTrace(
+    EReplayTraceCategory Category,
+    const FString& Message)
+{
+    if ((GCollectionReplayTraceConfig.bTracingEnabled) &&
+        EnumHasAllFlags(GCollectionReplayTraceConfig.CategoryMask, Category))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[REPLAY_TRACE][%d] %s"),
+            static_cast<int32>(Category), *Message);
+    }
+}
+
+bool UUELiveSyncSubsystem::
+IsReplayTracingActive(EReplayTraceCategory Category) const
+{
+    return GCollectionReplayTraceConfig.bTracingEnabled &&
+        EnumHasAllFlags(GCollectionReplayTraceConfig.CategoryMask, Category);
+}
+
+void UUELiveSyncSubsystem::
+SetReplayTracingEnabled(
+    bool bEnabled,
+    EReplayTraceCategory CategoryMask)
+{
+    GCollectionReplayTraceConfig.bTracingEnabled = bEnabled;
+    if (bEnabled)
+    {
+        GCollectionReplayTraceConfig.CategoryMask = CategoryMask;
+    }
+    else
+    {
+        GCollectionReplayTraceConfig.CategoryMask = EReplayTraceCategory::None;
+    }
+}
+
+
+void UUELiveSyncSubsystem::
+RecordReplayTimelineEvent(const FReplayTimelineEvent& Event)
+{
+    GCollectionReplayTimeline.Record(Event);
+    Stats.CollectionReplayTimelineRecorded.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+
+void UUELiveSyncSubsystem::
 ReplayCollectionStream()
 {
     CHECK_GAME_THREAD();
