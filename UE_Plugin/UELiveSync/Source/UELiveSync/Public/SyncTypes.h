@@ -1111,6 +1111,12 @@ struct FLiveSyncStats
     std::atomic<int32> KeyframeTrackCreated{0};         // New transform tracks created
     std::atomic<int32> KeyframeSectionCreated{0};       // New transform sections created
 
+    // --- Phase 7E Stage 10A: Visibility bool track counters ---
+    std::atomic<int32> KeyframeVisibilityKeysApplied{0};  // Visibility keys inserted into bool tracks
+    std::atomic<int32> KeyframeVisibilityTrackCreated{0};  // New bool tracks created
+    std::atomic<int32> KeyframeVisibilitySectionCreated{0}; // New bool sections created
+    std::atomic<int32> KeyframeVisibilityUnsupported{0};   // Channels > 10 rejected
+
     // --- Phase 9: Capability negotiation (game thread) ---
     std::atomic<int32> CapabilityAnnounceReceived{0};    // Total PT_CapabilityAnnounce packets received
     std::atomic<int32> CapabilityResponseReceived{0};   // Total PT_CapabilityResponse packets received

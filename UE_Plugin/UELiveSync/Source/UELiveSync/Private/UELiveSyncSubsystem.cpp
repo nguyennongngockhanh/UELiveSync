@@ -50,6 +50,8 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Sections/MovieSceneCameraCutSection.h"
 #include "Tracks/MovieScene3DTransformTrack.h"
 #include "Sections/MovieScene3DTransformSection.h"
+#include "Tracks/MovieSceneBoolTrack.h"
+#include "Sections/MovieSceneBoolSection.h"
 #endif
 
 #include "EngineUtils.h"
@@ -1722,23 +1724,29 @@ bool UUELiveSyncSubsystem::Tick(
     {
         TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_TickPipeline);
 
-        UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ProcessQueuedPackets"));
+        if (bEnableVerboseSyncLogs)
+        {
+            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ProcessQueuedPackets"));
         {
             TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessQueuedPackets);
             ProcessQueuedPackets();
         }
-        UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ProcessQueuedPackets"));
+            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ProcessQueuedPackets"));
+        }
 
         EvictStaleTransformStates();
 
         if (!CVarLiveSyncDisableInterpolation.GetValueOnGameThread())
         {
-            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: InterpolateTransforms"));
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: InterpolateTransforms"));
             {
                 TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_InterpolateTransforms);
                 InterpolateTransforms(DeltaTime);
             }
-            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: InterpolateTransforms"));
+                UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: InterpolateTransforms"));
+            }
         }
         else
         {
@@ -1747,12 +1755,15 @@ bool UUELiveSyncSubsystem::Tick(
 
         if (!CVarLiveSyncDisableAttachmentResolution.GetValueOnGameThread())
         {
-            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingAttachments"));
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingAttachments"));
             {
                 TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAttachments);
                 ResolvePendingAttachments();
             }
-            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingAttachments"));
+                UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingAttachments"));
+            }
         }
         else
         {
@@ -1766,21 +1777,27 @@ bool UUELiveSyncSubsystem::Tick(
         // are applied (FINDING-009).
         // =================================================
 
-        UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolveHierarchyAttachments"));
+        if (bEnableVerboseSyncLogs)
+        {
+            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolveHierarchyAttachments"));
         {
             TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolveHierarchyAttachments);
             ResolveHierarchyAttachments();
         }
-        UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolveHierarchyAttachments"));
+            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolveHierarchyAttachments"));
+        }
 
         if (!CVarLiveSyncDisableRecovery.GetValueOnGameThread())
         {
-            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: RecoverMissingActors"));
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: RecoverMissingActors"));
             {
                 TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_RecoverMissingActors);
                 RecoverMissingActors();
             }
-            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: RecoverMissingActors"));
+                UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: RecoverMissingActors"));
+            }
         }
         else
         {
@@ -1789,26 +1806,29 @@ bool UUELiveSyncSubsystem::Tick(
 
         if (!CVarLiveSyncDisableAssetResolution.GetValueOnGameThread())
         {
-            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingAssets"));
+            if (bEnableVerboseSyncLogs)
             {
-                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAssets);
-                ResolvePendingAssets();
-            }
-            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingAssets"));
+                UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingAssets"));
+                {
+                    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAssets);
+                    ResolvePendingAssets();
+                }
+                UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingAssets"));
 
-            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingMaterials"));
-            {
-                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingMaterials);
-                ResolvePendingMaterials();
-            }
-            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingMaterials"));
+                UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingMaterials"));
+                {
+                    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingMaterials);
+                    ResolvePendingMaterials();
+                }
+                UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingMaterials"));
 
-            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ReconstructCompletedMeshes"));
-            {
-                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ReconstructCompletedMeshes);
-                ReconstructCompletedMeshes();
+                UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ReconstructCompletedMeshes"));
+                {
+                    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ReconstructCompletedMeshes);
+                    ReconstructCompletedMeshes();
+                }
+                UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ReconstructCompletedMeshes"));
             }
-            UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ReconstructCompletedMeshes"));
         }
         else
         {
@@ -1837,12 +1857,15 @@ bool UUELiveSyncSubsystem::Tick(
     // PHASE 6H — SEMANTIC CONSISTENCY DIAGNOSTICS
     // =====================================================
 
-    UE_LOG(LogLiveSync, Log, TEXT("BEGIN Periodic: TickPhase6H"));
+    if (bEnableVerboseSyncLogs)
     {
-        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_TickPhase6H);
-        TickPhase6H(DeltaTime);
+        UE_LOG(LogLiveSync, Log, TEXT("BEGIN Periodic: TickPhase6H"));
+        {
+            TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_TickPhase6H);
+            TickPhase6H(DeltaTime);
+        }
+        UE_LOG(LogLiveSync, Log, TEXT("END   Periodic: TickPhase6H"));
     }
-    UE_LOG(LogLiveSync, Log, TEXT("END   Periodic: TickPhase6H"));
 
     // =====================================================
     // PHASE 6I — PERFORMANCE & SCALABILITY DIAGNOSTICS
@@ -1858,17 +1881,23 @@ bool UUELiveSyncSubsystem::Tick(
     // ROLLING METRICS (EMA, every tick)
     // =====================================================
 
-    UE_LOG(LogLiveSync, Log, TEXT("BEGIN TickMetrics"));
-    TickMetrics(DeltaTime);
-    UE_LOG(LogLiveSync, Log, TEXT("END   TickMetrics"));
+    if (bEnableVerboseSyncLogs)
+    {
+        UE_LOG(LogLiveSync, Log, TEXT("BEGIN TickMetrics"));
+        TickMetrics(DeltaTime);
+        UE_LOG(LogLiveSync, Log, TEXT("END   TickMetrics"));
+    }
 
     // =====================================================
     // SAFETY MONITORS (flood detection, queue pressure)
     // =====================================================
 
-    UE_LOG(LogLiveSync, Log, TEXT("BEGIN TickSafetyMonitors"));
-    TickSafetyMonitors(DeltaTime);
-    UE_LOG(LogLiveSync, Log, TEXT("END   TickSafetyMonitors"));
+    if (bEnableVerboseSyncLogs)
+    {
+        UE_LOG(LogLiveSync, Log, TEXT("BEGIN TickSafetyMonitors"));
+        TickSafetyMonitors(DeltaTime);
+        UE_LOG(LogLiveSync, Log, TEXT("END   TickSafetyMonitors"));
+    }
 
     // =====================================================
     // RUNTIME METRICS (every 30s in verbose mode)
@@ -1910,7 +1939,10 @@ bool UUELiveSyncSubsystem::Tick(
 #endif
     }
 
-    UE_LOG(LogLiveSync, Log, TEXT("END TRACE: Tick complete frame=%d"), VerboseFrameCounter);
+    if (bEnableVerboseSyncLogs)
+    {
+        UE_LOG(LogLiveSync, Log, TEXT("END TRACE: Tick complete frame=%d"), VerboseFrameCounter);
+    }
     return true;
 }
 
@@ -2703,7 +2735,7 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x18 };
+            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x18 };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
@@ -3887,6 +3919,109 @@ ProcessBinaryPacket(
         Stats.PacketsProcessed.fetch_add(
             1,
             std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // KEYFRAME PACKET (Phase 7E Stage 7 — PT_Keyframe 0x17)
+    // =====================================================
+    // Variable-size payload: 14-byte header + N × 25-byte entries.
+    //
+    // Validation:
+    //   - Total packet size >= header (14 bytes)
+    //   - KeyCount must be in [1, KEYFRAME_MAX_KEYS (255)]
+    //   - Total payload must match header + KeyCount * entry size
+    //   - Entry ChannelIndex must be in [0, 255]
+    //   - Sequence must be strictly greater than LastKeyframeSequence
+    //     (first packet with any sequence is accepted)
+    // =====================================================
+
+    if (PacketType == 0x17)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessKeyframe);
+
+        Stats.KeyframePacketsReceived.fetch_add(1, std::memory_order_relaxed);
+
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
+        if (ObjSize < KEYFRAME_HEADER_SIZE)
+        {
+            Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[KEYFRAME] Truncated header: size %d < %d"),
+                ObjSize, KEYFRAME_HEADER_SIZE);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Parse header
+        FKeyframeHeader Header;
+        FMemory::Memcpy(&Header, Ptr, sizeof(FKeyframeHeader));
+
+        // Validate key count
+        if (Header.KeyCount < KEYFRAME_MIN_KEYS ||
+            Header.KeyCount > KEYFRAME_MAX_KEYS)
+        {
+            Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[KEYFRAME] Invalid key count %d (range [%d,%d])"),
+                Header.KeyCount, KEYFRAME_MIN_KEYS, KEYFRAME_MAX_KEYS);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Validate total payload size matches expected
+        int32 ExpectedSize = KEYFRAME_HEADER_SIZE +
+            Header.KeyCount * KEYFRAME_ENTRY_SIZE;
+
+        if (ObjSize < ExpectedSize)
+        {
+            Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[KEYFRAME] Truncated payload: size %d < expected %d "
+                     "(count=%d)"),
+                ObjSize, ExpectedSize, Header.KeyCount);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Validate each entry's channel index is in range
+        const uint8* EntryPtr = Ptr + KEYFRAME_HEADER_SIZE;
+        for (uint8 i = 0; i < Header.KeyCount; i++)
+        {
+            // ChannelIndex is the last byte of each 25-byte entry
+            uint8 ChannelIndex = *(EntryPtr + KEYFRAME_ENTRY_SIZE - 1);
+            if (ChannelIndex > KEYFRAME_MAX_CHANNEL)
+            {
+                Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[KEYFRAME] Entry %d: channel %d out of range [0,%d]"),
+                    i, ChannelIndex, KEYFRAME_MAX_CHANNEL);
+                Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            EntryPtr += KEYFRAME_ENTRY_SIZE;
+        }
+
+        // Sequence monotonicity check
+        if (bHasKeyframeState && Header.Sequence <= LastKeyframeSequence)
+        {
+            Stats.KeyframePacketsStale.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[KEYFRAME] Stale packet: seq %u <= %u"),
+                Header.Sequence, LastKeyframeSequence);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Apply — insert keyframes into transform tracks
+        HandleKeyframe(Header, Ptr + KEYFRAME_HEADER_SIZE,
+            ObjSize - KEYFRAME_HEADER_SIZE);
+
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
@@ -7949,12 +8084,12 @@ void UUELiveSyncSubsystem::HandleSequencerOp(
         }
 
         // Get or create CameraCutTrack
-        UCameraCutTrack* CameraCutTrack = Cast<UCameraCutTrack>(
+        UMovieSceneCameraCutTrack* CameraCutTrack = Cast<UMovieSceneCameraCutTrack>(
             MovieScene->GetCameraCutTrack());
         if (!CameraCutTrack)
         {
-            CameraCutTrack = Cast<UCameraCutTrack>(
-                MovieScene->AddCameraCutTrack(UCameraCutTrack::StaticClass()));
+            CameraCutTrack = Cast<UMovieSceneCameraCutTrack>(
+                MovieScene->AddCameraCutTrack(UMovieSceneCameraCutTrack::StaticClass()));
         }
 
         if (!CameraCutTrack)
@@ -7966,7 +8101,7 @@ void UUELiveSyncSubsystem::HandleSequencerOp(
 
         // Create binding ID from the possessable binding GUID
         FMovieSceneObjectBindingID BindingID(
-            UE::MovieScene::FRelativeObjectBindingID(*FoundBinding));
+            (UE::MovieScene::FRelativeObjectBindingID(*FoundBinding)));
 
         // Add camera cut section
         UMovieSceneCameraCutSection* CutSection = CameraCutTrack->AddNewCameraCut(
@@ -8080,8 +8215,61 @@ HandleKeyframe(
             continue;
         }
 
-        // Step 2: Validate channel index (0-8 only, matching UE transform channels)
-        if (Entry->ChannelIndex > 8)
+        // Step 2: Channel dispatch — visibility (9/10) vs transform (0-8) vs unsupported
+        if (Entry->ChannelIndex == 9 || Entry->ChannelIndex == 10)
+        {
+            // Visibility keyframe (channels 9=hide_viewport, 10=hide_render)
+            // Apply to UMovieSceneBoolTrack for the object binding.
+
+            // Find or create bool track
+            UMovieSceneBoolTrack* BoolTrack =
+                MovieScene->FindTrack<UMovieSceneBoolTrack>(*FoundBinding);
+            if (!BoolTrack)
+            {
+                BoolTrack = MovieScene->AddTrack<UMovieSceneBoolTrack>(*FoundBinding);
+                Stats.KeyframeVisibilityTrackCreated.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            // Find or create bool section
+            UMovieSceneBoolSection* BoolSection = nullptr;
+            const TArray<UMovieSceneSection*>& BoolSections = BoolTrack->GetAllSections();
+            if (BoolSections.Num() > 0)
+            {
+                BoolSection = Cast<UMovieSceneBoolSection>(BoolSections[0]);
+            }
+            if (!BoolSection)
+            {
+                UMovieSceneSection* NewSection = BoolTrack->CreateNewSection();
+                if (NewSection)
+                {
+                    BoolTrack->AddSection(*NewSection);
+                    BoolSection = Cast<UMovieSceneBoolSection>(NewSection);
+                    Stats.KeyframeVisibilitySectionCreated.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+
+            if (BoolSection)
+            {
+                // Convert value: 0.0 → false, non-zero → true
+                const bool bValue = (Entry->Value != 0.0f);
+                BoolSection->GetChannel().AddKeys(
+                    { FFrameNumber(Entry->Frame) },
+                    { bValue });
+                Stats.KeyframeVisibilityKeysApplied.fetch_add(1, std::memory_order_relaxed);
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[KEYFRAME] Failed to create bool section for %s (ch %d) — skipping"),
+                    *Entry->ObjectGUID.ToString(), Entry->ChannelIndex);
+            }
+
+            EntryPtr += KEYFRAME_ENTRY_SIZE;
+            Remaining -= KEYFRAME_ENTRY_SIZE;
+            continue;
+        }
+
+        if (Entry->ChannelIndex > 10)
         {
             Stats.KeyframeUnsupportedChannel.fetch_add(1, std::memory_order_relaxed);
             UnsupportedChannel++;
@@ -9199,6 +9387,81 @@ HandlePlaybackState(
 
 
 // =========================================================
+// SNAPSHOT BOUNDARY (Phase 7 — PT_BeginSnapshot / PT_EndSnapshot)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleBeginSnapshot()
+{
+    CHECK_GAME_THREAD();
+
+    bInSnapshotBuild = true;
+    SnapshotStartTime = FPlatformTime::Seconds();
+
+    UE_LOG(LogLiveSync, Verbose,
+        TEXT("[SNAPSHOT] Begin: bInSnapshotBuild=1 ts=%.3f"),
+        SnapshotStartTime);
+}
+
+void UUELiveSyncSubsystem::
+HandleEndSnapshot()
+{
+    CHECK_GAME_THREAD();
+
+    bInSnapshotBuild = false;
+
+    // Replay collection stream
+    if (GCollectionReplayEnabled &&
+        GCollectionReplayBuffer.Num() > 0)
+    {
+        const double ReplayStart = FPlatformTime::Seconds();
+        const int32 PreReplayCount =
+            GCollectionReplayBuffer.Num();
+
+        ReplayCollectionStream();
+        CheckReplayBufferHealth();
+
+        const double ReplayDuration =
+            (FPlatformTime::Seconds() - ReplayStart) * 1000.0;
+
+        Stats.CollectionReplayReconnectRebuilds.fetch_add(
+            1, std::memory_order_relaxed);
+        Stats.CollectionReplayReconnectPacketsReplayed.fetch_add(
+            PreReplayCount, std::memory_order_relaxed);
+
+        // Check divergence after replay
+        const uint64 CurrentHash = ComputeCollectionStateHash();
+        if (GCollectionLastVerifiedHash != 0 &&
+            CurrentHash != GCollectionLastVerifiedHash)
+        {
+            Stats.CollectionReplayReconnectDivergences.fetch_add(
+                1, std::memory_order_relaxed);
+        }
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[COLLECTION] Replay: %d entries processed on reconnect (%.1f ms)"),
+            PreReplayCount, ReplayDuration);
+    }
+    else if (GCollectionReplayEnabled)
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[COLLECTION] Replay buffer empty — skipping replay on EndSnapshot"));
+    }
+}
+
+void UUELiveSyncSubsystem::
+AbortSnapshot()
+{
+    CHECK_GAME_THREAD();
+
+    bInSnapshotBuild = false;
+
+    UE_LOG(LogLiveSync, Warning,
+        TEXT("[SNAPSHOT] Aborted: bInSnapshotBuild=0"));
+}
+
+
+// =========================================================
 // ACTIVE CAMERA (Phase 7D)
 // =========================================================
 // Storage-only: accepts valid FActiveCameraPayload, updates
@@ -9275,161 +9538,8 @@ HandleActiveCamera(
         Stats.ActiveCameraPacketsApplied.fetch_add(1, std::memory_order_relaxed);
         Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
         return;
-    }
-
-    // =====================================================
-    // KEYFRAME PACKET (Phase 7E Stage 7 — PT_Keyframe 0x17)
-    // =====================================================
-    // Variable-size payload: 14-byte header + N × 25-byte entries.
-    //
-    // Validation:
-    //   - Total packet size >= header (14 bytes)
-    //   - KeyCount must be in [1, KEYFRAME_MAX_KEYS (255)]
-    //   - Total payload must match header + KeyCount * entry size
-    //   - Entry ChannelIndex must be in [0, 255]
-    //   - Sequence must be strictly greater than LastKeyframeSequence
-    //     (first packet with any sequence is accepted)
-    //
-    // Storage-only: validates and stores header state but does NOT
-    // insert keyframes into Sequencer tracks.
-    // =====================================================
-
-    if (PacketType == 0x17)
-    {
-        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessKeyframe);
-
-        Stats.KeyframePacketsReceived.fetch_add(1, std::memory_order_relaxed);
-
-        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
-        if (ObjSize < KEYFRAME_HEADER_SIZE)
-        {
-            Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
-            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[KEYFRAME] Truncated header: size %d < %d"),
-                ObjSize, KEYFRAME_HEADER_SIZE);
-            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-
-        // Parse header
-        FKeyframeHeader Header;
-        FMemory::Memcpy(&Header, Ptr, sizeof(FKeyframeHeader));
-
-        // Validate key count
-        if (Header.KeyCount < KEYFRAME_MIN_KEYS ||
-            Header.KeyCount > KEYFRAME_MAX_KEYS)
-        {
-            Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
-            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[KEYFRAME] Invalid key count %d (range [%d,%d])"),
-                Header.KeyCount, KEYFRAME_MIN_KEYS, KEYFRAME_MAX_KEYS);
-            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-
-        // Validate total payload size matches expected
-        int32 ExpectedSize = KEYFRAME_HEADER_SIZE +
-            Header.KeyCount * KEYFRAME_ENTRY_SIZE;
-
-        if (ObjSize < ExpectedSize)
-        {
-            Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
-            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[KEYFRAME] Truncated payload: size %d < expected %d "
-                     "(count=%d)"),
-                ObjSize, ExpectedSize, Header.KeyCount);
-            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-
-        // Validate each entry's channel index is in range
-        const uint8* EntryPtr = Ptr + KEYFRAME_HEADER_SIZE;
-        for (uint8 i = 0; i < Header.KeyCount; i++)
-        {
-            // ChannelIndex is the last byte of each 25-byte entry
-            uint8 ChannelIndex = *(EntryPtr + KEYFRAME_ENTRY_SIZE - 1);
-            if (ChannelIndex > KEYFRAME_MAX_CHANNEL)
-            {
-                Stats.KeyframePacketsMalformed.fetch_add(1, std::memory_order_relaxed);
-                Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[KEYFRAME] Entry %d: channel %d out of range [0,%d]"),
-                    i, ChannelIndex, KEYFRAME_MAX_CHANNEL);
-                Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-                return;
-            }
-            EntryPtr += KEYFRAME_ENTRY_SIZE;
-        }
-
-        // Sequence monotonicity check
-        if (bHasKeyframeState && Header.Sequence <= LastKeyframeSequence)
-        {
-            Stats.KeyframePacketsStale.fetch_add(1, std::memory_order_relaxed);
-            UE_LOG(LogLiveSync, Verbose,
-                TEXT("[KEYFRAME] Stale packet: seq %u <= %u"),
-                Header.Sequence, LastKeyframeSequence);
-            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-
-        // Apply — insert keyframes into transform tracks
-        HandleKeyframe(Header, Ptr + KEYFRAME_HEADER_SIZE,
-            ObjSize - KEYFRAME_HEADER_SIZE);
-
-        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    // =====================================================
-    // SEQUENCER OP (Phase 7E — PT_SequencerOp 0x18)
-    // =====================================================
-    // COLLECTION REPLAY (Phase 6F Stage 5–7)
-    // =====================================================
-    // After snapshot is fully built, replay the recorded
-    // collection packet stream to synchronize collection
-    // membership and identity state.
-    // =====================================================
-
-    if (GCollectionReplayEnabled &&
-        GCollectionReplayBuffer.Num() > 0)
-    {
-        const double ReplayStart = FPlatformTime::Seconds();
-        const int32 PreReplayCount =
-            GCollectionReplayBuffer.Num();
-
-        ReplayCollectionStream();
-        CheckReplayBufferHealth();
-
-        const double ReplayDuration =
-            (FPlatformTime::Seconds() - ReplayStart) * 1000.0;
-
-        Stats.CollectionReplayReconnectRebuilds.fetch_add(
-            1, std::memory_order_relaxed);
-        Stats.CollectionReplayReconnectPacketsReplayed.fetch_add(
-            PreReplayCount, std::memory_order_relaxed);
-
-        // Check divergence after replay
-        const uint64 CurrentHash = ComputeCollectionStateHash();
-        if (GCollectionLastVerifiedHash != 0 &&
-            CurrentHash != GCollectionLastVerifiedHash)
-        {
-            Stats.CollectionReplayReconnectDivergences.fetch_add(
-                1, std::memory_order_relaxed);
-        }
-
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[COLLECTION] Replay: %d entries processed on reconnect (%.1f ms)"),
-            PreReplayCount, ReplayDuration);
-    }
-    else if (GCollectionReplayEnabled)
-    {
-        UE_LOG(LogLiveSync, Verbose,
-            TEXT("[COLLECTION] Replay buffer empty — skipping replay on EndSnapshot"));
-    }
 }
+
 
 
 // =========================================================
@@ -10857,6 +10967,43 @@ HandleTimeline(
 {
 }
 
+
+// =========================================================
+// MATERIAL RESOLUTION (Phase 7B Stage 1C/1D) — stubs
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleMaterialDef(
+    const FGuid& Guid,
+    const TArray<FMaterialSlotRef>& Slots,
+    uint32 ObjectCount)
+{
+}
+
+void UUELiveSyncSubsystem::
+ResolvePendingMaterials()
+{
+}
+
+// =========================================================
+// MESH CHUNK REASSEMBLY (Phase 7C Stage 1B/1C) — stubs
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleMeshChunk(
+    const FGuid& Guid,
+    const FString& VersionHash,
+    uint32 ChunkIndex,
+    uint32 ChunkCount,
+    uint8 Flags,
+    const TArrayView<const uint8>& Payload)
+{
+}
+
+void UUELiveSyncSubsystem::
+ReconstructCompletedMeshes()
+{
+}
 
 #include "UELiveSyncSubsystem_Replay.inl"
 #include "UELiveSyncSubsystem_Phase6H.inl"

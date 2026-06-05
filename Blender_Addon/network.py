@@ -643,7 +643,7 @@ def serialize_timeline(frame_current, frame_start, frame_end,
 
 NULL_CAMERA_GUID = b'\x00' * 16
 
-def serialize_active_camera(guid_bytes, sequence, timestamp):
+def serialize_active_camera(guid_obj, sequence, timestamp):
     """Serialize active camera payload into fixed-size 28-byte payload.
 
     Payload layout:
@@ -651,12 +651,16 @@ def serialize_active_camera(guid_bytes, sequence, timestamp):
       [16-19] sequence  uint32 LE — monotonic global counter
       [20-27] timestamp double LE — time.time() at detection
 
-    guid_bytes: 16 bytes from UUID(...).bytes, or NULL_CAMERA_GUID for no camera.
+    guid_obj: UUID object, or None for no active camera (writes all-zero GUID).
     Returns bytes of length ACTIVE_CAMERA_PAYLOAD_SIZE.
     """
+    if guid_obj is None:
+        guid_bytes = NULL_CAMERA_GUID
+    else:
+        guid_bytes = pack_ue_fguid(guid_obj)
     return struct.pack(
         "<16sId",
-        guid_bytes[:16].ljust(16, b'\x00'),
+        guid_bytes,
         sequence & 0xFFFFFFFF,
         timestamp
     )
@@ -722,49 +726,58 @@ def serialize_sequencer_op_create_sequence(sequence, timestamp,
 
 
 def serialize_sequencer_op_add_possessable(sequence, timestamp,
-                                           object_guid_bytes, binding_type,
+                                           object_guid, binding_type,
                                            flags=0):
     """Serialize an ADD_POSSESSABLE sequencer op.
+
+    object_guid: UUID object (packed via pack_ue_fguid).
 
     Total payload: 16 (common) + 17 (payload) = 33 bytes
     """
     common = _serialize_sequencer_op_common(
         SEQUENCER_OP_ADD_POSSESSABLE, sequence, timestamp, flags)
+    guid_bytes = pack_ue_fguid(object_guid)
     payload = struct.pack(
         "<16sB",
-        object_guid_bytes[:16].ljust(16, b'\x00'),
+        guid_bytes,
         binding_type & 0xFF,
     )
     return common + payload
 
 
 def serialize_sequencer_op_remove_possessable(sequence, timestamp,
-                                              object_guid_bytes, flags=0):
+                                              object_guid, flags=0):
     """Serialize a REMOVE_POSSESSABLE sequencer op.
+
+    object_guid: UUID object (packed via pack_ue_fguid).
 
     Total payload: 16 (common) + 16 (payload) = 32 bytes
     """
     common = _serialize_sequencer_op_common(
         SEQUENCER_OP_REMOVE_POSSESSABLE, sequence, timestamp, flags)
+    guid_bytes = pack_ue_fguid(object_guid)
     payload = struct.pack(
         "<16s",
-        object_guid_bytes[:16].ljust(16, b'\x00'),
+        guid_bytes,
     )
     return common + payload
 
 
 def serialize_sequencer_op_add_camera_cut(sequence, timestamp,
-                                          camera_guid_bytes, frame_start,
+                                          camera_guid, frame_start,
                                           frame_end, flags=0):
     """Serialize an ADD_CAMERA_CUT sequencer op.
+
+    camera_guid: UUID object (packed via pack_ue_fguid).
 
     Total payload: 16 (common) + 24 (payload) = 40 bytes
     """
     common = _serialize_sequencer_op_common(
         SEQUENCER_OP_ADD_CAMERA_CUT, sequence, timestamp, flags)
+    guid_bytes = pack_ue_fguid(camera_guid)
     payload = struct.pack(
         "<16sii",
-        camera_guid_bytes[:16].ljust(16, b'\x00'),
+        guid_bytes,
         frame_start, frame_end,
     )
     return common + payload
@@ -823,30 +836,32 @@ KEYFRAME_CHANNEL_VISIBILITY_RENDER = 10    # hide_render → bool renderable/not
 
 def serialize_keyframe(sequence, timestamp, entries, flags=0):
     """Serialize a PT_Keyframe packet.
-    
-    entries: list of (guid_bytes, frame, value, channel_index) tuples.
-    
+
+    entries: list of (guid_obj, frame, value, channel_index) tuples.
+             guid_obj must be a UUID object (packed via pack_ue_fguid).
+
     Total payload: 14 + N * 25 bytes.
     """
     count = len(entries)
     if count < KEYFRAME_MIN_KEYS or count > KEYFRAME_MAX_KEYS:
         raise ValueError(
             f"Key count {count} out of range [{KEYFRAME_MIN_KEYS}, {KEYFRAME_MAX_KEYS}]")
-    
+
     header = struct.pack("<IdBB",
         sequence & 0xFFFFFFFF,
         timestamp,
         count & 0xFF,
         flags & 0xFF)
-    
+
     body = b''
-    for guid_bytes, frame, value, channel_index in entries:
+    for guid_obj, frame, value, channel_index in entries:
+        guid_bytes = pack_ue_fguid(guid_obj)
         body += struct.pack("<16sifB",
             guid_bytes[:16].ljust(16, b'\x00'),
             frame,
             value,
             channel_index & 0xFF)
-    
+
     return header + body
 
 
@@ -1418,11 +1433,18 @@ def serialize_hierarchy(guid_obj, parent_guid_obj):
 
 
 # =========================================================
-# GUID PACKING HELPER (shared by collection serializers)
+# GUID PACKING: UE FGuid compatible (4 × uint32 LE)
 # =========================================================
 
-def _pack_guid(guid_obj):
-    """Pack a GUID into 16 bytes (4 × uint32 LE)."""
+def pack_ue_fguid(guid_obj):
+    """Pack a UUID object into 16 bytes matching UE FGuid layout.
+
+    UE FGuid reads GUID bytes as struct.unpack('<IIII', data):
+      A = time_low
+      B = (time_mid << 16) | time_hi_version
+      C = (clock_seq_hi_variant << 24 | clock_seq_low << 16 | (node >> 32) & 0xFFFF)
+      D = node & 0xFFFFFFFF
+    """
     d_a = guid_obj.time_low
     d_b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
     d_c = (guid_obj.clock_seq_hi_variant << 24
@@ -1430,6 +1452,11 @@ def _pack_guid(guid_obj):
            | (guid_obj.node >> 32) & 0xFFFF)
     d_d = guid_obj.node & 0xFFFFFFFF
     return struct.pack("<IIII", d_a, d_b, d_c, d_d)
+
+
+def _pack_guid(guid_obj):
+    """Pack a GUID into 16 bytes (4 × uint32 LE). Delegates to pack_ue_fguid."""
+    return pack_ue_fguid(guid_obj)
 
 
 # =========================================================

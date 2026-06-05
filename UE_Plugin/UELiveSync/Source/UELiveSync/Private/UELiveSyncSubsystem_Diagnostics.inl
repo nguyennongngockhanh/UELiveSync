@@ -1094,6 +1094,28 @@ ConsoleDumpState()
         TEXT("    KFSectionsCre:    %d"),
         Stats.KeyframeSectionCreated.load(std::memory_order_relaxed));
 
+    // Visibility keyframe counters (Phase 7E Stage 10A)
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFBVisibility:    %d"),
+        Stats.KeyframeVisibilityKeysApplied.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFBTrackCre:      %d"),
+        Stats.KeyframeVisibilityTrackCreated.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFBSectionCre:    %d"),
+        Stats.KeyframeVisibilitySectionCreated.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    KFBUnsupp:        %d"),
+        Stats.KeyframeVisibilityUnsupported.load(std::memory_order_relaxed));
+
     UE_LOG(
         LogLiveSync,
         Log,
@@ -1493,6 +1515,11 @@ ConsoleReset()
     Stats.KeyframeUnsupportedChannel.store(0, std::memory_order_relaxed);
     Stats.KeyframeTrackCreated.store(0, std::memory_order_relaxed);
     Stats.KeyframeSectionCreated.store(0, std::memory_order_relaxed);
+    // Visibility counters (Phase 7E Stage 10A)
+    Stats.KeyframeVisibilityKeysApplied.store(0, std::memory_order_relaxed);
+    Stats.KeyframeVisibilityTrackCreated.store(0, std::memory_order_relaxed);
+    Stats.KeyframeVisibilitySectionCreated.store(0, std::memory_order_relaxed);
+    Stats.KeyframeVisibilityUnsupported.store(0, std::memory_order_relaxed);
     LastKeyframeSequence = 0;
     LastKeyframeTimestamp = 0.0;
     bHasKeyframeState = false;

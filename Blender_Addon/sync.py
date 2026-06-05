@@ -48,6 +48,7 @@ try:
         PT_Delete_V5,
         PT_Visibility,
         PT_Collection,
+        get_object_material_slots,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
         get_material_identity_hash,
@@ -68,10 +69,6 @@ try:
         compute_full_snapshot_hash,
         compute_collection_membership_hash,
         make_collection_subheader,
-        start_world_replay_recording,
-        clear_world_replay_stream,
-        record_world_entry,
-        set_world_replay_enabled,
         PT_Mesh,
         extract_evaluated_mesh_data,
         compute_geometry_version_hash,
@@ -142,6 +139,7 @@ try:
         _keyframe_packets_sent as _net_keyframe_packets_sent,
         _keyframes_sent as _net_keyframes_sent,
         _animated_objects_scanned as _net_animated_objects_scanned,
+        pack_ue_fguid,
     )
 except ImportError:
     from network import (
@@ -242,6 +240,7 @@ except ImportError:
         _keyframe_packets_sent as _net_keyframe_packets_sent,
         _keyframes_sent as _net_keyframes_sent,
         _animated_objects_scanned as _net_animated_objects_scanned,
+        pack_ue_fguid,
     )
 
 
@@ -880,15 +879,16 @@ _KEYFRAME_CHANNEL_MAP = {
     ("scale", 0): 6,  # scaleX
     ("scale", 1): 7,  # scaleY
     ("scale", 2): 8,  # scaleZ
-    ("hide_viewport", -1): 9,   # viewport visibility (bool: 0=visible, 1=hidden)
-    ("hide_render", -1): 10,    # render visibility (bool: 0=renderable, 1=not)
+    ("hide_viewport", 0): 9,   # viewport visibility (bool: 0=visible, 1=hidden)
+    ("hide_render", 0): 10,    # render visibility (bool: 0=renderable, 1=not)
 }
 
 
-def _extract_keyframes(obj, guid_bytes):
+def _extract_keyframes(obj, guid_obj):
     """Extract transform and visibility keyframes from Blender object's FCurves.
 
-    Returns list of (guid_bytes, frame, value, channel_index) tuples.
+    Returns list of (guid_obj, frame, value, channel_index) tuples.
+    guid_obj is a UUID object (packed via pack_ue_fguid during serialization).
     Supports:
       - Channels 0-2: location (locX, locY, locZ)
       - Channels 3-5: rotation_euler (rotX, rotY, rotZ)
@@ -909,7 +909,7 @@ def _extract_keyframes(obj, guid_bytes):
             continue
         for kp in fcurve.keyframe_points:
             entries.append((
-                guid_bytes,
+                guid_obj,
                 int(kp.co.x),
                 float(kp.co.y),
                 channel,
@@ -922,8 +922,12 @@ def _hash_keyframes(entries):
     if not entries:
         return 0
     h = 2166136261
-    for guid_bytes, frame, value, channel in entries:
-        for b in guid_bytes:
+    for guid_or_obj, frame, value, channel in entries:
+        if isinstance(guid_or_obj, bytes):
+            guid_data = guid_or_obj
+        else:
+            guid_data = pack_ue_fguid(guid_or_obj)
+        for b in guid_data:
             h = ((h ^ b) * 16777619) & 0xFFFFFFFF
         h = ((h ^ (frame & 0xFFFFFFFF)) * 16777619) & 0xFFFFFFFF
         val_bytes = struct.pack("<f", value)
@@ -1336,6 +1340,9 @@ def check_updates():
         previous = last_sent_transforms.get(
             guid
         )
+        is_first_send = (
+            previous is None
+        )
 
         if transforms_different(
             transform,
@@ -1370,10 +1377,6 @@ def check_updates():
                 _runtime_stats["serialization_failures"] += 1
 
                 continue
-
-            is_first_send = (
-                previous is None
-            )
 
             has_parent = (
                 parent_guid_obj is not None
@@ -1664,7 +1667,7 @@ def check_updates():
 
         if is_keyframe_effective() and not is_first_send:
             try:
-                kf_entries = _extract_keyframes(obj, guid_obj.bytes)
+                kf_entries = _extract_keyframes(obj, guid_obj)
             except Exception:
                 kf_entries = []
 
@@ -1967,8 +1970,10 @@ def check_updates():
 
         if camera_obj is not None:
             guid_hex = ensure_guid(camera_obj)
-            guid_bytes = UUID(guid_hex).bytes
+            guid_obj = UUID(guid_hex)
+            guid_bytes = guid_obj.bytes
         else:
+            guid_obj = None
             guid_bytes = NULL_CAMERA_GUID
 
         if _last_active_camera_guid is None:
@@ -1976,7 +1981,7 @@ def check_updates():
         elif _last_active_camera_guid == b'' or guid_bytes != _last_active_camera_guid:
             _active_camera_sequence += 1
             payload = serialize_active_camera(
-                guid_bytes,
+                guid_obj,
                 _active_camera_sequence,
                 time.time(),
             )
@@ -2247,6 +2252,27 @@ def get_uptime():
     return uptime
 
 
+def stop_sync():
+
+    global timer_running
+    global _timer_ref
+    global _sync_start_time
+
+    if _timer_ref is not None:
+        try:
+            bpy.app.timers.unregister(_timer_ref)
+        except ValueError:
+            pass
+        _timer_ref = None
+
+    timer_running = False
+    _sync_start_time = 0.0
+
+    disconnect()
+
+    print("UE Live Sync Stopped")
+
+
 def start_sync():
 
     global timer_running
@@ -2260,35 +2286,39 @@ def start_sync():
     global _last_object_names
     global _last_visibility_state
     global _last_parent_guid
-    global _last_collection_state  # Phase 6F
-    global _last_mesh_identity  # Phase 7A: clear stale mesh identity cache
-    global _last_material_identity  # Phase 7B: clear stale material identity cache
-    global _last_geometry_version  # Phase 7C: clear stale geometry version cache
-    global _last_playback_state  # Phase 7C: reset playback state
-    global _last_timeline_state  # Phase 7B: reset timeline tracking
+    global _last_collection_state
+    global _last_mesh_identity
+    global _last_material_identity
+    global _last_geometry_version
+    global _last_playback_state
+    global _last_timeline_state
     global _timeline_sequence
     global _timeline_packets_sent
     global _timeline_state_changes
-    global _last_active_camera_guid  # Phase 7D: reset active camera tracking
+    global _last_active_camera_guid
     global _active_camera_sequence
     global _active_camera_packets_sent
     global _active_camera_state_changes
 
+    # Reset runtime state
     timer_running = False
-    _last_mesh_identity.clear()  # Phase 7A: prevent stale suppression across sessions
-    _last_material_identity.clear()  # Phase 7B: prevent stale material suppression
+    last_sent_transforms.clear()
+    tracked_objects.clear()
+    _last_mesh_identity.clear()
+    _last_material_identity.clear()
+    _last_geometry_version.clear()
     _last_object_names.clear()
     _last_visibility_state.clear()
     _last_parent_guid.clear()
     _known_guids.clear()
-    _last_collection_state.clear()  # Phase 6F
-    _last_keyframe_action.clear()  # Phase 7E Stage 8
-    _last_playback_state = None  # Phase 7C: reset playback transition detector
-    _last_timeline_state = None  # Phase 7B: reset timeline transition detector
+    _last_collection_state.clear()
+    _last_keyframe_action.clear()
+    _last_playback_state = None
+    _last_timeline_state = None
     _timeline_sequence = 0
     _timeline_packets_sent = 0
     _timeline_state_changes = 0
-    _last_active_camera_guid = None  # Phase 7D: first tick sets baseline
+    _last_active_camera_guid = None
     _active_camera_sequence = 0
     _active_camera_packets_sent = 0
     _active_camera_state_changes = 0
@@ -2296,7 +2326,11 @@ def start_sync():
     _keyframe_packets_sent = 0
     _keyframes_sent = 0
     _animated_objects_scanned = 0
+    _last_heartbeat_time = 0.0
+    _last_object_count = 0
+    _scan_counter = 0
 
+    # Unregister existing timer if any
     if _timer_ref is not None:
         try:
             bpy.app.timers.unregister(_timer_ref)
@@ -2304,6 +2338,24 @@ def start_sync():
             pass
         _timer_ref = None
 
+    # Disconnect existing connection
     disconnect()
 
-    print("UE Live Sync Stopped")
+    # Read host/port from preferences
+    _sync_runtime_config()
+    host = "127.0.0.1"
+    port = _runtime_config.get("server_port", 57000)
+
+    # Connect
+    connect(host, port)
+
+    if not is_connected():
+        print(f"[LiveSync] Failed to connect to {host}:{port}")
+        return
+
+    _sync_start_time = time.time()
+    timer_running = True
+
+    _timer_ref = bpy.app.timers.register(check_updates)
+
+    print(f"UE Live Sync Started — connected to {host}:{port}")
