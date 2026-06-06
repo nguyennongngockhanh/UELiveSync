@@ -3936,6 +3936,68 @@ ProcessBinaryPacket(
             TArrayView<const uint8> PayloadView(
                 Ptr, PayloadSize);
 
+            // =====================================================
+            // Phase 7C Stage 2A: FULL_ATTR schema gate
+            // =====================================================
+            bool bHasFullAttr = (Flags & MESH_CHUNK_FLAG_FULL_ATTR) != 0;
+
+            if (bHasFullAttr)
+            {
+                if (ChunkIndex == 0)
+                {
+                    // Chunk 0: read SchemaVersion from payload start
+                    if (PayloadSize < 4)
+                    {
+                        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                        UE_LOG(LogLiveSync, Warning,
+                            TEXT("[MESH][FULL_ATTR] Chunk0 truncated: payload=%d < 4"),
+                            PayloadSize);
+                        Stats.MeshSchemaUnsupportedPackets++;
+                        Ptr += PayloadSize;
+                        continue;
+                    }
+
+                    uint32 SchemaVersion = 0;
+                    FMemory::Memcpy(&SchemaVersion, PayloadView.GetData(), sizeof(uint32));
+
+                    if (SchemaVersion == 1)
+                    {
+                        // v1 schema detected — safely defer (no v1 parser in Stage 2A)
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[MESH][FULL_ATTR] v1 schema detected for GUID=%s — deferred (Stage 2A)"),
+                            *Guid.ToString(EGuidFormats::Digits));
+                        Stats.MeshSchemaV1PacketsDetected++;
+                        Ptr += PayloadSize;
+                        continue;
+                    }
+                    else if (SchemaVersion == 0 || SchemaVersion > 1)
+                    {
+                        // Unsupported schema version — reject safely
+                        UE_LOG(LogLiveSync, Warning,
+                            TEXT("[MESH][FULL_ATTR] Unsupported schema %u for GUID=%s — rejected"),
+                            SchemaVersion, *Guid.ToString(EGuidFormats::Digits));
+                        Stats.MeshSchemaUnsupportedPackets++;
+                        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                        Ptr += PayloadSize;
+                        continue;
+                    }
+                }
+                else
+                {
+                    // ChunkIndex > 0 with FULL_ATTR: safely skip in Stage 2A
+                    // (SchemaVersion consumed from chunk 0 only)
+                    UE_LOG(LogLiveSync, Verbose,
+                        TEXT("[MESH][FULL_ATTR] Chunk %u > 0 skipped (Stage 2A)"),
+                        ChunkIndex);
+                    Stats.MeshSchemaUnsupportedPackets++;
+                    Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                    Ptr += PayloadSize;
+                    continue;
+                }
+            }
+
+            // FULL_ATTR absent: legacy V5 path
+            Stats.MeshSchemaV5Packets++;
             HandleMeshChunk(
                 Guid,
                 VersionHash,

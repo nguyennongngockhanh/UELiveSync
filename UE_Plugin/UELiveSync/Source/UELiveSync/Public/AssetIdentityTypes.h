@@ -241,6 +241,10 @@ static constexpr uint8
 static constexpr uint8
     MESH_CHUNK_FLAG_LAST_CHUNK        = 0x40;
 
+// Phase 7C Stage 2A: full-attribute schema gate flag
+static constexpr uint8
+    MESH_CHUNK_FLAG_FULL_ATTR         = 0x80;
+
 static constexpr int32
     LIVE_SYNC_V5_MATERIAL_SLOT_SIZE = 17;
 // SlotIndex(1) + MaterialLow(8) + MaterialHigh(8) = 17 bytes per slot

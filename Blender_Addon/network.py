@@ -888,6 +888,7 @@ MESH_CHUNK_FLAG_HAS_NORMALS       = 0x08  # Reserved for Stage 2
 MESH_CHUNK_FLAG_HAS_UVS           = 0x10  # Reserved for Stage 2
 MESH_CHUNK_FLAG_FIRST_CHUNK       = 0x20  # First chunk of multi-chunk mesh
 MESH_CHUNK_FLAG_LAST_CHUNK        = 0x40  # Last chunk of multi-chunk mesh
+MESH_CHUNK_FLAG_FULL_ATTR         = 0x80  # Phase 7C Stage 2A: full-attribute schema gate
 
 
 def extract_evaluated_mesh_data(obj):

@@ -761,6 +761,11 @@ private:
     // Total mesh sections built successfully this session
     uint32 MeshSectionsBuilt = 0;
 
+    // Phase 7C Stage 2A: mesh schema gate counters
+    uint32 MeshSchemaV5Packets = 0;
+    uint32 MeshSchemaV1PacketsDetected = 0;
+    uint32 MeshSchemaUnsupportedPackets = 0;
+
     // =====================================================
     // PLAYBACK STATE (Phase 7C)
     // =====================================================
