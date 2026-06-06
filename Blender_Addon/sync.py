@@ -1543,9 +1543,9 @@ def check_updates():
         # chunks when the geometry version hash changes.
         #
         # Suppressed on first send (is_first_send) to avoid
-        # flooding on reconnect. _last_geometry_version
-        # is None for new objects, triggering a first-tick
-        # evaluation without emission.
+        # flooding on reconnect. On the first evaluation
+        # (prev_hash is None), the mesh IS emitted so that
+        # newly created objects transmit their geometry.
         #
         # Only processes MESH objects with valid data.
         # Skips silently if depsgraph evaluation fails
@@ -1564,7 +1564,7 @@ def check_updates():
                         mesh_data["material_indices"],
                     )
                     prev_hash = _last_geometry_version.get(guid)
-                    if prev_hash is not None and current_hash != prev_hash:
+                    if prev_hash is None or current_hash != prev_hash:
                         version_hash = current_hash
                         chunk_flags = (
                             MESH_CHUNK_FLAG_FIRST_CHUNK |

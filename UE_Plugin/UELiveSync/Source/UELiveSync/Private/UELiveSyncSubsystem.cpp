@@ -73,6 +73,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
+#include "KismetProceduralMeshLibrary.h"
 
 #include "Engine/StaticMesh.h"
 
@@ -596,8 +597,8 @@ static TAutoConsoleVariable<int32>
 static TAutoConsoleVariable<int32>
     CVarLiveSyncInterpMode(
         TEXT("UE.LiveSync.InterpMode"),
-        1,
-        TEXT("Interpolation mode: 0=direct-set (zero lag), 1=smooth (default)"),
+        0,
+        TEXT("Interpolation mode: 0=direct-set (zero lag, default), 1=smooth"),
         ECVF_Default
     );
 
@@ -1727,10 +1728,13 @@ bool UUELiveSyncSubsystem::Tick(
         if (bEnableVerboseSyncLogs)
         {
             UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ProcessQueuedPackets"));
+        }
         {
             TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessQueuedPackets);
             ProcessQueuedPackets();
         }
+        if (bEnableVerboseSyncLogs)
+        {
             UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ProcessQueuedPackets"));
         }
 
@@ -1741,10 +1745,13 @@ bool UUELiveSyncSubsystem::Tick(
             if (bEnableVerboseSyncLogs)
             {
                 UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: InterpolateTransforms"));
+            }
             {
                 TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_InterpolateTransforms);
                 InterpolateTransforms(DeltaTime);
             }
+            if (bEnableVerboseSyncLogs)
+            {
                 UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: InterpolateTransforms"));
             }
         }
@@ -1758,10 +1765,13 @@ bool UUELiveSyncSubsystem::Tick(
             if (bEnableVerboseSyncLogs)
             {
                 UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingAttachments"));
+            }
             {
                 TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAttachments);
                 ResolvePendingAttachments();
             }
+            if (bEnableVerboseSyncLogs)
+            {
                 UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingAttachments"));
             }
         }
@@ -1780,10 +1790,13 @@ bool UUELiveSyncSubsystem::Tick(
         if (bEnableVerboseSyncLogs)
         {
             UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolveHierarchyAttachments"));
+        }
         {
             TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolveHierarchyAttachments);
             ResolveHierarchyAttachments();
         }
+        if (bEnableVerboseSyncLogs)
+        {
             UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolveHierarchyAttachments"));
         }
 
@@ -1792,10 +1805,13 @@ bool UUELiveSyncSubsystem::Tick(
             if (bEnableVerboseSyncLogs)
             {
                 UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: RecoverMissingActors"));
+            }
             {
                 TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_RecoverMissingActors);
                 RecoverMissingActors();
             }
+            if (bEnableVerboseSyncLogs)
+            {
                 UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: RecoverMissingActors"));
             }
         }
@@ -1809,24 +1825,39 @@ bool UUELiveSyncSubsystem::Tick(
             if (bEnableVerboseSyncLogs)
             {
                 UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingAssets"));
-                {
-                    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAssets);
-                    ResolvePendingAssets();
-                }
+            }
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingAssets);
+                ResolvePendingAssets();
+            }
+            if (bEnableVerboseSyncLogs)
+            {
                 UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingAssets"));
+            }
 
+            if (bEnableVerboseSyncLogs)
+            {
                 UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ResolvePendingMaterials"));
-                {
-                    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingMaterials);
-                    ResolvePendingMaterials();
-                }
+            }
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ResolvePendingMaterials);
+                ResolvePendingMaterials();
+            }
+            if (bEnableVerboseSyncLogs)
+            {
                 UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingMaterials"));
+            }
 
+            if (bEnableVerboseSyncLogs)
+            {
                 UE_LOG(LogLiveSync, Log, TEXT("BEGIN Pipeline: ReconstructCompletedMeshes"));
-                {
-                    TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ReconstructCompletedMeshes);
-                    ReconstructCompletedMeshes();
-                }
+            }
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ReconstructCompletedMeshes);
+                ReconstructCompletedMeshes();
+            }
+            if (bEnableVerboseSyncLogs)
+            {
                 UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ReconstructCompletedMeshes"));
             }
         }
@@ -5102,7 +5133,10 @@ InterpolateTransforms(
     static int InterpFreezeIter = 0;
     InterpFreezeIter++;
 
-    UE_LOG(LogLiveSync, Log, TEXT("BEGIN InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
+    if (bEnableVerboseSyncLogs)
+    {
+        UE_LOG(LogLiveSync, Log, TEXT("BEGIN InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
+    }
 
     // Skip interpolation during snapshot build — all transforms
     // will be bulk-applied when EndSnapshot is received
@@ -5735,7 +5769,10 @@ InterpolateTransforms(
         InterpCount++;
     }
 
-    UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
+    if (bEnableVerboseSyncLogs)
+    {
+        UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
+    }
 
     if (ShouldLogVerbose())
     {
@@ -10969,7 +11006,44 @@ HandleTimeline(
 
 
 // =========================================================
-// MATERIAL RESOLUTION (Phase 7B Stage 1C/1D) — stubs
+// CACHE MATERIAL PATH (Phase 7B Stage 1D)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+CacheMaterialPath(
+    const FMaterialIdentityRef& Identity,
+    const FSoftObjectPath& Path)
+{
+    if (!Identity.IsValid() ||
+        Path.IsNull())
+    {
+        return;
+    }
+
+    FSoftObjectPath* Existing =
+        MaterialPathCache.Find(Identity);
+
+    if (Existing && *Existing != Path)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("[MaterialRegistry] Identity collision: "
+                 "0x%llx%llx was \"%s\" now \"%s\" \u2014 overwriting"),
+            Identity.High,
+            Identity.Low,
+            *Existing->ToString(),
+            *Path.ToString());
+    }
+
+    MaterialPathCache.Add(
+        Identity,
+        Path);
+}
+
+
+// =========================================================
+// HANDLE MATERIAL DEF (Phase 7B Stage 1C)
 // =========================================================
 
 void UUELiveSyncSubsystem::
@@ -10978,15 +11052,137 @@ HandleMaterialDef(
     const TArray<FMaterialSlotRef>& Slots,
     uint32 ObjectCount)
 {
+    CHECK_GAME_THREAD();
+
+    if (!Guid.IsValid())
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MATERIAL] Skipping invalid GUID"));
+        return;
+    }
+
+    MaterialMetadata.Add(
+        Guid,
+        Slots);
+
+    MaterialDefsReceived++;
 }
+
+
+// =========================================================
+// RESOLVE PENDING MATERIALS (Phase 7B Stage 1D)
+// =========================================================
 
 void UUELiveSyncSubsystem::
 ResolvePendingMaterials()
 {
+    CHECK_GAME_THREAD();
+
+    if (MaterialMetadata.Num() == 0)
+    {
+        return;
+    }
+
+    for (auto It = MaterialMetadata.CreateIterator(); It; ++It)
+    {
+        const FGuid& Guid = It.Key();
+        const TArray<FMaterialSlotRef>& Slots = It.Value();
+
+        AActor* Actor = FindActorFast(Guid);
+        if (!Actor)
+        {
+            continue;
+        }
+
+        UStaticMeshComponent* MeshComp =
+            Actor->FindComponentByClass<
+                UStaticMeshComponent>();
+
+        if (!MeshComp)
+        {
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Verbose,
+                    TEXT("[MaterialResolve] No mesh component for "
+                         "GUID=%s \u2014 skipping"),
+                    *Guid.ToString(
+                        EGuidFormats::Digits));
+            }
+            continue;
+        }
+
+        bool bAnyValidUnresolved = false;
+
+        for (const FMaterialSlotRef& Slot : Slots)
+        {
+            if (!Slot.IsValid())
+            {
+                continue;
+            }
+
+            FSoftObjectPath* Path =
+                MaterialPathCache.Find(Slot.Identity);
+
+            if (!Path || Path->IsNull())
+            {
+                bAnyValidUnresolved = true;
+                continue;
+            }
+
+            UMaterialInterface* Mat =
+                Cast<UMaterialInterface>(
+                    Path->TryLoad());
+
+            if (!Mat)
+            {
+                bAnyValidUnresolved = true;
+
+                if (bEnableVerboseSyncLogs)
+                {
+                    UE_LOG(
+                        LogLiveSync,
+                        Verbose,
+                        TEXT("[MaterialResolve] Failed to load "
+                             "material for slot %d on GUID=%s"),
+                        Slot.SlotIndex,
+                        *Guid.ToString(
+                            EGuidFormats::Digits));
+                }
+                continue;
+            }
+
+            MeshComp->SetMaterial(
+                Slot.SlotIndex,
+                Mat);
+
+            MaterialAssignmentsSucceeded++;
+
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Log,
+                    TEXT("[MaterialResolve] Set slot %d on "
+                         "GUID=%s \u2014 %s"),
+                    Slot.SlotIndex,
+                    *Guid.ToString(
+                        EGuidFormats::Digits),
+                    *Path->ToString());
+            }
+        }
+
+        if (!bAnyValidUnresolved)
+        {
+            It.RemoveCurrent();
+        }
+    }
 }
 
+
 // =========================================================
-// MESH CHUNK REASSEMBLY (Phase 7C Stage 1B/1C) — stubs
+// HANDLE MESH CHUNK (Phase 7C Stage 1B)
 // =========================================================
 
 void UUELiveSyncSubsystem::
@@ -10998,11 +11194,553 @@ HandleMeshChunk(
     uint8 Flags,
     const TArrayView<const uint8>& Payload)
 {
+    CHECK_GAME_THREAD();
+
+    if (!Guid.IsValid())
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH] HandleMeshChunk: invalid GUID"));
+        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    if (ChunkCount == 0 || ChunkIndex >= ChunkCount)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH] HandleMeshChunk: invalid chunk index/count "
+                 "(%u/%u) for GUID=%s"),
+            ChunkIndex, ChunkCount,
+            *Guid.ToString(EGuidFormats::Digits));
+        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    if (PendingMeshReassembly.Num() >= MAX_CONCURRENT_MESH_REASSEMBLIES &&
+        !PendingMeshReassembly.Contains(Guid))
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH] Too many pending reassemblies (%d) \u2014 "
+                 "rejecting chunk for GUID=%s"),
+            PendingMeshReassembly.Num(),
+            *Guid.ToString(EGuidFormats::Digits));
+        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    FMeshReassemblyState& State =
+        PendingMeshReassembly.FindOrAdd(Guid);
+
+    if (State.ChunkCount == 0)
+    {
+        State.VersionHash = VersionHash;
+        State.ChunkCount  = ChunkCount;
+        State.Flags       = Flags;
+        State.FirstChunkTime = FPlatformTime::Seconds();
+    }
+    else
+    {
+        if (State.VersionHash != VersionHash ||
+            State.ChunkCount != ChunkCount)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH] Conflicting version hash or count for "
+                     "GUID=%s (existing=%s/%u new=%s/%u)"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *State.VersionHash, State.ChunkCount,
+                *VersionHash, ChunkCount);
+            PendingMeshReassembly.Remove(Guid);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+
+    if (State.Chunks.Contains(ChunkIndex))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MESH] Duplicate chunk %u/%u for GUID=%s"),
+            ChunkIndex, ChunkCount,
+            *Guid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    TArray<uint8>& StoredPayload =
+        State.Chunks.Add(ChunkIndex);
+    StoredPayload.Append(
+        Payload.GetData(),
+        Payload.Num());
+
+    State.ChunksReceived++;
+    MeshChunksReceived++;
+
+    if (State.IsComplete())
+    {
+        MeshReassembliesCompleted++;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MESH] Reassembly complete for GUID=%s "
+                 "(%u/%u chunks) \u2014 %d total chunks received this session"),
+            *Guid.ToString(EGuidFormats::Digits),
+            State.ChunksReceived,
+            State.ChunkCount,
+            MeshChunksReceived);
+    }
 }
+
+
+// =========================================================
+// RECONSTRUCT COMPLETED MESHES (Phase 7C Stage 1C)
+// =========================================================
 
 void UUELiveSyncSubsystem::
 ReconstructCompletedMeshes()
 {
+    CHECK_GAME_THREAD();
+
+    TArray<FGuid> Reconstructed;
+
+    for (auto& Pair : PendingMeshReassembly)
+    {
+        FMeshReassemblyState& State = Pair.Value;
+
+        if (!State.IsComplete() || State.bReconstructed)
+        {
+            continue;
+        }
+
+        const FGuid& Guid = Pair.Key;
+
+        AActor* Actor = FindActorFast(Guid);
+        if (!Actor)
+        {
+            continue;
+        }
+
+        UProceduralMeshComponent* ProcMesh =
+            Actor->FindComponentByClass<
+                UProceduralMeshComponent>();
+
+        if (!ProcMesh)
+        {
+            ProcMesh =
+                NewObject<UProceduralMeshComponent>(
+                    Actor);
+
+            if (Actor->GetRootComponent())
+            {
+                ProcMesh->SetupAttachment(
+                    Actor->GetRootComponent());
+            }
+            else
+            {
+                Actor->SetRootComponent(
+                    ProcMesh);
+            }
+
+            ProcMesh->RegisterComponent();
+        }
+
+        TArray<FVector>   Vertices;
+        TArray<int32>     Triangles;
+        TArray<int32>     MaterialIndices;
+
+        int32 TotalVertices = 0;
+        int32 TotalTriangles = 0;
+
+        for (uint32 i = 0; i < State.ChunkCount; i++)
+        {
+            const TArray<uint8>* ChunkData =
+                State.Chunks.Find(i);
+
+            if (!ChunkData)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH] Missing chunk %u/%u for GUID=%s "
+                         "\u2014 skipping reconstruction"),
+                    i, State.ChunkCount,
+                    *Guid.ToString(EGuidFormats::Digits));
+                return;
+            }
+
+            const uint8* Data = ChunkData->GetData();
+            int32 DataLen = ChunkData->Num();
+
+            int32 Offset = 0;
+
+            if (Offset + 4 > DataLen) { return; }
+            int32 VCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+            TotalVertices += VCount;
+
+            int32 VertexBytes = VCount * 12;
+            if (Offset + VertexBytes > DataLen) { return; }
+            Offset += VertexBytes;
+
+            if (Offset + 4 > DataLen) { return; }
+            int32 TCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+            TotalTriangles += TCount;
+
+            int32 TriBytes = TCount * 12;
+            if (Offset + TriBytes > DataLen) { return; }
+            Offset += TriBytes;
+
+            if (Offset + 4 > DataLen) { return; }
+            int32 MCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+
+            int32 MatBytes = MCount * 4;
+            if (Offset + MatBytes > DataLen) { return; }
+            Offset += MatBytes;
+        }
+
+        if (TotalVertices == 0 || TotalTriangles == 0)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MESH] Empty geometry for GUID=%s "
+                     "\u2014 skipping reconstruction"),
+                *Guid.ToString(EGuidFormats::Digits));
+            State.bReconstructed = true;
+            Reconstructed.Add(Guid);
+            continue;
+        }
+
+        Vertices.Reserve(TotalVertices);
+        Triangles.Reserve(TotalTriangles);
+        MaterialIndices.Reserve(TotalTriangles);
+        int32 VertexBase = 0;
+
+        // The Y-flip axis conversion is a reflection (determinant = -1),
+        // so it changes handedness. Reverse triangle winding to keep
+        // outside-faces visible (fix inside-out / see-through artifact).
+        const bool bWindingFlipped = true;
+
+        for (uint32 i = 0; i < State.ChunkCount; i++)
+        {
+            const TArray<uint8>& ChunkData = *State.Chunks.Find(i);
+            const uint8* Data = ChunkData.GetData();
+            int32 Offset = 0;
+
+            int32 VCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+
+            for (int32 v = 0; v < VCount; v++)
+            {
+                const float* F = reinterpret_cast<const float*>(Data + Offset);
+                // Convert Blender-local → UE-local (match Blender-side conversion matrix:
+                //   Y → -Y flip). Blender sends raw mesh vertex coords in Blender
+                //   coordinate space. Actor transform already carries the Y-flipped
+                //   quaternion, so vertices must use the same convention.
+                const float BlenderX = F[0];
+                const float BlenderY = F[1];
+                const float BlenderZ = F[2];
+                FVector UEV(BlenderX * 100.0f, -BlenderY * 100.0f, BlenderZ * 100.0f);
+                Vertices.Add(UEV);
+                Offset += 12;
+            }
+
+            int32 TCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+
+            for (int32 t = 0; t < TCount; t++)
+            {
+                const int32* Idx = reinterpret_cast<const int32*>(Data + Offset);
+                // Original winding: A, B, C → flipped: A, C, B
+                if (bWindingFlipped)
+                {
+                    Triangles.Add(Idx[0] + VertexBase);
+                    Triangles.Add(Idx[2] + VertexBase);
+                    Triangles.Add(Idx[1] + VertexBase);
+                }
+                else
+                {
+                    Triangles.Add(Idx[0] + VertexBase);
+                    Triangles.Add(Idx[1] + VertexBase);
+                    Triangles.Add(Idx[2] + VertexBase);
+                }
+                Offset += 12;
+            }
+
+            int32 MCount = *reinterpret_cast<const int32*>(Data + Offset);
+            Offset += 4;
+
+            for (int32 m = 0; m < MCount; m++)
+            {
+                const int32 MatIdx = *reinterpret_cast<const int32*>(Data + Offset);
+                MaterialIndices.Add(MatIdx);
+                Offset += 4;
+            }
+
+            VertexBase += VCount;
+        }
+
+        {
+            FBox LocalBox(ForceInit);
+            int32 NanCount = 0;
+            int32 ZeroCount = 0;
+            for (const FVector& V : Vertices)
+            {
+                LocalBox += V;
+                if (FMath::IsNaN(V.X) || FMath::IsNaN(V.Y) || FMath::IsNaN(V.Z))
+                    NanCount++;
+                if (FMath::Abs(V.X) < KINDA_SMALL_NUMBER &&
+                    FMath::Abs(V.Y) < KINDA_SMALL_NUMBER &&
+                    FMath::Abs(V.Z) < KINDA_SMALL_NUMBER)
+                    ZeroCount++;
+            }
+            int32 MinTriIdx = MAX_int32, MaxTriIdx = MIN_int32;
+            int32 InvalidIdxCount = 0;
+            for (int32 Idx : Triangles)
+            {
+                if (Idx < MinTriIdx) MinTriIdx = Idx;
+                if (Idx > MaxTriIdx) MaxTriIdx = Idx;
+                if (Idx < 0 || Idx >= TotalVertices)
+                    InvalidIdxCount++;
+            }
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][DIAG] GUID=%s: verts=%d tris=%d "
+                     "bbox=%s extent=%s "
+                     "NaN=%d zero=%d triIdxRange=[%d,%d] invalidIdx=%d"),
+                *Guid.ToString(EGuidFormats::Digits),
+                TotalVertices, Triangles.Num() / 3,
+                *LocalBox.ToString(), *LocalBox.GetExtent().ToString(),
+                NanCount, ZeroCount,
+                MinTriIdx, MaxTriIdx, InvalidIdxCount);
+            if (TotalVertices > 0)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH][DIAG] GUID=%s first 3 verts: v0=(%g,%g,%g) v1=(%g,%g,%g) v2=(%g,%g,%g)"),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    Vertices[0].X, Vertices[0].Y, Vertices[0].Z,
+                    TotalVertices > 1 ? Vertices[1].X : 0,
+                    TotalVertices > 1 ? Vertices[1].Y : 0,
+                    TotalVertices > 1 ? Vertices[1].Z : 0,
+                    TotalVertices > 2 ? Vertices[2].X : 0,
+                    TotalVertices > 2 ? Vertices[2].Y : 0,
+                    TotalVertices > 2 ? Vertices[2].Z : 0);
+                // Compact axis diagnostic: first Blender→UE conversion + winding + bounds
+                const FVector& FirstBlenderV = Vertices[0];
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH][AXIS] firstBlenderV=(%g,%g,%g) firstUEV=(%g,%g,%g) windingFlipped=%d boundsExtent=%s"),
+                    FirstBlenderV.X, -FirstBlenderV.Y, FirstBlenderV.Z,
+                    FirstBlenderV.X, FirstBlenderV.Y, FirstBlenderV.Z,
+                    bWindingFlipped ? 1 : 0,
+                    *LocalBox.GetExtent().ToString());
+            }
+        }
+
+        int32 NumSections = 0;
+
+        if (MaterialIndices.Num() == Triangles.Num() / 3)
+        {
+            TMap<int32, TArray<int32>> MaterialGroups;
+            for (int32 t = 0; t < Triangles.Num() / 3; t++)
+            {
+                int32 MatIdx = (t < MaterialIndices.Num())
+                    ? MaterialIndices[t]
+                    : 0;
+                MaterialGroups.FindOrAdd(MatIdx).Add(t);
+            }
+
+            for (auto& Group : MaterialGroups)
+            {
+                int32 SectionIndex = Group.Key;
+                const TArray<int32>& TriIndices = Group.Value;
+
+                TArray<FVector> SectionVerts;
+                TArray<int32> SectionTris;
+                TArray<FVector> SectionNormals;
+                TArray<FVector2D> SectionUVs;
+                TArray<FColor> SectionColors;
+                TArray<FProcMeshTangent> SectionTangents;
+
+                TMap<int32, int32> VMap;
+                for (int32 triIdx : TriIndices)
+                {
+                    int32 BaseIdx = triIdx * 3;
+                    for (int32 j = 0; j < 3; j++)
+                    {
+                        int32 OrigIdx = Triangles[BaseIdx + j];
+                        int32* NewIdx = VMap.Find(OrigIdx);
+                        if (!NewIdx)
+                        {
+                            NewIdx = &VMap.Add(OrigIdx, SectionVerts.Num());
+                            SectionVerts.Add(Vertices[OrigIdx]);
+                        }
+                        SectionTris.Add(*NewIdx);
+                    }
+                }
+
+                // Procedural UV: identity mapping since Blender doesn't send UVs.
+                // This enables proper tangent basis computation in CalculateTangentsForMesh.
+                SectionUVs.SetNum(SectionVerts.Num());
+                for (int32 i = 0; i < SectionVerts.Num(); i++)
+                {
+                    SectionUVs[i] = FVector2D(0.0f, 0.0f);
+                }
+
+                // Calculate normals + tangents from vertices + triangles + UVs.
+                UKismetProceduralMeshLibrary::CalculateTangentsForMesh(
+                    SectionVerts,
+                    SectionTris,
+                    SectionUVs,
+                    SectionNormals,
+                    SectionTangents);
+
+                ProcMesh->CreateMeshSection(
+                    SectionIndex,
+                    SectionVerts,
+                    SectionTris,
+                    SectionNormals,
+                    SectionUVs,
+                    SectionColors,
+                    SectionTangents,
+                    true);
+
+                NumSections++;
+
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH][NORMAL] section=%d normals=%d tangents=%d"),
+                    SectionIndex, SectionNormals.Num(), SectionTangents.Num());
+            }
+        }
+        else
+        {
+            // Single-section path: generate procedural UVs + calculate normals/tangents.
+            TArray<FVector> SectionVerts = Vertices;
+            TArray<int32> SectionTris = Triangles;
+            TArray<FVector> SectionNormals;
+            TArray<FVector2D> SectionUVs;
+            TArray<FColor> SectionColors;
+            TArray<FProcMeshTangent> SectionTangents;
+
+            // Procedural UV: identity mapping.
+            SectionUVs.SetNum(SectionVerts.Num());
+            for (int32 i = 0; i < SectionVerts.Num(); i++)
+            {
+                SectionUVs[i] = FVector2D(0.0f, 0.0f);
+            }
+
+            // Calculate normals + tangents.
+            UKismetProceduralMeshLibrary::CalculateTangentsForMesh(
+                SectionVerts,
+                SectionTris,
+                SectionUVs,
+                SectionNormals,
+                SectionTangents);
+
+            ProcMesh->CreateMeshSection(
+                0,
+                SectionVerts,
+                SectionTris,
+                SectionNormals,
+                SectionUVs,
+                SectionColors,
+                SectionTangents,
+                true);
+
+            NumSections = 1;
+
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][NORMAL] section=0 normals=%d tangents=%d"),
+                SectionNormals.Num(), SectionTangents.Num());
+        }
+
+        {
+            int32 FinalSectionCount = ProcMesh->GetNumSections();
+            FBoxSphereBounds ProcBounds = ProcMesh->Bounds;
+            FVector ProcExtent = ProcBounds.GetBox().GetExtent();
+            // Compute pre-scale extent by unscaling Vertices
+            FBox PreScaleBox(ForceInit);
+            for (const FVector& V : Vertices) { PreScaleBox += V / 100.0f; }
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][SCALE] preScaleExtent=%s postScaleExtent=%s "
+                     "sections=%d boundsOrigin=(%g,%g,%g) boundsExtent=%s "
+                     "sphereRadius=%g"),
+                *PreScaleBox.GetExtent().ToString(), *ProcExtent.ToString(),
+                FinalSectionCount,
+                ProcBounds.Origin.X, ProcBounds.Origin.Y, ProcBounds.Origin.Z,
+                *ProcExtent.ToString(),
+                ProcBounds.SphereRadius);
+            // STEP1: after CreateMeshSection
+            FBoxSphereBounds ActorBS1; Actor->GetActorBounds(false, ActorBS1.Origin, ActorBS1.BoxExtent);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][STEP1] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
+                ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
+                Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
+                ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
+                *ProcExtent.ToString(), *ActorBS1.BoxExtent.ToString());
+        }
+
+        MeshSectionsBuilt += NumSections;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MESH] Reconstructed GUID=%s: %d verts, %d tris, "
+                 "%d sections, %d total sections built this session"),
+            *Guid.ToString(EGuidFormats::Digits),
+            TotalVertices,
+            TotalTriangles,
+            NumSections,
+            MeshSectionsBuilt);
+
+        {
+            UStaticMeshComponent* PlaceholderSMC =
+                Actor->FindComponentByClass<UStaticMeshComponent>();
+            if (PlaceholderSMC && PlaceholderSMC->IsVisible())
+            {
+                PlaceholderSMC->SetVisibility(false, false);
+                PlaceholderSMC->SetHiddenInGame(true, false);
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH] Hidden placeholder SMC for GUID=%s"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
+
+            if (Actor->GetRootComponent() != ProcMesh)
+            {
+                ProcMesh->DetachFromComponent(
+                    FDetachmentTransformRules::KeepWorldTransform);
+                Actor->SetRootComponent(ProcMesh);
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH] Promoted ProcMesh to root for GUID=%s"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
+            // Explicitly restore ProcMesh visibility (placeholder SMC hide can propagate to children)
+            ProcMesh->SetVisibility(true, true);
+            ProcMesh->SetHiddenInGame(false, true);
+            ProcMesh->UpdateBounds();
+            ProcMesh->MarkRenderStateDirty();
+            // STEP2: after SetRootComponent(ProcMesh)
+            {
+                FBoxSphereBounds ProcBS2 = ProcMesh->Bounds;
+                FBoxSphereBounds ActorBS2; Actor->GetActorBounds(false, ActorBS2.Origin, ActorBS2.BoxExtent);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH][STEP2] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
+                    ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
+                    Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
+                    ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
+                    *ProcBS2.GetBox().GetExtent().ToString(), *ActorBS2.BoxExtent.ToString());
+            }
+
+            // STEP3: after visibility restore (bounds already updated above)
+            {
+                FBoxSphereBounds ProcBS3 = ProcMesh->Bounds;
+                FBoxSphereBounds ActorBS3; Actor->GetActorBounds(false, ActorBS3.Origin, ActorBS3.BoxExtent);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH][STEP3] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
+                    ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
+                    Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
+                    ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
+                    *ProcBS3.GetBox().GetExtent().ToString(), *ActorBS3.BoxExtent.ToString());
+            }
+        }
+
+        State.bReconstructed = true;
+        Reconstructed.Add(Guid);
+    }
+
+    for (const FGuid& Guid : Reconstructed)
+    {
+        PendingMeshReassembly.Remove(Guid);
+    }
 }
 
 #include "UELiveSyncSubsystem_Replay.inl"

@@ -61,6 +61,8 @@
 7. **Phase 7E Stage 10A — Visibility Keyframes** (scope lock) 🔒
 8. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
 9. **Phase 8 — High Performance Streaming** (ready)
+10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline visible/scaled/oriented ✅ (partial pass)
+11. **Manual Selected-Object Full Mesh Attribute Sync** — normals, UVs, tangents, vertex colors (NEXT)
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
@@ -134,6 +136,72 @@
 - **2.4**: Full regression: 674/674 standalone tests PASS, 0 regressions
 
 **Phase 7A is now COMPLETE.** 🏁
+
+---
+
+## Phase 7C — Mesh Reconstruction Baseline (PARTIAL PASS)
+
+**Status**: Runtime PT_Mesh reconstruction pipeline is functional — reconstructed meshes are visible and correctly scaled/oriented in UE. This is a **baseline / partial pass**, not final material-quality mesh sync. Production-quality full attribute sync is deferred to a manual selected-mesh stage.
+
+### What Works
+
+- **ProcMesh creation / root promotion**: Placeholder `StaticMeshComponent` replaced with `UProceduralMeshComponent`; ProcMesh promoted to root. Root component ownership verified.
+- **Visibility restoration**: Placeholder SMC hidden via `SetVisibility(false)` + `SetHiddenInGame(true)` *without* propagating to ProcMesh children. ProcMesh explicitly restored visible via `SetVisibility(true)` + `SetHiddenInGame(false)` after root promotion.
+- **Blender→UE vertex scale**: 100× conversion applied (`BlenderX*100, -BlenderY*100, BlenderZ*100`). Pre/post-scale diagnostics logged.
+- **Blender→UE local axis conversion**: X→X, Y→-Y, Z→Z (Y-axis flip to match Blender coordinate space).
+- **Triangle winding flip**: Reversed to compensate for Y-reflection handedness change (fixes inside-out / see-through artifact for flat-shaded geometry).
+- **Temporary UE-side normals/tangents**: Generated via `UKismetProceduralMeshLibrary::CalculateTangentsForMesh()` using procedural UVs (all zero). Works for flat shading but insufficient for Blender-faithful shading.
+- **Material index grouping**: Per-material sections via `MaterialGroups` map → `CreateMeshSection()` per section.
+- **Chunk reassembly**: `HandleMeshChunk()` validates GUID, chunk count/index, version hash conflict, duplicate rejection, max concurrent enforcement.
+- **First-tick mesh send**: Fixed `sync.py` — `prev_hash is None` now triggers mesh emission for newly created objects (was `prev_hash is not None` — only sent on change, never on first).
+
+### Build & Validation
+
+- UE 5.7.4 C++ compile: PASS
+- Plugin load: PASS
+- Port 57000: PASS
+- PT_Mesh packet accept: PASS (kValidTypes fix confirmed)
+- User validation: Meshes visible; Suzanne/Monkey orientation and scale correct
+- Runtime shading: **Partial** — see Known Limitations
+
+### Known Limitations
+
+| Limitation | Root Cause | Impact |
+|------------|------------|--------|
+| UE-generated normals/tangents from dummy/procedural UVs (all-zero) are insufficient for Blender shading fidelity | Current PT_Mesh V5 payload only carries vertices, triangles, and material_indices — no real normals, UVs, tangents, or vertex colors | Shading has dark patches / see-through artifacts on smooth meshes; UV-based materials show no texture mapping |
+| PT_Mesh V5 does not carry real loop-expanded normals | Blender render-geometry normals not extracted | Flat shading works; smooth shading does not |
+| PT_Mesh V5 does not carry real UV layers | No UV0/UV1/… extraction | UV-mapped materials appear blank |
+| PT_Mesh V5 does not carry tangents | Tangents depend on real UVs, which are absent | ComputeTangentsForMesh produces dummy tangents |
+| PT_Mesh V5 does not carry vertex color / color attributes | No color attribute extraction | Vertex color-driven materials show nothing |
+| PT_Mesh V5 material_indices map to material slots but full material slot sync (PT_Material) is separate | PT_Material handled separately in Phase 7B | Materials resolve via PT_Material path, not PT_Mesh |
+
+**This is a baseline pass**: the mesh pipeline (chunk reassembly → vertex scale → axis conversion → winding flip → ProcMesh section build) is structurally complete and validated. **Full Blender-faithful shading fidelity requires loop-expanded attribute sync (normals, UVs, tangents, vertex colors) which is deferred.**
+
+### Next Stage — Manual Selected-Object Full Mesh Attribute Sync
+
+Planned next stage: **manual selected-object full mesh attribute sync** (not realtime every-tick).
+
+- **Blender UI button**: "Sync Selected Mesh to UE"
+- **Scope**: Loop-expanded render-geometry for selected meshes only
+- **Attributes to sync**:
+  - Split normals / loop normals
+  - UV0, UV1, … texture coordinate layers
+  - Tangents (computed from real UVs + normals)
+  - Vertex color / color attributes
+  - Material indices (existing)
+- **Keep realtime**: Transform / rename / visibility / hierarchy / collection remain lightweight tick sync
+- **Packet format**: Extension of PT_Mesh (V5 → V6 or new payload fields), not a full new packet type
+- **Approach**: User-triggered on demand, not per-tick broadcast
+
+### Files Changed (Mesh Reconstruction)
+
+| File | Change |
+|------|--------|
+| `UE_Plugin/UELiveSync/.../UELiveSyncSubsystem.cpp` | +mesh reconstruction pipeline: proc mesh creation, root promotion, visibility fix, vertex scale/axis/winding conversion, procedural UV + normal/tangent generation, per-material sections, material resolve, CacheMaterialPath |
+| `UE_Plugin/UELiveSync/.../UELiveSyncSubsystem.cpp` | `#include "KismetProceduralMeshLibrary.h"` for CalculateTangentsForMesh |
+| `UE_Plugin/UELiveSync/.../UELiveSyncSubsystem.cpp` | CVar `UE.LiveSync.InterpMode` default 0 (direct-set) |
+| `UE_Plugin/UELiveSync/.../UELiveSyncSubsystem.cpp` | Verbose logging scope braces for all pipeline stages |
+| `Blender_Addon/sync.py` | First-tick mesh emit fix: `prev_hash is None` triggers send (new object geometry) |
 
 ---
 
@@ -691,6 +759,10 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
+
+- **Phase 7C Mesh Reconstruction Baseline** (2026-06-06): PT_Mesh runtime reconstruction now visible and correctly scaled/oriented in UE. ProcMesh replacement, root promotion, visibility restoration, 100× unit conversion, Y-axis local conversion, winding flip, and temporary UE-side normal/tangent generation are implemented and build-pass. Shading artifacts on smooth meshes are known and attributed to missing Blender loop attributes in the current V5 mesh payload (no real normals, UVs, tangents, or vertex colors). Full attribute sync deferred to a manual selected-mesh stage. **Partial pass, not final fidelity.**
+
+- **Blender sync.py first-tick fix**: Newly created meshes now transmit geometry on first evaluation (`prev_hash is None` triggers send). Previously, new objects were never sent because `prev_hash is not None` required a prior hash.
 
 - **Phase 7E Stage 10A.1**: Visibility keyframe extraction implemented — `_KEYFRAME_CHANNEL_MAP` extended with `hide_viewport`→9 and `hide_render`→10 (array_index=-1 for Blender scalar properties). Visibility FCurves extracted through same `_extract_keyframes()` pipeline as transform. Polarity: 1.0=hidden, 0.0=visible (value-as-is from Blender). Existing hashing, batching, and serialization reused unchanged. 67/67 tests. **2252/2252 grand total.** ✅
 
