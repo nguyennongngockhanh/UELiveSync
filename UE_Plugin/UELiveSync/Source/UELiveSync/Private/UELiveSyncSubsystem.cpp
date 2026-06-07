@@ -11302,6 +11302,73 @@ ResolvePendingMaterials()
 // Vertex stride 32: pos(float3) + normal(float3) + uv0(float2)
 // Vertex stride 48: pos(float3) + normal(float3) + uv0(float2) + color0(float4)
 // =========================================================
+// =========================================================
+// Safe float32 wire decode helpers for FULL_ATTR v1 mesh parse
+// Wire vertex components are float32. UE5 FVector/FVector2D are
+// double-based — read float32 individually, construct higher-
+// precision types.
+// =========================================================
+
+static bool ReadU32_Safe(const uint8* Data, int32 DataLen, int32& Offset, uint32& OutVal)
+{
+    if (Offset + 4 > DataLen) return false;
+    FMemory::Memcpy(&OutVal, Data + Offset, sizeof(uint32));
+    Offset += 4;
+    return true;
+}
+
+static bool ReadF32_Safe(const uint8* Data, int32 DataLen, int32& Offset, float& OutVal)
+{
+    if (Offset + 4 > DataLen) return false;
+    FMemory::Memcpy(&OutVal, Data + Offset, sizeof(float));
+    Offset += 4;
+    return true;
+}
+
+static bool ReadVec3F32(const uint8* Data, int32 DataLen, int32& Offset, FVector& OutVec)
+{
+    float X, Y, Z;
+    if (!ReadF32_Safe(Data, DataLen, Offset, X) ||
+        !ReadF32_Safe(Data, DataLen, Offset, Y) ||
+        !ReadF32_Safe(Data, DataLen, Offset, Z))
+        return false;
+    OutVec = FVector(X, Y, Z);
+    return true;
+}
+
+static bool ReadVec2F32(const uint8* Data, int32 DataLen, int32& Offset, FVector2D& OutVec)
+{
+    float U, V;
+    if (!ReadF32_Safe(Data, DataLen, Offset, U) ||
+        !ReadF32_Safe(Data, DataLen, Offset, V))
+        return false;
+    OutVec = FVector2D(U, V);
+    return true;
+}
+
+static bool ReadColor4F32(const uint8* Data, int32 DataLen, int32& Offset, FLinearColor& OutColor)
+{
+    float R, G, B, A;
+    if (!ReadF32_Safe(Data, DataLen, Offset, R) ||
+        !ReadF32_Safe(Data, DataLen, Offset, G) ||
+        !ReadF32_Safe(Data, DataLen, Offset, B) ||
+        !ReadF32_Safe(Data, DataLen, Offset, A))
+        return false;
+    OutColor = FLinearColor(R, G, B, A);
+    return true;
+}
+
+static bool IsFiniteVec3(const FVector& V)
+{
+    return FMath::IsFinite(V.X) && FMath::IsFinite(V.Y) && FMath::IsFinite(V.Z);
+}
+
+static bool IsFiniteVec2(const FVector2D& V)
+{
+    return FMath::IsFinite(V.X) && FMath::IsFinite(V.Y);
+}
+
+// =========================================================
 
 bool UUELiveSyncSubsystem::
 ParseV1MeshPayload(
@@ -11399,22 +11466,47 @@ ParseV1MeshPayload(
         return false;
     }
 
-    // Parse vertices
+    // Parse vertices using float32 wire decode
+    // Wire vertex components are float32; UE5 FVector/FVector2D are double-based.
     const bool bHasColor0 = (VertexStride == 48);
     OutParsedChunk.Vertices.Reserve(VertexCount);
     for (uint32 i = 0; i < VertexCount; i++)
     {
         FV1MeshParsedVertex V;
-        FMemory::Memcpy(&V.Position, Data + Offset, sizeof(float) * 3);
-        Offset += sizeof(float) * 3;
-        FMemory::Memcpy(&V.Normal, Data + Offset, sizeof(float) * 3);
-        Offset += sizeof(float) * 3;
-        FMemory::Memcpy(&V.UV0, Data + Offset, sizeof(float) * 2);
-        Offset += sizeof(float) * 2;
+        if (!ReadVec3F32(Data, DataLen, Offset, V.Position))
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] Truncated position at vertex %u/%u for GUID=%s chunk=%u"),
+                i, VertexCount,
+                *Guid.ToString(EGuidFormats::Digits), ChunkIndex);
+            return false;
+        }
+        if (!ReadVec3F32(Data, DataLen, Offset, V.Normal))
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] Truncated normal at vertex %u/%u for GUID=%s chunk=%u"),
+                i, VertexCount,
+                *Guid.ToString(EGuidFormats::Digits), ChunkIndex);
+            return false;
+        }
+        if (!ReadVec2F32(Data, DataLen, Offset, V.UV0))
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] Truncated uv0 at vertex %u/%u for GUID=%s chunk=%u"),
+                i, VertexCount,
+                *Guid.ToString(EGuidFormats::Digits), ChunkIndex);
+            return false;
+        }
         if (bHasColor0)
         {
-            FMemory::Memcpy(&V.Color0, Data + Offset, sizeof(float) * 4);
-            Offset += sizeof(float) * 4;
+            if (!ReadColor4F32(Data, DataLen, Offset, V.Color0))
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH][V1] Truncated color0 at vertex %u/%u for GUID=%s chunk=%u"),
+                    i, VertexCount,
+                    *Guid.ToString(EGuidFormats::Digits), ChunkIndex);
+                return false;
+            }
         }
         else
         {
@@ -12180,22 +12272,119 @@ BuildV1MeshFromReassembly()
             continue;
         }
 
-        // Validate all indices are in bounds of merged vertex array
-        bool bInvalidIndex = false;
-        for (int32 Idx : Indices)
+        // Finite-float validation: reject if any position/normal/UV/color
+        // contains NaN or Inf before handing data to CreateMeshSection.
+        int32 NanPosCount = 0;
+        int32 NanNormalCount = 0;
+        int32 NanUVCount = 0;
+        for (int32 vi = 0; vi < Positions.Num(); vi++)
         {
-            if (Idx < 0 || Idx >= Positions.Num())
-            {
-                bInvalidIndex = true;
-                break;
-            }
+            if (!IsFiniteVec3(Positions[vi]))
+                NanPosCount++;
+            if (!IsFiniteVec3(Normals[vi]))
+                NanNormalCount++;
+            if (!IsFiniteVec2(UV0[vi]))
+                NanUVCount++;
         }
 
-        if (bInvalidIndex)
+        if (NanPosCount > 0 || NanNormalCount > 0 || NanUVCount > 0)
         {
             Stats.MeshSchemaV1BuildRejected.fetch_add(1, std::memory_order_relaxed);
             UE_LOG(LogLiveSync, Warning,
-                TEXT("[MESH][V1] Out-of-bounds index in merged data "
+                TEXT("[MESH][V1] Invalid float data for GUID=%s vhash=%s: "
+                     "NaN/Inf positions=%d normals=%d uvs=%d \u2014 rejecting build"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash,
+                NanPosCount, NanNormalCount, NanUVCount);
+            State.bReconstructed = true;
+            Reconstructed.Add(Key);
+            continue;
+        }
+
+        // Build-time diagnostics: bounds and first 3 sample vertices
+        {
+            FBox Bounds(ForceInit);
+            for (const FVector& P : Positions)
+                Bounds += P;
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][V1] Bounds for GUID=%s vhash=%s: "
+                     "Min=(%.6f, %.6f, %.6f) Max=(%.6f, %.6f, %.6f) "
+                     "verts=%d tris=%d"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash,
+                Bounds.Min.X, Bounds.Min.Y, Bounds.Min.Z,
+                Bounds.Max.X, Bounds.Max.Y, Bounds.Max.Z,
+                Positions.Num(), Indices.Num() / 3);
+            int32 Samples = FMath::Min(3, Positions.Num());
+            for (int32 si = 0; si < Samples; si++)
+            {
+                UE_LOG(LogLiveSync, Verbose,
+                    TEXT("[MESH][V1] Sample %d: pos=(%.6f, %.6f, %.6f) "
+                         "normal=(%.6f, %.6f, %.6f) uv=(%.6f, %.6f)"),
+                    si,
+                    Positions[si].X, Positions[si].Y, Positions[si].Z,
+                    Normals[si].X, Normals[si].Y, Normals[si].Z,
+                    UV0[si].X, UV0[si].Y);
+            }
+        }
+
+        // Triangle validation: each triangle must have 3 valid, in-bounds indices.
+        // Skip degenerate triangles (3 identical indices), log count.
+        int32 DegenerateCount = 0;
+        TArray<int32> ValidIndices;
+        ValidIndices.Reserve(Indices.Num());
+        int32 NumVerts = Positions.Num();
+        bool bTrianglesValid = true;
+        for (int32 ti = 0; bTrianglesValid && ti + 2 < Indices.Num(); ti += 3)
+        {
+            int32 IA = Indices[ti];
+            int32 IB = Indices[ti + 1];
+            int32 IC = Indices[ti + 2];
+            if (IA < 0 || IA >= NumVerts ||
+                IB < 0 || IB >= NumVerts ||
+                IC < 0 || IC >= NumVerts)
+            {
+                Stats.MeshSchemaV1BuildRejected.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH][V1] Out-of-range triangle indices "
+                         "for GUID=%s vhash=%s \u2014 rejecting build"),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    *Key.VersionHash);
+                bTrianglesValid = false;
+                break;
+            }
+            if (IA == IB && IB == IC)
+            {
+                DegenerateCount++;
+                continue;
+            }
+            ValidIndices.Add(IA);
+            ValidIndices.Add(IB);
+            ValidIndices.Add(IC);
+        }
+
+        if (!bTrianglesValid)
+        {
+            State.bReconstructed = true;
+            Reconstructed.Add(Key);
+            continue;
+        }
+
+        if (DegenerateCount > 0)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MESH][V1] Skipped %d degenerate triangle(s) "
+                     "for GUID=%s vhash=%s"),
+                DegenerateCount,
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash);
+        }
+
+        if (ValidIndices.Num() < 3)
+        {
+            Stats.MeshSchemaV1BuildRejected.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] No valid triangles after degenerate filter "
                      "for GUID=%s vhash=%s \u2014 rejecting build"),
                 *Guid.ToString(EGuidFormats::Digits),
                 *Key.VersionHash);
@@ -12232,16 +12421,16 @@ BuildV1MeshFromReassembly()
             SectionColors = MoveTemp(Colors);
         }
 
-        // Build one section only (Stage 2C.3: single-section, no material grouping)
+        // Build one section (Stage 2C.5: collision disabled to avoid Chaos NaN checks)
         ProcMesh->CreateMeshSection(
             0,
             Positions,
-            Indices,
+            ValidIndices,
             Normals,
             UV0,
             SectionColors,
             TArray<FProcMeshTangent>(),
-            true);
+            false);
 
         Stats.MeshSchemaV1SectionsBuilt.fetch_add(1, std::memory_order_relaxed);
 
@@ -12251,7 +12440,7 @@ BuildV1MeshFromReassembly()
             *Guid.ToString(EGuidFormats::Digits),
             *Key.VersionHash,
             Positions.Num(),
-            Indices.Num() / 3,
+            ValidIndices.Num() / 3,
             State.VertexStride,
             bHasColor0 ? 1 : 0);
 
