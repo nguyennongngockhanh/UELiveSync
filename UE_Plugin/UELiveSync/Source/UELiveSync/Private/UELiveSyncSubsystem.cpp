@@ -794,6 +794,39 @@ static TAutoConsoleVariable<int32>
         ECVF_Default
     );
 
+// =========================================================
+// PHASE 7C STAGE 2C.10 — V1 DEBUG MATERIAL MODES
+// =========================================================
+// Opt-in diagnostic CVars for runtime shading/culling
+// isolation on v1 ProceduralMesh builds. These do NOT
+// change the packet format, do NOT modify the legacy V5
+// path, and do NOT persist to assets.
+// =========================================================
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncV1DebugMaterialMode(
+        TEXT("UE.LiveSync.V1DebugMaterialMode"),
+        0,
+        TEXT("V1 mesh debug material mode: 0=none (default), 1=unlit gray, 2=two-sided gray, 3=two-sided unlit gray."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncV1DebugForceFaceNormals(
+        TEXT("UE.LiveSync.V1DebugForceFaceNormals"),
+        0,
+        TEXT("V1 mesh debug: force per-triangle face normals instead of source v1 normals (1=on, 0=off)."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncV1DebugDisableTangents(
+        TEXT("UE.LiveSync.V1DebugDisableTangents"),
+        0,
+        TEXT("V1 mesh debug: pass empty tangent array to CreateMeshSection (1=on, 0=off)."),
+        ECVF_Default
+    );
+
 bool UUELiveSyncSubsystem::
     bEnableVerboseSyncLogs =
         false;
@@ -12671,6 +12704,54 @@ BuildV1MeshFromReassembly()
         // by CalculateTangentsForMesh (which computes face normals).
         TArray<FVector> PreservedNormals = Normals;
 
+        // === STAGE 2C.10: V1 DEBUG — FORCE FACE NORMALS ===
+        // If CVar UE.LiveSync.V1DebugForceFaceNormals == 1, replace
+        // all vertex normals with computed per-triangle face normals.
+        // This is diagnostic only: it does not change packet format
+        // or the legacy V5 path.
+        int32 DebugFaceNormalsMode = 0;
+        {
+            int32 CV = CVarLiveSyncV1DebugForceFaceNormals.GetValueOnAnyThread();
+            DebugFaceNormalsMode = (CV != 0) ? 1 : 0;
+            if (DebugFaceNormalsMode)
+            {
+                int32 TriangleCount = ValidIndices.Num() / 3;
+                TArray<FVector> FaceNormals;
+                FaceNormals.Reserve(TriangleCount);
+                for (int32 ti = 0; ti < TriangleCount; ti++)
+                {
+                    int32 IA = ValidIndices[ti * 3];
+                    int32 IB = ValidIndices[ti * 3 + 1];
+                    int32 IC = ValidIndices[ti * 3 + 2];
+                    FVector FN = FVector::CrossProduct(
+                        Positions[IB] - Positions[IA],
+                        Positions[IC] - Positions[IA]
+                    ).GetSafeNormal();
+                    FaceNormals.Add(FN);
+                }
+                // Assign face normal to each vertex of each triangle
+                // (last writer wins — sufficient for per-triangle isolation)
+                PreservedNormals.Empty();
+                PreservedNormals.SetNum(Positions.Num(), false);
+                for (int32 ti = 0; ti < TriangleCount; ti++)
+                {
+                    int32 IA = ValidIndices[ti * 3];
+                    int32 IB = ValidIndices[ti * 3 + 1];
+                    int32 IC = ValidIndices[ti * 3 + 2];
+                    PreservedNormals[IA] = FaceNormals[ti];
+                    PreservedNormals[IB] = FaceNormals[ti];
+                    PreservedNormals[IC] = FaceNormals[ti];
+                }
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][DEBUG_NORMALS] mode=face"));
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][DEBUG_NORMALS] mode=source"));
+            }
+        }
+
         // Generate tangents from geometry. Discard the recomputed normals
         // from CalculateTangentsForMesh — we preserve source v1 normals.
         TArray<FVector> TangentNormals;
@@ -12862,6 +12943,26 @@ BuildV1MeshFromReassembly()
             }
         }
 
+        // === STAGE 2C.10: V1 DEBUG — DISABLE TANGENTS ===
+        // If CVar UE.LiveSync.V1DebugDisableTangents == 1, replace
+        // all tangents with empty array for diagnostic isolation.
+        TArray<FProcMeshTangent> DebugTangents;
+        {
+            int32 CV = CVarLiveSyncV1DebugDisableTangents.GetValueOnAnyThread();
+            if (CV != 0)
+            {
+                DebugTangents.Empty();
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][DEBUG_TANGENTS] enabled"));
+            }
+            else
+            {
+                DebugTangents = FinalTangents;
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][DEBUG_TANGENTS] disabled"));
+            }
+        }
+
         // === T12: Collision disabled for v1 ===
         // Stage 2C.5: collision disabled to avoid Chaos NaN checks.
         ProcMesh->CreateMeshSection(
@@ -12871,8 +12972,97 @@ BuildV1MeshFromReassembly()
             PreservedNormals,
             UV0,
             SectionColors,
-            FinalTangents,
+            DebugTangents,
             false);
+
+        // === STAGE 2C.10: V1 DEBUG — ASSIGN DEBUG MATERIAL ===
+        // If CVar UE.LiveSync.V1DebugMaterialMode != 0, create or
+        // select a transient debug material and assign it to section 0.
+        // Diagnostic only — does NOT change packet format, does NOT
+        // modify the legacy V5 path, and does NOT persist to assets.
+        {
+            int32 DebugMode = CVarLiveSyncV1DebugMaterialMode.GetValueOnAnyThread();
+            FString MatName = TEXT("None");
+            int32 Assigned = 0;
+
+            if (DebugMode != 0)
+            {
+                // Create a transient debug material
+                static UMaterial* DebugMatUnlit = nullptr;
+                static UMaterial* DebugMatTwoSided = nullptr;
+                static UMaterial* DebugMatTwoSidedUnlit = nullptr;
+                static bool bDebugMaterialsCreated = false;
+
+                if (!bDebugMaterialsCreated)
+                {
+                    // Create transient unlit gray material
+                    {
+                        DebugMatUnlit = NewObject<UMaterial>(
+                            GetTransientPackage(),
+                            NAME_None,
+                            EObjectFlags::RF_Transient | EObjectFlags::RF_Public);
+                        DebugMatUnlit->SetShadingModel(EMaterialShadingModel::MSM_Unlit);
+                        DebugMatUnlit->MaterialDomain = MD_Surface;
+                        DebugMatUnlit->PostEditChange();
+                    }
+
+                    // Create transient two-sided gray material (default-lit, two-sided)
+                    {
+                        DebugMatTwoSided = NewObject<UMaterial>(
+                            GetTransientPackage(),
+                            NAME_None,
+                            EObjectFlags::RF_Transient | EObjectFlags::RF_Public);
+                        DebugMatTwoSided->SetShadingModel(EMaterialShadingModel::MSM_DefaultLit);
+                        DebugMatTwoSided->TwoSided = 1;
+                        DebugMatTwoSided->PostEditChange();
+                    }
+
+                    // Create transient two-sided unlit gray material
+                    {
+                        DebugMatTwoSidedUnlit = NewObject<UMaterial>(
+                            GetTransientPackage(),
+                            NAME_None,
+                            EObjectFlags::RF_Transient | EObjectFlags::RF_Public);
+                        DebugMatTwoSidedUnlit->SetShadingModel(EMaterialShadingModel::MSM_Unlit);
+                        DebugMatTwoSidedUnlit->TwoSided = 1;
+                        DebugMatTwoSidedUnlit->PostEditChange();
+                    }
+
+                    bDebugMaterialsCreated = true;
+                }
+
+                UMaterialInterface* TargetMat = nullptr;
+
+                switch (DebugMode)
+                {
+                case 1:
+                    TargetMat = DebugMatUnlit;
+                    MatName = TEXT("UnlitGray");
+                    break;
+                case 2:
+                    TargetMat = DebugMatTwoSided;
+                    MatName = TEXT("TwoSidedGray");
+                    break;
+                case 3:
+                    TargetMat = DebugMatTwoSidedUnlit;
+                    MatName = TEXT("TwoSidedUnlitGray");
+                    break;
+                default:
+                    MatName = TEXT("None");
+                    break;
+                }
+
+                if (TargetMat)
+                {
+                    ProcMesh->SetMaterial(0, TargetMat);
+                    Assigned = 1;
+                }
+            }
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][V1][DEBUG_MATERIAL] mode=%d material=%s assigned=%d"),
+                DebugMode, *MatName, Assigned);
+        }
 
         // === Post-CreateMeshSection diagnostics ===
         {
