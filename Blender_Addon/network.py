@@ -890,6 +890,11 @@ MESH_CHUNK_FLAG_FIRST_CHUNK       = 0x20  # First chunk of multi-chunk mesh
 MESH_CHUNK_FLAG_LAST_CHUNK        = 0x40  # Last chunk of multi-chunk mesh
 MESH_CHUNK_FLAG_FULL_ATTR         = 0x80  # Phase 7C Stage 2A: full-attribute schema gate
 
+# Phase 7C Stage 2B.2: Full-attribute schema version and vertex strides
+MESH_FULL_ATTR_SCHEMA_VERSION = 1
+MESH_FULL_ATTR_VERTEX_STRIDE_NO_COLOR = 32
+MESH_FULL_ATTR_VERTEX_STRIDE_COLOR0 = 48
+
 
 def extract_evaluated_mesh_data(obj):
     """Extract evaluated mesh geometry from a Blender object.
@@ -1044,6 +1049,116 @@ def serialize_mesh_chunk(guid_obj, version_hash, chunk_index, chunk_count,
     payload.extend(struct.pack("<I", len(material_indices)))
     for m in material_indices:
         payload.extend(struct.pack("<i", m))
+
+    return bytes(payload)
+
+
+# =========================================================
+# PHASE 7C STAGE 2B.2: FULL-ATTR MESH SERIALIZATION (V1)
+# =========================================================
+
+def serialize_full_attr_mesh_chunk_v1(
+    guid_obj,
+    version_hash,
+    chunk_index,
+    chunk_count,
+    render_vertices,
+    local_indices,
+    flags=0,
+    vertex_stride=32,
+):
+    """Serialize a FULL_ATTR PT_Mesh chunk with SchemaVersion=1 payload.
+
+    Wire format (shared 89-byte header matches serialize_mesh_chunk):
+
+      Chunk 0:  Header(89) + SchemaVersion(4) + Stride(4) + VertCount(4)
+                + VertexV1[N] + IndexCount(4) + Indices[]
+      Chunk>0:  Header(89) + Stride(4) + VertCount(4)
+                + VertexV1[N] + IndexCount(4) + Indices[]
+
+    VertexV1 stride=32: pos(float3) + normal(float3) + uv0(float2)
+    VertexV1 stride=48: pos(float3) + normal(float3) + uv0(float2) + color0(float4)
+
+    Args:
+        guid_obj: uuid.UUID of the target object.
+        version_hash: str — 64-char hex digest from compute_geometry_version_hash.
+        chunk_index: int — 0-based index of this chunk.
+        chunk_count: int — total number of chunks for this mesh.
+        render_vertices: list of dicts with position, normal, uv0, color0.
+        local_indices: list of int — triangle indices into render_vertices.
+        flags: bitmask — must include MESH_CHUNK_FLAG_FULL_ATTR.
+        vertex_stride: int — 32 (no color) or 48 (with color0).
+
+    Returns:
+        bytes — the complete chunk payload (header + attribute data).
+
+    Raises:
+        ValueError: on any validation failure.
+    """
+    if not (flags & MESH_CHUNK_FLAG_FULL_ATTR):
+        raise ValueError("flags must include MESH_CHUNK_FLAG_FULL_ATTR")
+
+    if vertex_stride not in (MESH_FULL_ATTR_VERTEX_STRIDE_NO_COLOR, MESH_FULL_ATTR_VERTEX_STRIDE_COLOR0):
+        raise ValueError(f"vertex_stride must be 32 or 48, got {vertex_stride}")
+
+    if vertex_stride == MESH_FULL_ATTR_VERTEX_STRIDE_COLOR0:
+        for i, rv in enumerate(render_vertices):
+            if rv.get("color0") is None:
+                raise ValueError(
+                    f"render_vertices[{i}] missing color0 (stride=48)")
+
+    for i, idx in enumerate(local_indices):
+        if not (0 <= idx < len(render_vertices)):
+            raise ValueError(
+                f"local_indices[{i}] = {idx} out of range "
+                f"[0, {len(render_vertices)})")
+
+    if not (0 <= chunk_index < chunk_count):
+        raise ValueError(
+            f"chunk_index {chunk_index} must be < chunk_count {chunk_count}")
+
+    version_bytes = version_hash.encode("ascii")
+    if len(version_bytes) != 64:
+        raise ValueError(
+            f"version_hash must be 64 ASCII chars, got {len(version_bytes)}")
+
+    # Build 89-byte header (matches serialize_mesh_chunk)
+    payload = bytearray()
+
+    a = guid_obj.time_low
+    b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
+    c = (guid_obj.clock_seq_hi_variant << 24
+         | guid_obj.clock_seq_low << 16
+         | (guid_obj.node >> 32) & 0xFFFF)
+    d = guid_obj.node & 0xFFFFFFFF
+    payload.extend(struct.pack("<IIII", a, b, c, d))
+
+    payload.extend(version_bytes)
+
+    payload.extend(struct.pack("<II", chunk_index, chunk_count))
+    payload.extend(struct.pack("<B", flags))
+
+    # Payload
+    if chunk_index == 0:
+        payload.extend(struct.pack("<I", MESH_FULL_ATTR_SCHEMA_VERSION))
+
+    payload.extend(struct.pack("<I", vertex_stride))
+    payload.extend(struct.pack("<I", len(render_vertices)))
+
+    for rv in render_vertices:
+        p = rv["position"]
+        n = rv["normal"]
+        uv = rv["uv0"]
+        payload.extend(struct.pack("<fff", p[0], p[1], p[2]))
+        payload.extend(struct.pack("<fff", n[0], n[1], n[2]))
+        payload.extend(struct.pack("<ff", uv[0], uv[1]))
+        if vertex_stride == MESH_FULL_ATTR_VERTEX_STRIDE_COLOR0:
+            c = rv["color0"]
+            payload.extend(struct.pack("<ffff", c[0], c[1], c[2], c[3]))
+
+    payload.extend(struct.pack("<I", len(local_indices)))
+    for idx in local_indices:
+        payload.extend(struct.pack("<I", idx))
 
     return bytes(payload)
 
