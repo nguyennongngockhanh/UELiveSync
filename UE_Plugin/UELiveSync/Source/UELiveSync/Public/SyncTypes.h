@@ -1123,10 +1123,75 @@ struct FLiveSyncStats
     std::atomic<int32> KeyframeVisibilitySectionCreated{0}; // New bool sections created
     std::atomic<int32> KeyframeVisibilityUnsupported{0};   // Channels > 10 rejected
 
+    // --- Phase 7C Stage 2C.2: Mesh schema v1 reassembly counters ---
+    std::atomic<int32> MeshSchemaV1ChunksStored{0};         // Chunks stored in reassembly state
+    std::atomic<int32> MeshSchemaV1MeshesCompleted{0};      // Full reassemblies completed
+    std::atomic<int32> MeshSchemaV1DuplicateChunks{0};      // Duplicate chunk indices rejected
+    std::atomic<int32> MeshSchemaV1ReassemblyRejected{0};   // Chunks rejected (count/stride mismatch)
+
     // --- Phase 9: Capability negotiation (game thread) ---
     std::atomic<int32> CapabilityAnnounceReceived{0};    // Total PT_CapabilityAnnounce packets received
     std::atomic<int32> CapabilityResponseReceived{0};   // Total PT_CapabilityResponse packets received
     std::atomic<int32> CapabilityPacketsMalformed{0};    // Packets rejected (bad size)
+};
+
+// =========================================================
+// MESH SCHEMA V1 — Parsed vertex/chunk/reassembly types
+// =========================================================
+
+struct FV1MeshParsedVertex
+{
+    FVector    Position;
+    FVector    Normal;
+    FVector2D  UV0;
+    FLinearColor Color0;
+};
+
+struct FV1MeshParsedChunk
+{
+    uint32 ChunkIndex   = 0;
+    uint32 ChunkCount   = 0;
+    uint32 VertexStride = 0;
+    uint32 VertexCount  = 0;
+    uint32 IndexCount   = 0;
+    TArray<FV1MeshParsedVertex> Vertices;
+    TArray<uint32> Indices;
+};
+
+struct FV1MeshReassemblyKey
+{
+    FGuid   Guid;
+    FString VersionHash;
+
+    bool operator==(const FV1MeshReassemblyKey& Other) const
+    {
+        return Guid == Other.Guid && VersionHash == Other.VersionHash;
+    }
+};
+
+inline uint32 GetTypeHash(const FV1MeshReassemblyKey& Key)
+{
+    return HashCombine(GetTypeHash(Key.Guid), GetTypeHash(Key.VersionHash));
+}
+
+struct FV1MeshReassemblyState
+{
+    uint32 ChunkCount    = 0;
+    uint32 VertexStride  = 0;
+    uint32 ChunksReceived = 0;
+    bool   bReconstructed = false;
+
+    TMap<uint32, FV1MeshParsedChunk> Chunks;
+
+    bool IsComplete() const
+    {
+        return ChunkCount > 0 && ChunksReceived >= ChunkCount;
+    }
+
+    bool HasChunk(uint32 ChunkIndex) const
+    {
+        return Chunks.Contains(ChunkIndex);
+    }
 };
 
 // =========================================================

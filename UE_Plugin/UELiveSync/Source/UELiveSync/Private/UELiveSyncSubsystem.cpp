@@ -3937,19 +3937,96 @@ ProcessBinaryPacket(
                 Ptr, PayloadSize);
 
             // =====================================================
-            // Phase 7C Stage 2C: FULL_ATTR v1 parser-only
+            // Phase 7C Stage 2C.2: FULL_ATTR v1 reassembly
             // =====================================================
             bool bHasFullAttr = (Flags & MESH_CHUNK_FLAG_FULL_ATTR) != 0;
 
             if (bHasFullAttr)
             {
-                // Parse and validate v1 payload; no reconstruction
-                if (ParseV1MeshPayload(Guid, ChunkIndex, ChunkCount, PayloadView))
+                FV1MeshParsedChunk ParsedChunk;
+                if (ParseV1MeshPayload(Guid, ChunkIndex, ChunkCount, PayloadView, ParsedChunk))
                 {
                     Stats.MeshSchemaV1PacketsParsed.fetch_add(1, std::memory_order_relaxed);
+
+                    FV1MeshReassemblyKey Key;
+                    Key.Guid = Guid;
+                    Key.VersionHash = VersionHash;
+
+                    FV1MeshReassemblyState& State =
+                        PendingV1MeshReassembly.FindOrAdd(Key);
+
+                    // First chunk for this key: initialize state
+                    if (State.ChunkCount == 0)
+                    {
+                        State.ChunkCount   = ParsedChunk.ChunkCount;
+                        State.VertexStride = ParsedChunk.VertexStride;
+                    }
+                    else
+                    {
+                        // Validate consistency with prior chunks
+                        bool bMismatch = false;
+                        if (State.ChunkCount != ParsedChunk.ChunkCount)
+                        {
+                            UE_LOG(LogLiveSync, Warning,
+                                TEXT("[MESH][V1] ChunkCount mismatch for GUID=%s "
+                                     "(existing=%u new=%u)"),
+                                *Guid.ToString(EGuidFormats::Digits),
+                                State.ChunkCount, ParsedChunk.ChunkCount);
+                            bMismatch = true;
+                        }
+                        if (State.VertexStride != ParsedChunk.VertexStride)
+                        {
+                            UE_LOG(LogLiveSync, Warning,
+                                TEXT("[MESH][V1] VertexStride mismatch for GUID=%s "
+                                     "(existing=%u new=%u)"),
+                                *Guid.ToString(EGuidFormats::Digits),
+                                State.VertexStride, ParsedChunk.VertexStride);
+                            bMismatch = true;
+                        }
+
+                        if (bMismatch)
+                        {
+                            Stats.MeshSchemaV1ReassemblyRejected.fetch_add(1, std::memory_order_relaxed);
+                            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                            Ptr += PayloadSize;
+                            continue;
+                        }
+                    }
+
+                    // Check for duplicate chunk index
+                    if (State.HasChunk(ChunkIndex))
+                    {
+                        Stats.MeshSchemaV1DuplicateChunks.fetch_add(1, std::memory_order_relaxed);
+                        UE_LOG(LogLiveSync, Verbose,
+                            TEXT("[MESH][V1] Duplicate chunk %u/%u for GUID=%s"),
+                            ChunkIndex, ChunkCount,
+                            *Guid.ToString(EGuidFormats::Digits));
+                        Ptr += PayloadSize;
+                        continue;
+                    }
+
+                    // Store parsed chunk
+                    State.Chunks.Add(ChunkIndex, MoveTemp(ParsedChunk));
+                    State.ChunksReceived++;
+                    Stats.MeshSchemaV1ChunksStored.fetch_add(1, std::memory_order_relaxed);
+
                     UE_LOG(LogLiveSync, Log,
-                        TEXT("[MESH][V1] Parsed GUID=%s chunk=%u/%u"),
-                        *Guid.ToString(EGuidFormats::Digits), ChunkIndex, ChunkCount);
+                        TEXT("[MESH][V1] Stored chunk %u/%u for GUID=%s "
+                             "(received=%u/%u)"),
+                        ChunkIndex, ChunkCount,
+                        *Guid.ToString(EGuidFormats::Digits),
+                        State.ChunksReceived, State.ChunkCount);
+
+                    // Check completion
+                    if (State.IsComplete())
+                    {
+                        Stats.MeshSchemaV1MeshesCompleted.fetch_add(1, std::memory_order_relaxed);
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[MESH][V1] Reassembly complete for GUID=%s "
+                                 "(%u/%u chunks)"),
+                            *Guid.ToString(EGuidFormats::Digits),
+                            State.ChunksReceived, State.ChunkCount);
+                    }
                 }
                 else
                 {
@@ -11231,7 +11308,8 @@ ParseV1MeshPayload(
     const FGuid& Guid,
     uint32 ChunkIndex,
     uint32 ChunkCount,
-    const TArrayView<const uint8>& Payload)
+    const TArrayView<const uint8>& Payload,
+    FV1MeshParsedChunk& OutParsedChunk)
 {
     CHECK_GAME_THREAD();
 
@@ -11247,11 +11325,12 @@ ParseV1MeshPayload(
             UE_LOG(LogLiveSync, Warning,
                 TEXT("[MESH][V1] Chunk0 truncated: cannot read SchemaVersion for GUID=%s"),
                 *Guid.ToString(EGuidFormats::Digits));
-            Stats.MeshSchemaUnsupportedPackets++;
+            Stats.MeshSchemaUnsupportedPackets.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
 
-        uint32 SchemaVersion = *reinterpret_cast<const uint32*>(Data + Offset);
+        uint32 SchemaVersion = 0;
+        FMemory::Memcpy(&SchemaVersion, Data + Offset, sizeof(uint32));
         Offset += 4;
 
         if (SchemaVersion != 1)
@@ -11259,7 +11338,7 @@ ParseV1MeshPayload(
             UE_LOG(LogLiveSync, Warning,
                 TEXT("[MESH][V1] Unsupported SchemaVersion %u for GUID=%s"),
                 SchemaVersion, *Guid.ToString(EGuidFormats::Digits));
-            Stats.MeshSchemaUnsupportedPackets++;
+            Stats.MeshSchemaUnsupportedPackets.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
     }
@@ -11283,7 +11362,8 @@ ParseV1MeshPayload(
         return false;
     }
 
-    uint32 VertexStride = *reinterpret_cast<const uint32*>(Data + Offset);
+    uint32 VertexStride = 0;
+    FMemory::Memcpy(&VertexStride, Data + Offset, sizeof(uint32));
     Offset += 4;
 
     if (VertexStride != 32 && VertexStride != 48)
@@ -11304,7 +11384,8 @@ ParseV1MeshPayload(
         return false;
     }
 
-    uint32 VertexCount = *reinterpret_cast<const uint32*>(Data + Offset);
+    uint32 VertexCount = 0;
+    FMemory::Memcpy(&VertexCount, Data + Offset, sizeof(uint32));
     Offset += 4;
 
     uint32 VertexBytes = VertexCount * VertexStride;
@@ -11317,7 +11398,30 @@ ParseV1MeshPayload(
             VertexBytes, DataLen - Offset);
         return false;
     }
-    Offset += VertexBytes;
+
+    // Parse vertices
+    const bool bHasColor0 = (VertexStride == 48);
+    OutParsedChunk.Vertices.Reserve(VertexCount);
+    for (uint32 i = 0; i < VertexCount; i++)
+    {
+        FV1MeshParsedVertex V;
+        FMemory::Memcpy(&V.Position, Data + Offset, sizeof(float) * 3);
+        Offset += sizeof(float) * 3;
+        FMemory::Memcpy(&V.Normal, Data + Offset, sizeof(float) * 3);
+        Offset += sizeof(float) * 3;
+        FMemory::Memcpy(&V.UV0, Data + Offset, sizeof(float) * 2);
+        Offset += sizeof(float) * 2;
+        if (bHasColor0)
+        {
+            FMemory::Memcpy(&V.Color0, Data + Offset, sizeof(float) * 4);
+            Offset += sizeof(float) * 4;
+        }
+        else
+        {
+            V.Color0 = FLinearColor(0, 0, 0, 0);
+        }
+        OutParsedChunk.Vertices.Add(V);
+    }
 
     // IndexCount (uint32) + Indices[]
     if (Offset + 4 > DataLen)
@@ -11328,7 +11432,8 @@ ParseV1MeshPayload(
         return false;
     }
 
-    uint32 IndexCount = *reinterpret_cast<const uint32*>(Data + Offset);
+    uint32 IndexCount = 0;
+    FMemory::Memcpy(&IndexCount, Data + Offset, sizeof(uint32));
     Offset += 4;
 
     uint32 IndexBytes = IndexCount * sizeof(uint32);
@@ -11342,22 +11447,31 @@ ParseV1MeshPayload(
         return false;
     }
 
-    // Validate indices in range
-    const uint32* Indices = reinterpret_cast<const uint32*>(Data + Offset);
+    // Validate and store indices
+    OutParsedChunk.Indices.Reserve(IndexCount);
     for (uint32 i = 0; i < IndexCount; i++)
     {
-        if (Indices[i] >= VertexCount)
+        uint32 Index = 0;
+        FMemory::Memcpy(&Index, Data + Offset, sizeof(uint32));
+        Offset += sizeof(uint32);
+        if (Index >= VertexCount)
         {
             UE_LOG(LogLiveSync, Warning,
                 TEXT("[MESH][V1] Out-of-bounds index %u (>= VertexCount=%u) "
                      "for GUID=%s chunk=%u"),
-                Indices[i], VertexCount,
+                Index, VertexCount,
                 *Guid.ToString(EGuidFormats::Digits), ChunkIndex);
             return false;
         }
+        OutParsedChunk.Indices.Add(Index);
     }
 
-    // Parser-only: validated successfully, no reconstruction
+    OutParsedChunk.ChunkIndex   = ChunkIndex;
+    OutParsedChunk.ChunkCount   = ChunkCount;
+    OutParsedChunk.VertexStride = VertexStride;
+    OutParsedChunk.VertexCount  = VertexCount;
+    OutParsedChunk.IndexCount   = IndexCount;
+
     return true;
 }
 

@@ -404,16 +404,16 @@ private:
     // MESH CHUNK REASSEMBLY (Phase 7C Stage 1B/1C)
     // =====================================================
 
-    /** Parse and validate a FULL_ATTR v1 mesh chunk payload.
-     *  Returns true if the payload is valid v1. Parser-only:
-     *  validates format, stride, bounds — does not store data
-     *  or build mesh sections.
+    /** Parse, validate, and store a FULL_ATTR v1 mesh chunk payload.
+     *  Returns true if the payload is valid and OutParsedChunk is filled.
+     *  On false the chunk is rejected (no data stored).
      */
     bool ParseV1MeshPayload(
         const FGuid& Guid,
         uint32 ChunkIndex,
         uint32 ChunkCount,
-        const TArrayView<const uint8>& Payload);
+        const TArrayView<const uint8>& Payload,
+        FV1MeshParsedChunk& OutParsedChunk);
 
     /** Parse, validate, and store one PT_Mesh chunk. */
     void HandleMeshChunk(
@@ -762,6 +762,9 @@ private:
 
     // GUID → reassembly state
     TMap<FGuid, FMeshReassemblyState> PendingMeshReassembly;
+
+    // (Guid, VersionHash) → v1 reassembly state
+    TMap<FV1MeshReassemblyKey, FV1MeshReassemblyState> PendingV1MeshReassembly;
 
     // Total PT_Mesh chunks received this session
     uint32 MeshChunksReceived = 0;
