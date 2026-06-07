@@ -12036,7 +12036,236 @@ ReconstructCompletedMeshes()
     {
         PendingMeshReassembly.Remove(Guid);
     }
+
+    // Phase 7C Stage 2C.3: Build ProceduralMesh from completed v1 reassemblies
+    BuildV1MeshFromReassembly();
 }
+
+
+// =========================================================
+// BUILD V1 MESH FROM REASSEMBLY (Phase 7C Stage 2C.3)
+// =========================================================
+// Merges completed v1 reassembly chunks into final arrays,
+// converts Blender→UE coordinate space (Y-flip + cm scale),
+// flips winding (Blender CW → UE CCW), and builds one
+// ProceduralMesh section per mesh.
+//
+// Missing actors: data is kept (not cleared) in case the
+// actor appears in a later tick. Counter incremented.
+// =========================================================
+
+void UUELiveSyncSubsystem::
+BuildV1MeshFromReassembly()
+{
+    CHECK_GAME_THREAD();
+
+    TArray<FV1MeshReassemblyKey> Reconstructed;
+
+    for (auto& Pair : PendingV1MeshReassembly)
+    {
+        FV1MeshReassemblyState& State = Pair.Value;
+
+        if (!State.IsComplete() || State.bReconstructed)
+        {
+            continue;
+        }
+
+        const FV1MeshReassemblyKey& Key = Pair.Key;
+        const FGuid& Guid = Key.Guid;
+
+        // Resolve actor from GUID
+        AActor* Actor = FindActorFast(Guid);
+        if (!Actor)
+        {
+            Stats.MeshSchemaV1MissingActor.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] Missing actor for GUID=%s vhash=%s "
+                     "\u2014 keeping data for late actor resolution"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash);
+            // Keep completed data; actor may appear later via BuildActorCache
+            continue;
+        }
+
+        // Merge all chunks in order
+        TArray<FVector> Positions;
+        TArray<int32> Indices;
+        TArray<FVector> Normals;
+        TArray<FVector2D> UV0;
+        TArray<FColor> Colors;
+        bool bHasColor0 = false;
+        bool bBuildValid = true;
+        uint32 VertexBase = 0;
+
+        for (uint32 i = 0; i < State.ChunkCount; i++)
+        {
+            const FV1MeshParsedChunk* Chunk = State.Chunks.Find(i);
+            if (!Chunk)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH][V1] Missing chunk %u/%u for GUID=%s vhash=%s"),
+                    i, State.ChunkCount,
+                    *Guid.ToString(EGuidFormats::Digits),
+                    *Key.VersionHash);
+                bBuildValid = false;
+                break;
+            }
+
+            bool bChunkHasColor0 = (Chunk->VertexStride == 48);
+            bHasColor0 = bHasColor0 || bChunkHasColor0;
+
+            // Convert and add vertices
+            for (uint32 v = 0; v < Chunk->VertexCount; v++)
+            {
+                const FV1MeshParsedVertex& Vert = Chunk->Vertices[v];
+
+                // Blender → UE: Y-flip + cm scale (same convention as V5)
+                FVector UEPos(
+                    Vert.Position.X * 100.0f,
+                    -Vert.Position.Y * 100.0f,
+                    Vert.Position.Z * 100.0f);
+                Positions.Add(UEPos);
+
+                // Normal: Y-flip only (no scale)
+                FVector UENormal(
+                    Vert.Normal.X,
+                    -Vert.Normal.Y,
+                    Vert.Normal.Z);
+                Normals.Add(UENormal);
+
+                // UV0: no conversion
+                UV0.Add(Vert.UV0);
+
+                // Color0: convert FLinearColor → FColor (linear, no sRGB)
+                if (bChunkHasColor0)
+                {
+                    Colors.Add(Vert.Color0.ToFColor(false));
+                }
+            }
+
+            // Add indices with VertexBase offset; flip winding (CW→CCW per Y-flip handedness)
+            for (uint32 idx = 0; idx + 2 < Chunk->IndexCount; idx += 3)
+            {
+                Indices.Add(Chunk->Indices[idx] + VertexBase);
+                Indices.Add(Chunk->Indices[idx + 2] + VertexBase);
+                Indices.Add(Chunk->Indices[idx + 1] + VertexBase);
+            }
+
+            VertexBase += Chunk->VertexCount;
+        }
+
+        if (!bBuildValid)
+        {
+            Stats.MeshSchemaV1BuildRejected.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] Build rejected for GUID=%s vhash=%s "
+                     "\u2014 missing chunk during merge"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash);
+            State.bReconstructed = true;
+            Reconstructed.Add(Key);
+            continue;
+        }
+
+        if (Positions.Num() == 0 || Indices.Num() == 0)
+        {
+            Stats.MeshSchemaV1BuildRejected.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MESH][V1] Empty geometry for GUID=%s vhash=%s "
+                     "\u2014 skipping build"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash);
+            State.bReconstructed = true;
+            Reconstructed.Add(Key);
+            continue;
+        }
+
+        // Validate all indices are in bounds of merged vertex array
+        bool bInvalidIndex = false;
+        for (int32 Idx : Indices)
+        {
+            if (Idx < 0 || Idx >= Positions.Num())
+            {
+                bInvalidIndex = true;
+                break;
+            }
+        }
+
+        if (bInvalidIndex)
+        {
+            Stats.MeshSchemaV1BuildRejected.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] Out-of-bounds index in merged data "
+                     "for GUID=%s vhash=%s \u2014 rejecting build"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash);
+            State.bReconstructed = true;
+            Reconstructed.Add(Key);
+            continue;
+        }
+
+        // Find or create ProceduralMeshComponent
+        UProceduralMeshComponent* ProcMesh =
+            Actor->FindComponentByClass<UProceduralMeshComponent>();
+
+        if (!ProcMesh)
+        {
+            ProcMesh = NewObject<UProceduralMeshComponent>(Actor);
+
+            if (Actor->GetRootComponent())
+            {
+                ProcMesh->SetupAttachment(
+                    Actor->GetRootComponent());
+            }
+            else
+            {
+                Actor->SetRootComponent(ProcMesh);
+            }
+
+            ProcMesh->RegisterComponent();
+        }
+
+        // For stride 32 (no color0), pass empty color array
+        TArray<FColor> SectionColors;
+        if (bHasColor0)
+        {
+            SectionColors = MoveTemp(Colors);
+        }
+
+        // Build one section only (Stage 2C.3: single-section, no material grouping)
+        ProcMesh->CreateMeshSection(
+            0,
+            Positions,
+            Indices,
+            Normals,
+            UV0,
+            SectionColors,
+            TArray<FProcMeshTangent>(),
+            true);
+
+        Stats.MeshSchemaV1SectionsBuilt.fetch_add(1, std::memory_order_relaxed);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MESH][V1] Built section for GUID=%s vhash=%s: "
+                 "%d verts, %d tris, stride=%d, hasColor=%d"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *Key.VersionHash,
+            Positions.Num(),
+            Indices.Num() / 3,
+            State.VertexStride,
+            bHasColor0 ? 1 : 0);
+
+        // Mark completed and remove from pending
+        State.bReconstructed = true;
+        Reconstructed.Add(Key);
+    }
+
+    for (const FV1MeshReassemblyKey& Key : Reconstructed)
+    {
+        PendingV1MeshReassembly.Remove(Key);
+    }
+}
+
 
 #include "UELiveSyncSubsystem_Replay.inl"
 #include "UELiveSyncSubsystem_Phase6H.inl"

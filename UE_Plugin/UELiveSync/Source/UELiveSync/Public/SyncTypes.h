@@ -1129,6 +1129,11 @@ struct FLiveSyncStats
     std::atomic<int32> MeshSchemaV1DuplicateChunks{0};      // Duplicate chunk indices rejected
     std::atomic<int32> MeshSchemaV1ReassemblyRejected{0};   // Chunks rejected (count/stride mismatch)
 
+    // --- Phase 7C Stage 2C.3: Mesh schema v1 build counters ---
+    std::atomic<int32> MeshSchemaV1SectionsBuilt{0};        // ProceduralMesh sections built from v1 reassembly
+    std::atomic<int32> MeshSchemaV1BuildRejected{0};        // Completed v1 reassembly rejected at build time
+    std::atomic<int32> MeshSchemaV1MissingActor{0};         // v1 build skipped (actor not found)
+
     // --- Phase 9: Capability negotiation (game thread) ---
     std::atomic<int32> CapabilityAnnounceReceived{0};    // Total PT_CapabilityAnnounce packets received
     std::atomic<int32> CapabilityResponseReceived{0};   // Total PT_CapabilityResponse packets received

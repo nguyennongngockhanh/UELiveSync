@@ -415,6 +415,13 @@ private:
         const TArrayView<const uint8>& Payload,
         FV1MeshParsedChunk& OutParsedChunk);
 
+    /** Build ProceduralMeshComponent sections from completed v1 reassemblies.
+     *  Called from ReconstructCompletedMeshes after the V5 loop.
+     *  Iterates PendingV1MeshReassembly and builds one section per
+     *  completed reassembly. Clears successfully built entries.
+     */
+    void BuildV1MeshFromReassembly();
+
     /** Parse, validate, and store one PT_Mesh chunk. */
     void HandleMeshChunk(
         const FGuid& Guid,
