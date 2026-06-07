@@ -390,6 +390,163 @@ class UELIVESYNC_OT_dump_diagnostics(
 
 
 # =========================================================
+# MANUAL MESH SYNC OPERATOR (Phase 7C Stage 2B.3)
+# =========================================================
+
+class UELIVESYNC_OT_sync_selected_mesh_to_ue(
+    bpy.types.Operator
+):
+    bl_idname = \
+        "uelivesync.sync_selected_mesh_to_ue"
+
+    bl_label = "Sync Selected Mesh to UE"
+
+    bl_description = \
+        "Send loop-expanded full-attribute mesh data for " \
+        "selected MESH objects to UE via PT_Mesh v1"
+
+    def execute(self, context):
+
+        selected = [
+            obj for obj in context.selected_objects
+            if obj.type == 'MESH'
+        ]
+
+        if not selected:
+            self.report(
+                {'WARNING'},
+                "No MESH objects selected"
+            )
+
+            return {'CANCELLED'}
+
+        if not network.is_connected():
+
+            self.report(
+                {'WARNING'},
+                "Not connected to UE"
+            )
+
+            return {'CANCELLED'}
+
+        import uuid
+
+        depsgraph = \
+            context.evaluated_depsgraph_get()
+
+        synced_count = 0
+
+        for obj in selected:
+
+            try:
+
+                guid_hex = sync.ensure_guid(obj)
+                guid_obj = uuid.UUID(guid_hex)
+
+                evaluated_obj = \
+                    obj.evaluated_get(depsgraph)
+
+                if evaluated_obj.type != 'MESH':
+                    continue
+
+                mesh = evaluated_obj.to_mesh()
+
+                if mesh is None:
+                    continue
+
+                try:
+
+                    mesh.calc_loop_triangles()
+
+                    triangle_count = \
+                        len(mesh.loop_triangles)
+
+                    if triangle_count == 0:
+                        continue
+
+                    render_vertices, stride, \
+                        uv0_fb, diags = \
+                        network.extract_loop_expanded_render_vertices(
+                            mesh,
+                        )
+
+                    if not render_vertices:
+                        continue
+
+                    version_hash = \
+                        network.compute_render_vertex_version_hash(
+                            render_vertices,
+                            stride,
+                        )
+
+                    chunks = \
+                        network.chunk_render_vertices(
+                            render_vertices,
+                            stride,
+                            triangle_count,
+                        )
+
+                    chunk_count = len(chunks)
+
+                    for chunk_data in chunks:
+
+                        ci = chunk_data["chunk_index"]
+
+                        chunk_payload = \
+                            network.serialize_full_attr_mesh_chunk_v1(
+                                guid_obj,
+                                version_hash,
+                                ci,
+                                chunk_count,
+                                chunk_data["vertices"],
+                                chunk_data["indices"],
+                                flags=network.MESH_CHUNK_FLAG_FULL_ATTR,
+                                vertex_stride=stride,
+                            )
+
+                        network.send_objects(
+                            [chunk_payload],
+                            packet_type=network.PT_Mesh,
+                            version=network.LIVE_SYNC_VERSION_V5,
+                        )
+
+                    print(
+                        f"[MESH][ATTR] Manual sync: {obj.name} "
+                        f"({triangle_count} tris, "
+                        f"{len(render_vertices)} verts, "
+                        f"{chunk_count} chunk(s), stride={stride})"
+                    )
+
+                    synced_count += 1
+
+                finally:
+
+                    evaluated_obj.to_mesh_clear()
+
+            except Exception as e:
+
+                print(
+                    f"[MESH][ATTR] ERROR: {obj.name} — {e}"
+                )
+
+        if synced_count > 0:
+
+            self.report(
+                {'INFO'},
+                f"Synced {synced_count} mesh object(s) to UE"
+            )
+
+        else:
+
+            self.report(
+                {'WARNING'},
+                "No mesh objects could be synced"
+            )
+
+        return {'FINISHED'}
+
+
+# =========================================================
 # CONNECTION STATUS PANEL
 # =========================================================
 
@@ -577,6 +734,11 @@ class UELIVESYNC_PT_panel(
             icon='UV_SYNC_SELECT',
         )
 
+        layout.operator(
+            "uelivesync.sync_selected_mesh_to_ue",
+            icon='MESH_DATA',
+        )
+
         layout.separator()
 
         # Preferences shortcut
@@ -603,6 +765,7 @@ classes = (
     UELIVESYNC_OT_stop,
     UELIVESYNC_OT_rebind_all,
     UELIVESYNC_OT_dump_diagnostics,
+    UELIVESYNC_OT_sync_selected_mesh_to_ue,
     UELIVESYNC_PT_panel,
 )
 

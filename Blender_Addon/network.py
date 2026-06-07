@@ -1164,6 +1164,135 @@ def serialize_full_attr_mesh_chunk_v1(
 
 
 # =========================================================
+# PHASE 7C STAGE 2B.3: MANUAL MESH SYNC HELPERS
+# =========================================================
+
+TRIANGLES_PER_CHUNK = 8192
+
+
+def extract_loop_expanded_render_vertices(mesh):
+    """Extract loop-expanded render vertices from a Blender mesh.
+
+    Args:
+        mesh: bpy.types.Mesh (evaluated, loop_triangles calc'd).
+
+    Returns:
+        (render_vertices, stride, uv0_fallback, diagnostics)
+    """
+    has_uv = len(mesh.uv_layers) > 0
+    uv_layer = mesh.uv_layers.active.data if has_uv else None
+
+    has_color = len(mesh.vertex_colors) > 0
+    color_layer = mesh.vertex_colors.active.data if has_color else None
+
+    stride = MESH_FULL_ATTR_VERTEX_STRIDE_COLOR0 if has_color \
+        else MESH_FULL_ATTR_VERTEX_STRIDE_NO_COLOR
+    uv0_fallback = 0
+    diagnostics = []
+
+    loops = mesh.loops
+    vertices = mesh.vertices
+
+    render_vertices = []
+
+    for tri in mesh.loop_triangles:
+        for loop_idx in tri.loops:
+            loop = loops[loop_idx]
+
+            pos = (vertices[loop.vertex_index].co.x,
+                   vertices[loop.vertex_index].co.y,
+                   vertices[loop.vertex_index].co.z)
+
+            no = (loop.normal.x, loop.normal.y, loop.normal.z)
+
+            if uv_layer:
+                uv = uv_layer[loop_idx].uv
+                uv0 = (uv.x, uv.y)
+            else:
+                uv0 = (0.0, 0.0)
+                uv0_fallback = 1
+
+            if color_layer:
+                c = color_layer[loop_idx].color
+                color0 = (c[0], c[1], c[2], c[3])
+            else:
+                color0 = None
+
+            render_vertices.append({
+                "position": pos,
+                "normal": no,
+                "uv0": uv0,
+                "color0": color0,
+            })
+
+    if uv0_fallback:
+        diagnostics.append("[MESH][ATTR] uv0Fallback=1")
+    elif has_uv:
+        diagnostics.append(
+            f"[MESH][ATTR] uv0Layer={mesh.uv_layers.active.name}")
+
+    return render_vertices, stride, uv0_fallback, diagnostics
+
+
+def compute_render_vertex_version_hash(render_vertices, stride):
+    """SHA-256 hex digest over full render vertex payload.
+
+    Deterministic across sessions for identical mesh content.
+    Changes when any vertex attribute changes.
+    """
+    import hashlib
+    h = hashlib.sha256()
+    for rv in render_vertices:
+        p = rv["position"]
+        n = rv["normal"]
+        uv = rv["uv0"]
+        h.update(struct.pack("<fff", p[0], p[1], p[2]))
+        h.update(struct.pack("<fff", n[0], n[1], n[2]))
+        h.update(struct.pack("<ff", uv[0], uv[1]))
+        if stride == MESH_FULL_ATTR_VERTEX_STRIDE_COLOR0:
+            c = rv["color0"]
+            h.update(struct.pack("<ffff", c[0], c[1], c[2], c[3]))
+    return h.hexdigest()
+
+
+def chunk_render_vertices(render_vertices, stride, triangle_count):
+    """Split render vertices into triangle-range chunks.
+
+    Returns list of chunk dicts:
+        'vertices', 'indices', 'vertex_count',
+        'triangle_count', 'chunk_index'
+    """
+    num_chunks = max(1, (triangle_count + TRIANGLES_PER_CHUNK - 1)
+                     // TRIANGLES_PER_CHUNK)
+    chunks = []
+    vc_start = 0
+
+    for ci in range(num_chunks):
+        tri_start = ci * TRIANGLES_PER_CHUNK
+        tri_end = min(tri_start + TRIANGLES_PER_CHUNK, triangle_count)
+        tri_in_chunk = tri_end - tri_start
+        vc = tri_in_chunk * 3
+
+        chunk_verts = render_vertices[vc_start:vc_start + vc]
+        vc_start += vc
+
+        chunk_indices = []
+        for ti in range(tri_in_chunk):
+            base = ti * 3
+            chunk_indices.extend([base, base + 1, base + 2])
+
+        chunks.append({
+            "vertices": chunk_verts,
+            "indices": chunk_indices,
+            "vertex_count": vc,
+            "triangle_count": tri_in_chunk,
+            "chunk_index": ci,
+        })
+
+    return chunks
+
+
+# =========================================================
 # OBJECT SERIALIZATION
 # =========================================================
 
