@@ -12485,6 +12485,143 @@ BuildV1MeshFromReassembly()
             }
         }
 
+        // Outward winding diagnostic: compute face normal vs outward direction.
+        // For closed meshes, face normal should point away from mesh center.
+        // If majority of triangles face inward, flip winding + normals.
+        {
+            FBox WindingBounds(ForceInit);
+            for (const FVector& P : Positions)
+                WindingBounds += P;
+            FVector MeshCenter = WindingBounds.GetCenter();
+
+            int32 WindingTriCount = ValidIndices.Num() / 3;
+            int32 InwardCount = 0;
+            int32 ZeroOutwardCount = 0;
+            double TotalOutwardDot = 0.0;
+            int32 CheckedOutward = 0;
+
+            for (int32 ti = 0; ti < WindingTriCount; ti++)
+            {
+                int32 IA = ValidIndices[ti * 3];
+                int32 IB = ValidIndices[ti * 3 + 1];
+                int32 IC = ValidIndices[ti * 3 + 2];
+
+                const FVector& A = Positions[IA];
+                const FVector& B = Positions[IB];
+                const FVector& C = Positions[IC];
+
+                FVector FaceNormal = FVector::CrossProduct(B - A, C - A).GetSafeNormal();
+                if (FaceNormal.IsNearlyZero())
+                {
+                    ZeroOutwardCount++;
+                    continue;
+                }
+
+                FVector FaceCenter = (A + B + C) / 3.0f;
+                FVector OutwardVec = (FaceCenter - MeshCenter).GetSafeNormal();
+                if (OutwardVec.IsNearlyZero())
+                {
+                    ZeroOutwardCount++;
+                    continue;
+                }
+
+                float OutwardDot = FVector::DotProduct(FaceNormal, OutwardVec);
+                TotalOutwardDot += OutwardDot;
+                CheckedOutward++;
+                if (OutwardDot < 0.0f)
+                    InwardCount++;
+
+                if (ti < 3)
+                {
+                    UE_LOG(LogLiveSync, Verbose,
+                        TEXT("[MESH][V1][WINDING] Tri %d: outwardDot=%.4f "
+                             "faceNormal=(%.4f,%.4f,%.4f) faceCenter=(%.4f,%.4f,%.4f)"),
+                        ti, OutwardDot,
+                        FaceNormal.X, FaceNormal.Y, FaceNormal.Z,
+                        FaceCenter.X, FaceCenter.Y, FaceCenter.Z);
+                }
+            }
+
+            float AvgOutwardDot = (CheckedOutward > 0)
+                ? static_cast<float>(TotalOutwardDot / CheckedOutward)
+                : 0.0f;
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][V1][WINDING] GUID=%s vhash=%s: "
+                     "tris=%d avgOutwardDot=%.4f inward=%d/%d zeroOutward=%d"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash,
+                WindingTriCount, AvgOutwardDot,
+                InwardCount, CheckedOutward, ZeroOutwardCount);
+
+            // Auto-fix: if majority of triangles face inward, flip all windings
+            // and negate normals to produce consistent outward-facing mesh.
+            if (CheckedOutward > 0 && InwardCount > CheckedOutward / 2)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][WINDING] Flipping %d triangles outward "
+                         "for GUID=%s vhash=%s (inward=%d/%d)"),
+                    WindingTriCount,
+                    *Guid.ToString(EGuidFormats::Digits),
+                    *Key.VersionHash,
+                    InwardCount, CheckedOutward);
+
+                // Flip winding: swap B and C in each triangle
+                for (int32 ti = 0; ti < WindingTriCount; ti++)
+                {
+                    int32 Base = ti * 3;
+                    Swap(ValidIndices[Base + 1], ValidIndices[Base + 2]);
+                }
+
+                // Negate normals to stay consistent with flipped winding
+                for (FVector& N : Normals)
+                    N = -N;
+
+                // Recompute outward diagnostics after fix
+                {
+                    double FixTotalOutwardDot = 0.0;
+                    int32 FixChecked = 0;
+                    int32 FixInward = 0;
+                    for (int32 ti = 0; ti < WindingTriCount; ti++)
+                    {
+                        int32 IA = ValidIndices[ti * 3];
+                        int32 IB = ValidIndices[ti * 3 + 1];
+                        int32 IC = ValidIndices[ti * 3 + 2];
+
+                        FVector FaceNormal = FVector::CrossProduct(
+                            Positions[IB] - Positions[IA],
+                            Positions[IC] - Positions[IA]).GetSafeNormal();
+                        if (FaceNormal.IsNearlyZero()) continue;
+
+                        FVector FaceCenter = (Positions[IA] + Positions[IB] + Positions[IC]) / 3.0f;
+                        FVector OutwardVec = (FaceCenter - MeshCenter).GetSafeNormal();
+                        if (OutwardVec.IsNearlyZero()) continue;
+
+                        float Dot = FVector::DotProduct(FaceNormal, OutwardVec);
+                        FixTotalOutwardDot += Dot;
+                        FixChecked++;
+                        if (Dot < 0.0f) FixInward++;
+                    }
+                    float FixAvg = (FixChecked > 0)
+                        ? static_cast<float>(FixTotalOutwardDot / FixChecked)
+                        : 0.0f;
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MESH][V1][WINDING] After fix for GUID=%s vhash=%s: "
+                             "avgOutwardDot=%.4f inward=%d/%d"),
+                        *Guid.ToString(EGuidFormats::Digits),
+                        *Key.VersionHash,
+                        FixAvg, FixInward, FixChecked);
+                }
+
+                // Log hint about one-sided materials
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][WINDING] Winding corrected for GUID=%s vhash=%s. "
+                         "If mesh still appears inside-out, check material TwoSided setting."),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    *Key.VersionHash);
+            }
+        }
+
         // Find or create ProceduralMeshComponent
         UProceduralMeshComponent* ProcMesh =
             Actor->FindComponentByClass<UProceduralMeshComponent>();
