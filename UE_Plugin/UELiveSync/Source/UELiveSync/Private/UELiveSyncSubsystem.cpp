@@ -12513,29 +12513,100 @@ BuildV1MeshFromReassembly()
             SectionColors = MoveTemp(Colors);
         }
 
-        // Calculate normals and tangents from geometry for correct lighting
-        TArray<FVector> FinalNormals;
+        // Save source v1 normals after validation/fix — must not be overwritten
+        // by CalculateTangentsForMesh (which computes face normals).
+        TArray<FVector> PreservedNormals = Normals;
+
+        // Generate tangents from geometry. Discard the recomputed normals
+        // from CalculateTangentsForMesh — we preserve source v1 normals.
+        TArray<FVector> TangentNormals;
         TArray<FProcMeshTangent> FinalTangents;
         UKismetProceduralMeshLibrary::CalculateTangentsForMesh(
             Positions,
             ValidIndices,
             UV0,
-            FinalNormals,
+            TangentNormals,
             FinalTangents);
 
+        // Orthogonalize each tangent against preserved normal (Gram-Schmidt).
+        // Preserve original handedness by adjusting bFlipTangentY so that
+        // cross(N, OrthoT) * sign aligns with the original bitangent direction.
+        int32 DegenerateTangentCount = 0;
+        float MaxNormalDelta = 0.0f;
+        {
+            int32 NormalCount = FMath::Min(PreservedNormals.Num(), TangentNormals.Num());
+            for (int32 ni = 0; ni < NormalCount; ni++)
+            {
+                float Delta = (PreservedNormals[ni] - TangentNormals[ni]).Size();
+                if (Delta > MaxNormalDelta)
+                    MaxNormalDelta = Delta;
+            }
+        }
+
+        for (int32 ti = 0; ti < FinalTangents.Num() && ti < PreservedNormals.Num(); ti++)
+        {
+            FVector T = FinalTangents[ti].TangentX;
+            bool bOrigFlip = FinalTangents[ti].bFlipTangentY;
+            const FVector& N = PreservedNormals[ti];
+            const FVector& NOrig = TangentNormals[ti];
+
+            // Gram-Schmidt: project out normal component
+            FVector OrthoT = T - FVector::DotProduct(T, N) * N;
+            if (OrthoT.IsNearlyZero())
+            {
+                // Degenerate UV tangent — fallback to arbitrary orthogonal vector
+                OrthoT = FVector::CrossProduct(N, FVector(1.0f, 0.0f, 0.0f));
+                if (OrthoT.IsNearlyZero())
+                    OrthoT = FVector::CrossProduct(N, FVector(0.0f, 1.0f, 0.0f));
+                DegenerateTangentCount++;
+            }
+            OrthoT.Normalize();
+
+            // Preserve original bitangent direction: compute sign so that
+            // cross(OrthoT, N) * sign aligns with original cross(T, NOrig) * sign.
+            FVector OrigBT = FVector::CrossProduct(T, NOrig).GetSafeNormal();
+            if (bOrigFlip) OrigBT = -OrigBT;
+            FVector NewBT = FVector::CrossProduct(OrthoT, N).GetSafeNormal();
+            bool bFlip = (FVector::DotProduct(OrigBT, NewBT) < 0.0f);
+
+            FinalTangents[ti] = FProcMeshTangent(OrthoT, bFlip);
+        }
+
         UE_LOG(LogLiveSync, Verbose,
-            TEXT("[MESH][V1][NORMAL] Calculated tangents for GUID=%s vhash=%s: "
-                 "normals=%d tangents=%d"),
+            TEXT("[MESH][V1][TANGENT] GUID=%s vhash=%s: "
+                 "tangents=%d normalPreservedDeltaMax=%.6f degenTangent=%d"),
             *Guid.ToString(EGuidFormats::Digits),
             *Key.VersionHash,
-            FinalNormals.Num(), FinalTangents.Num());
+            FinalTangents.Num(), MaxNormalDelta, DegenerateTangentCount);
 
-        // Build one section (Stage 2C.5: collision disabled to avoid Chaos NaN checks)
+        // Log first 3 preserved normals and tangents
+        {
+            int32 Samples = FMath::Min(3, PreservedNormals.Num());
+            for (int32 si = 0; si < Samples; si++)
+            {
+                FString TangentStr = (si < FinalTangents.Num())
+                    ? FString::Printf(TEXT("(%.6f, %.6f, %.6f)"),
+                        FinalTangents[si].TangentX.X,
+                        FinalTangents[si].TangentX.Y,
+                        FinalTangents[si].TangentX.Z)
+                    : TEXT("(N/A)");
+                UE_LOG(LogLiveSync, Verbose,
+                    TEXT("[MESH][V1][TANGENT] Sample %d: normal=(%.6f, %.6f, %.6f) tangent=%s"),
+                    si,
+                    PreservedNormals[si].X,
+                    PreservedNormals[si].Y,
+                    PreservedNormals[si].Z,
+                    *TangentStr);
+            }
+        }
+
+        // Build one section with preserved v1 source normals and generated tangents.
+        // Stage 2C.5: collision disabled to avoid Chaos NaN checks.
         ProcMesh->CreateMeshSection(
             0,
             Positions,
             ValidIndices,
-            FinalNormals,
+            PreservedNormals,
             UV0,
             SectionColors,
             FinalTangents,
