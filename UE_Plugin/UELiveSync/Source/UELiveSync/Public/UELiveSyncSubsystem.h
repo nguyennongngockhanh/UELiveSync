@@ -404,6 +404,17 @@ private:
     // MESH CHUNK REASSEMBLY (Phase 7C Stage 1B/1C)
     // =====================================================
 
+    /** Parse and validate a FULL_ATTR v1 mesh chunk payload.
+     *  Returns true if the payload is valid v1. Parser-only:
+     *  validates format, stride, bounds — does not store data
+     *  or build mesh sections.
+     */
+    bool ParseV1MeshPayload(
+        const FGuid& Guid,
+        uint32 ChunkIndex,
+        uint32 ChunkCount,
+        const TArrayView<const uint8>& Payload);
+
     /** Parse, validate, and store one PT_Mesh chunk. */
     void HandleMeshChunk(
         const FGuid& Guid,
@@ -761,11 +772,7 @@ private:
     // Total mesh sections built successfully this session
     uint32 MeshSectionsBuilt = 0;
 
-    // Phase 7C Stage 2A: mesh schema gate counters
-    uint32 MeshSchemaV5Packets = 0;
-    uint32 MeshSchemaV1PacketsDetected = 0;
-    uint32 MeshSchemaUnsupportedPackets = 0;
-
+    // Mesh schema counters live on FLiveSyncStats (Stats.MeshSchema*)
     // =====================================================
     // PLAYBACK STATE (Phase 7C)
     // =====================================================

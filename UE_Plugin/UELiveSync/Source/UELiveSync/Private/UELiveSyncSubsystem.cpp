@@ -3937,63 +3937,28 @@ ProcessBinaryPacket(
                 Ptr, PayloadSize);
 
             // =====================================================
-            // Phase 7C Stage 2A: FULL_ATTR schema gate
+            // Phase 7C Stage 2C: FULL_ATTR v1 parser-only
             // =====================================================
             bool bHasFullAttr = (Flags & MESH_CHUNK_FLAG_FULL_ATTR) != 0;
 
             if (bHasFullAttr)
             {
-                if (ChunkIndex == 0)
+                // Parse and validate v1 payload; no reconstruction
+                if (ParseV1MeshPayload(Guid, ChunkIndex, ChunkCount, PayloadView))
                 {
-                    // Chunk 0: read SchemaVersion from payload start
-                    if (PayloadSize < 4)
-                    {
-                        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-                        UE_LOG(LogLiveSync, Warning,
-                            TEXT("[MESH][FULL_ATTR] Chunk0 truncated: payload=%d < 4"),
-                            PayloadSize);
-                        Stats.MeshSchemaUnsupportedPackets++;
-                        Ptr += PayloadSize;
-                        continue;
-                    }
-
-                    uint32 SchemaVersion = 0;
-                    FMemory::Memcpy(&SchemaVersion, PayloadView.GetData(), sizeof(uint32));
-
-                    if (SchemaVersion == 1)
-                    {
-                        // v1 schema detected — safely defer (no v1 parser in Stage 2A)
-                        UE_LOG(LogLiveSync, Log,
-                            TEXT("[MESH][FULL_ATTR] v1 schema detected for GUID=%s — deferred (Stage 2A)"),
-                            *Guid.ToString(EGuidFormats::Digits));
-                        Stats.MeshSchemaV1PacketsDetected++;
-                        Ptr += PayloadSize;
-                        continue;
-                    }
-                    else if (SchemaVersion == 0 || SchemaVersion > 1)
-                    {
-                        // Unsupported schema version — reject safely
-                        UE_LOG(LogLiveSync, Warning,
-                            TEXT("[MESH][FULL_ATTR] Unsupported schema %u for GUID=%s — rejected"),
-                            SchemaVersion, *Guid.ToString(EGuidFormats::Digits));
-                        Stats.MeshSchemaUnsupportedPackets++;
-                        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-                        Ptr += PayloadSize;
-                        continue;
-                    }
+                    Stats.MeshSchemaV1PacketsParsed.fetch_add(1, std::memory_order_relaxed);
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MESH][V1] Parsed GUID=%s chunk=%u/%u"),
+                        *Guid.ToString(EGuidFormats::Digits), ChunkIndex, ChunkCount);
                 }
                 else
                 {
-                    // ChunkIndex > 0 with FULL_ATTR: safely skip in Stage 2A
-                    // (SchemaVersion consumed from chunk 0 only)
-                    UE_LOG(LogLiveSync, Verbose,
-                        TEXT("[MESH][FULL_ATTR] Chunk %u > 0 skipped (Stage 2A)"),
-                        ChunkIndex);
-                    Stats.MeshSchemaUnsupportedPackets++;
+                    Stats.MeshSchemaV1PacketsRejected.fetch_add(1, std::memory_order_relaxed);
                     Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-                    Ptr += PayloadSize;
-                    continue;
                 }
+
+                Ptr += PayloadSize;
+                continue;
             }
 
             // FULL_ATTR absent: legacy V5 path
@@ -11240,6 +11205,160 @@ ResolvePendingMaterials()
             It.RemoveCurrent();
         }
     }
+}
+
+
+// =========================================================
+// PARSE V1 MESH PAYLOAD (Phase 7C Stage 2C)
+// =========================================================
+// Parser-only: validates FULL_ATTR v1 payload format without
+// storing data or building mesh sections.
+//
+// Chunk 0 payload:
+//   SchemaVersion(4) + VertexStride(4) + VertexCount(4) +
+//   Vertex[VertexCount] + IndexCount(4) + Index[IndexCount]
+//
+// Chunk >0 payload (no SchemaVersion):
+//   VertexStride(4) + VertexCount(4) + Vertex[VertexCount] +
+//   IndexCount(4) + Index[IndexCount]
+//
+// Vertex stride 32: pos(float3) + normal(float3) + uv0(float2)
+// Vertex stride 48: pos(float3) + normal(float3) + uv0(float2) + color0(float4)
+// =========================================================
+
+bool UUELiveSyncSubsystem::
+ParseV1MeshPayload(
+    const FGuid& Guid,
+    uint32 ChunkIndex,
+    uint32 ChunkCount,
+    const TArrayView<const uint8>& Payload)
+{
+    CHECK_GAME_THREAD();
+
+    const uint8* Data = Payload.GetData();
+    int32 DataLen = Payload.Num();
+    int32 Offset = 0;
+
+    // Chunk 0: SchemaVersion (uint32)
+    if (ChunkIndex == 0)
+    {
+        if (Offset + 4 > DataLen)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] Chunk0 truncated: cannot read SchemaVersion for GUID=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
+            Stats.MeshSchemaUnsupportedPackets++;
+            return false;
+        }
+
+        uint32 SchemaVersion = *reinterpret_cast<const uint32*>(Data + Offset);
+        Offset += 4;
+
+        if (SchemaVersion != 1)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] Unsupported SchemaVersion %u for GUID=%s"),
+                SchemaVersion, *Guid.ToString(EGuidFormats::Digits));
+            Stats.MeshSchemaUnsupportedPackets++;
+            return false;
+        }
+    }
+
+    // Validate ChunkIndex < ChunkCount (defense-in-depth; already checked by caller)
+    if (ChunkIndex >= ChunkCount)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][V1] ChunkIndex=%u >= ChunkCount=%u for GUID=%s"),
+            ChunkIndex, ChunkCount,
+            *Guid.ToString(EGuidFormats::Digits));
+        return false;
+    }
+
+    // VertexStride (uint32) — always present in every chunk
+    if (Offset + 4 > DataLen)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][V1] Truncated payload: cannot read VertexStride for GUID=%s chunk=%u"),
+            *Guid.ToString(EGuidFormats::Digits), ChunkIndex);
+        return false;
+    }
+
+    uint32 VertexStride = *reinterpret_cast<const uint32*>(Data + Offset);
+    Offset += 4;
+
+    if (VertexStride != 32 && VertexStride != 48)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][V1] Unsupported VertexStride %u for GUID=%s chunk=%u"),
+            VertexStride,
+            *Guid.ToString(EGuidFormats::Digits), ChunkIndex);
+        return false;
+    }
+
+    // VertexCount (uint32) + Vertex array
+    if (Offset + 4 > DataLen)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][V1] Truncated payload: cannot read VertexCount for GUID=%s chunk=%u"),
+            *Guid.ToString(EGuidFormats::Digits), ChunkIndex);
+        return false;
+    }
+
+    uint32 VertexCount = *reinterpret_cast<const uint32*>(Data + Offset);
+    Offset += 4;
+
+    uint32 VertexBytes = VertexCount * VertexStride;
+    if (Offset + static_cast<int32>(VertexBytes) > DataLen)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][V1] Truncated vertex payload for GUID=%s chunk=%u: "
+                 "need %u bytes, have %d"),
+            *Guid.ToString(EGuidFormats::Digits), ChunkIndex,
+            VertexBytes, DataLen - Offset);
+        return false;
+    }
+    Offset += VertexBytes;
+
+    // IndexCount (uint32) + Indices[]
+    if (Offset + 4 > DataLen)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][V1] Truncated payload: cannot read IndexCount for GUID=%s chunk=%u"),
+            *Guid.ToString(EGuidFormats::Digits), ChunkIndex);
+        return false;
+    }
+
+    uint32 IndexCount = *reinterpret_cast<const uint32*>(Data + Offset);
+    Offset += 4;
+
+    uint32 IndexBytes = IndexCount * sizeof(uint32);
+    if (Offset + static_cast<int32>(IndexBytes) > DataLen)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][V1] Truncated index payload for GUID=%s chunk=%u: "
+                 "need %u bytes, have %d"),
+            *Guid.ToString(EGuidFormats::Digits), ChunkIndex,
+            IndexBytes, DataLen - Offset);
+        return false;
+    }
+
+    // Validate indices in range
+    const uint32* Indices = reinterpret_cast<const uint32*>(Data + Offset);
+    for (uint32 i = 0; i < IndexCount; i++)
+    {
+        if (Indices[i] >= VertexCount)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] Out-of-bounds index %u (>= VertexCount=%u) "
+                     "for GUID=%s chunk=%u"),
+                Indices[i], VertexCount,
+                *Guid.ToString(EGuidFormats::Digits), ChunkIndex);
+            return false;
+        }
+    }
+
+    // Parser-only: validated successfully, no reconstruction
+    return true;
 }
 
 

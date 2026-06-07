@@ -1042,6 +1042,12 @@ struct FLiveSyncStats
     std::atomic<int32> OverloadWarnings{0};                     // Overload condition warnings
     std::atomic<int32> AdaptiveCadenceAdjusted{0};              // Adaptive diagnostics cadence adjusted
 
+    // --- Mesh schema counters (Phase 7C Stage 2C, written by game thread) ---
+    std::atomic<int32> MeshSchemaV5Packets{0};                  // Legacy V5 mesh packets processed
+    std::atomic<int32> MeshSchemaV1PacketsParsed{0};            // FULL_ATTR v1 packets parsed successfully
+    std::atomic<int32> MeshSchemaV1PacketsRejected{0};          // FULL_ATTR v1 packets rejected (validation failure)
+    std::atomic<int32> MeshSchemaUnsupportedPackets{0};         // Unsupported FULL_ATTR schema version
+
     // --- Per-frame timing (written by game thread) ---
     double LastPacketTime = 0.0;
     double LastThreadLoopTime = 0.0;
