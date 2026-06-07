@@ -12650,6 +12650,23 @@ BuildV1MeshFromReassembly()
             SectionColors = MoveTemp(Colors);
         }
 
+        // === STAGE 2C.9: Validate section array sizes ===
+
+        // T8: If Normals.Num() != Vertices.Num(), reject build.
+        if (Normals.Num() != Positions.Num())
+        {
+            Stats.MeshSchemaV1BuildRejected.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1] Rejecting build: normals count (%d) != vertices count (%d) "
+                     "for GUID=%s vhash=%s"),
+                Normals.Num(), Positions.Num(),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash);
+            State.bReconstructed = true;
+            Reconstructed.Add(Key);
+            continue;
+        }
+
         // Save source v1 normals after validation/fix — must not be overwritten
         // by CalculateTangentsForMesh (which computes face normals).
         TArray<FVector> PreservedNormals = Normals;
@@ -12709,14 +12726,27 @@ BuildV1MeshFromReassembly()
             FinalTangents[ti] = FProcMeshTangent(OrthoT, bFlip);
         }
 
-        UE_LOG(LogLiveSync, Verbose,
+        // Count bad orthogonal tangents: |dot(N,T)| > 0.1 means tangent is not
+        // properly orthogonalized to the preserved normal.
+        int32 BadOrthogonalCount = 0;
+        {
+            for (int32 ti = 0; ti < FinalTangents.Num() && ti < PreservedNormals.Num(); ti++)
+            {
+                float Dot = FVector::DotProduct(FinalTangents[ti].TangentX, PreservedNormals[ti]);
+                if (FMath::Abs(Dot) > 0.1f)
+                    BadOrthogonalCount++;
+            }
+        }
+
+        // Unconditional tangent diagnostic (Log level)
+        UE_LOG(LogLiveSync, Log,
             TEXT("[MESH][V1][TANGENT] GUID=%s vhash=%s: "
-                 "tangents=%d normalPreservedDeltaMax=%.6f degenTangent=%d"),
+                 "tangents=%d normalPreservedDeltaMax=%.6f degenTangent=%d badOrthogonal=%d"),
             *Guid.ToString(EGuidFormats::Digits),
             *Key.VersionHash,
-            FinalTangents.Num(), MaxNormalDelta, DegenerateTangentCount);
+            FinalTangents.Num(), MaxNormalDelta, DegenerateTangentCount, BadOrthogonalCount);
 
-        // Log first 3 preserved normals and tangents
+        // Log first 3 preserved normals and tangents (Log level)
         {
             int32 Samples = FMath::Min(3, PreservedNormals.Num());
             for (int32 si = 0; si < Samples; si++)
@@ -12727,7 +12757,7 @@ BuildV1MeshFromReassembly()
                         FinalTangents[si].TangentX.Y,
                         FinalTangents[si].TangentX.Z)
                     : TEXT("(N/A)");
-                UE_LOG(LogLiveSync, Verbose,
+                UE_LOG(LogLiveSync, Log,
                     TEXT("[MESH][V1][TANGENT] Sample %d: normal=(%.6f, %.6f, %.6f) tangent=%s"),
                     si,
                     PreservedNormals[si].X,
@@ -12737,7 +12767,102 @@ BuildV1MeshFromReassembly()
             }
         }
 
-        // Build one section with preserved v1 source normals and generated tangents.
+        // === T7/T2: Tangent count == vertices count ===
+        // If Tangents.Num() != Vertices.Num(), generate fallback tangent for every vertex.
+        if (FinalTangents.Num() != Positions.Num())
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1][TANGENT] FinalTangents.Num() (%d) != Vertices.Num() (%d) "
+                     "— generating fallback tangents for GUID=%s vhash=%s"),
+                FinalTangents.Num(), Positions.Num(),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash);
+            // Generate fallback tangents for all vertices
+            TArray<FProcMeshTangent> FallbackTangents;
+            FallbackTangents.SetNum(Positions.Num());
+            for (int32 vi = 0; vi < Positions.Num(); vi++)
+            {
+                const FVector& N = PreservedNormals[vi];
+                FVector Fallback = FVector::CrossProduct(N, FVector(1.0f, 0.0f, 0.0f));
+                if (Fallback.IsNearlyZero())
+                    Fallback = FVector::CrossProduct(N, FVector(0.0f, 1.0f, 0.0f));
+                Fallback.Normalize();
+                FallbackTangents[vi] = FProcMeshTangent(Fallback, false);
+            }
+            FinalTangents = MoveTemp(FallbackTangents);
+            DegenerateTangentCount = Positions.Num();
+        }
+
+        // === T9: UV0 count == vertices count ===
+        // If UV0.Num() != Vertices.Num(), fill zero UVs and log.
+        if (UV0.Num() != Positions.Num())
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][V1][SECTION_ARRAYS] UV0.Num() (%d) != Vertices.Num() (%d) "
+                     "— filling zero UVs for GUID=%s vhash=%s"),
+                UV0.Num(), Positions.Num(),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash);
+            TArray<FVector2D> ZeroUVs;
+            ZeroUVs.SetNum(Positions.Num());
+            for (int32 ui = 0; ui < ZeroUVs.Num(); ui++)
+                ZeroUVs[ui] = FVector2D(0.0f, 0.0f);
+            UV0 = MoveTemp(ZeroUVs);
+        }
+
+        // === T9: Unconditional section arrays diagnostic ===
+        {
+            int32 VertCount = Positions.Num();
+            int32 IndexCount = ValidIndices.Num();
+            int32 NormalCount = PreservedNormals.Num();
+            int32 UV0Count = UV0.Num();
+            int32 TangentCount = FinalTangents.Num();
+            int32 ColorCount = SectionColors.Num();
+            int32 FiniteNormals = 0;
+            int32 FiniteTangents = 0;
+            for (int32 vi = 0; vi < NormalCount; vi++)
+            {
+                if (IsFiniteVec3(PreservedNormals[vi]))
+                    FiniteNormals++;
+            }
+            for (int32 ti = 0; ti < TangentCount; ti++)
+            {
+                if (IsFiniteVec3(FinalTangents[ti].TangentX))
+                    FiniteTangents++;
+            }
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][V1][SECTION_ARRAYS] GUID=%s vhash=%s: "
+                     "verts=%d indices=%d normals=%d uv0=%d tangents=%d colors=%d "
+                     "finiteNormals=%d finiteTangents=%d badTangents=%d"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash,
+                VertCount, IndexCount, NormalCount, UV0Count, TangentCount,
+                ColorCount, FiniteNormals, FiniteTangents, BadOrthogonalCount);
+
+            // Log first 3 samples of each array
+            int32 Samples = FMath::Min(3, VertCount);
+            for (int32 si = 0; si < Samples; si++)
+            {
+                FString VertStr = FString::Printf(TEXT("(%.4f, %.4f, %.4f)"),
+                    Positions[si].X, Positions[si].Y, Positions[si].Z);
+                FString NormStr = FString::Printf(TEXT("(%.6f, %.6f, %.6f)"),
+                    PreservedNormals[si].X, PreservedNormals[si].Y, PreservedNormals[si].Z);
+                FString TangStr = (si < FinalTangents.Num())
+                    ? FString::Printf(TEXT("(%.6f, %.6f, %.6f)"),
+                        FinalTangents[si].TangentX.X,
+                        FinalTangents[si].TangentX.Y,
+                        FinalTangents[si].TangentX.Z)
+                    : TEXT("(N/A)");
+                FString UVStr = (si < UV0.Num())
+                    ? FString::Printf(TEXT("(%.4f, %.4f)"), UV0[si].X, UV0[si].Y)
+                    : TEXT("(N/A)");
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][SECTION_ARRAYS] Sample %d: vert=%s normal=%s tangent=%s uv=%s"),
+                    si, *VertStr, *NormStr, *TangStr, *UVStr);
+            }
+        }
+
+        // === T12: Collision disabled for v1 ===
         // Stage 2C.5: collision disabled to avoid Chaos NaN checks.
         ProcMesh->CreateMeshSection(
             0,
@@ -12748,6 +12873,47 @@ BuildV1MeshFromReassembly()
             SectionColors,
             FinalTangents,
             false);
+
+        // === Post-CreateMeshSection diagnostics ===
+        {
+            // Section local bounds
+            FBox SectionBounds(ForceInit);
+            bool bBoundsComputed = false;
+            for (int32 vi = 0; vi < Positions.Num(); vi++)
+            {
+                if (!bBoundsComputed)
+                {
+                    SectionBounds.Min = Positions[vi];
+                    SectionBounds.Max = Positions[vi];
+                    bBoundsComputed = true;
+                }
+                else
+                {
+                    SectionBounds += Positions[vi];
+                }
+            }
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][V1][AFTER_BUILD] GUID=%s vhash=%s: "
+                     "sectionBounds Min=(%.4f, %.4f, %.4f) Max=(%.4f, %.4f, %.4f) "
+                     "numSections=%d"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash,
+                SectionBounds.Min.X, SectionBounds.Min.Y, SectionBounds.Min.Z,
+                SectionBounds.Max.X, SectionBounds.Max.Y, SectionBounds.Max.Z,
+                ProcMesh->GetNumSections());
+
+            // Material slot/name on section 0 (read-only diagnostic)
+            if (ProcMesh->GetNumSections() > 0 && ProcMesh->GetMaterial(0))
+            {
+                UMaterialInterface* Mat = ProcMesh->GetMaterial(0);
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][AFTER_BUILD] GUID=%s vhash=%s: "
+                         "section0 material=%s"),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    *Key.VersionHash,
+                    *Mat->GetName());
+            }
+        }
 
         Stats.MeshSchemaV1SectionsBuilt.fetch_add(1, std::memory_order_relaxed);
 
