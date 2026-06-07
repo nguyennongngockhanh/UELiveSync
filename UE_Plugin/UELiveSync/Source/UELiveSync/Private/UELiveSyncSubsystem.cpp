@@ -12393,6 +12393,98 @@ BuildV1MeshFromReassembly()
             continue;
         }
 
+        // Normal validation diagnostic: compare vertex normals with computed face normals
+        {
+            int32 TriangleCount = ValidIndices.Num() / 3;
+            int32 NegativeDotCount = 0;
+            int32 ZeroNormalCount = 0;
+            double TotalDot = 0.0;
+            int32 CheckedCount = 0;
+
+            for (int32 ti = 0; ti < TriangleCount; ti++)
+            {
+                int32 IA = ValidIndices[ti * 3];
+                int32 IB = ValidIndices[ti * 3 + 1];
+                int32 IC = ValidIndices[ti * 3 + 2];
+
+                FVector FaceNormal = FVector::CrossProduct(
+                    Positions[IB] - Positions[IA],
+                    Positions[IC] - Positions[IA]
+                ).GetSafeNormal();
+
+                for (int32 VI : {IA, IB, IC})
+                {
+                    const FVector& VN = Normals[VI];
+                    if (!IsFiniteVec3(VN) || VN.IsNearlyZero())
+                    {
+                        ZeroNormalCount++;
+                    }
+                    else
+                    {
+                        float Dot = FVector::DotProduct(FaceNormal, VN);
+                        TotalDot += Dot;
+                        CheckedCount++;
+                        if (Dot < 0.0f)
+                            NegativeDotCount++;
+                    }
+                }
+            }
+
+            float AvgDot = (CheckedCount > 0) ? static_cast<float>(TotalDot / CheckedCount) : 0.0f;
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][V1][NORMAL] GUID=%s vhash=%s: "
+                     "tris=%d avgDot=%.4f negative=%d zero=%d checked=%d"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash,
+                TriangleCount, AvgDot, NegativeDotCount, ZeroNormalCount, CheckedCount);
+
+            // If most dot products are negative, flip all normals
+            if (CheckedCount > 0 && NegativeDotCount > CheckedCount / 2)
+            {
+                UE_LOG(LogLiveSync, Verbose,
+                    TEXT("[MESH][V1][NORMAL] Flipping %d normals (negative=%d/%d) "
+                         "for GUID=%s vhash=%s"),
+                    Normals.Num(), NegativeDotCount, CheckedCount,
+                    *Guid.ToString(EGuidFormats::Digits),
+                    *Key.VersionHash);
+                for (FVector& N : Normals)
+                    N = -N;
+            }
+
+            // Replace zero/invalid normals with computed face normals
+            if (ZeroNormalCount > 0)
+            {
+                int32 ReplacedCount = 0;
+                for (int32 ti = 0; ti < TriangleCount; ti++)
+                {
+                    int32 IA = ValidIndices[ti * 3];
+                    int32 IB = ValidIndices[ti * 3 + 1];
+                    int32 IC = ValidIndices[ti * 3 + 2];
+
+                    FVector FaceNormal = FVector::CrossProduct(
+                        Positions[IB] - Positions[IA],
+                        Positions[IC] - Positions[IA]
+                    ).GetSafeNormal();
+
+                    for (int32 VI : {IA, IB, IC})
+                    {
+                        if (!IsFiniteVec3(Normals[VI]) || Normals[VI].IsNearlyZero())
+                        {
+                            Normals[VI] = FaceNormal;
+                            ReplacedCount++;
+                        }
+                    }
+                }
+                UE_LOG(LogLiveSync, Verbose,
+                    TEXT("[MESH][V1][NORMAL] Replaced %d zero/invalid normals "
+                         "for GUID=%s vhash=%s"),
+                    ReplacedCount,
+                    *Guid.ToString(EGuidFormats::Digits),
+                    *Key.VersionHash);
+            }
+        }
+
         // Find or create ProceduralMeshComponent
         UProceduralMeshComponent* ProcMesh =
             Actor->FindComponentByClass<UProceduralMeshComponent>();
@@ -12421,15 +12513,32 @@ BuildV1MeshFromReassembly()
             SectionColors = MoveTemp(Colors);
         }
 
+        // Calculate normals and tangents from geometry for correct lighting
+        TArray<FVector> FinalNormals;
+        TArray<FProcMeshTangent> FinalTangents;
+        UKismetProceduralMeshLibrary::CalculateTangentsForMesh(
+            Positions,
+            ValidIndices,
+            UV0,
+            FinalNormals,
+            FinalTangents);
+
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MESH][V1][NORMAL] Calculated tangents for GUID=%s vhash=%s: "
+                 "normals=%d tangents=%d"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *Key.VersionHash,
+            FinalNormals.Num(), FinalTangents.Num());
+
         // Build one section (Stage 2C.5: collision disabled to avoid Chaos NaN checks)
         ProcMesh->CreateMeshSection(
             0,
             Positions,
             ValidIndices,
-            Normals,
+            FinalNormals,
             UV0,
             SectionColors,
-            TArray<FProcMeshTangent>(),
+            FinalTangents,
             false);
 
         Stats.MeshSchemaV1SectionsBuilt.fetch_add(1, std::memory_order_relaxed);
