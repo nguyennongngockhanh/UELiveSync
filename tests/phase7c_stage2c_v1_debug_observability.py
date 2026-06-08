@@ -180,23 +180,23 @@ def main():
         "Not in else branch (was label inverted?)"
     )
 
-    # ---- T6: DisableTangents DEBUG_TANGENTS disabled computed=N passed=0 ----
-    print("\n[TEST GROUP] T6: DisableTangents DEBUG_TANGENTS disabled")
+    # ---- T6: DisableTangents DEBUG_TANGENTS disabled (debug) computed=N passed=0 ----
+    print("\n[TEST GROUP] T6: DisableTangents DEBUG_TANGENTS disabled (debug)")
     tangents_disabled_log = bool(
         re.search(
-            r'\[MESH\]\[V1\]\[DEBUG_TANGENTS\]\s+disabled\s+computed=%d\s+passed=%d',
+            r'\[MESH\]\[V1\]\[DEBUG_TANGENTS\]\s+disabled\s+\(debug\)\s+computed=%d\s+passed=%d',
             cpp
         )
     )
     check(
-        "T6: Source contains [MESH][V1][DEBUG_TANGENTS] disabled computed=%d passed=%d log",
+        "T6: Source contains [MESH][V1][DEBUG_TANGENTS] disabled (debug) computed=%d passed=%d log",
         tangents_disabled_log,
         "Log marker not found or format mismatch"
     )
 
     has_disabled_in_if = bool(
         re.search(
-            r'if\s*\(\s*CV\s*!=\s*0\s*\)[^{]*\{[^{}]*\[MESH\]\[V1\]\[DEBUG_TANGENTS\]\s+disabled',
+            r'if\s*\(\s*DebugCV\s*!=\s*0\s*\)[^{]*\{[^{}]*\[MESH\]\[V1\]\[DEBUG_TANGENTS\]\s+disabled\s+\(debug\)',
             cpp,
             re.DOTALL
         )

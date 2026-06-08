@@ -77,6 +77,8 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 
 #include "Engine/StaticMesh.h"
 
+#include <cmath>
+
 // =========================================================
 // PHASE 6 — SEMANTIC EDITOR-EVENT HELPERS
 // =========================================================
@@ -824,6 +826,15 @@ static TAutoConsoleVariable<int32>
         TEXT("UE.LiveSync.V1DebugDisableTangents"),
         0,
         TEXT("V1 mesh debug: pass empty tangent array to CreateMeshSection (1=on, 0=off)."),
+        ECVF_Default
+    );
+
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncV1DisableTangents(
+        TEXT("UE.LiveSync.V1DisableTangents"),
+        0,
+        TEXT("V1 mesh: skip tangent generation and pass empty tangent array (1=on, 0=off). "
+             "Use when generated tangents cause shading artifacts (zero UVs → bad tangents)."),
         ECVF_Default
     );
 
@@ -12944,6 +12955,11 @@ BuildV1MeshFromReassembly()
                 if (CV != 0)
                     PassedTangentsCount = 0;
             }
+            {
+                int32 NCV = CVarLiveSyncV1DisableTangents.GetValueOnAnyThread();
+                if (NCV != 0)
+                    PassedTangentsCount = 0;
+            }
             int32 ColorCount = SectionColors.Num();
             int32 FiniteNormals = 0;
             int32 FiniteTangents = 0;
@@ -12995,14 +13011,26 @@ BuildV1MeshFromReassembly()
         // If CVar UE.LiveSync.V1DebugDisableTangents == 1, pass an empty
         // tangent array to CreateMeshSection for diagnostic isolation.
         // Computed tangents are always generated — only the passed array varies.
+        // === STAGE 2C.12: V1 NON-DEBUG DISABLE TANGENTS ===
+        // If CVar UE.LiveSync.V1DisableTangents == 1, same effect as the debug CVar
+        // but intended for production use when generated tangents cause shading artifacts.
+        // Debug CVar takes priority when both are set.
         TArray<FProcMeshTangent> DebugTangents;
         {
-            int32 CV = CVarLiveSyncV1DebugDisableTangents.GetValueOnAnyThread();
-            if (CV != 0)
+            int32 DebugCV = CVarLiveSyncV1DebugDisableTangents.GetValueOnAnyThread();
+            int32 NonDebugCV = CVarLiveSyncV1DisableTangents.GetValueOnAnyThread();
+            if (DebugCV != 0)
             {
                 DebugTangents.Empty();
                 UE_LOG(LogLiveSync, Log,
-                    TEXT("[MESH][V1][DEBUG_TANGENTS] disabled computed=%d passed=%d"),
+                    TEXT("[MESH][V1][DEBUG_TANGENTS] disabled (debug) computed=%d passed=%d"),
+                    FinalTangents.Num(), DebugTangents.Num());
+            }
+            else if (NonDebugCV != 0)
+            {
+                DebugTangents.Empty();
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][DEBUG_TANGENTS] disabled (non-debug) computed=%d passed=%d"),
                     FinalTangents.Num(), DebugTangents.Num());
             }
             else
