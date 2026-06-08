@@ -48,7 +48,7 @@
 - **Phase 7B** — Timeline Sync (implemented) ✅
 - **Phase 7C** — Playback Sync (implemented) ✅
 - **Phase 7D** — Active Camera Sync (implemented) ✅
-- **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.1 extraction done) ✅
+- **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.2 UE BoolTrack apply done) ✅
 
 ## Current Roadmap
 
@@ -58,7 +58,7 @@
 4. ~~**Phase 7C — Playback Sync (0x14)**~~ **IMPLEMENTED** ✅
 5. ~~**Phase 7D — Active Camera Sync (0x15)**~~ **IMPLEMENTED** ✅
 6. ~~**Phase 7E — Sequencer + Keyframe Replication**~~ **Stage 9C CLOSEOUT** ✅
-7. **Phase 7E Stage 10A — Visibility Keyframes** (scope lock) 🔒
+7. **Phase 7E Stage 10A — Visibility Keyframes** (Stages 10A.1–10A.2 complete) ✅
 8. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
 9. **Phase 8 — High Performance Streaming** (ready)
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline visible/scaled/oriented ✅ (partial pass)
@@ -559,9 +559,9 @@ Camera transform, FOV, focal length, sensor size, focus distance, aperture, clip
 
 ---
 
-## Phase 7E — Sequencer + Keyframe Replication (Stage 10A.1 IMPLEMENTED)
+## Phase 7E — Sequencer + Keyframe Replication (Stage 10A.2 IMPLEMENTED)
 
-**Status**: Stage 10A.1 complete. Transform keyframe pipeline (Stages 1–9B) closeout complete. Visibility keyframe extraction and serialization implemented. 563/563 tests passing.
+**Status**: Stage 10A.2 complete. Transform keyframe pipeline (Stages 1–9B) closeout complete. Visibility keyframe extraction (10A.1) and UE BoolTrack apply (10A.2) implemented. 612/612 tests passing.
 
 ### Stage 3 — Wire Format + Parser (VERIFIED)
 - `PT_SequencerOp = 0x18` in both Blender `network.py` and UE `SyncTypes.h`.
@@ -664,11 +664,15 @@ Phase 7E transform keyframe pipeline is **complete and verified**. All stages ar
 - **No live Sequencer UI**: The transient `ULevelSequence` is not opened in Sequencer tabs or displayed in the UI.
 - **No full Blender+UE runtime validation**: All validation is done via unit tests with simulated network/sequencer state. End-to-end runtime validation requires a running UE editor instance.
 
-#### Recommendation: Stage 10A — Visibility Keyframes Scope Lock
+#### Stage 10A — Visibility BoolTrack Apply IMPLEMENTED
 
-Architecture document published — `Docs/Architecture/56-phase7e-stage10a-visibility-keyframes-scope-lock.md`.
+Stage 10A is fully implemented in two sub-stages:
+- **10A.1**: Blender-side visibility keyframe extraction (channels 9=hide_viewport, 10=hide_render) — 67/67 PASS
+- **10A.2**: UE HandleKeyframe() channels 9–10 → Sequencer BoolTrack apply — 49/49 PASS
 
-**Next direction**: Implement `UMovieSceneBoolTrack` writes for object visibility, reusing the existing PT_Keyframe (0x17) packet with channels 9–10.
+Architecture document: `Docs/Architecture/56-phase7e-stage10a-visibility-keyframes-scope-lock.md`.
+
+Implementation commits: `185fb65`, `b39d914`.
 
 **Rationale**:
 - **Lower risk** than interpolation/tangent mapping — bool tracks are simpler than tangent math.
@@ -734,6 +738,7 @@ All verified in regression run.
 | Phase 7D Stage 3 (UE handler) | **92/92 PASS** | |
 | Phase 7D Stage 4 (viewport) | **81/81 PASS** | |
 | Phase 7E Stage 10A.1 visibility extraction | **67/67 PASS** | |
+| Phase 7E Stage 10A.2 visibility BoolTrack apply | **49/49 PASS** | |
 | Phase 7C Stage 1 (playback wire) | **42/42 PASS** | |
 | Phase 7C Stage 2 (detection) | **41/41 PASS** | |
 | Phase 7C Stage 3 (UE handler) | **53/53 PASS** | |
@@ -745,8 +750,8 @@ All verified in regression run.
 | Phase 6E delete validation | **320/320 PASS** | |
 | Phase 6D hierarchy | **119/119 PASS** | 7 skipped (no UE) |
 | Phase 6H semantic consistency | **10/11 PASS** | 1 skip (no UE) |
-| **Phase 7E standalone** | **81+50+72+79+54+97+63+67 = 563/563 PASS** | |
-| **Grand total (all standalone)** | **2252/2252 PASS** | 1689 (prev) + 563 (Phase 7E Stage 3–10A.1) |
+| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49 = 612/612 PASS** | |
+| **Grand total (all standalone)** | **2301/2301 PASS** | 1689 (prev) + 612 (Phase 7E Stage 3–10A.2) |
 
 **Notes**:
 - Phase 6B runtime audit: 90/102 PASS, 12 FAIL — pre-existing ConsoleReset checks against `.cpp` file; ConsoleReset code lives in `.inl` include. Not regressions.
@@ -765,6 +770,8 @@ All verified in regression run.
 - **Blender sync.py first-tick fix**: Newly created meshes now transmit geometry on first evaluation (`prev_hash is None` triggers send). Previously, new objects were never sent because `prev_hash is not None` required a prior hash.
 
 - **Phase 7E Stage 10A.1**: Visibility keyframe extraction implemented — `_KEYFRAME_CHANNEL_MAP` extended with `hide_viewport`→9 and `hide_render`→10 (array_index=-1 for Blender scalar properties). Visibility FCurves extracted through same `_extract_keyframes()` pipeline as transform. Polarity: 1.0=hidden, 0.0=visible (value-as-is from Blender). Existing hashing, batching, and serialization reused unchanged. 67/67 tests. **2252/2252 grand total.** ✅
+
+- **Phase 7E Stage 10A.2**: UE visibility BoolTrack apply implemented — `HandleKeyframe()` channels 9–10 now write to Sequencer `UMovieSceneBoolTrack`/`UMovieSceneBoolSection`/`FMovieSceneBoolChannel` via `AddKeys()`. Visibility-specific log markers (`[KEYFRAME][VISIBILITY]`), stale sequence rejection, missing binding safety, unsupported channel >10 safety, correct `KeyframeVisibilityUnsupported` counter. 49/49 tests. **2301/2301 grand total.** Commits: `185fb65`, `b39d914`. ✅
 
 - **Phase 7E Stage 10A**: Visibility Keyframes scope lock published — `Docs/Architecture/56-phase7e-stage10a-visibility-keyframes-scope-lock.md`. Extends PT_Keyframe (0x17) with channels 9 (hide_viewport) and 10 (hide_render) using existing 25B entry. No wire format change. Uses UMovieSceneBoolTrack/UMovieSceneBoolSection/FMovieSceneBoolChannel. 26 acceptance criteria, 3 stages, ~4 days.
 
