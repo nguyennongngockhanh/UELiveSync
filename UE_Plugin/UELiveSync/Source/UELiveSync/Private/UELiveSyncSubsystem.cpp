@@ -1562,7 +1562,9 @@ bool UUELiveSyncSubsystem::Tick(
         UE_LOG(
             LogLiveSync,
             Log,
-            TEXT("Stale Connection Removed"));
+            TEXT("Stale connection, draining queue before cleanup"));
+
+        ProcessQueuedPackets();
 
         StopNetworkThread();
     }
@@ -1578,7 +1580,9 @@ bool UUELiveSyncSubsystem::Tick(
         UE_LOG(
             LogLiveSync,
             Log,
-            TEXT("Detected thread exit, cleaning up"));
+            TEXT("Detected thread exit, draining queue before cleanup"));
+
+        ProcessQueuedPackets();
 
         StopNetworkThread();
     }
@@ -1599,7 +1603,9 @@ bool UUELiveSyncSubsystem::Tick(
         UE_LOG(
             LogLiveSync,
             Log,
-            TEXT("Heartbeat timeout: closing connection"));
+            TEXT("Heartbeat timeout: draining queue before cleanup"));
+
+        ProcessQueuedPackets();
 
         StopNetworkThread();
     }
