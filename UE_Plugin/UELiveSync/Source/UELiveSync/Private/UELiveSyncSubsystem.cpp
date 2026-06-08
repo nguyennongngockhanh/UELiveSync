@@ -8385,11 +8385,23 @@ HandleKeyframe(
         FGuid* FoundBinding = LiveSyncGuidToSequencerBinding.Find(Entry->ObjectGUID);
         if (!FoundBinding)
         {
-            Stats.KeyframeMissingBinding.fetch_add(1, std::memory_order_relaxed);
-            MissingBinding++;
-            UE_LOG(LogLiveSync, Verbose,
-                TEXT("[KEYFRAME] No binding for %s — skipping"),
-                *Entry->ObjectGUID.ToString());
+            const bool bIsVisibility = (Entry->ChannelIndex == 9 || Entry->ChannelIndex == 10);
+            if (bIsVisibility)
+            {
+                Stats.KeyframeMissingBinding.fetch_add(1, std::memory_order_relaxed);
+                MissingBinding++;
+                UE_LOG(LogLiveSync, Verbose,
+                    TEXT("[KEYFRAME][VISIBILITY] missing binding channel=%d guid=%s — skipping"),
+                    Entry->ChannelIndex, *Entry->ObjectGUID.ToString());
+            }
+            else
+            {
+                Stats.KeyframeMissingBinding.fetch_add(1, std::memory_order_relaxed);
+                MissingBinding++;
+                UE_LOG(LogLiveSync, Verbose,
+                    TEXT("[KEYFRAME] No binding for %s ch=%d — skipping"),
+                    *Entry->ObjectGUID.ToString(), Entry->ChannelIndex);
+            }
             EntryPtr += KEYFRAME_ENTRY_SIZE;
             Remaining -= KEYFRAME_ENTRY_SIZE;
             continue;
@@ -8398,6 +8410,17 @@ HandleKeyframe(
         // Step 2: Channel dispatch — visibility (9/10) vs transform (0-8) vs unsupported
         if (Entry->ChannelIndex == 9 || Entry->ChannelIndex == 10)
         {
+            // Stale sequence rejection
+            if (!bHasLiveSyncSequence || !LiveSyncSequence.IsValid())
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[KEYFRAME][VISIBILITY] stale sequence rejected for %s (ch %d)"),
+                    *Entry->ObjectGUID.ToString(), Entry->ChannelIndex);
+                EntryPtr += KEYFRAME_ENTRY_SIZE;
+                Remaining -= KEYFRAME_ENTRY_SIZE;
+                continue;
+            }
+
             // Visibility keyframe (channels 9=hide_viewport, 10=hide_render)
             // Apply to UMovieSceneBoolTrack for the object binding.
 
@@ -8436,6 +8459,10 @@ HandleKeyframe(
                     { FFrameNumber(Entry->Frame) },
                     { bValue });
                 Stats.KeyframeVisibilityKeysApplied.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[KEYFRAME][VISIBILITY] applied channel=%d guid=%s value=%d frame=%d"),
+                    Entry->ChannelIndex, *Entry->ObjectGUID.ToString(),
+                    bValue ? 1 : 0, Entry->Frame);
             }
             else
             {
@@ -8451,10 +8478,10 @@ HandleKeyframe(
 
         if (Entry->ChannelIndex > 10)
         {
-            Stats.KeyframeUnsupportedChannel.fetch_add(1, std::memory_order_relaxed);
+            Stats.KeyframeVisibilityUnsupported.fetch_add(1, std::memory_order_relaxed);
             UnsupportedChannel++;
             UE_LOG(LogLiveSync, Verbose,
-                TEXT("[KEYFRAME] Unsupported channel %d for %s — skipping"),
+                TEXT("[KEYFRAME][VISIBILITY] unsupported channel=%d guid=%s — skipping"),
                 Entry->ChannelIndex, *Entry->ObjectGUID.ToString());
             EntryPtr += KEYFRAME_ENTRY_SIZE;
             Remaining -= KEYFRAME_ENTRY_SIZE;
