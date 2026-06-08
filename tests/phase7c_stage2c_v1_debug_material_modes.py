@@ -320,8 +320,9 @@ def main():
     print("  3. UE.LiveSync.V1DebugDisableTangents (int, default 0)")
     print("\nLog markers:")
     print("  [MESH][V1][DEBUG_MATERIAL] mode=<0-3> material=<name|None> assigned=<0-1>")
+    print("  [MESH][V1][DEBUG_FACE_NORMALS] enabled|disabled normals=N tris=N")
     print("  [MESH][V1][DEBUG_NORMALS] mode=source|face")
-    print("  [MESH][V1][DEBUG_TANGENTS] enabled|disabled")
+    print("  [MESH][V1][DEBUG_TANGENTS] enabled|disabled computed=N passed=N")
 
     sys.exit(1 if FAIL_COUNT > 0 else 0)
 

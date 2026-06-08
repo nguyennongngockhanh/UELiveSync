@@ -12749,10 +12749,16 @@ BuildV1MeshFromReassembly()
                     PreservedNormals[IC] = FaceNormals[ti];
                 }
                 UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][DEBUG_FACE_NORMALS] enabled normals=%d tris=%d"),
+                    PreservedNormals.Num(), TriangleCount);
+                UE_LOG(LogLiveSync, Log,
                     TEXT("[MESH][V1][DEBUG_NORMALS] mode=face"));
             }
             else
             {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][V1][DEBUG_FACE_NORMALS] disabled normals=%d"),
+                    PreservedNormals.Num());
                 UE_LOG(LogLiveSync, Log,
                     TEXT("[MESH][V1][DEBUG_NORMALS] mode=source"));
             }
@@ -12904,6 +12910,13 @@ BuildV1MeshFromReassembly()
             int32 NormalCount = PreservedNormals.Num();
             int32 UV0Count = UV0.Num();
             int32 TangentCount = FinalTangents.Num();
+            int32 ComputedTangentsCount = TangentCount;
+            int32 PassedTangentsCount = ComputedTangentsCount;
+            {
+                int32 CV = CVarLiveSyncV1DebugDisableTangents.GetValueOnAnyThread();
+                if (CV != 0)
+                    PassedTangentsCount = 0;
+            }
             int32 ColorCount = SectionColors.Num();
             int32 FiniteNormals = 0;
             int32 FiniteTangents = 0;
@@ -12919,11 +12932,13 @@ BuildV1MeshFromReassembly()
             }
             UE_LOG(LogLiveSync, Log,
                 TEXT("[MESH][V1][SECTION_ARRAYS] GUID=%s vhash=%s: "
-                     "verts=%d indices=%d normals=%d uv0=%d tangents=%d colors=%d "
+                     "verts=%d indices=%d normals=%d uv0=%d "
+                     "computedTangents=%d passedTangents=%d colors=%d "
                      "finiteNormals=%d finiteTangents=%d badTangents=%d"),
                 *Guid.ToString(EGuidFormats::Digits),
                 *Key.VersionHash,
-                VertCount, IndexCount, NormalCount, UV0Count, TangentCount,
+                VertCount, IndexCount, NormalCount, UV0Count,
+                ComputedTangentsCount, PassedTangentsCount,
                 ColorCount, FiniteNormals, FiniteTangents, BadOrthogonalCount);
 
             // Log first 3 samples of each array
@@ -12949,9 +12964,10 @@ BuildV1MeshFromReassembly()
             }
         }
 
-        // === STAGE 2C.10: V1 DEBUG — DISABLE TANGENTS ===
-        // If CVar UE.LiveSync.V1DebugDisableTangents == 1, replace
-        // all tangents with empty array for diagnostic isolation.
+        // === STAGE 2C.11: V1 DEBUG — DISABLE TANGENTS ===
+        // If CVar UE.LiveSync.V1DebugDisableTangents == 1, pass an empty
+        // tangent array to CreateMeshSection for diagnostic isolation.
+        // Computed tangents are always generated — only the passed array varies.
         TArray<FProcMeshTangent> DebugTangents;
         {
             int32 CV = CVarLiveSyncV1DebugDisableTangents.GetValueOnAnyThread();
@@ -12959,13 +12975,15 @@ BuildV1MeshFromReassembly()
             {
                 DebugTangents.Empty();
                 UE_LOG(LogLiveSync, Log,
-                    TEXT("[MESH][V1][DEBUG_TANGENTS] enabled"));
+                    TEXT("[MESH][V1][DEBUG_TANGENTS] disabled computed=%d passed=%d"),
+                    FinalTangents.Num(), DebugTangents.Num());
             }
             else
             {
                 DebugTangents = FinalTangents;
                 UE_LOG(LogLiveSync, Log,
-                    TEXT("[MESH][V1][DEBUG_TANGENTS] disabled"));
+                    TEXT("[MESH][V1][DEBUG_TANGENTS] enabled computed=%d passed=%d"),
+                    FinalTangents.Num(), DebugTangents.Num());
             }
         }
 

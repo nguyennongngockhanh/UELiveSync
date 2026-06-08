@@ -381,14 +381,15 @@ check("T8c: Sample log entry has all expected fields",
 # =========================================================
 print("\n--- T9: Section arrays diagnostic unconditional ---")
 # The [MESH][V1][SECTION_ARRAYS] log is at Log level.
-# Fields: verts, indices, normals, uv0, tangents, colors,
-#         finiteNormals, finiteTangents, badTangents
+# Fields: verts, indices, normals, uv0, computedTangents, passedTangents,
+#         colors, finiteNormals, finiteTangents, badTangents
 expected_fields = [
-    "verts=", "indices=", "normals=", "uv0=", "tangents=",
+    "verts=", "indices=", "normals=", "uv0=", "computedTangents=", "passedTangents=",
     "colors=", "finiteNormals=", "finiteTangents=", "badTangents="
 ]
 section_log = ("[MESH][V1][SECTION_ARRAYS] GUID=xxxx vhash=yyyy: "
-               "verts=36 indices=36 normals=36 uv0=36 tangents=36 "
+               "verts=36 indices=36 normals=36 uv0=36 "
+               "computedTangents=36 passedTangents=36 "
                "colors=0 finiteNormals=36 finiteTangents=36 badTangents=0")
 check("T9a: Section arrays log has all expected fields",
       all(f in section_log for f in expected_fields))
