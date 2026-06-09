@@ -364,6 +364,8 @@ _runtime_stats = {
     "last_heartbeat_time": 0.0,
     "heartbeat_interval": 5.0,
     "scan_interval": 300,
+    "burst_packet_count": 0,
+    "burst_packet_count_peak": 0,
 }
 
 # Cached preferences (avoids RNA lookup every tick)
@@ -1046,6 +1048,8 @@ def check_updates():
 
     _update_runtime_stats()
 
+    _burst_packet_count = 0
+
     _verbose_logging = _get_threshold(
         "verbose_logging",
         False
@@ -1187,6 +1191,7 @@ def check_updates():
                 packet_type=0x03,
                 flags=0x02
             )
+            _burst_packet_count += 1
 
         if snapshot_children:
 
@@ -1195,6 +1200,7 @@ def check_updates():
                 packet_type=0x03,
                 flags=0x02 | 0x01
             )
+            _burst_packet_count += 1
 
             if _verbose_logging:
                 print(
@@ -1694,6 +1700,7 @@ def check_updates():
                                 packet_type=PT_Keyframe,
                                 version=5,
                             )
+                            _burst_packet_count += 1
                             _keyframe_packets_sent += 1
                             _keyframes_sent += len(batch)
                             _runtime_stats["keyframe_packets_sent"] = _keyframe_packets_sent
@@ -1721,6 +1728,7 @@ def check_updates():
             packet_type=PT_Delete_V5,
             version=LIVE_SYNC_VERSION_V5
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND DELETE PACKETS (V3 legacy)
@@ -1732,6 +1740,7 @@ def check_updates():
             deletes_to_send,
             packet_type=0x04
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND CREATE PACKETS (first-time objects, roots)
@@ -1743,6 +1752,7 @@ def check_updates():
             create_objects,
             packet_type=0x03
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND CREATE PACKETS (first-time objects, children)
@@ -1755,6 +1765,7 @@ def check_updates():
             packet_type=0x03,
             flags=0x01
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND ASSET DEF PACKETS (Phase 5D: V5 PT_AssetDef)
@@ -1768,6 +1779,7 @@ def check_updates():
             packet_type=PT_AssetDef,
             version=LIVE_SYNC_VERSION_V5
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND RENAME PACKETS (Phase 6 — Semantic Event)
@@ -1779,6 +1791,7 @@ def check_updates():
             renames_to_send,
             packet_type=PT_Rename
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND VISIBILITY PACKETS (Phase 6 — Semantic Event)
@@ -1790,6 +1803,7 @@ def check_updates():
             vis_payloads_to_send,
             packet_type=PT_Visibility
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND HIERARCHY PACKETS (Phase 6D — Semantic Event)
@@ -1801,6 +1815,7 @@ def check_updates():
             hierarchies_to_send,
             packet_type=PT_Hierarchy
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND COLLECTION PACKETS (Phase 6F — Semantic Event)
@@ -1816,6 +1831,7 @@ def check_updates():
             packet_type=PT_Collection,
             version=LIVE_SYNC_VERSION_V5
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND MATERIAL PACKETS (Phase 7B Stage 1C — PT_Material)
@@ -1831,6 +1847,7 @@ def check_updates():
             packet_type=PT_Material,
             version=LIVE_SYNC_VERSION_V5
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND MESH CHUNK PACKETS (Phase 7C Stage 1D — PT_Mesh)
@@ -1846,6 +1863,7 @@ def check_updates():
             packet_type=PT_Mesh,
             version=LIVE_SYNC_VERSION_V5
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND TRANSFORM PACKETS (existing objects, roots)
@@ -1856,6 +1874,7 @@ def check_updates():
         send_objects(
             objects_to_send
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # SEND TRANSFORM PACKETS (existing objects, children)
@@ -1867,6 +1886,7 @@ def check_updates():
             children_to_send,
             flags=0x01
         )
+        _burst_packet_count += 1
 
     # =====================================================
     # HEARTBEAT (every 5 seconds)
@@ -1891,6 +1911,7 @@ def check_updates():
             [],
             packet_type=0x07
         )
+        _burst_packet_count += 1
 
         _last_heartbeat_time = now
 
@@ -1915,6 +1936,7 @@ def check_updates():
                 time.time(),
             )
             send_objects([payload], packet_type=PT_PlaybackState, version=5)
+            _burst_packet_count += 1
             _net_playback_sequence += 1
             _net_playback_packets_sent += 1
             _net_playback_state_changes += 1
@@ -1950,6 +1972,7 @@ def check_updates():
                 _timeline_sequence, time.time(),
             )
             send_objects([payload], packet_type=PT_Timeline, version=5)
+            _burst_packet_count += 1
             _timeline_packets_sent += 1
             _timeline_state_changes += 1
             _runtime_stats["timeline_packets_sent"] = _timeline_packets_sent
@@ -1986,6 +2009,7 @@ def check_updates():
                 time.time(),
             )
             send_objects([payload], packet_type=PT_ActiveCamera, version=5)
+            _burst_packet_count += 1
             _active_camera_packets_sent += 1
             _active_camera_state_changes += 1
             _runtime_stats["active_camera_packets_sent"] = _active_camera_packets_sent
@@ -2025,6 +2049,13 @@ def check_updates():
     # Must happen AFTER all tracked_objects modifications (scan_scene,
     # iteration, ReferenceError removals) to ensure accurate next-tick diff.
     _known_guids = set(tracked_objects.keys())
+
+    # Phase 8 Stage 1: per-tick burst packet count
+    _runtime_stats["burst_packet_count"] = _burst_packet_count
+    _runtime_stats["burst_packet_count_peak"] = max(
+        _runtime_stats.get("burst_packet_count_peak", 0),
+        _burst_packet_count
+    )
 
     return 0.016
 
