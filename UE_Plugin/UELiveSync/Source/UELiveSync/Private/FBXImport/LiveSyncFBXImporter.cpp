@@ -159,6 +159,12 @@ bool FLiveSyncFBXImporter::HandleImport(
         AssetBasePath / AssetName;
 
 #if WITH_EDITOR
+    // Check if the target asset already exists (for lifecycle diagnostics)
+    const FString FullAssetPath =
+        FString::Printf(TEXT("%s.%s"), *AssetPackagePath, *AssetName);
+    const bool bReplacingExistingAsset =
+        StaticLoadObject(UStaticMesh::StaticClass(), nullptr, *FullAssetPath) != nullptr;
+
     // Import FBX as StaticMesh using AssetImportTask
     UAssetImportTask* ImportTask = NewObject<UAssetImportTask>();
     if (!ImportTask)
@@ -235,6 +241,20 @@ bool FLiveSyncFBXImporter::HandleImport(
         Request.VertCount,
         Request.TriCount,
         Request.MatSlotCount);
+
+    // Lifecycle diagnostics: new vs replaced asset
+    if (bReplacingExistingAsset)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX] Replaced existing imported asset: %s"),
+            *AssetPackagePath);
+    }
+    else
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX] Created new imported asset: %s"),
+            *AssetPackagePath);
+    }
 
     // Spawn or update StaticMeshActor by LiveSync GUID
     AActor* ExistingActor = Context.FindActor(Request.ObjectGUID);

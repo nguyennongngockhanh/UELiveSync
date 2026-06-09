@@ -573,6 +573,80 @@ else:
 
 
 # =============================================================
+# T12: Stage 4A — FBX Asset Lifecycle Diagnostics
+# =============================================================
+
+banner("T12 — Stage 4A: Asset lifecycle diagnostics")
+
+if os.path.isfile(ue_importer_cpp_path):
+    with open(ue_importer_cpp_path, "r") as f:
+        importer_text = f.read()
+
+    # T12.1: bReplacingExistingAsset variable exists
+    test("T12.1: bReplacingExistingAsset check exists",
+          "bReplacingExistingAsset" in importer_text,
+          "bReplacingExistingAsset not found in LiveSyncFBXImporter.cpp")
+
+    # T12.2: Log marker for replaced existing asset
+    test("T12.2: [FBX] Replaced existing imported asset log marker",
+          "[FBX] Replaced existing imported asset" in importer_text,
+          "Log marker missing for replaced existing asset")
+
+    # T12.3: Log marker for created new asset
+    test("T12.3: [FBX] Created new imported asset log marker",
+          "[FBX] Created new imported asset" in importer_text,
+          "Log marker missing for created new asset")
+
+    # T12.4: Existing /Game/UELiveSync/Imported destination unchanged
+    test("T12.4: /Game/UELiveSync/Imported destination unchanged",
+          "/Game/UELiveSync/Imported" in importer_text,
+          "Asset destination missing from importer")
+
+    # T12.5: Existing import success marker unchanged
+    test("T12.5: [FBX] Imported StaticMesh log marker unchanged",
+          "[FBX] Imported StaticMesh" in importer_text,
+          "Import success log marker missing")
+
+    # T12.6–9: No asset deletion APIs added
+    test("T12.6: No DeleteObject API added",
+          "DeleteObject" not in importer_text,
+          "DeleteObject should not appear in LiveSyncFBXImporter.cpp")
+
+    test("T12.7: No DeletePackage API added",
+          "DeletePackage" not in importer_text,
+          "DeletePackage should not appear in LiveSyncFBXImporter.cpp")
+
+    test("T12.8: No ObjectTools::DeleteObjects added",
+          "ObjectTools::DeleteObjects" not in importer_text,
+          "ObjectTools::DeleteObjects should not appear")
+
+    test("T12.9: No CollectGarbage added",
+          "CollectGarbage" not in importer_text,
+          "CollectGarbage should not appear in LiveSyncFBXImporter.cpp")
+
+    # T12.10: No new counter FBXImportReplacedExisting
+    test("T12.10: No FBXImportReplacedExisting counter added",
+          "FBXImportReplacedExisting" not in importer_text,
+          "FBXImportReplacedExisting counter should not be added in Stage 4A")
+
+    # T12.11: SyncTypes.h unchanged (no FBXImportReplacedExisting there either)
+    if os.path.isfile(sync_types_h_path):
+        with open(sync_types_h_path, "r") as f:
+            types_text = f.read()
+        test("T12.11: SyncTypes.h has no FBXImportReplacedExisting",
+              "FBXImportReplacedExisting" not in types_text,
+              "FBXImportReplacedExisting should not appear in SyncTypes.h")
+    else:
+        test("T12.11: SyncTypes.h found",
+              False,
+              f"not found at {sync_types_h_path}")
+else:
+    test("T12.12: LiveSyncFBXImporter.cpp found",
+          False,
+          f"not found at {ue_importer_cpp_path}")
+
+
+# =============================================================
 # Summary
 # =============================================================
 
