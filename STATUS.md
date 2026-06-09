@@ -49,6 +49,7 @@
 - **Phase 7C** — Playback Sync (implemented) ✅
 - **Phase 7D** — Active Camera Sync (implemented) ✅
 - **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.2 UE BoolTrack apply done) ✅
+- **Phase 7C Stage 3A** — FBX Mesh Handoff Import (complete) ✅
 
 ## Current Roadmap
 
@@ -61,8 +62,9 @@
 7. **Phase 7E Stage 10A — Visibility Keyframes** (Stages 10A.1–10A.2 complete) ✅
 8. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
 9. **Phase 8 — High Performance Streaming** (ready)
-10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline visible/scaled/oriented ✅ (partial pass)
-11. **Manual Selected-Object Full Mesh Attribute Sync** — normals, UVs, tangents, vertex colors (NEXT)
+10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
+11. ~~**Manual Selected-Object Full Mesh Attribute Sync**~~ — superseded by Stage 3A FBX handoff 🔒
+12. **Phase 7C Stage 3A — FBX Mesh Handoff Import** — Blender exports FBX → UE imports StaticMesh asset (COMPLETE) ✅
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
@@ -764,6 +766,8 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
+
+- **Phase 7C Stage 3A — FBX Mesh Handoff Import** (2026-06-09): FBX mesh handoff pipeline implemented end-to-end. Blender exports selected mesh to `~/.cache/uelivesync/fbx/<guid>/<name>.fbx`, sends `PT_FBXImportRequest` (0x16) 680-byte fixed payload. UE imports via `UFbxFactory` → `UAssetImportTask` to `/Game/UELiveSync/Imported/`, spawns/updates `AStaticMeshActor` with `LiveSync_GUID` tag. Build PASS, runtime validation PASS (StaticMesh visible in viewport). Commit: `3842dde`. Tests: `phase7c_stage3a1_fbx_import_request.py` 34/34 PASS. **Direction change**: PT_Mesh procedural mesh path is now experimental/debug. Production mesh sync direction is Blender exports FBX → UE imports StaticMesh asset. Transform/visibility/keyframes remain on TCP LiveSync.
 
 - **Phase 7C Mesh Reconstruction Baseline** (2026-06-06): PT_Mesh runtime reconstruction now visible and correctly scaled/oriented in UE. ProcMesh replacement, root promotion, visibility restoration, 100× unit conversion, Y-axis local conversion, winding flip, and temporary UE-side normal/tangent generation are implemented and build-pass. Shading artifacts on smooth meshes are known and attributed to missing Blender loop attributes in the current V5 mesh payload (no real normals, UVs, tangents, or vertex colors). Full attribute sync deferred to a manual selected-mesh stage. **Partial pass, not final fidelity.**
 
