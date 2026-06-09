@@ -50,6 +50,7 @@
 - **Phase 7D** — Active Camera Sync (implemented) ✅
 - **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.2 UE BoolTrack apply done) ✅
 - **Phase 7C Stage 3A–5** — FBX Mesh Handoff Import + Importer Hardening + Asset Lifecycle Diagnostics + Scene Unit Conversion + Rename Asset Path Diagnostics (all stages complete) ✅
+- **Phase 8** — High Performance Streaming (diagnostics + benchmark complete) ✅
 
 ## Current Roadmap
 
@@ -61,7 +62,7 @@
 6. ~~**Phase 7E — Sequencer + Keyframe Replication**~~ **Stage 9C CLOSEOUT** ✅
 7. **Phase 7E Stage 10A — Visibility Keyframes** (Stages 10A.1–10A.2 complete) ✅
 8. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
-9. **Phase 8 — High Performance Streaming** (ready)
+9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. Next: Phase 9 production readiness. **COMPLETE** ✅
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
 11. ~~**Manual Selected-Object Full Mesh Attribute Sync**~~ — superseded by Stage 3A FBX handoff 🔒
 12. **Phase 7C Stage 3A–5 — FBX Mesh Handoff Import** — Blender exports FBX → UE imports StaticMesh asset. Asset lifecycle diagnostics + scene unit conversion fix + rename asset path diagnostics (COMPLETE) ✅
@@ -766,6 +767,10 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
+- **Phase 8 Stage 2 — Large Scene Benchmark** (2026-06-09): Runtime benchmark PASS — measured Blender burst packet count, queue depth, and dropped packets for 50/100/250/500 simultaneous objects. Results: burst_packet_count_peak constant at 3 (create) and 1 (move) regardless of count. Queue depth always 0, no drops, no UE overflow. Per-type batching confirmed efficient. **Conclusion: No coalescing needed. Streaming pipeline solid for 1–500 objects.** Evidence: `.opencode/evidence/phase8_stage2_large_scene_load/`
+
+- **Phase 8 Stage 1 — Blender Burst Packet Diagnostics** (2026-06-09): Added `_runtime_stats["burst_packet_count"]` (per-tick) and `burst_packet_count_peak` (monotonic max) to Blender `check_updates()`. Counts `send_objects()` calls per tick. Python-only instrumentation — no UE changes, no wire format, no network.py changes. Includes 20 increment sites. Peak = max burst per tick across `_runtime_stats` lifecycle. Commit: `5f27c23`. Tests: `phase8_burst_packet_diagnostics.py` 10/10 PASS, `phase7c_stage3a1_fbx_import_request.py` 85/85 PASS, `py_compile sync.py` PASS.
+
 - **Phase 7C Stage 5 — FBX Rename Asset Path Diagnostics** (2026-06-09): Added diagnostic warning when FBX import targets a new asset path while a LiveSync actor already exists for the same GUID (indicates the Blender object was renamed). When `MeshActor && !bReplacingExistingAsset`, logs: `[FBX] Possible rename/new asset path detected for GUID %s: importing to new asset path %s. Previous imported asset may remain orphaned.` Diagnostic only — no asset deletion, no migration, no naming policy change, no new counters. Commit: `0a55aa5`. Tests: `phase7c_stage3a1_fbx_import_request.py` 85/85 PASS (was 75, +10 T14 tests). Build: PASS (pre-existing SetNum deprecation).
   - Runtime validation (PASS): UE5.7.4 desktop/GPU session, Blender 5.1.2 Flatpak. First sync: created new asset + spawned actor. Re-sync (no rename): replaced existing asset, no warning. Rename to Stage5B: rename warning logged, new asset path used, same actor updated. No duplicate LS_FBX, no "Already registered". Evidence: `.opencode/evidence/phase7c_stage5_fbx_rename_asset_path/`
 
