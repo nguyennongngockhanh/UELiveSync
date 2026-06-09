@@ -767,6 +767,8 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
+- **Phase 9J.2 — Dual-Component Commercial Licensing** (2026-06-09): Added root commercial source-available LICENSE, EULA.md for commercial end-user terms, and Blender_Addon/LICENSE GPL-2.0-or-later component notice. Updated README and RELEASE_NOTES license references. Purpose: support commercial sale while documenting Blender addon GPL compatibility.
+
 - **Phase 9I.1 — Public README Landing Page** (2026-06-09): Created README.md for public GitHub landing page. Documents release v0.2.1, feature scope, install links, production FBX mesh path, limitations, and license TBD.
 
 - **Phase 9G.1 — Prepare v0.2.1 Patch Release Metadata** (2026-06-09): Metadata bumped to v0.2.1. CHANGELOG/RELEASE_NOTES/INSTALL updated for v0.2.1. Reason: include cross-platform installer helper in a tagged release. v0.2.0 remains untouched. Tag/package/release pending.

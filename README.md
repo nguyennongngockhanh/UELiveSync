@@ -72,4 +72,6 @@ See [INSTALL.md](INSTALL.md) for full Windows, Linux, Flatpak, and macOS instruc
 
 ## License
 
-License: TBD. No license file is currently included.
+License: Commercial/source-available. See [LICENSE](LICENSE) and [EULA.md](EULA.md).
+
+The Blender addon component is distributed with GPL-2.0-or-later compatible terms due to Blender integration; see [Blender_Addon/LICENSE](Blender_Addon/LICENSE). The UE plugin and commercial package are governed by the commercial EULA.

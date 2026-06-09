@@ -1,0 +1,30 @@
+Blender Addon Component License Notice
+
+Copyright (c) 2026 Nguyen Nong Ngoc Khanh.
+
+The Blender addon component located in `Blender_Addon/` is distributed
+under GPL-2.0-or-later compatible terms because it integrates with
+Blender and uses the Blender Python API (`bpy`).
+
+You may use, study, modify, and redistribute the Blender addon
+component under the terms of the GNU General Public License version 2
+or later ("GPL-2.0-or-later").
+
+This license notice applies **only** to `Blender_Addon/` and does not
+apply to:
+
+- `UE_Plugin/` or any Unreal Engine plugin component
+- `install_uelivesync.py` or the installer helper
+- Packaging, branding, release assets, or the commercial package
+- The Blender addon alone does not include the UE plugin or
+  commercial integration
+
+The commercial UELiveSync package, UE plugin, trademarks/branding,
+support, and release assets remain governed by the root LICENSE and
+EULA.md located at the repository root.
+
+A full copy of the GPL-2.0-or-later text may be obtained from:
+https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+If a complete GPL text copy is required for marketplace distribution,
+it should be included before publishing.

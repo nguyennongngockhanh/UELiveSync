@@ -1,5 +1,7 @@
 # UELiveSync v0.2.1 Pre-release
 
+License: Commercial/source-available. See [LICENSE](LICENSE) and [EULA.md](EULA.md). Blender addon component has GPL-2.0-or-later compatible terms; see [Blender_Addon/LICENSE](Blender_Addon/LICENSE).
+
 ## What Changed Since v0.2.0
 
 - Added cross-platform installer helper: `install_uelivesync.py`.

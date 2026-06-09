@@ -1,0 +1,39 @@
+UELiveSync Commercial Source-Available License
+
+Copyright (c) 2026 Nguyen Nong Ngoc Khanh. All rights reserved.
+
+This software is source-available, not open-source. Viewing or accessing
+the source code in this repository does not grant any right or license to
+use, copy, modify, merge, publish, distribute, sublicense, sell, host,
+transfer, or share the software, in whole or in part, unless expressly
+authorized in writing by the copyright holder.
+
+Commercial use of this software requires a valid commercial license
+obtained through purchase or a separate written agreement with the
+copyright holder.
+
+Redistribution, resale, sublicensing, public hosting, file sharing, and
+publishing the software or any portion of it in any form — including but
+not limited to the Blender addon package, UE plugin package, compiled
+artifacts, documentation, or source code — is strictly prohibited unless
+expressly authorized in writing by the copyright holder.
+
+Use of the software by licensed customers is governed by the terms set
+forth in EULA.md.
+
+The Blender addon component (located in Blender_Addon/) has separate
+GPL-compatible licensing terms due to its integration with Blender. See
+Blender_Addon/LICENSE for details.
+
+The UE plugin component (located in UE_Plugin/UELiveSync/) is governed
+by the commercial EULA described in EULA.md.
+
+DISCLAIMER: THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES,
+OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+In the event of any conflict between this root LICENSE and EULA.md, the
+terms of EULA.md shall govern end-user usage rights.
