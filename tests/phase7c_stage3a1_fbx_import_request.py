@@ -440,6 +440,84 @@ else:
 
 
 # =============================================================
+# T10: Stage 3A.4 — Helper extraction + log marker anchors
+# =============================================================
+
+banner("T10 — Stage 3A.4: Helper functions and log markers in LiveSyncFBXImporter")
+
+if os.path.isfile(ue_importer_cpp_path):
+    with open(ue_importer_cpp_path, "r") as f:
+        importer_text = f.read()
+
+    # T10.1–4: Helper function names exist
+    test("T10.1: ValidatePayloadSize helper exists",
+          "ValidatePayloadSize" in importer_text,
+          "ValidatePayloadSize not found in LiveSyncFBXImporter.cpp")
+
+    test("T10.2: ValidateVersion helper exists",
+          "ValidateVersion" in importer_text,
+          "ValidateVersion not found")
+
+    test("T10.3: ValidatePathSecurity helper exists",
+          "ValidatePathSecurity" in importer_text,
+          "ValidatePathSecurity not found")
+
+    test("T10.4: SanitizeObjectName helper exists",
+          "SanitizeObjectName" in importer_text,
+          "SanitizeObjectName not found")
+
+    # T10.5–9: Rejection log markers preserved
+    test("T10.5: [FBX] Truncated request log marker",
+          "[FBX] Truncated request" in importer_text,
+          "Truncated request log marker missing")
+
+    test("T10.6: [FBX] Unsupported version log marker",
+          "[FBX] Unsupported version" in importer_text,
+          "Unsupported version log marker missing")
+
+    test("T10.7: [FBX] File not found log marker",
+          "[FBX] File not found" in importer_text,
+          "File not found log marker missing")
+
+    test("T10.8: [FBX] Path outside allowed root log marker",
+          "[FBX] Path outside allowed root" in importer_text,
+          "Path outside allowed root log marker missing")
+
+    test("T10.9: [FBX] Path contains '..' log marker",
+          "[FBX] Path contains '..'" in importer_text,
+          "Path contains .. log marker missing")
+
+    # T10.10: "Unnamed" fallback
+    test("T10.10: 'Unnamed' fallback preserved",
+          "Unnamed" in importer_text,
+          "Unnamed fallback not found")
+
+    # T10.11: /Game/UELiveSync/Imported destination
+    test("T10.11: Asset destination /Game/UELiveSync/Imported",
+          "/Game/UELiveSync/Imported" in importer_text,
+          "Asset destination not found")
+
+    # T10.12: Actor update branch (SetStaticMesh)
+    test("T10.12: Actor update branch (SetStaticMesh)",
+          "GetStaticMeshComponent()->SetStaticMesh" in importer_text,
+          "SetStaticMesh not found in importer")
+
+    # T10.13: Actor spawn branch (!MeshActor)
+    test("T10.13: Actor spawn branch (!MeshActor)",
+          "if (!MeshActor)" in importer_text,
+          "Spawn branch not found in importer")
+
+    # T10.14: LiveSync_GUID tag
+    test("T10.14: LiveSync_GUID tag logic",
+          "LiveSync_GUID=" in importer_text,
+          "LiveSync_GUID tag not found")
+else:
+    test("T10.15: LiveSyncFBXImporter.cpp found",
+          False,
+          f"not found at {ue_importer_cpp_path}")
+
+
+# =============================================================
 # Summary
 # =============================================================
 

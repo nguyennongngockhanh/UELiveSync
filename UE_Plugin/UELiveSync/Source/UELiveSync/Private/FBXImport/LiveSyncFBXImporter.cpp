@@ -19,89 +19,83 @@
 // Game-thread only. Safe on missing actor / invalid path.
 // =========================================================
 
-bool FLiveSyncFBXImporter::HandleImport(
-    const uint8* PayloadPtr,
-    int32 PayloadSize,
-    const FFBXImportContext& Context)
+// =========================================================
+// VALIDATION HELPERS
+// =========================================================
+
+static bool ValidatePayloadSize(int32 PayloadSize, FLiveSyncStats& Stats)
 {
-    check(IsInGameThread());
-
-    if (!Context.Stats)
-    {
-        return false;
-    }
-
     if (PayloadSize < static_cast<int32>(sizeof(FFBXImportRequestPayload)))
     {
-        Context.Stats->FBXImportRequestsRejected.fetch_add(
+        Stats.FBXImportRequestsRejected.fetch_add(
             1, std::memory_order_relaxed);
         UE_LOG(LogLiveSync, Warning,
             TEXT("[FBX] Truncated request: size %d < %d"),
             PayloadSize, sizeof(FFBXImportRequestPayload));
         return false;
     }
+    return true;
+}
 
-    FFBXImportRequestPayload Request;
-    FMemory::Memcpy(&Request, PayloadPtr, sizeof(FFBXImportRequestPayload));
-
-    // Validate version
-    if (Request.Version != 1)
+static bool ValidateVersion(uint32 Version, FLiveSyncStats& Stats)
+{
+    if (Version != 1)
     {
-        Context.Stats->FBXImportRequestsRejected.fetch_add(
+        Stats.FBXImportRequestsRejected.fetch_add(
             1, std::memory_order_relaxed);
         UE_LOG(LogLiveSync, Warning,
             TEXT("[FBX] Unsupported version %u — rejecting"),
-            Request.Version);
+            Version);
         return false;
     }
+    return true;
+}
 
-    // Validate FBX path: must exist and be within allowed cache dir
-    FString FbxPathStr(
-        ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.FbxPath)));
-
-    if (FbxPathStr.IsEmpty() || !FPaths::FileExists(FbxPathStr))
+static bool ValidatePathSecurity(const FString& FbxPath, FLiveSyncStats& Stats)
+{
+    if (FbxPath.IsEmpty() || !FPaths::FileExists(FbxPath))
     {
-        Context.Stats->FBXImportRequestsRejected.fetch_add(
+        Stats.FBXImportRequestsRejected.fetch_add(
             1, std::memory_order_relaxed);
         UE_LOG(LogLiveSync, Warning,
             TEXT("[FBX] File not found: %s"),
-            *FbxPathStr);
+            *FbxPath);
         return false;
     }
 
-    // Path safety check: must start with allowed cache root and no '..'
     const FString AllowedRoot =
         TEXT("/home/nguyennongngockhanh/.cache/uelivesync/fbx");
-    if (!FbxPathStr.StartsWith(AllowedRoot))
+    if (!FbxPath.StartsWith(AllowedRoot))
     {
-        Context.Stats->FBXImportRequestsRejected.fetch_add(
+        Stats.FBXImportRequestsRejected.fetch_add(
             1, std::memory_order_relaxed);
         UE_LOG(LogLiveSync, Warning,
             TEXT("[FBX] Path outside allowed root: %s"),
-            *FbxPathStr);
+            *FbxPath);
         return false;
     }
-    if (FbxPathStr.Contains(TEXT("..")))
+    if (FbxPath.Contains(TEXT("..")))
     {
-        Context.Stats->FBXImportRequestsRejected.fetch_add(
+        Stats.FBXImportRequestsRejected.fetch_add(
             1, std::memory_order_relaxed);
         UE_LOG(LogLiveSync, Warning,
             TEXT("[FBX] Path contains '..': %s"),
-            *FbxPathStr);
+            *FbxPath);
         return false;
     }
+    return true;
+}
 
-    // Build destination asset path
-    FString ObjectNameStr(
-        ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.ObjectName)));
-    if (ObjectNameStr.IsEmpty())
+static FString SanitizeObjectName(const FString& RawName)
+{
+    FString Name = RawName;
+    if (Name.IsEmpty())
     {
-        ObjectNameStr = TEXT("Unnamed");
+        Name = TEXT("Unnamed");
     }
 
-    // Sanitize object name for asset path
     FString SafeName;
-    for (TCHAR C : ObjectNameStr)
+    for (TCHAR C : Name)
     {
         if (FChar::IsAlnum(C) || C == TEXT('_') || C == TEXT('-'))
         {
@@ -116,6 +110,44 @@ bool FLiveSyncFBXImporter::HandleImport(
     {
         SafeName = TEXT("Mesh");
     }
+    return SafeName;
+}
+
+bool FLiveSyncFBXImporter::HandleImport(
+    const uint8* PayloadPtr,
+    int32 PayloadSize,
+    const FFBXImportContext& Context)
+{
+    check(IsInGameThread());
+
+    if (!Context.Stats)
+    {
+        return false;
+    }
+
+    if (!ValidatePayloadSize(PayloadSize, *Context.Stats))
+    {
+        return false;
+    }
+
+    FFBXImportRequestPayload Request;
+    FMemory::Memcpy(&Request, PayloadPtr, sizeof(FFBXImportRequestPayload));
+
+    if (!ValidateVersion(Request.Version, *Context.Stats))
+    {
+        return false;
+    }
+
+    FString FbxPathStr(
+        ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.FbxPath)));
+
+    if (!ValidatePathSecurity(FbxPathStr, *Context.Stats))
+    {
+        return false;
+    }
+
+    FString SafeName = SanitizeObjectName(
+        ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.ObjectName)));
 
     const FString GuidShort =
         Request.ObjectGUID.ToString().Left(8);
