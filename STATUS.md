@@ -767,6 +767,8 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
+- **Phase 9A — Prepare v0.2.0 Release Docs and Metadata** (2026-06-09): Production readiness audit PASS. v0.2.0 metadata prepared in `__init__.py`, `UELiveSync.uplugin`, `CHANGELOG.md`. Release notes created in `RELEASE_NOTES.md`. Tag pending final approval.
+
 - **Phase 8 Stage 2 — Large Scene Benchmark** (2026-06-09): Runtime benchmark PASS — measured Blender burst packet count, queue depth, and dropped packets for 50/100/250/500 simultaneous objects. Results: burst_packet_count_peak constant at 3 (create) and 1 (move) regardless of count. Queue depth always 0, no drops, no UE overflow. Per-type batching confirmed efficient. **Conclusion: No coalescing needed. Streaming pipeline solid for 1–500 objects.** Evidence: `.opencode/evidence/phase8_stage2_large_scene_load/`
 
 - **Phase 8 Stage 1 — Blender Burst Packet Diagnostics** (2026-06-09): Added `_runtime_stats["burst_packet_count"]` (per-tick) and `burst_packet_count_peak` (monotonic max) to Blender `check_updates()`. Counts `send_objects()` calls per tick. Python-only instrumentation — no UE changes, no wire format, no network.py changes. Includes 20 increment sites. Peak = max burst per tick across `_runtime_stats` lifecycle. Commit: `5f27c23`. Tests: `phase8_burst_packet_diagnostics.py` 10/10 PASS, `phase7c_stage3a1_fbx_import_request.py` 85/85 PASS, `py_compile sync.py` PASS.
