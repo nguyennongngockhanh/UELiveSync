@@ -1,6 +1,14 @@
-# UELiveSync v0.2.1 Pre-release
+# UELiveSync v0.2.2 Pre-release
 
 License: Commercial/source-available. See [LICENSE](LICENSE) and [EULA.md](EULA.md). Blender addon component has GPL-2.0-or-later compatible terms; see [Blender_Addon/LICENSE](Blender_Addon/LICENSE).
+
+## What Changed Since v0.2.1
+
+- Added commercial source-available root `LICENSE`.
+- Added commercial `EULA.md`.
+- Added `Blender_Addon/LICENSE` GPL-2.0-or-later component notice.
+- Updated README/release notes license references.
+- Runtime sync code is unchanged from v0.2.1.
 
 ## What Changed Since v0.2.0
 

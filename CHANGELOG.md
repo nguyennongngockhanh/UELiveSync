@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.2] - 2026-06-09
+
+### Added
+- Commercial source-available root license.
+- Commercial end-user license agreement: `EULA.md`.
+- Blender addon GPL-2.0-or-later component license notice: `Blender_Addon/LICENSE`.
+
+### Changed
+- README and release notes now document commercial/source-available licensing.
+- Release package now includes commercial licensing terms required for paid distribution.
+
+### Notes
+- v0.2.0 and v0.2.1 remain published and untouched.
+- v0.2.2 is a license/documentation patch release.
+- Runtime sync code is unchanged from v0.2.1.
+
 ## [0.2.1] - 2026-06-09
 
 ### Added

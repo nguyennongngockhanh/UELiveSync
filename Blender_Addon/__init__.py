@@ -1,7 +1,7 @@
 bl_info = {
     "name": "UE Live Sync",
     "author": "Harumaki",
-    "version": (0, 2, 1),
+    "version": (0, 2, 2),
     "blender": (4, 5, 0),
     "location": "View3D > Sidebar > UE Sync",
     "category": "3D View",
