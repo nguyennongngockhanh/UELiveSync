@@ -230,10 +230,11 @@ bool FLiveSyncFBXImporter::HandleImport(
     Context.Stats->FBXImportSucceeded.fetch_add(
         1, std::memory_order_relaxed);
     UE_LOG(LogLiveSync, Log,
-        TEXT("[FBX] Imported StaticMesh: %s (%d verts, %d tris)"),
+        TEXT("[FBX] Imported StaticMesh: %s (%d verts, %d tris, %d mat slots)"),
         *StaticMesh->GetName(),
         Request.VertCount,
-        Request.TriCount);
+        Request.TriCount,
+        Request.MatSlotCount);
 
     // Spawn or update StaticMeshActor by LiveSync GUID
     AActor* ExistingActor = Context.FindActor(Request.ObjectGUID);

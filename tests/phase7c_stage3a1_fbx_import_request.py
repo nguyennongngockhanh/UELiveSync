@@ -518,6 +518,61 @@ else:
 
 
 # =============================================================
+# T11: Stage 3B — FBX Material Slot Count Logging
+# =============================================================
+
+banner("T11 — Stage 3B: MatSlotCount referenced and logged in LiveSyncFBXImporter")
+
+if os.path.isfile(ue_importer_cpp_path):
+    with open(ue_importer_cpp_path, "r") as f:
+        importer_text = f.read()
+
+    # T11.1: Request.MatSlotCount referenced in importer
+    test("T11.1: Request.MatSlotCount referenced in importer",
+          "Request.MatSlotCount" in importer_text,
+          "Request.MatSlotCount not found")
+
+    # T11.2: Import success log includes mat slot count
+    test("T11.2: Import success log includes mat slot count",
+          "mat slots" in importer_text or "MatSlotCount" in importer_text,
+          "Material slot count not referenced in log")
+
+    # T11.3: PT_FBXImportRequest payload layout unchanged
+    if os.path.isfile(sync_types_h_path):
+        with open(sync_types_h_path, "r") as f:
+            types_text = f.read()
+        has_fbx_request = "FFBXImportRequestPayload" in types_text
+        has_mat_slot = "MatSlotCount" in types_text
+        has_680 = "680" in types_text  # static_assert size
+        test("T11.3: FFBXImportRequestPayload layout unchanged",
+              has_fbx_request and has_mat_slot and has_680,
+              f"FBX request struct check failed: fbx_req={has_fbx_request} mat_slot={has_mat_slot} size680={has_680}")
+    else:
+        test("T11.3: SyncTypes.h found",
+              False,
+              f"not found at {sync_types_h_path}")
+
+    # T11.4: No PT_Material handler modification in this file
+    test("T11.4: No PT_Material handler changes in importer",
+          "HandleMaterialDef" not in importer_text,
+          "HandleMaterialDef should not be in LiveSyncFBXImporter.cpp")
+
+    # T11.5: Existing /Game/UELiveSync/Imported destination unchanged
+    test("T11.5: /Game/UELiveSync/Imported destination unchanged",
+          "/Game/UELiveSync/Imported" in importer_text,
+          "Asset destination missing from importer")
+
+    # T11.6: Existing LiveSync_GUID tag behavior unchanged
+    test("T11.6: LiveSync_GUID tag behavior unchanged",
+          "LiveSync_GUID=" in importer_text,
+          "LiveSync_GUID tag missing from importer")
+else:
+    test("T11.7: LiveSyncFBXImporter.cpp found",
+          False,
+          f"not found at {ue_importer_cpp_path}")
+
+
+# =============================================================
 # Summary
 # =============================================================
 
