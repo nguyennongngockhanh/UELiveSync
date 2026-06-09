@@ -49,7 +49,7 @@
 - **Phase 7C** — Playback Sync (implemented) ✅
 - **Phase 7D** — Active Camera Sync (implemented) ✅
 - **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.2 UE BoolTrack apply done) ✅
-- **Phase 7C Stage 3A** — FBX Mesh Handoff Import + Importer Extraction (Stage 3A.3 complete) ✅
+- **Phase 7C Stage 3A** — FBX Mesh Handoff Import + Importer Extraction + Hardening (all stages complete) ✅
 
 ## Current Roadmap
 
@@ -777,6 +777,17 @@ All verified in regression run.
   - `UELiveSyncSubsystem.h`: −5 lines (removed HandleFBXImport declaration)
   - Behavior unchanged. Packet format unchanged. `FFBXImportRequestPayload` unchanged. `FLiveSyncStats` unchanged. PT_Mesh, keyframe, visibility, transform, hierarchy, create/delete untouched.
   - Commit: `78164da`. Tests: 38/38 PASS. UE build: PASS (only pre-existing SetNum deprecation warning).
+- **Phase 7C Stage 3A.4 — FBX Importer Hardening** (2026-06-09): Extracted 4 private/static validation helpers from `HandleImport()` in `LiveSyncFBXImporter.cpp`:
+  - `ValidatePayloadSize` — validates minimum payload size against `sizeof(FFBXImportRequestPayload)`
+  - `ValidateVersion` — checks version == 1
+  - `ValidatePathSecurity` — file existence, allowlist root check, `..` traversal guard
+  - `SanitizeObjectName` — alphanumeric/underscore/hyphen filtering, `Unnamed`/`Mesh` fallback
+  - No public API changes. `LiveSyncFBXImporter.h` unchanged. `UELiveSyncSubsystem.cpp/h` unchanged. `SyncTypes.h` unchanged.
+  - Packet/protocol unchanged. PT_Mesh, keyframe, visibility, transform, hierarchy, create/delete, TCP untouched.
+  - Existing log markers preserved. Existing counters preserved. FBX cache root allowlist preserved.
+  - `/Game/UELiveSync/Imported` destination preserved. `LS_FBX_` actor naming and `LiveSync_GUID` tag preserved.
+  - Commit: `bb85cc8`. Tests: `phase7c_stage3a1_fbx_import_request.py` 52/52 PASS (was 38, +14 T10 tests). UE build: PASS.
+  - **Stage 3A is now COMPLETE. Next: Phase 7C Stage 3B audit — FBX material slot handoff / imported mesh material assignment audit.**
 - **Phase 7C Mesh Reconstruction Baseline** (2026-06-06): PT_Mesh runtime reconstruction now visible and correctly scaled/oriented in UE. ProcMesh replacement, root promotion, visibility restoration, 100× unit conversion, Y-axis local conversion, winding flip, and temporary UE-side normal/tangent generation are implemented and build-pass. Shading artifacts on smooth meshes are known and attributed to missing Blender loop attributes in the current V5 mesh payload (no real normals, UVs, tangents, or vertex colors). Full attribute sync deferred to a manual selected-mesh stage. **Partial pass, not final fidelity.**
 
 - **Blender sync.py first-tick fix**: Newly created meshes now transmit geometry on first evaluation (`prev_hash is None` triggers send). Previously, new objects were never sent because `prev_hash is not None` required a prior hash.
