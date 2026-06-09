@@ -1,4 +1,12 @@
-# UELiveSync v0.2.0 Pre-release
+# UELiveSync v0.2.1 Pre-release
+
+## What Changed Since v0.2.0
+
+- Added cross-platform installer helper: `install_uelivesync.py`.
+- Added `INSTALL.md`.
+- Installer supports Blender addon install paths for Windows, Linux, Linux Flatpak, and macOS.
+- Installer supports UE project plugin install to `<Project>/Plugins/UELiveSync/`.
+- Installer includes dry-run, backup, and force safety modes.
 
 ## Supported Versions
 

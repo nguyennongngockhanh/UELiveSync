@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.1] - 2026-06-09
+
+### Added
+- Cross-platform installer helper: `install_uelivesync.py`.
+- `INSTALL.md` with Windows, Linux, Linux Flatpak, and macOS install instructions.
+- Installer source/functional tests for dry-run, backup, force, and destination-exists safety.
+
+### Fixed
+- Installer overwrite safety before release: existing destinations now require `--backup` or `--force`.
+- `--backup` now preserves existing installs as `.bak-YYYYMMDD-HHMMSS`.
+- `--dry-run` performs no filesystem writes.
+
+### Notes
+- v0.2.0 remains published and untouched.
+- v0.2.1 is a patch release to include the installer helper in the release tag/source archive.
+- Runtime sync code is unchanged from v0.2.0.
+
 ## [0.2.0] - 2026-06-09
 
 ### Added
