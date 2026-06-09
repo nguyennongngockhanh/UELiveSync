@@ -547,6 +547,190 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue(
 
 
 # =========================================================
+# PHASE 7C STAGE 3A.1: FBX MESH HANDOFF OPERATOR
+# =========================================================
+
+class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+    bpy.types.Operator
+):
+    bl_idname = \
+        "uelivesync.sync_selected_mesh_to_ue_fbx"
+
+    bl_label = "Sync Selected Mesh to UE (FBX)"
+
+    bl_description = \
+        "Export selected MESH objects to FBX cache and " \
+        "send PT_FBXImportRequest to UE for StaticMesh import"
+
+    def execute(self, context):
+
+        selected = [
+            obj for obj in context.selected_objects
+            if obj.type == 'MESH'
+        ]
+
+        if not selected:
+            self.report(
+                {'WARNING'},
+                "No MESH objects selected"
+            )
+            return {'CANCELLED'}
+
+        if not network.is_connected():
+            self.report(
+                {'WARNING'},
+                "Not connected to UE"
+            )
+            return {'CANCELLED'}
+
+        import os
+        import uuid
+        import json
+        import time
+        import math
+
+        fbx_cache_root = \
+            os.path.expanduser(
+                "~/.cache/uelivesync/fbx"
+            )
+
+        synced_count = 0
+
+        for obj in selected:
+
+            try:
+                guid_hex = sync.ensure_guid(obj)
+                guid_obj = uuid.UUID(guid_hex)
+
+                safe_name = \
+                    "".join(
+                        c for c in obj.name
+                        if c.isalnum() or c in "._- "
+                    ).strip().replace(" ", "_")
+
+                if not safe_name:
+                    safe_name = "unnamed"
+
+                obj_dir = os.path.join(
+                    fbx_cache_root,
+                    guid_hex,
+                )
+                os.makedirs(obj_dir, exist_ok=True)
+
+                fbx_path = os.path.join(
+                    obj_dir,
+                    f"{safe_name}.fbx",
+                )
+
+                # Export selected object only as FBX
+                import bpy
+                bpy.ops.export_scene.fbx(
+                    filepath=fbx_path,
+                    use_selection=True,
+                    object_types={'MESH'},
+                    apply_scale_options='FBX_SCALE_UNITS',
+                    bake_space_transform=False,
+                    mesh_smooth_type='FACE',
+                    use_mesh_modifiers=True,
+                    use_tspace=False,
+                )
+
+                if not os.path.isfile(fbx_path):
+                    print(
+                        f"[FBX] Export failed — {fbx_path} "
+                        "not created"
+                    )
+                    continue
+
+                # Compute mesh stats from evaluated mesh
+                depsgraph = \
+                    context.evaluated_depsgraph_get()
+                evaluated_obj = \
+                    obj.evaluated_get(depsgraph)
+
+                mesh = evaluated_obj.to_mesh()
+                if mesh is None:
+                    continue
+
+                try:
+                    mesh.calc_loop_triangles()
+                    vert_count = len(mesh.vertices)
+                    tri_count = len(mesh.loop_triangles)
+                    mat_slot_count = \
+                        len(mesh.materials)
+                finally:
+                    evaluated_obj.to_mesh_clear()
+
+                # Write manifest JSON
+                manifest = {
+                    "object_guid": guid_hex,
+                    "object_name": obj.name,
+                    "safe_name": safe_name,
+                    "fbx_path": fbx_path,
+                    "vert_count": vert_count,
+                    "tri_count": tri_count,
+                    "mat_slot_count": mat_slot_count,
+                    "timestamp": time.time(),
+                    "source": "Blender FBX export",
+                }
+
+                manifest_path = os.path.join(
+                    obj_dir,
+                    f"{safe_name}.manifest.json",
+                )
+                with open(
+                    manifest_path, "w"
+                ) as f:
+                    json.dump(
+                        manifest, f, indent=2
+                    )
+
+                # Build and send FBX import request packet
+                payload = \
+                    network.serialize_fbx_import_request(
+                        guid_obj=guid_obj,
+                        fbx_path=fbx_path,
+                        object_name=safe_name,
+                        vert_count=vert_count,
+                        tri_count=tri_count,
+                        mat_slot_count=mat_slot_count,
+                        timestamp=time.time(),
+                    )
+
+                network.send_objects(
+                    [payload],
+                    packet_type=network.PT_FBXImportRequest,
+                    version=network.LIVE_SYNC_VERSION_V5,
+                )
+
+                print(
+                    f"[FBX] Synced: {obj.name} → {fbx_path} "
+                    f"({tri_count} tri, "
+                    f"{vert_count} vert)"
+                )
+
+                synced_count += 1
+
+            except Exception as e:
+                print(
+                    f"[FBX] ERROR: {obj.name} — {e}"
+                )
+
+        if synced_count > 0:
+            self.report(
+                {'INFO'},
+                f"FBX synced {synced_count} mesh object(s) to UE"
+            )
+        else:
+            self.report(
+                {'WARNING'},
+                "No mesh objects could be FBX-synced"
+            )
+
+        return {'FINISHED'}
+
+
+# =========================================================
 # CONNECTION STATUS PANEL
 # =========================================================
 
@@ -739,6 +923,11 @@ class UELIVESYNC_PT_panel(
             icon='MESH_DATA',
         )
 
+        layout.operator(
+            "uelivesync.sync_selected_mesh_to_ue_fbx",
+            icon='MESH_DATA',
+        )
+
         layout.separator()
 
         # Preferences shortcut
@@ -766,6 +955,7 @@ classes = (
     UELIVESYNC_OT_rebind_all,
     UELIVESYNC_OT_dump_diagnostics,
     UELIVESYNC_OT_sync_selected_mesh_to_ue,
+    UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx,
     UELIVESYNC_PT_panel,
 )
 

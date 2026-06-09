@@ -244,6 +244,10 @@ enum EPacketType : uint8
     // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md
     PT_ActiveCamera   = 0x15,  // Active camera identity (event-driven, NOT state stream)
 
+    // Phase 7C Stage 3A.1: FBX Mesh Handoff Import
+    // Fixed 680-byte payload: GUID(16) + Version(4) + FbxPath(512) + Name(128) + Verts(4) + Tris(4) + Mats(4) + Timestamp(8)
+    PT_FBXImportRequest = 0x16,
+
     // Phase 7E: Sequencer operations (discrete events, NOT state stream)
     // See Docs/Architecture/54-phase7e-sequencer-keyframe-scope-lock.md
     PT_SequencerOp    = 0x18,  // Sequencer operation (create, add possessable, etc.)
@@ -566,6 +570,40 @@ struct FCapabilityResponsePayload
 static_assert(
     sizeof(FCapabilityResponsePayload) == 4,
     "FCapabilityResponsePayload must be exactly 4 bytes");
+
+
+// =========================================================
+// FBX IMPORT REQUEST PAYLOAD (Phase 7C Stage 3A.1)
+// =========================================================
+
+// PT_FBXImportRequest (0x16) fixed-size payload: 680 bytes
+// Wire format:
+//   [0-15]   ObjectGUID   FGuid      — object GUID
+//   [16-19]  Version      uint32     — payload format version (1)
+//   [20-531] FbxPath      uint8[512] — null-padded UTF-8 absolute path to .fbx
+//   [532-659] ObjectName  uint8[128] — null-padded UTF-8 display name
+//   [660-663] VertCount    uint32     — vertex count
+//   [664-667] TriCount     uint32     — triangle count
+//   [668-671] MatSlotCount uint32     — material slot count
+//   [672-679] Timestamp    double     — export timestamp (Unix epoch seconds)
+//
+// UE generates destination AssetPath internally:
+//   /Game/UELiveSync/Imported/<SanitizedObjectName>_<GuidShort>
+struct FFBXImportRequestPayload
+{
+    FGuid    ObjectGUID    = FGuid();
+    uint32   Version       = 1;
+    uint8    FbxPath[512]  = {0};
+    uint8    ObjectName[128] = {0};
+    uint32   VertCount     = 0;
+    uint32   TriCount      = 0;
+    uint32   MatSlotCount  = 0;
+    double   Timestamp     = 0.0;
+};
+
+static_assert(
+    sizeof(FFBXImportRequestPayload) == 680,
+    "FFBXImportRequestPayload must be exactly 680 bytes");
 
 #pragma pack(pop)
 
@@ -1138,6 +1176,14 @@ struct FLiveSyncStats
     std::atomic<int32> CapabilityAnnounceReceived{0};    // Total PT_CapabilityAnnounce packets received
     std::atomic<int32> CapabilityResponseReceived{0};   // Total PT_CapabilityResponse packets received
     std::atomic<int32> CapabilityPacketsMalformed{0};    // Packets rejected (bad size)
+
+    // --- Phase 7C Stage 3A.1: FBX Mesh Handoff Import ---
+    std::atomic<int32> FBXImportRequestsReceived{0};     // Total PT_FBXImportRequest packets received
+    std::atomic<int32> FBXImportRequestsRejected{0};     // Packets rejected (bad path, invalid, etc.)
+    std::atomic<int32> FBXImportSucceeded{0};             // Successful FBX → StaticMesh imports
+    std::atomic<int32> FBXImportFailed{0};                // Failed FBX imports (UE import API error)
+    std::atomic<int32> FBXImportActorsSpawned{0};         // New StaticMeshActor spawned
+    std::atomic<int32> FBXImportActorsUpdated{0};         // Existing StaticMeshActor updated
 };
 
 // =========================================================
@@ -1825,7 +1871,7 @@ static constexpr uint32
     constexpr uint32 FNV_OFFSET = 2166136261u;
     constexpr uint32 FNV_PRIME  = 16777619u;
 
-    auto fnv = [](uint32 h, uint8 b) constexpr
+    auto fnv = [](uint32 h, int32 b) constexpr
     {
         return (h ^ b) * FNV_PRIME;
     };
@@ -1875,7 +1921,10 @@ static constexpr uint32
     // Phase 7E Stage 7 — PT_Keyframe sizes
     H = fnv(H, 14); // KEYFRAME_HEADER_SIZE
     H = fnv(H, 25); // KEYFRAME_ENTRY_SIZE
-    // Packet types
+
+    // Phase 7C Stage 3A.1: FBX Mesh Handoff Import
+    H = fnv(H, 680); // FFBXImportRequestPayload
+
     H = fnv(H, 0x01); H = fnv(H, 0x03);
     H = fnv(H, 0x04); H = fnv(H, 0x07);
     H = fnv(H, 0x05); // PT_Material
@@ -1889,6 +1938,7 @@ static constexpr uint32
     H = fnv(H, 0x13); // PT_Timeline (Phase 7B)
     H = fnv(H, 0x14); // PT_PlaybackState (Phase 7C)
     H = fnv(H, 0x15); // PT_ActiveCamera (Phase 7D)
+    H = fnv(H, 0x16); // PT_FBXImportRequest (Phase 7C Stage 3A.1)
     H = fnv(H, 0x17); // PT_Keyframe (Phase 7E Stage 7)
     H = fnv(H, 0x18); // PT_SequencerOp (Phase 7E)
 

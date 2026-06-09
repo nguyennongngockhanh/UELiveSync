@@ -50,7 +50,8 @@ public class UELiveSync : ModuleRules
 				"JsonUtilities",
 				"ProceduralMeshComponent",
 
-				"UnrealEd"
+				"UnrealEd",
+				"AssetTools"
 			}
 		);
 

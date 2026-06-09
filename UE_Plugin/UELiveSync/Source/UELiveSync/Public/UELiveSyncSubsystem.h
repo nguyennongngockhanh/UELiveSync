@@ -474,6 +474,11 @@ private:
         const uint8* PayloadPtr,
         int32 PayloadSize);
 
+    // Phase 7C Stage 3A.1: FBX Mesh Handoff Import
+    void HandleFBXImport(
+        const uint8* PayloadPtr,
+        int32 PayloadSize);
+
     // =====================================================
     // ACTOR CACHE
     // =====================================================

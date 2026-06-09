@@ -36,9 +36,9 @@ def _compute_protocol_signature():
         h = _fnv(h, v & 0xFF)
         h = _fnv(h, (v >> 8) & 0xFF)
     import struct as _s
-    for size in (24, 22, 80, 81, 16, 33, 28, 28, 4, 4, 16, 32, 33, 40, 14, 25):
+    for size in (24, 22, 80, 81, 16, 33, 28, 28, 4, 4, 16, 32, 33, 40, 14, 25, 680):
         h = _fnv(h, size)
-    for pt in (0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x18):
+    for pt in (0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18):
         h = _fnv(h, pt)
     return h
 
@@ -285,6 +285,9 @@ PT_Timeline = 0x13   # Phase 7B: timeline/playhead frame sync
 PT_PlaybackState = 0x14  # Phase 7C: playback state (play/pause/stop/loop)
 PT_ActiveCamera = 0x15  # Phase 7D: active camera selection (GUID-only, no params)
 
+# Phase 7C Stage 3A.1: FBX Mesh Handoff Import (PT_FBXImportRequest = 0x16)
+PT_FBXImportRequest = 0x16  # FBX mesh import request (fixed 680-byte payload)
+
 # Phase 7E Stage 7: Keyframe replication (PT_Keyframe = 0x17)
 PT_Keyframe = 0x17  # Keyframe replication (fixed header + repeated entries)
 
@@ -299,6 +302,55 @@ SEQUENCER_OP_REMOVE_POSSESSABLE = 2  # Remove possessable binding from sequence
 SEQUENCER_OP_ADD_CAMERA_CUT    = 3  # Add camera cut to sequence
 SEQUENCER_OP_CLEAR_SEQUENCE    = 4  # Clear all tracks/possessables from sequence
 SEQUENCER_OP_SET_FRAME_RANGE   = 5  # Update sequence frame range + FPS
+
+# Phase 7C Stage 3A.1: FBX Import Request payload: 680 bytes fixed
+FBX_IMPORT_REQUEST_PAYLOAD_SIZE = 680
+
+def serialize_fbx_import_request(
+    guid_obj, fbx_path, object_name,
+    vert_count, tri_count, mat_slot_count,
+    timestamp, version=1
+):
+    """Serialize a PT_FBXImportRequest (0x16) fixed-size payload.
+
+    Wire format (680 bytes):
+        ObjectGUID  : 16 bytes (4 × uint32 LE)
+        Version     : uint32 LE
+        FbxPath     : 512 bytes, UTF-8 null-padded
+        ObjectName  : 128 bytes, UTF-8 null-padded
+        VertCount   : uint32 LE
+        TriCount    : uint32 LE
+        MatSlotCount: uint32 LE
+        Timestamp   : double LE
+
+    Args:
+        guid_obj: UUID object for the object GUID.
+        fbx_path: Absolute filesystem path to the exported .fbx file.
+        object_name: Display name for the object.
+        vert_count: Vertex count in the exported mesh.
+        tri_count: Triangle count in the exported mesh.
+        mat_slot_count: Number of material slots.
+        timestamp: Unix timestamp (seconds since epoch) as float.
+        version: Payload format version (default 1).
+
+    Returns:
+        bytes: 680-byte fixed-size payload.
+    """
+    guid_bytes = pack_ue_fguid(guid_obj)
+    fbx_path_bytes = fbx_path.encode('utf-8')
+    name_bytes = object_name.encode('utf-8')
+    fmt = '<16sI512s128sIIId'
+    return struct.pack(
+        fmt,
+        guid_bytes,
+        version,
+        fbx_path_bytes.ljust(512, b'\x00')[:512],
+        name_bytes.ljust(128, b'\x00')[:128],
+        vert_count,
+        tri_count,
+        mat_slot_count,
+        timestamp,
+    )
 
 # Phase 9: Capability negotiation (announce/response)
 PT_CapabilityAnnounce  = 0x11  # Phase 9: capability bitmask from Blender to UE
