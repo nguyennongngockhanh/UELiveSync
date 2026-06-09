@@ -276,6 +276,15 @@ bool FLiveSyncFBXImporter::HandleImport(
         }
     }
 
+    // Rename/new asset path warning: same GUID, different asset path
+    if (MeshActor && !bReplacingExistingAsset)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[FBX] Possible rename/new asset path detected for GUID %s: importing to new asset path %s. Previous imported asset may remain orphaned."),
+            *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+            *AssetPackagePath);
+    }
+
     if (!MeshActor)
     {
         // Spawn new StaticMeshActor

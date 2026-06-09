@@ -712,6 +712,73 @@ else:
 
 
 # =============================================================
+# T14: Stage 5 — Rename/new asset path diagnostic warning
+# =============================================================
+
+banner("T14 — Stage 5: Rename/new asset path diagnostic")
+
+if os.path.isfile(ue_importer_cpp_path):
+    with open(ue_importer_cpp_path, "r") as f:
+        importer_text = f.read()
+
+    # T14.1: Log marker for rename/new asset path detection
+    test("T14.1: Possible rename/new asset path detected log marker",
+          "Possible rename/new asset path detected" in importer_text,
+          "Rename diagnostic log marker not found")
+
+    # T14.2: Condition uses MeshActor && !bReplacingExistingAsset
+    test("T14.2: Condition MeshActor && !bReplacingExistingAsset present",
+          "MeshActor && !bReplacingExistingAsset" in importer_text,
+          "Rename detection condition not found")
+
+    # T14.3: Log mentions orphaned
+    test("T14.3: Orphaned warning present",
+          "orphaned" in importer_text,
+          "Orphaned not mentioned in log")
+
+    # T14.4: Existing lifecycle marker: Created new
+    test("T14.4: Created new imported asset marker unchanged",
+          "[FBX] Created new imported asset" in importer_text,
+          "Created new asset marker missing")
+
+    # T14.5: Existing lifecycle marker: Replaced existing
+    test("T14.5: Replaced existing imported asset marker unchanged",
+          "[FBX] Replaced existing imported asset" in importer_text,
+          "Replaced existing asset marker missing")
+
+    # T14.6–9: No asset deletion APIs added
+    test("T14.6: No DeleteObject API added",
+          "DeleteObject" not in importer_text.split(
+              "FLiveSyncFBXImporter::HandleImport")[1],
+          "DeleteObject found in LiveSyncFBXImporter.cpp")
+
+    test("T14.7: No DeletePackage API added",
+          "DeletePackage" not in importer_text.split(
+              "FLiveSyncFBXImporter::HandleImport")[1],
+          "DeletePackage found in LiveSyncFBXImporter.cpp")
+
+    test("T14.8: No ObjectTools::DeleteObjects added",
+          "ObjectTools::DeleteObjects" not in importer_text.split(
+              "FLiveSyncFBXImporter::HandleImport")[1],
+          "ObjectTools::DeleteObjects found in LiveSyncFBXImporter.cpp")
+
+    test("T14.9: No CollectGarbage added",
+          "CollectGarbage" not in importer_text.split(
+              "FLiveSyncFBXImporter::HandleImport")[1],
+          "CollectGarbage found in LiveSyncFBXImporter.cpp")
+
+    # T14.10: No FBXImportReplacedExisting counter
+    test("T14.10: No FBXImportReplacedExisting counter",
+          "FBXImportReplacedExisting" not in importer_text,
+          "FBXImportReplacedExisting counter found")
+
+else:
+    test("T14.11: LiveSyncFBXImporter.cpp found",
+          False,
+          f"not found at {ue_importer_cpp_path}")
+
+
+# =============================================================
 # Summary
 # =============================================================
 
