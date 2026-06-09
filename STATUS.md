@@ -767,6 +767,8 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
+- **Phase 9I.1 — Public README Landing Page** (2026-06-09): Created README.md for public GitHub landing page. Documents release v0.2.1, feature scope, install links, production FBX mesh path, limitations, and license TBD.
+
 - **Phase 9G.1 — Prepare v0.2.1 Patch Release Metadata** (2026-06-09): Metadata bumped to v0.2.1. CHANGELOG/RELEASE_NOTES/INSTALL updated for v0.2.1. Reason: include cross-platform installer helper in a tagged release. v0.2.0 remains untouched. Tag/package/release pending.
 
 - **Phase 9A — Prepare v0.2.0 Release Docs and Metadata** (2026-06-09): Production readiness audit PASS. v0.2.0 metadata prepared in `__init__.py`, `UELiveSync.uplugin`, `CHANGELOG.md`. Release notes created in `RELEASE_NOTES.md`. Tag pending final approval.
