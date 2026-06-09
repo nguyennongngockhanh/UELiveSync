@@ -766,9 +766,7 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
-
 - **Phase 7C Stage 3A — FBX Mesh Handoff Import** (2026-06-09): FBX mesh handoff pipeline implemented end-to-end. Blender exports selected mesh to `~/.cache/uelivesync/fbx/<guid>/<name>.fbx`, sends `PT_FBXImportRequest` (0x16) 680-byte fixed payload. UE imports via `UFbxFactory` → `UAssetImportTask` to `/Game/UELiveSync/Imported/`, spawns/updates `AStaticMeshActor` with `LiveSync_GUID` tag. Build PASS, runtime validation PASS (StaticMesh visible in viewport). Commit: `3842dde`. Tests: `phase7c_stage3a1_fbx_import_request.py` 34/34 PASS. **Direction change**: PT_Mesh procedural mesh path is now experimental/debug. Production mesh sync direction is Blender exports FBX → UE imports StaticMesh asset. Transform/visibility/keyframes remain on TCP LiveSync.
-
 - **Phase 7C Mesh Reconstruction Baseline** (2026-06-06): PT_Mesh runtime reconstruction now visible and correctly scaled/oriented in UE. ProcMesh replacement, root promotion, visibility restoration, 100× unit conversion, Y-axis local conversion, winding flip, and temporary UE-side normal/tangent generation are implemented and build-pass. Shading artifacts on smooth meshes are known and attributed to missing Blender loop attributes in the current V5 mesh payload (no real normals, UVs, tangents, or vertex colors). Full attribute sync deferred to a manual selected-mesh stage. **Partial pass, not final fidelity.**
 
 - **Blender sync.py first-tick fix**: Newly created meshes now transmit geometry on first evaluation (`prev_hash is None` triggers send). Previously, new objects were never sent because `prev_hash is not None` required a prior hash.
