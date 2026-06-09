@@ -787,7 +787,16 @@ All verified in regression run.
   - Existing log markers preserved. Existing counters preserved. FBX cache root allowlist preserved.
   - `/Game/UELiveSync/Imported` destination preserved. `LS_FBX_` actor naming and `LiveSync_GUID` tag preserved.
   - Commit: `bb85cc8`. Tests: `phase7c_stage3a1_fbx_import_request.py` 52/52 PASS (was 38, +14 T10 tests). UE build: PASS.
-  - **Stage 3A is now COMPLETE. Next: Phase 7C Stage 3B audit — FBX material slot handoff / imported mesh material assignment audit.**
+  - **Stage 3A is now COMPLETE.**
+- **Phase 7C Stage 3B — FBX Material Slot Count Logging** (2026-06-09): UE importer now reads and logs `Request.MatSlotCount` on FBX import success:
+  - Log format: `[FBX] Imported StaticMesh: %s (%d verts, %d tris, %d mat slots)`
+  - No packet format change. `FFBXImportRequestPayload` layout unchanged.
+  - No material behavior change. PT_Material lane remains independent.
+  - No post-import material assignment — FBX handles material slots natively via `UFbxFactory`.
+  - Commit: `f7e848d`. Tests: `phase7c_stage3a1_fbx_import_request.py` 58/58 PASS (was 52, +6 T11 tests). UE build: PASS.
+  - Runtime validation: first sync `2 mat slots` confirmed, re-sync `1 mat slot` confirmed, update path clean (no duplicate actor, no "Already registered" warning).
+  - Evidence: `.opencode/evidence/phase7c_stage3b_fbx_material_slots/ue_fbx_log_evidence.txt`
+  - **Stage 3B complete. Stage 3 is now COMPLETE.**
 - **Phase 7C Mesh Reconstruction Baseline** (2026-06-06): PT_Mesh runtime reconstruction now visible and correctly scaled/oriented in UE. ProcMesh replacement, root promotion, visibility restoration, 100× unit conversion, Y-axis local conversion, winding flip, and temporary UE-side normal/tangent generation are implemented and build-pass. Shading artifacts on smooth meshes are known and attributed to missing Blender loop attributes in the current V5 mesh payload (no real normals, UVs, tangents, or vertex colors). Full attribute sync deferred to a manual selected-mesh stage. **Partial pass, not final fidelity.**
 
 - **Blender sync.py first-tick fix**: Newly created meshes now transmit geometry on first evaluation (`prev_hash is None` triggers send). Previously, new objects were never sent because `prev_hash is not None` required a prior hash.
