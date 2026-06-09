@@ -385,44 +385,58 @@ else:
 
 banner("T9 — Stage 3A.2: No redundant RegisterComponent in HandleFBXImport")
 
-if os.path.isfile(ue_cpp_path):
+ue_importer_cpp_path = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "UE_Plugin",
+    "UELiveSync",
+    "Source",
+    "UELiveSync",
+    "Private",
+    "FBXImport",
+    "LiveSyncFBXImporter.cpp",
+)
+
+if os.path.isfile(ue_cpp_path) and os.path.isfile(ue_importer_cpp_path):
     with open(ue_cpp_path, "r") as f:
-        lines = f.readlines()
+        subsystem_text = f.read()
+    with open(ue_importer_cpp_path, "r") as f:
+        importer_text = f.read()
 
-    full_text = "".join(lines)
-
+    # Check both files for moved/remaining patterns
     # T9.1: No RegisterComponent immediately after SetStaticMesh in HandleFBXImport
-    set_mesh_pos = full_text.find("GetStaticMeshComponent()->SetStaticMesh")
+    set_mesh_pos = importer_text.find("GetStaticMeshComponent()->SetStaticMesh")
     has_register_after_set = False
     if set_mesh_pos >= 0:
-        snippet = full_text[set_mesh_pos:set_mesh_pos + 500]
+        snippet = importer_text[set_mesh_pos:set_mesh_pos + 500]
         has_register_after_set = "RegisterComponent" in snippet
     test("T9.1: No RegisterComponent after SetStaticMesh in HandleFBXImport",
           not has_register_after_set,
           "RegisterComponent() still present after SetStaticMesh")
 
-    # T9.2: SetStaticMesh still present in HandleFBXImport
-    has_set_static_mesh = "GetStaticMeshComponent()->SetStaticMesh" in full_text
-    test("T9.2: SetStaticMesh still present in subsystem",
+    # T9.2: SetStaticMesh still present in importer
+    has_set_static_mesh = "GetStaticMeshComponent()->SetStaticMesh" in importer_text
+    test("T9.2: SetStaticMesh still present in importer",
           has_set_static_mesh,
-          "SetStaticMesh call not found in UELiveSyncSubsystem.cpp")
+          "SetStaticMesh call not found in LiveSyncFBXImporter.cpp")
 
-    # T9.3: ActorCache.Add with Request.ObjectGUID exists (spans multiple lines)
-    has_actor_cache_add = "ActorCache.Add(" in full_text
-    has_object_guid = "Request.ObjectGUID" in full_text
-    test("T9.3: ActorCache.Add with Request.ObjectGUID still present",
-          has_actor_cache_add and has_object_guid,
-          "ActorCache.Add or ObjectGUID not found")
+    # T9.3: ActorCache.Add with Request.ObjectGUID exists (via callback in subsystem)
+    has_dispatch_add = "ActorCache.Add(G, A)" in subsystem_text
+    has_importer_cached = "OnActorCached" in importer_text
+    has_object_guid_importer = "Request.ObjectGUID" in importer_text
+    test("T9.3: ActorCache callback dispatch + importer logic present",
+          has_dispatch_add and has_importer_cached and has_object_guid_importer,
+          "ActorCache callback or ObjectGUID not found")
 
-    # T9.4: LiveSync_GUID tag logic still exists
-    has_guid_tag = "LiveSync_GUID=" in full_text
-    test("T9.4: LiveSync_GUID tag logic still present",
+    # T9.4: LiveSync_GUID tag logic still exists in importer
+    has_guid_tag = "LiveSync_GUID=" in importer_text
+    test("T9.4: LiveSync_GUID tag logic still present in importer",
           has_guid_tag,
           "LiveSync_GUID tag not found")
 else:
-    test("T9.5: UELiveSyncSubsystem.cpp found for source check",
+    test("T9.5: UELiveSyncSubsystem.cpp and LiveSyncFBXImporter.cpp found",
           False,
-          f"not found at {ue_cpp_path}")
+          f"missing subsystem={os.path.isfile(ue_cpp_path)} importer={os.path.isfile(ue_importer_cpp_path)}")
 
 
 # =============================================================
