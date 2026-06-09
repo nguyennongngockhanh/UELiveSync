@@ -49,7 +49,7 @@
 - **Phase 7C** — Playback Sync (implemented) ✅
 - **Phase 7D** — Active Camera Sync (implemented) ✅
 - **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.2 UE BoolTrack apply done) ✅
-- **Phase 7C Stage 3A–4B** — FBX Mesh Handoff Import + Importer Hardening + Asset Lifecycle Diagnostics + Scene Unit Conversion (all stages complete) ✅
+- **Phase 7C Stage 3A–5** — FBX Mesh Handoff Import + Importer Hardening + Asset Lifecycle Diagnostics + Scene Unit Conversion + Rename Asset Path Diagnostics (all stages complete) ✅
 
 ## Current Roadmap
 
@@ -64,7 +64,7 @@
 9. **Phase 8 — High Performance Streaming** (ready)
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
 11. ~~**Manual Selected-Object Full Mesh Attribute Sync**~~ — superseded by Stage 3A FBX handoff 🔒
-12. **Phase 7C Stage 3A–4B — FBX Mesh Handoff Import** — Blender exports FBX → UE imports StaticMesh asset. Asset lifecycle diagnostics + scene unit conversion fix (COMPLETE) ✅
+12. **Phase 7C Stage 3A–5 — FBX Mesh Handoff Import** — Blender exports FBX → UE imports StaticMesh asset. Asset lifecycle diagnostics + scene unit conversion fix + rename asset path diagnostics (COMPLETE) ✅
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
@@ -766,6 +766,9 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
+- **Phase 7C Stage 5 — FBX Rename Asset Path Diagnostics** (2026-06-09): Added diagnostic warning when FBX import targets a new asset path while a LiveSync actor already exists for the same GUID (indicates the Blender object was renamed). When `MeshActor && !bReplacingExistingAsset`, logs: `[FBX] Possible rename/new asset path detected for GUID %s: importing to new asset path %s. Previous imported asset may remain orphaned.` Diagnostic only — no asset deletion, no migration, no naming policy change, no new counters. Commit: `0a55aa5`. Tests: `phase7c_stage3a1_fbx_import_request.py` 85/85 PASS (was 75, +10 T14 tests). Build: PASS (pre-existing SetNum deprecation).
+  - Runtime validation (PASS): UE5.7.4 desktop/GPU session, Blender 5.1.2 Flatpak. First sync: created new asset + spawned actor. Re-sync (no rename): replaced existing asset, no warning. Rename to Stage5B: rename warning logged, new asset path used, same actor updated. No duplicate LS_FBX, no "Already registered". Evidence: `.opencode/evidence/phase7c_stage5_fbx_rename_asset_path/`
+
 - **Phase 7C Stage 4B — FBX Scene Unit Conversion Fix** (2026-06-09): FBX-imported StaticMesh now imports at correct scale. Root cause: UE5.7.4 `UFbxAssetImportData::bConvertSceneUnit` defaults to `false`. Blender exports FBX with `apply_scale_options='FBX_SCALE_UNITS'` (writes `UnitScaleFactor=100`). Without unit conversion, a 2m cube imported as ~2 UE units instead of ~200 UE units. Fix: added `FbxFactory->ImportUI->StaticMeshImportData->bConvertSceneUnit = true;` in `LiveSyncFBXImporter.cpp`. Also added `#include "Factories/FbxStaticMeshImportData.h"`. Runtime validation confirmed: 2m Blender cube imports as 200×200×200 UE units (box half-extent 100.0). No TCP transform change. No Blender export change. No packet/protocol change. Commit: `5250e27`. Tests: `phase7c_stage3a1_fbx_import_request.py` 75/75 PASS (was 69, +6 T13 tests). Build: PASS (pre-existing SetNum deprecation).
   - Evidence: `.opencode/evidence/phase7c_stage4b_fbx_scene_unit/ue_fbx_bounds_evidence.txt`
 
