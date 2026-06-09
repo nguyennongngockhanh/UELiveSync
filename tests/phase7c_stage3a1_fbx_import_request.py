@@ -380,6 +380,52 @@ else:
 
 
 # =============================================================
+# T9: Stage 3A.2 — Component registration and actor lifecycle (source text)
+# =============================================================
+
+banner("T9 — Stage 3A.2: No redundant RegisterComponent in HandleFBXImport")
+
+if os.path.isfile(ue_cpp_path):
+    with open(ue_cpp_path, "r") as f:
+        lines = f.readlines()
+
+    full_text = "".join(lines)
+
+    # T9.1: No RegisterComponent immediately after SetStaticMesh in HandleFBXImport
+    set_mesh_pos = full_text.find("GetStaticMeshComponent()->SetStaticMesh")
+    has_register_after_set = False
+    if set_mesh_pos >= 0:
+        snippet = full_text[set_mesh_pos:set_mesh_pos + 500]
+        has_register_after_set = "RegisterComponent" in snippet
+    test("T9.1: No RegisterComponent after SetStaticMesh in HandleFBXImport",
+          not has_register_after_set,
+          "RegisterComponent() still present after SetStaticMesh")
+
+    # T9.2: SetStaticMesh still present in HandleFBXImport
+    has_set_static_mesh = "GetStaticMeshComponent()->SetStaticMesh" in full_text
+    test("T9.2: SetStaticMesh still present in subsystem",
+          has_set_static_mesh,
+          "SetStaticMesh call not found in UELiveSyncSubsystem.cpp")
+
+    # T9.3: ActorCache.Add with Request.ObjectGUID exists (spans multiple lines)
+    has_actor_cache_add = "ActorCache.Add(" in full_text
+    has_object_guid = "Request.ObjectGUID" in full_text
+    test("T9.3: ActorCache.Add with Request.ObjectGUID still present",
+          has_actor_cache_add and has_object_guid,
+          "ActorCache.Add or ObjectGUID not found")
+
+    # T9.4: LiveSync_GUID tag logic still exists
+    has_guid_tag = "LiveSync_GUID=" in full_text
+    test("T9.4: LiveSync_GUID tag logic still present",
+          has_guid_tag,
+          "LiveSync_GUID tag not found")
+else:
+    test("T9.5: UELiveSyncSubsystem.cpp found for source check",
+          False,
+          f"not found at {ue_cpp_path}")
+
+
+# =============================================================
 # Summary
 # =============================================================
 

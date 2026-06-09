@@ -8810,7 +8810,6 @@ HandleFBXImport(
         if (MeshActor)
         {
             MeshActor->GetStaticMeshComponent()->SetStaticMesh(StaticMesh);
-            MeshActor->GetStaticMeshComponent()->RegisterComponent();
             Stats.FBXImportActorsUpdated.fetch_add(
                 1, std::memory_order_relaxed);
             UE_LOG(LogLiveSync, Log,
@@ -8849,7 +8848,6 @@ HandleFBXImport(
         }
 
         MeshActor->GetStaticMeshComponent()->SetStaticMesh(StaticMesh);
-        MeshActor->GetStaticMeshComponent()->RegisterComponent();
 
         // Tag with LiveSync GUID (matching HandleCreateObject pattern)
         FString TagString =
