@@ -5,6 +5,7 @@
 #include "AssetImportTask.h"
 #include "Factories/FbxFactory.h"
 #include "Factories/FbxImportUI.h"
+#include "Factories/FbxStaticMeshImportData.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/StaticMesh.h"
 #endif
@@ -189,6 +190,7 @@ bool FLiveSyncFBXImporter::HandleImport(
     if (FbxFactory)
     {
         FbxFactory->ImportUI->bAutomatedImportShouldDetectType = true;
+        FbxFactory->ImportUI->StaticMeshImportData->bConvertSceneUnit = true;
         ImportTask->Factory = FbxFactory;
     }
 

@@ -647,6 +647,71 @@ else:
 
 
 # =============================================================
+# T13: Stage 4B — FBX Scene Unit Conversion (bConvertSceneUnit)
+# =============================================================
+
+banner("T13 — Stage 4B: FBX scene unit conversion")
+
+init_py_path = os.path.join(
+    os.path.dirname(__file__),
+    "..", "Blender_Addon", "__init__.py")
+
+if os.path.isfile(ue_importer_cpp_path):
+    with open(ue_importer_cpp_path, "r") as f:
+        importer_text = f.read()
+
+    # T13.1: bConvertSceneUnit exists
+    test("T13.1: bConvertSceneUnit exists in LiveSyncFBXImporter.cpp",
+          "bConvertSceneUnit" in importer_text,
+          "bConvertSceneUnit not found")
+
+    # T13.2: StaticMeshImportData->bConvertSceneUnit = true
+    test("T13.2: StaticMeshImportData->bConvertSceneUnit = true set",
+          "StaticMeshImportData->bConvertSceneUnit = true" in importer_text,
+          "bConvertSceneUnit = true not set on StaticMeshImportData")
+
+    # T13.3: No bConvertSceneUnit = false
+    test("T13.3: No bConvertSceneUnit = false in LiveSyncFBXImporter.cpp",
+          "bConvertSceneUnit = false" not in importer_text,
+          "bConvertSceneUnit = false should not appear")
+
+    # T13.4: No ImportUniformScale change
+    test("T13.4: No ImportUniformScale added",
+          "ImportUniformScale" not in importer_text,
+          "ImportUniformScale should not appear in LiveSyncFBXImporter.cpp")
+else:
+    test("T13.5: LiveSyncFBXImporter.cpp found",
+          False,
+          f"not found at {ue_importer_cpp_path}")
+
+if os.path.isfile(init_py_path):
+    with open(init_py_path, "r") as f:
+        init_text = f.read()
+
+    # T13.6: Blender still uses FBX_SCALE_UNITS
+    test("T13.6: Blender __init__.py uses apply_scale_options='FBX_SCALE_UNITS'",
+          "apply_scale_options='FBX_SCALE_UNITS'" in init_text,
+          "FBX_SCALE_UNITS option missing from Blender export")
+else:
+    test("T13.7: Blender __init__.py found",
+          False,
+          f"not found at {init_py_path}")
+
+if os.path.isfile(ue_importer_cpp_path):
+    with open(ue_importer_cpp_path, "r") as f:
+        importer_text = f.read()
+
+    # T13.8: FbxStaticMeshImportData.h include added
+    test("T13.8: FbxStaticMeshImportData.h included",
+          '#include "Factories/FbxStaticMeshImportData.h"' in importer_text,
+          "FbxStaticMeshImportData.h include missing")
+else:
+    test("T13.9: LiveSyncFBXImporter.cpp found (re-check)",
+          False,
+          f"not found at {ue_importer_cpp_path}")
+
+
+# =============================================================
 # Summary
 # =============================================================
 
