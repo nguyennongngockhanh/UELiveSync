@@ -179,6 +179,7 @@ except ImportError:
         PT_Collection,
         PT_Material,
         LIVE_SYNC_VERSION_V5,
+        get_object_material_slots,
         get_mesh_identity_hash,
         get_material_identity_hash,
         serialize_asset_identity,
