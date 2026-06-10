@@ -61,7 +61,7 @@ Open or restart the project. The plugin loads automatically.
 
 1. **Launch UE** with your project. Use windowed mode:
    ```bash
-   CEF_DISABLE_GPU=1 ./UnrealEditor <Project>.uproject
+   ./UnrealEditor <Project>.uproject -windowed -ResX=1280 -ResY=720 -nohighdpi -log
    ```
    (On Linux; see [SYSTEM_REQUIREMENTS.md](SYSTEM_REQUIREMENTS.md) for details.)
 

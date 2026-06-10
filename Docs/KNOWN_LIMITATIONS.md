@@ -24,18 +24,26 @@ The following platforms have **not** been validated with a full runtime test:
 
 - **Do not** use `-NullRHI` for LiveSync — networking is disabled in that mode.
 - **Do not** use `-RenderOffScreen -NoCEF` — Tick() and FTSTicker did not execute in validation.
-- **Use** windowed UE mode with `CEF_DISABLE_GPU=1` for runtime validation on Linux.
+- **Use** windowed UE mode for runtime validation on Linux. The stable launch profile is the bare UE command without the old SDL/CEF env vars:
+
+  ```
+  ./UnrealEditor <Project>.uproject -windowed -ResX=1280 -ResY=720 -nohighdpi -log
+  ```
+
+- The old validation profile (`CEF_DISABLE_GPU=1` + SDL/X11 env vars) is **no longer recommended** — it caused CEF GPU crash cascades on Fedora 44 / NVIDIA 595.80.
 
 See [SYSTEM_REQUIREMENTS.md](SYSTEM_REQUIREMENTS.md) for the recommended launch profile.
 
-## Feature Gaps (Not Yet Validated at Runtime)
+## Feature Validation Status
 
-| Feature | Status |
-|---------|--------|
-| Interactive visibility sync | Validated in Blender driver (not interactive) |
-| MESH-parent hierarchy sync | Not tested with EMPTY parent |
-| Keyframe visibility channels 9–10 | Not tested at runtime |
-| Real FBX import/reimport | Not tested with an actual FBX file |
+Phase 10D runtime gaps are **closed** (commit `1ef954a`):
+
+| Feature | Runtime Validated |
+|---------|-------------------|
+| Interactive visibility sync | ✅ PASS |
+| MESH-parent hierarchy sync | ✅ PASS |
+| Keyframe visibility channels 9–10 | ✅ PASS |
+| Real FBX import/reimport | ✅ PASS |
 
 ## FBX Mesh Handoff
 

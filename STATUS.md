@@ -661,11 +661,11 @@ Phase 7E transform keyframe pipeline is **complete and verified**. All stages ar
 #### Known Gaps
 
 - **No interpolation/tangent mapping**: Blender Bézier/auto/vector tangents are not mapped to UE's `FMovieSceneTangentData`. Keys use default Hermite interpolation on the UE side.
-- **No visibility keys**: The existing visibility lane (`PT_Visibility`, 0x0B) is not integrated with Sequencer. No `UMovieSceneBoolTrack` writes occur.
+- **PT_Visibility lane not integrated with Sequencer**: The existing visibility lane (`PT_Visibility`, 0x0B) does not write to Sequencer tracks. Visibility keyframes use `PT_Keyframe` channels 9–10 via `UMovieSceneBoolTrack` (Stage 10A).
 - **No camera property keys**: FCurves for focal length, aperture, focus distance, etc. are silently skipped in `_extract_keyframes()`.
 - **No Bézier handles**: Multi-keyframe curve shapes are not preserved — only per-frame transform values are replicated.
 - **No live Sequencer UI**: The transient `ULevelSequence` is not opened in Sequencer tabs or displayed in the UI.
-- **No full Blender+UE runtime validation**: All validation is done via unit tests with simulated network/sequencer state. End-to-end runtime validation requires a running UE editor instance.
+- **Sequencer keyframe runtime validation limited to Phase 10D tests**: End-to-end runtime validation for visibility keyframes (ch 9–10) completed via Blender driver scripts. Transform keyframe runtime validation still requires a running UE editor instance with Blender FCurve animation.
 
 #### Stage 10A — Visibility BoolTrack Apply IMPLEMENTED
 
@@ -767,9 +767,18 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
-- **Phase 9N.1 — Prepare v0.2.3 Hotfix/Docs Patch Metadata** (2026-06-10): Metadata bumped to v0.2.3. CHANGELOG/RELEASE_NOTES/INSTALL updated for v0.2.3. Reason: include fallback import hotfix and runtime validation docs in a tagged release. v0.2.0, v0.2.1, and v0.2.2 remain untouched. Tag/package/release pending.
+- **Phase 10D — Runtime Gap Closure** (2026-06-10): All Phase 10D runtime gaps closed and validated.
+  - **StopNetworkThread sequencer state reset** (commit `1ef954a`): Resets `bHasSequencerOpState`, `LastSequencerOpSequence`, `bHasLiveSyncSequence`, `LiveSyncSequence`, `LiveSyncGuidToSequencerBinding`, `PendingSequencerBindings` on disconnect, preventing stale SEQOP rejection after reconnect.
+  - **Runtime validation results**:
+    - Interactive visibility hide/show apply — **PASS**
+    - MESH-parent hierarchy attach/detach — **PASS**
+    - Real FBX import — **PASS**
+    - Real FBX reimport/update same GUID — **PASS**
+    - Visibility keyframe channels 9–10 (Sequencer BoolTrack apply) — **PASS** (applied=6 miss=0 unsupp=0)
+  - **UE launch profile**: Updated to bare UE command (`-windowed -ResX=1280 -ResY=720 -nohighdpi -log`). The old `CEF_DISABLE_GPU=1` + SDL/X11 env profile is no longer recommended (caused CEF GPU crash on Fedora 44 / NVIDIA 595.80).
+  - Evidence: `.opencode/evidence/runtime_gap_tests/`
 
-- **Phase 9M — Full Runtime Validation Closed** (2026-06-10): Runtime validation completed with UE windowed + CEF_DISABLE_GPU=1. `-RenderOffScreen -NoCEF` documented as unsuitable for LiveSync runtime validation because Tick/FTSTicker did not execute. Blender→UE packet pipeline verified: listener, accept, enqueue, process, spawn, transform, rename, mesh/asset, FBX request parsing. Source tests passed: phase9f 30/30, phase7c 85/85, phase8 10/10. Runtime gaps deferred: interactive visibility, MESH-parent hierarchy, keyframe channel 9/10, real FBX import/reimport. Related hotfix committed separately: `3f8f3fa`. Evidence: `.opencode/evidence/runtime_full_test/final_report.md`.
+- **Phase 9N.1 — Prepare v0.2.3 Hotfix/Docs Patch Metadata** (2026-06-10): Metadata bumped to v0.2.3. CHANGELOG/RELEASE_NOTES/INSTALL updated for v0.2.3. Reason: include fallback import hotfix and runtime validation docs in a tagged release. v0.2.0, v0.2.1, and v0.2.2 remain untouched. Tag/package/release pending.
 
 - **Phase 9K.1 — Prepare v0.2.2 Commercial License Patch Metadata** (2026-06-09): Metadata bumped to v0.2.2. CHANGELOG/RELEASE_NOTES/INSTALL updated for v0.2.2. Reason: include commercial license terms in a tagged release. v0.2.0 and v0.2.1 remain untouched. Tag/package/release pending.
 

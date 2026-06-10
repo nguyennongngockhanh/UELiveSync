@@ -4,6 +4,8 @@ Blender ↔ Unreal Engine lightweight live sync over direct TCP.
 
 **Latest release: [v0.2.3](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.3)** — early-access pre-release.
 
+> **main branch** includes post-v0.2.3 runtime validation updates and sequencer reconnect fixes. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for unreleased changes.
+
 ## Supported Versions
 
 - **Unreal Engine:** 5.7+

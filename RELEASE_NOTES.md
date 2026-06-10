@@ -2,6 +2,32 @@
 
 License: Commercial/source-available. See [LICENSE](LICENSE) and [EULA.md](EULA.md). Blender addon component has GPL-2.0-or-later compatible terms; see [Blender_Addon/LICENSE](Blender_Addon/LICENSE).
 
+## Unreleased / main after v0.2.3
+
+### Runtime Validation
+- Closed all Phase 10D runtime gaps:
+  - **Visibility hide/show apply** — validated via Blender driver.
+  - **MESH-parent hierarchy attach/detach** — validated with EMPTY parent.
+  - **Real FBX import** — validated with an actual FBX file.
+  - **Real FBX reimport/update** — same-GUID update validated.
+  - **Visibility keyframe channels 9–10** — Sequencer BoolTrack apply validated at runtime (6/6 keys applied).
+- Summary output now correctly reports `applied=6` for visibility keyframes (fixes cosmetic counter gap).
+
+### Sequencer Fix
+- **Sequencer state reset on reconnect** (commit `1ef954a`): `StopNetworkThread()` now resets `bHasSequencerOpState`, `LastSequencerOpSequence`, `bHasLiveSyncSequence`, `LiveSyncSequence`, `LiveSyncGuidToSequencerBinding`, and `PendingSequencerBindings` on disconnect — prevents stale SEQOP rejection after reconnect.
+
+### UE Launch Profile
+- Stable runtime validation profile updated to **bare UE command** (no `CEF_DISABLE_GPU=1` or SDL/X11 env vars). The old env profile caused CEF GPU crash cascades on Fedora 44 / NVIDIA 595.80.
+- `-RenderOffScreen -NoCEF` and `-NullRHI` remain unsuitable for LiveSync runtime validation.
+
+### Docs
+- Added buyer documentation pack (commit `934cb80`):
+  - `Docs/BUYER_QUICK_START.md`
+  - `Docs/SYSTEM_REQUIREMENTS.md`
+  - `Docs/KNOWN_LIMITATIONS.md`
+  - `Docs/LICENSE_FAQ.md`
+  - `Docs/SUPPORT_POLICY.md`
+
 ## What Changed Since v0.2.2
 
 - Added missing `get_object_material_slots` fallback import for standalone/background Blender execution.

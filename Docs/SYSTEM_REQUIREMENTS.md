@@ -16,9 +16,9 @@
 
 | Item | Detail |
 |------|--------|
-| OS | Fedora KDE Linux |
-| GPU | NVIDIA / Vulkan |
-| UE mode | Windowed, `CEF_DISABLE_GPU=1` |
+| OS | Fedora KDE Linux (44+ validated) |
+| GPU | NVIDIA / Vulkan (driver 595.80 validated) |
+| UE mode | Windowed, bare command (no SDL/X11/CEF env vars) |
 | Network | Local TCP 127.0.0.1:57000 |
 
 ## Not Yet Validated
@@ -30,11 +30,15 @@
 
 ## Recommended UE Launch (Linux)
 
+The stable runtime validation profile on Fedora 44 / NVIDIA 595.80:
+
 ```bash
-CEF_DISABLE_GPU=1 ./UnrealEditor <Project>.uproject
+./UnrealEditor <Project>.uproject -windowed -ResX=1280 -ResY=720 -nohighdpi -log
 ```
 
-Use windowed mode. Do not use `-NullRHI` or `-RenderOffScreen -NoCEF` — LiveSync networking and/or Tick will not function in those modes.
+Do not use `-NullRHI` or `-RenderOffScreen -NoCEF` — LiveSync networking and/or Tick will not function in those modes.
+
+The previous validation profile (`CEF_DISABLE_GPU=1` with SDL/X11 env vars) is **no longer recommended** — it caused CEF GPU crash cascades. The bare UE command above is the validated launch method for current runtime tests.
 
 ## Network / Security
 
