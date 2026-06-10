@@ -767,6 +767,8 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
+- **Phase 9M — Full Runtime Validation Closed** (2026-06-10): Runtime validation completed with UE windowed + CEF_DISABLE_GPU=1. `-RenderOffScreen -NoCEF` documented as unsuitable for LiveSync runtime validation because Tick/FTSTicker did not execute. Blender→UE packet pipeline verified: listener, accept, enqueue, process, spawn, transform, rename, mesh/asset, FBX request parsing. Source tests passed: phase9f 30/30, phase7c 85/85, phase8 10/10. Runtime gaps deferred: interactive visibility, MESH-parent hierarchy, keyframe channel 9/10, real FBX import/reimport. Related hotfix committed separately: `3f8f3fa`. Evidence: `.opencode/evidence/runtime_full_test/final_report.md`.
+
 - **Phase 9K.1 — Prepare v0.2.2 Commercial License Patch Metadata** (2026-06-09): Metadata bumped to v0.2.2. CHANGELOG/RELEASE_NOTES/INSTALL updated for v0.2.2. Reason: include commercial license terms in a tagged release. v0.2.0 and v0.2.1 remain untouched. Tag/package/release pending.
 
 - **Phase 9J.2 — Dual-Component Commercial Licensing** (2026-06-09): Added root commercial source-available LICENSE, EULA.md for commercial end-user terms, and Blender_Addon/LICENSE GPL-2.0-or-later component notice. Updated README and RELEASE_NOTES license references. Purpose: support commercial sale while documenting Blender addon GPL compatibility.
