@@ -1,6 +1,6 @@
 # UELiveSync Known Limitations
 
-**Version:** v0.2.3 — early-access pre-release.
+**Version:** v0.2.4 — early-access pre-release.
 
 ---
 
@@ -54,7 +54,7 @@ Phase 10D runtime gaps are **closed** (commit `1ef954a`):
 
 ## Early-Access Notes
 
-- v0.2.3 is an early-access pre-release.
+- v0.2.4 is an early-access pre-release.
 - Buyer should expect continued improvements in asset lifecycle, cleanup, and platform coverage.
 - Not yet recommended for production pipelines without prior testing on the target setup.
 

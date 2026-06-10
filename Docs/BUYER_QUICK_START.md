@@ -1,6 +1,6 @@
 # UELiveSync Buyer Quick Start
 
-**Release:** v0.2.3
+**Release:** v0.2.4
 
 This guide gets you from download to a working live sync between Blender and Unreal Engine.
 
@@ -8,18 +8,18 @@ This guide gets you from download to a working live sync between Blender and Unr
 
 ## 1. Download
 
-Download the three release assets from the [v0.2.3 release page](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.3):
+Download the three release assets from the [v0.2.4 release page](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.4):
 
 | File | Description |
 |------|-------------|
-| `UELiveSync-Blender-Addon-v0.2.3.zip` | Blender addon |
-| `UELiveSync-UE-Plugin-v0.2.3.zip` | UE plugin |
-| `UELiveSync-v0.2.3-SHA256SUMS.txt` | Integrity checksums |
+| `UELiveSync-Blender-Addon-v0.2.4.zip` | Blender addon |
+| `UELiveSync-UE-Plugin-v0.2.4.zip` | UE plugin |
+| `UELiveSync-v0.2.4-SHA256SUMS.txt` | Integrity checksums |
 
 ## 2. Verify Integrity
 
 ```bash
-sha256sum -c UELiveSync-v0.2.3-SHA256SUMS.txt
+sha256sum -c UELiveSync-v0.2.4-SHA256SUMS.txt
 ```
 
 Both zips should report `OK`.
@@ -27,7 +27,7 @@ Both zips should report `OK`.
 ## 3. Install Blender Addon
 
 ```bash
-unzip UELiveSync-Blender-Addon-v0.2.3.zip
+unzip UELiveSync-Blender-Addon-v0.2.4.zip
 ```
 
 Copy the `ue_live_sync/` folder to your Blender addons directory:
@@ -46,7 +46,7 @@ See [INSTALL.md](../INSTALL.md) for detailed instructions and the automated inst
 ## 4. Install UE Plugin
 
 ```bash
-unzip UELiveSync-UE-Plugin-v0.2.3.zip
+unzip UELiveSync-UE-Plugin-v0.2.4.zip
 ```
 
 Copy the `UELiveSync/` folder into your UE project's `Plugins/` directory:

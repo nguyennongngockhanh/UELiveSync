@@ -1,6 +1,6 @@
 # UELiveSync System Requirements
 
-**Version:** v0.2.3
+**Version:** v0.2.4
 
 ---
 

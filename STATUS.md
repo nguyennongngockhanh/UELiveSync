@@ -778,6 +778,8 @@ All verified in regression run.
   - **UE launch profile**: Updated to bare UE command (`-windowed -ResX=1280 -ResY=720 -nohighdpi -log`). The old `CEF_DISABLE_GPU=1` + SDL/X11 env profile is no longer recommended (caused CEF GPU crash on Fedora 44 / NVIDIA 595.80).
   - Evidence: `.opencode/evidence/runtime_gap_tests/`
 
+- **Phase 10F — Prepare v0.2.4 Patch Release Metadata** (2026-06-10): Metadata bumped to v0.2.4. CHANGELOG/RELEASE_NOTES/INSTALL/README/Docs updated for v0.2.4. Tag/package/release pending.
+
 - **Phase 9N.1 — Prepare v0.2.3 Hotfix/Docs Patch Metadata** (2026-06-10): Metadata bumped to v0.2.3. CHANGELOG/RELEASE_NOTES/INSTALL updated for v0.2.3. Reason: include fallback import hotfix and runtime validation docs in a tagged release. v0.2.0, v0.2.1, and v0.2.2 remain untouched. Tag/package/release pending.
 
 - **Phase 9K.1 — Prepare v0.2.2 Commercial License Patch Metadata** (2026-06-09): Metadata bumped to v0.2.2. CHANGELOG/RELEASE_NOTES/INSTALL updated for v0.2.2. Reason: include commercial license terms in a tagged release. v0.2.0 and v0.2.1 remain untouched. Tag/package/release pending.

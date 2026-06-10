@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.4] - 2026-06-10
+
+### Added
+- Runtime validation for visibility hide/show, MESH-parent hierarchy, real FBX import/reimport, and visibility keyframe channels 9–10.
+- Sequencer state reset on reconnect to prevent stale SEQOP rejection after reconnect.
+- Buyer documentation pack (quick start, system requirements, known limitations, license FAQ, support policy).
+- Updated Linux runtime validation launch profile (bare UE command instead of `CEF_DISABLE_GPU=1`).
+
+### Fixed
+- Sequencer reconnect bug where stale sequencer state caused CREATE_SEQUENCE and ADD_POSSESSABLE rejection.
+- Visibility keyframe applied counter now correctly reports applied keys.
+
+### Notes
+- v0.2.4 is a patch release with runtime validation closure and sequencer reconnect fix.
+- Runtime protocol and packet formats are unchanged from v0.2.3.
+- v0.2.0, v0.2.1, v0.2.2, and v0.2.3 remain published and untouched.
+
 ## [0.2.3] - 2026-06-10
 
 ### Fixed

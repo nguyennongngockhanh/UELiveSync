@@ -1,8 +1,8 @@
-# UELiveSync v0.2.3 Pre-release
+# UELiveSync v0.2.4 Patch Release
 
 License: Commercial/source-available. See [LICENSE](LICENSE) and [EULA.md](EULA.md). Blender addon component has GPL-2.0-or-later compatible terms; see [Blender_Addon/LICENSE](Blender_Addon/LICENSE).
 
-## Unreleased / main after v0.2.3
+## What Changed Since v0.2.3
 
 ### Runtime Validation
 - Closed all Phase 10D runtime gaps:
@@ -27,6 +27,10 @@ License: Commercial/source-available. See [LICENSE](LICENSE) and [EULA.md](EULA.
   - `Docs/KNOWN_LIMITATIONS.md`
   - `Docs/LICENSE_FAQ.md`
   - `Docs/SUPPORT_POLICY.md`
+
+## Unreleased / main after v0.2.4
+
+*No unreleased changes yet.*
 
 ## What Changed Since v0.2.2
 

@@ -2,9 +2,9 @@
 
 Blender ↔ Unreal Engine lightweight live sync over direct TCP.
 
-**Latest release: [v0.2.3](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.3)** — early-access pre-release.
+**Latest release: [v0.2.4](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.4)** — patch release.
 
-> **main branch** includes post-v0.2.3 runtime validation updates and sequencer reconnect fixes. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for unreleased changes.
+> **main branch** includes changes beyond the v0.2.4 release. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for unreleased changes.
 
 ## Supported Versions
 
@@ -32,7 +32,7 @@ Blender ↔ Unreal Engine lightweight live sync over direct TCP.
 
 ## Quick Install
 
-1. Download the [v0.2.3 release](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.3) or follow [INSTALL.md](INSTALL.md).
+1. Download the [v0.2.4 release](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.4) or follow [INSTALL.md](INSTALL.md).
 2. Use the install helper for automated setup:
 
 ```bash
@@ -70,7 +70,7 @@ See [INSTALL.md](INSTALL.md) for full Windows, Linux, Flatpak, and macOS instruc
 - [INSTALL.md](INSTALL.md) — Installation guide
 - [RELEASE_NOTES.md](RELEASE_NOTES.md) — Feature details and known issues
 - [CHANGELOG.md](CHANGELOG.md) — Release history
-- [v0.2.3 Release](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.3)
+- [v0.2.4 Release](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.4)
 
 ## Buyer Documentation
 
