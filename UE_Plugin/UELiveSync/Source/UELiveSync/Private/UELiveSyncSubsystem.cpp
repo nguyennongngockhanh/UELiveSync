@@ -2300,6 +2300,15 @@ StopNetworkThread()
     RemoteCapabilities = 0;
     bCapabilityResponseSent = false;
 
+    // Phase 7E/10A: sequencer op state is per remote session. Reset on
+    // disconnect so reconnects may restart SEQOP numbering from 1.
+    bHasSequencerOpState = false;
+    LastSequencerOpSequence = 0;
+    bHasLiveSyncSequence = false;
+    LiveSyncSequence = nullptr;
+    LiveSyncGuidToSequencerBinding.Empty();
+    PendingSequencerBindings.Empty();
+
     UE_LOG(LogLiveSync, Log,
         TEXT("[HIERARCHY] PendingHierarchyAttachments cleared (StopNetworkThread)"));
 
@@ -8515,6 +8524,7 @@ HandleKeyframe(
                     { FFrameNumber(Entry->Frame) },
                     { bValue });
                 Stats.KeyframeVisibilityKeysApplied.fetch_add(1, std::memory_order_relaxed);
+                AppliedKeys++;
                 UE_LOG(LogLiveSync, Log,
                     TEXT("[KEYFRAME][VISIBILITY] applied channel=%d guid=%s value=%d frame=%d"),
                     Entry->ChannelIndex, *Entry->ObjectGUID.ToString(),
