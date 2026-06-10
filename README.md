@@ -2,7 +2,7 @@
 
 Blender ↔ Unreal Engine lightweight live sync over direct TCP.
 
-**Latest pre-release: [v0.2.1](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.1)** — active development.
+**Latest release: [v0.2.3](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.3)** — early-access pre-release.
 
 ## Supported Versions
 
@@ -30,7 +30,7 @@ Blender ↔ Unreal Engine lightweight live sync over direct TCP.
 
 ## Quick Install
 
-1. Download the [v0.2.1 release](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.1) or follow [INSTALL.md](INSTALL.md).
+1. Download the [v0.2.3 release](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.3) or follow [INSTALL.md](INSTALL.md).
 2. Use the install helper for automated setup:
 
 ```bash
@@ -68,7 +68,15 @@ See [INSTALL.md](INSTALL.md) for full Windows, Linux, Flatpak, and macOS instruc
 - [INSTALL.md](INSTALL.md) — Installation guide
 - [RELEASE_NOTES.md](RELEASE_NOTES.md) — Feature details and known issues
 - [CHANGELOG.md](CHANGELOG.md) — Release history
-- [v0.2.1 Release](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.1)
+- [v0.2.3 Release](https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.3)
+
+## Buyer Documentation
+
+- [BUYER_QUICK_START.md](Docs/BUYER_QUICK_START.md) — Get started in 5 minutes
+- [SYSTEM_REQUIREMENTS.md](Docs/SYSTEM_REQUIREMENTS.md) — Tested platforms and launch profile
+- [KNOWN_LIMITATIONS.md](Docs/KNOWN_LIMITATIONS.md) — Current product limitations
+- [LICENSE_FAQ.md](Docs/LICENSE_FAQ.md) — Plain-English license answers
+- [SUPPORT_POLICY.md](Docs/SUPPORT_POLICY.md) — Support terms and contact
 
 ## License
 
