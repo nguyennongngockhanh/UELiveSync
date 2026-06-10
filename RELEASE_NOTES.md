@@ -1,6 +1,14 @@
-# UELiveSync v0.2.2 Pre-release
+# UELiveSync v0.2.3 Pre-release
 
 License: Commercial/source-available. See [LICENSE](LICENSE) and [EULA.md](EULA.md). Blender addon component has GPL-2.0-or-later compatible terms; see [Blender_Addon/LICENSE](Blender_Addon/LICENSE).
+
+## What Changed Since v0.2.2
+
+- Added missing `get_object_material_slots` fallback import for standalone/background Blender execution.
+- Added `Docs/runtime_validation.md`.
+- Documented stable runtime validation launch profile: UE windowed mode with `CEF_DISABLE_GPU=1`.
+- Documented that `-RenderOffScreen -NoCEF` is unsuitable for LiveSync runtime validation because Tick/FTSTicker did not execute.
+- Runtime protocol and packet formats are unchanged from v0.2.2.
 
 ## What Changed Since v0.2.1
 

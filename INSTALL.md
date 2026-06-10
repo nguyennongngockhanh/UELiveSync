@@ -17,7 +17,7 @@
 
 ### Blender Addon
 
-Unzip `UELiveSync-Blender-Addon-v0.2.2.zip` and place the `ue_live_sync/` folder in the appropriate path for your platform:
+Unzip `UELiveSync-Blender-Addon-v0.2.3.zip` and place the `ue_live_sync/` folder in the appropriate path for your platform:
 
 **Windows:**
 ```
@@ -44,7 +44,7 @@ Unzip `UELiveSync-Blender-Addon-v0.2.2.zip` and place the `ue_live_sync/` folder
 
 ### UE Plugin
 
-Unzip `UELiveSync-UE-Plugin-v0.2.2.zip` and place the `UELiveSync/` folder in your project:
+Unzip `UELiveSync-UE-Plugin-v0.2.3.zip` and place the `UELiveSync/` folder in your project:
 
 ```
 <Project>/Plugins/UELiveSync/
@@ -62,7 +62,7 @@ The installer (`install_uelivesync.py`) automates installation for Blender and U
 ### Prerequisites
 
 - Python 3.6+ (no external dependencies)
-- Access to the `UELiveSync-Blender-Addon-v0.2.2.zip` or the source repo
+- Access to the `UELiveSync-Blender-Addon-v0.2.3.zip` or the source repo
 
 ### Basic Usage
 
@@ -132,8 +132,8 @@ python install_uelivesync.py --blender-addon --flatpak --blender-version 5.1
 
 | Asset | Description |
 |-------|-------------|
-| `UELiveSync-Blender-Addon-v0.2.2.zip` | Blender addon (folder: `ue_live_sync/`) |
-| `UELiveSync-UE-Plugin-v0.2.2.zip` | UE plugin (folder: `UELiveSync/`) |
-| `UELiveSync-v0.2.2-SHA256SUMS.txt` | SHA-256 checksums for verification |
+| `UELiveSync-Blender-Addon-v0.2.3.zip` | Blender addon (folder: `ue_live_sync/`) |
+| `UELiveSync-UE-Plugin-v0.2.3.zip` | UE plugin (folder: `UELiveSync/`) |
+| `UELiveSync-v0.2.3-SHA256SUMS.txt` | SHA-256 checksums for verification |
 
-GitHub Release: https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.2
+GitHub Release: https://github.com/nguyennongngockhanh/UELiveSync/releases/tag/v0.2.3

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.3] - 2026-06-10
+
+### Fixed
+- Added missing `get_object_material_slots` fallback import in `Blender_Addon/sync.py` for standalone/background execution paths.
+
+### Added
+- Runtime validation documentation: `Docs/runtime_validation.md`.
+- Full runtime validation status entry documenting the stable UE launch profile.
+
+### Notes
+- v0.2.3 is a hotfix/docs patch release.
+- Runtime protocol and packet formats are unchanged from v0.2.2.
+- v0.2.0, v0.2.1, and v0.2.2 remain published and untouched.
+- Recommended runtime validation profile is UE windowed mode with `CEF_DISABLE_GPU=1`.
+- `-RenderOffScreen -NoCEF` is not recommended for LiveSync runtime validation because Tick/FTSTicker did not execute in that mode.
+
 ## [0.2.2] - 2026-06-09
 
 ### Added
