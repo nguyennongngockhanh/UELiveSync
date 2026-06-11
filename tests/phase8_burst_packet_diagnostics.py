@@ -85,10 +85,10 @@ if os.path.isfile(SYNC_PY):
     else:
         test("T7: network.py exists for check", False, "network.py not found")
 
-    # T8: No wire format change (FBX_IMPORT_REQUEST_PAYLOAD_SIZE still 680)
-    test("T8: FBX_IMPORT_REQUEST_PAYLOAD_SIZE unchanged in network.py",
-          "FBX_IMPORT_REQUEST_PAYLOAD_SIZE = 680" in net_text,
-          "FBX payload size changed")
+    # T8: Payload size updated for GeometryHash (Phase 10J.5F)
+    test("T8: FBX_IMPORT_REQUEST_PAYLOAD_SIZE is 688 in network.py",
+          "FBX_IMPORT_REQUEST_PAYLOAD_SIZE = 688" in net_text,
+          "FBX payload size not updated")
 
     # T9: sync.py imports network
     test("T9: sync.py imports network module",

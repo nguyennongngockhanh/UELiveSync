@@ -303,17 +303,51 @@ SEQUENCER_OP_ADD_CAMERA_CUT    = 3  # Add camera cut to sequence
 SEQUENCER_OP_CLEAR_SEQUENCE    = 4  # Clear all tracks/possessables from sequence
 SEQUENCER_OP_SET_FRAME_RANGE   = 5  # Update sequence frame range + FPS
 
-# Phase 7C Stage 3A.1: FBX Import Request payload: 680 bytes fixed
-FBX_IMPORT_REQUEST_PAYLOAD_SIZE = 680
+# Phase 7C Stage 3A.1: FBX Import Request payload: 688 bytes fixed
+FBX_IMPORT_REQUEST_PAYLOAD_SIZE = 688
+
+def compute_fbx_geometry_hash(mesh):
+    """Compute a stable 64-bit geometry hash for FBX duplicate detection.
+
+    Uses evaluated mesh vertex coordinates, loop triangle topology,
+    and material slot count. Deterministic for identical geometry;
+    changes when vertex positions, topology, or material slot count change.
+
+    Guarantees non-zero return for any non-empty mesh.
+    Falls back to a deterministic non-zero sentinel derived from
+    mesh content if primary xxh64 returns 0 (astronomically rare).
+
+    Args:
+        mesh: bpy.types.Mesh (evaluated) with loop triangles available.
+
+    Returns:
+        int: unsigned 64-bit xxh64 hash. 0 if computation fails.
+    """
+    try:
+        if not mesh.loop_triangles and hasattr(mesh, 'calc_loop_triangles'):
+            mesh.calc_loop_triangles()
+        data = b''
+        for v in mesh.vertices:
+            data += struct.pack('<fff', v.co.x, v.co.y, v.co.z)
+        for t in mesh.loop_triangles:
+            data += struct.pack('<III', t.vertices[0], t.vertices[1], t.vertices[2])
+        data += struct.pack('<I', len(mesh.materials))
+        h = xxh64(data)
+        if h == 0:
+            h = xxh64(data, seed=1)
+        return h
+    except Exception:
+        return 0
+
 
 def serialize_fbx_import_request(
     guid_obj, fbx_path, object_name,
     vert_count, tri_count, mat_slot_count,
-    timestamp, version=1
+    timestamp, geometry_hash=0, version=1
 ):
     """Serialize a PT_FBXImportRequest (0x16) fixed-size payload.
 
-    Wire format (680 bytes):
+    Wire format (688 bytes):
         ObjectGUID  : 16 bytes (4 × uint32 LE)
         Version     : uint32 LE
         FbxPath     : 512 bytes, UTF-8 null-padded
@@ -322,6 +356,10 @@ def serialize_fbx_import_request(
         TriCount    : uint32 LE
         MatSlotCount: uint32 LE
         Timestamp   : double LE
+        GeometryHash: uint64 LE  — geometry content signature (Phase 10J.5F)
+
+    Backward compatible: geometry_hash=0 indicates old/unknown protocol.
+    Old 680-byte payloads are accepted on the UE side (GeometryHash = 0).
 
     Args:
         guid_obj: UUID object for the object GUID.
@@ -331,15 +369,16 @@ def serialize_fbx_import_request(
         tri_count: Triangle count in the exported mesh.
         mat_slot_count: Number of material slots.
         timestamp: Unix timestamp (seconds since epoch) as float.
+        geometry_hash: 64-bit geometry content hash (0 = unknown/old protocol).
         version: Payload format version (default 1).
 
     Returns:
-        bytes: 680-byte fixed-size payload.
+        bytes: 688-byte fixed-size payload.
     """
     guid_bytes = pack_ue_fguid(guid_obj)
     fbx_path_bytes = fbx_path.encode('utf-8')
     name_bytes = object_name.encode('utf-8')
-    fmt = '<16sI512s128sIIId'
+    fmt = '<16sI512s128sIIIdQ'
     return struct.pack(
         fmt,
         guid_bytes,
@@ -350,6 +389,7 @@ def serialize_fbx_import_request(
         tri_count,
         mat_slot_count,
         timestamp,
+        geometry_hash,
     )
 
 # Phase 9: Capability negotiation (announce/response)

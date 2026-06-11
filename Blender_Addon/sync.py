@@ -48,6 +48,7 @@ try:
         PT_Delete_V5,
         PT_Visibility,
         PT_Collection,
+        PT_Material,
         get_object_material_slots,
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
@@ -1224,6 +1225,12 @@ def check_updates():
     mesh_payloads_to_send = []
 
     # =====================================================
+    # MATSTALL: track GUIDs that had material changes this tick
+    # for transform-side diagnostics.
+    # =====================================================
+    _mat_stall_guids = set()
+
+    # =====================================================
     # SCENE SCAN (only when object count changes or
     # periodic check for edge cases)
     # =====================================================
@@ -1351,10 +1358,22 @@ def check_updates():
             previous is None
         )
 
+        _is_mat_stall_target = (guid in _mat_stall_guids if hasattr(_mat_stall_guids, '__contains__') else False)
+
         if transforms_different(
             transform,
             previous
         ):
+
+            # MATSTALL: log transform send for material-tracked targets.
+            if _verbose_logging or _is_mat_stall_target or obj.name == "Suzanne":
+                print(
+                    f"[MATSTALL][BLENDER] transform_sent guid={guid} "
+                    f"obj={obj.name} first_send={is_first_send} "
+                    f"loc=({transform['location'][0]:.4f},{transform['location'][1]:.4f},{transform['location'][2]:.4f}) "
+                    f"rot=({transform['rotation'][0]:.4f},{transform['rotation'][1]:.4f},{transform['rotation'][2]:.4f},{transform['rotation'][3]:.4f}) "
+                    f"scl=({transform['scale'][0]:.4f},{transform['scale'][1]:.4f},{transform['scale'][2]:.4f})"
+                )
 
             parent_guid = get_parent_guid(obj)
 
@@ -1461,6 +1480,14 @@ def check_updates():
                     obj.data.name if obj.data else ""
                 )
 
+        # MATSTALL: log when transform NOT sent (same transform).
+        # Only for material-tracked targets or Suzanne to avoid spam.
+        if (not is_first_send) and (_is_mat_stall_target or obj.name == "Suzanne"):
+            print(
+                f"[MATSTALL][BLENDER] transform_skipped guid={guid} "
+                f"obj={obj.name} reason=same_transform"
+            )
+
         # Phase 6: Visibility detection (semantic event)
         # NOTE: Lives OUTSIDE the transforms_different gate so that
         # visibility changes are detected even when the object does
@@ -1530,17 +1557,60 @@ def check_updates():
         # components yet. SetMaterial() is deferred to Stage 2.
         # =================================================
 
-        current_slots = get_object_material_slots(obj)
+        # Phase 10J: exception-isolated material detection
+        # Material assignment can trigger transient mesh-data rebuild
+        # where obj.material_slots throws RuntimeError.
+        # =====================================================
+        # MATSTALL diagnostics: log material state transitions.
+        # =====================================================
+        _mat_stall_name = obj.name
+        _mat_stall_prev = _last_material_identity.get(guid)
+        try:
+            current_slots = get_object_material_slots(obj)
+        except Exception as _mat_exc:
+            # MATSTALL: log the exception so we can detect depsgraph
+            # rebuild spurious empty-slot emission.
+            if _verbose_logging or _mat_stall_name == "Suzanne":
+                print(
+                    f"[MATSTALL][BLENDER] mat_slots_threw guid={guid} "
+                    f"obj={_mat_stall_name} exc={_mat_exc} "
+                    f"prev_slots_count={len(_mat_stall_prev) if _mat_stall_prev is not None else 'None'}"
+                )
+            # Do NOT re-raise — must not break transform sync loop
+            current_slots = {}
+
         prev_slots = _last_material_identity.get(guid)
         is_first_material = (prev_slots is None)
 
         if not is_first_material and current_slots != prev_slots:
-            material_payloads_to_send.append(
-                serialize_material_slots(guid_obj, current_slots)
-            )
+            _mat_stall_cur_count = len(current_slots)
+            _mat_stall_prev_count = len(prev_slots) if prev_slots is not None else 0
+            # MATSTALL: log material slot change for diagnostics.
+            if _verbose_logging or _mat_stall_name == "Suzanne":
+                print(
+                    f"[MATSTALL][BLENDER] mat_changed guid={guid} "
+                    f"obj={_mat_stall_name} prev_count={_mat_stall_prev_count} "
+                    f"cur_count={_mat_stall_cur_count} "
+                    f"prev_keys={list(prev_slots.keys()) if prev_slots else 'None'} "
+                    f"cur_keys={list(current_slots.keys()) if current_slots else 'None'}"
+                )
+            # Phase 10J: exception-isolated material send
+            try:
+                material_payloads_to_send.append(
+                    serialize_material_slots(guid_obj, current_slots)
+                )
+            except Exception as _send_exc:
+                if _verbose_logging:
+                    print(
+                        f"[MATERIAL][ERROR] serialize_material_slots failed "
+                        f"for {obj.name}: {_send_exc} — skipping"
+                    )
+                continue
             if _verbose_logging:
                 print(f"[MATERIAL][DIAG] Material change detected guid={guid}")
                 print(f"[MATERIAL][DIAG] Slots={current_slots}")
+            # MATSTALL: track for transform diagnostics
+            _mat_stall_guids.add(guid)
 
         _last_material_identity[guid] = current_slots
 
@@ -1902,6 +1972,21 @@ def check_updates():
             flush=True
         )
 
+        # MATSTALL: log network send for material and transform.
+        if _verbose_logging or (material_payloads_to_send and "Suzanne" in str(material_payloads_to_send)):
+            import network as _net_mod
+            _connected = _net_mod.is_connected() if _net_mod else False
+            print(
+                f"[MATSTALL][BLENDER] net_send mat_count={len(material_payloads_to_send)} "
+                f"connected={_connected}"
+            )
+        if _verbose_logging and objects_to_send:
+            import network as _net_mod
+            _connected = _net_mod.is_connected() if _net_mod else False
+            print(
+                f"[MATSTALL][BLENDER] net_send transform_count={len(objects_to_send)} "
+                f"children={len(children_to_send)} connected={_connected}"
+            )
         if _verbose_logging:
             print(
                 "[LiveSync] Sending heartbeat",
@@ -2059,6 +2144,26 @@ def check_updates():
     )
 
     return 0.016
+
+
+def _check_updates_wrapped():
+    """Wrapper for check_updates with exception isolation (Phase 10J).
+
+    bpy.app.timers.register requires the callback to return a float or
+    raise an exception.  An unhandled exception from check_updates would
+    break the timer loop.  This wrapper catches all exceptions, logs them,
+    and returns the normal interval so the timer continues.
+    """
+    try:
+        return check_updates()
+    except Exception as _e:
+        print(
+            f"[LIVESYNC][ERROR] check_updates exception: {_e}"
+        )
+        set_critical_error(
+            f"check_updates failed: {_e}"
+        )
+        return 0.016
 
 
 # =========================================================
@@ -2388,6 +2493,7 @@ def start_sync():
     _sync_start_time = time.time()
     timer_running = True
 
-    _timer_ref = bpy.app.timers.register(check_updates)
+    # Phase 10J: use exception-isolated wrapper
+    _timer_ref = bpy.app.timers.register(_check_updates_wrapped)
 
     print(f"UE Live Sync Started — connected to {host}:{port}")

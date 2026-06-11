@@ -5,6 +5,9 @@
 
 class AActor;
 class UWorld;
+class AActor;
+class UStaticMeshComponent;
+class UStaticMesh;
 
 struct FFBXImportContext
 {
@@ -12,6 +15,10 @@ struct FFBXImportContext
     FLiveSyncStats* Stats = nullptr;
     TFunction<AActor*(const FGuid&)> FindActor;
     TFunction<void(const FGuid&, AActor*)> OnActorCached;
+    // Phase 10J.5E: Called when a GUID is promoted to FBX authority.
+    TFunction<void(const FGuid&)> OnMarkFbxAuthority;
+    // Phase 10J.5D.5: Called to schedule deferred visibility repair.
+    TFunction<void(const FGuid&)> OnScheduleRepair;
 };
 
 class FLiveSyncFBXImporter
@@ -21,5 +28,13 @@ public:
         const uint8* PayloadPtr,
         int32 PayloadSize,
         const FFBXImportContext& Context
+    );
+
+    // Phase 10J.5D.5: Re-apply visibility/bounds/material on FBX actor.
+    static void EnsureFBXMeshRenderable(
+        UStaticMeshComponent* SMC,
+        UStaticMesh* StaticMesh,
+        AActor* OwnerActor,
+        const FGuid& Guid
     );
 };

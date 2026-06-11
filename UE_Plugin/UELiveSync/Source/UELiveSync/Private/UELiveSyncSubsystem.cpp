@@ -79,6 +79,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "KismetProceduralMeshLibrary.h"
 
 #include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
 
 #include <cmath>
 
@@ -1398,7 +1399,7 @@ bool UUELiveSyncSubsystem::Tick(
     // PERIODIC TICK DIAGNOSTICS (every ~100 frames)
     // =====================================================
 
-    if (VerboseFrameCounter % 100 == 1)
+    if (bEnableVerboseSyncLogs && VerboseFrameCounter % 100 == 1)
     {
         const int32 CacheSize = ActorCache.Num();
         const int32 StateSize = TransformStates.Num();
@@ -2022,6 +2023,12 @@ bool UUELiveSyncSubsystem::Tick(
         UE_LOG(LogLiveSync, Log, TEXT("END   DrawDebugOverlay"));
 #endif
     }
+
+    // =====================================================
+    // Phase 10J.5D.5: Deferred FBX repair (post-import passes)
+    // =====================================================
+
+    ProcessDeferredRepairs();
 
     if (bEnableVerboseSyncLogs)
     {
@@ -3885,6 +3892,31 @@ ProcessBinaryPacket(
                 Slots.Add(Slot);
             }
 
+            if (GEnableVerboseSyncLogs)
+            {
+                // MATSTALL diagnostics: log material packet processing.
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATSTALL][UE] mat_packet guid=%s slot_count=%d objects=%d"),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    Slots.Num(), ObjectCount);
+
+                // MATSTALL: quick ActorCache check for this GUID.
+                AActor* _mat_actor = FindActorFast(Guid);
+                if (_mat_actor)
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MATSTALL][UE] mat_packet actor_cache_hit guid=%s actor=%s"),
+                        *Guid.ToString(EGuidFormats::Digits),
+                        *_mat_actor->GetName());
+                }
+                else
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[MATSTALL][UE] mat_packet actor_cache_miss guid=%s"),
+                        *Guid.ToString(EGuidFormats::Digits));
+                }
+            }
+
             HandleMaterialDef(Guid, Slots, ObjectCount);
         }
 
@@ -4002,6 +4034,25 @@ ProcessBinaryPacket(
             // Phase 7C Stage 2C.2: FULL_ATTR v1 reassembly
             // =====================================================
             bool bHasFullAttr = (Flags & MESH_CHUNK_FLAG_FULL_ATTR) != 0;
+
+            // Phase 10J.5E: Skip v1 chunk accumulation for FBX-authoritative GUIDs.
+            if (bHasFullAttr && FBXAuthoritativeGuids.Contains(Guid))
+            {
+                if (PayloadSize <= 0)
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[MESH][AUTH_WARN] guid=%s reason=truncated_chunk_for_fbx_authoritative chunk=%u/%u payloadSize=%d"),
+                        *Guid.ToString(EGuidFormats::Digits), ChunkIndex, ChunkCount, PayloadSize);
+                }
+                else
+                {
+                    UE_LOG(LogLiveSync, Verbose,
+                        TEXT("[MESH][AUTH] skip_v1_chunk_fbx_authoritative guid=%s chunk=%u/%u"),
+                        *Guid.ToString(EGuidFormats::Digits), ChunkIndex, ChunkCount);
+                }
+                Ptr += PayloadSize;
+                continue;
+            }
 
             if (bHasFullAttr)
             {
@@ -4122,9 +4173,11 @@ ProcessBinaryPacket(
     // =====================================================
     // FBX IMPORT REQUEST (Phase 7C Stage 3A.1 — PT_FBXImportRequest 0x16)
     // =====================================================
-    // Fixed 680-byte payload. UE validates path safety, imports FBX as
-    // StaticMesh under /Game/UELiveSync/Imported, then spawns/updates a
-    // StaticMeshActor tagged with the LiveSync GUID.
+    // Fixed 688-byte payload (Phase 10J.5F: added GeometryHash).
+    // Backward compatible: old 680-byte payloads accepted (GeometryHash = 0).
+    // UE validates path safety, imports FBX as StaticMesh under
+    // /Game/UELiveSync/Imported, then spawns/updates a StaticMeshActor
+    // tagged with the LiveSync GUID.
     // =====================================================
 
     if (PacketType == 0x16)
@@ -4135,13 +4188,15 @@ ProcessBinaryPacket(
             1, std::memory_order_relaxed);
 
         int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
-        if (ObjSize < static_cast<int32>(sizeof(FFBXImportRequestPayload)))
+        // Accept both old (680) and new (688) payload sizes
+        constexpr int32 kFBXPayloadSizeMin = 680;
+        if (ObjSize < kFBXPayloadSizeMin)
         {
             Stats.MalformedPackets.fetch_add(
                 1, std::memory_order_relaxed);
             UE_LOG(LogLiveSync, Warning,
                 TEXT("[FBX] Truncated payload: size %d < %d"),
-                ObjSize, sizeof(FFBXImportRequestPayload));
+                ObjSize, kFBXPayloadSizeMin);
             Stats.PacketsProcessed.fetch_add(
                 1, std::memory_order_relaxed);
             return;
@@ -4153,6 +4208,27 @@ ProcessBinaryPacket(
             Ctx.Stats = &Stats;
             Ctx.FindActor = [this](const FGuid& G) { return FindActorFast(G); };
             Ctx.OnActorCached = [this](const FGuid& G, AActor* A) { ActorCache.Add(G, A); };
+            Ctx.OnMarkFbxAuthority = [this](const FGuid& G)
+            {
+                FBXAuthoritativeGuids.Add(G);
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[FBX][AUTH] guid=%s authority=fbx"),
+                    *G.ToString(EGuidFormats::Digits));
+            };
+            Ctx.OnScheduleRepair = [this](const FGuid& G)
+            {
+                FDeferredFBXRepairEntry Entry;
+                Entry.Guid = G;
+                Entry.PassNumber = 1;
+                Entry.ScheduleTime = FPlatformTime::Seconds();
+                DeferredFBXRepairs.Add(Entry);
+
+                FDeferredFBXRepairEntry Entry2;
+                Entry2.Guid = G;
+                Entry2.PassNumber = 2;
+                Entry2.ScheduleTime = FPlatformTime::Seconds();
+                DeferredFBXRepairs.Add(Entry2);
+            };
             FLiveSyncFBXImporter::HandleImport(Ptr, ObjSize, Ctx);
         }
 
@@ -4780,10 +4856,13 @@ ProcessBinaryPacket(
             }
             else
             {
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[CREATE][DIAG] Parent not available for world-spawn computation — guid=%s parent=%s local transform will be used as world spawn (will correct on next interpolation tick)"),
-                    *Guid.ToString(EGuidFormats::Digits),
-                    *ParentGuid.ToString(EGuidFormats::Digits));
+                if (GEnableVerboseSyncLogs)
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[CREATE][DIAG] Parent not available for world-spawn computation — guid=%s parent=%s local transform will be used as world spawn (will correct on next interpolation tick)"),
+                        *Guid.ToString(EGuidFormats::Digits),
+                        *ParentGuid.ToString(EGuidFormats::Digits));
+                }
             }
         }
 
@@ -4801,7 +4880,7 @@ ProcessBinaryPacket(
             PrimitiveType = *Ptr;
             Ptr += 1;
 
-            if (PacketType == 0x03)
+            if (PacketType == 0x03 && GEnableVerboseSyncLogs)
             {
                 UE_LOG(LogLiveSync, Warning,
                     TEXT("[CREATE][DIAG] PARSED primitive_type=0x%02X guid=%s obj=%u/%u ver=%u"),
@@ -4822,17 +4901,20 @@ ProcessBinaryPacket(
         // APPLY
         // =================================================
 
-        if (PacketType == 0x03)
-        {
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[CREATE][DIAG] DISPATCH guid=%s loc=%s rot=(%.4f,%.4f,%.4f,%.4f) scale=%s prim=0x%02X parent=%s local=%d"),
-                *Guid.ToString(EGuidFormats::Digits),
-                *SpawnLocation.ToString(),
-                SpawnRotation.W, SpawnRotation.X, SpawnRotation.Y, SpawnRotation.Z,
-                *SpawnScale.ToString(),
-                PrimitiveType,
-                *ParentGuid.ToString(EGuidFormats::Digits),
-                bIsLocalTransform ? 1 : 0);
+            if (PacketType == 0x03)
+            {
+                if (GEnableVerboseSyncLogs)
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[CREATE][DIAG] DISPATCH guid=%s loc=%s rot=(%.4f,%.4f,%.4f,%.4f) scale=%s prim=0x%02X parent=%s local=%d"),
+                        *Guid.ToString(EGuidFormats::Digits),
+                        *SpawnLocation.ToString(),
+                        SpawnRotation.W, SpawnRotation.X, SpawnRotation.Y, SpawnRotation.Z,
+                        *SpawnScale.ToString(),
+                        PrimitiveType,
+                        *ParentGuid.ToString(EGuidFormats::Digits),
+                        bIsLocalTransform ? 1 : 0);
+                }
 
             HandleCreateObject(
                 Guid,
@@ -4901,9 +4983,31 @@ UpdateTargetTransform(
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("BEGIN TRACE: UpdateTargetTransform guid=%s"),
-        *Guid.ToString(
-            EGuidFormats::Digits));
+        TEXT("BEGIN TRACE: UpdateTargetTransform guid=%s loc=(%s) rot=(%s) scl=(%s) local=%d"),
+        *Guid.ToString(EGuidFormats::Digits),
+        *Location.ToString(),
+        *Rotation.ToString(),
+        *Scale.ToString(),
+        bIsLocalTransform);
+
+    if (GEnableVerboseSyncLogs)
+    {
+        // MATSTALL: quick ActorCache hit/miss for transform.
+        AActor* _matActorCacheActor = FindActorFast(Guid);
+        if (_matActorCacheActor)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MATSTALL][UE] transform actor_cache_hit guid=%s actor=%s"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *_matActorCacheActor->GetName());
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MATSTALL][UE] transform actor_cache_miss guid=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
+        }
+    }
 
     FSyncTransformState& State =
 
@@ -5642,6 +5746,27 @@ InterpolateTransforms(
                         if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
                         {
                             Actor->SetActorTransform(WorldXForm);
+                            // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
+                            if (FBXAuthoritativeGuids.Contains(Guid))
+                            {
+                                const FVector PostScl = Actor->GetActorScale3D();
+                                if (FMath::Abs(PostScl.X) > 100000.0f || FMath::Abs(PostScl.Y) > 100000.0f || FMath::Abs(PostScl.Z) > 100000.0f)
+                                {
+                                    UE_LOG(LogLiveSync, Warning,
+                                        TEXT("[FBX][TRANSFORM_WARN] guid=%s reason=extreme_scale scl=(%s)"),
+                                        *Guid.ToString(EGuidFormats::Digits),
+                                        *PostScl.ToString());
+                                }
+                                const FVector PostLoc = Actor->GetActorLocation();
+                                const float LocMag = PostLoc.Size();
+                                if (LocMag > 1000000.0f)
+                                {
+                                    UE_LOG(LogLiveSync, Warning,
+                                        TEXT("[FBX][TRANSFORM_WARN] guid=%s reason=large_location loc=(%s) magnitude=%.1f"),
+                                        *Guid.ToString(EGuidFormats::Digits),
+                                        *PostLoc.ToString(), LocMag);
+                                }
+                            }
                         }
                         else
                         {
@@ -5780,9 +5905,41 @@ InterpolateTransforms(
                 UE_LOG(LogLiveSync, Log,
                     TEXT("  DO SetActorTransform guid=%s (root direct-set)"),
                     *Guid.ToString(EGuidFormats::Digits));
+                // MATSTALL: log the final applied transform.
+                if (GEnableVerboseSyncLogs)
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MATSTALL][UE] transform_applied guid=%s actor=%s loc=(%s) rot=(%s) scl=(%s) interp_mode=direct"),
+                        *Guid.ToString(EGuidFormats::Digits),
+                        *Actor->GetName(),
+                        *RootDirectXForm.GetLocation().ToString(),
+                        *RootDirectXForm.GetRotation().ToString(),
+                        *RootDirectXForm.GetScale3D().ToString());
+                }
                 if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
                 {
                     Actor->SetActorTransform(RootDirectXForm);
+                    // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
+                    if (FBXAuthoritativeGuids.Contains(Guid))
+                    {
+                        const FVector PostScl = Actor->GetActorScale3D();
+                        if (FMath::Abs(PostScl.X) > 100000.0f || FMath::Abs(PostScl.Y) > 100000.0f || FMath::Abs(PostScl.Z) > 100000.0f)
+                        {
+                            UE_LOG(LogLiveSync, Warning,
+                                TEXT("[FBX][TRANSFORM_WARN] guid=%s reason=extreme_scale scl=(%s)"),
+                                *Guid.ToString(EGuidFormats::Digits),
+                                *PostScl.ToString());
+                        }
+                        const FVector PostLoc = Actor->GetActorLocation();
+                        const float LocMag = PostLoc.Size();
+                        if (LocMag > 1000000.0f)
+                        {
+                            UE_LOG(LogLiveSync, Warning,
+                                TEXT("[FBX][TRANSFORM_WARN] guid=%s reason=large_location loc=(%s) magnitude=%.1f"),
+                                *Guid.ToString(EGuidFormats::Digits),
+                                *PostLoc.ToString(), LocMag);
+                        }
+                    }
                 }
                 else
                 {
@@ -5843,9 +6000,41 @@ InterpolateTransforms(
                 UE_LOG(LogLiveSync, Log,
                     TEXT("  DO SetActorTransform guid=%s (root snap)"),
                     *Guid.ToString(EGuidFormats::Digits));
+                // MATSTALL: log the final applied transform.
+                if (GEnableVerboseSyncLogs)
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MATSTALL][UE] transform_applied guid=%s actor=%s loc=(%s) rot=(%s) scl=(%s) interp_mode=snap"),
+                        *Guid.ToString(EGuidFormats::Digits),
+                        *Actor->GetName(),
+                        *RootSnapXForm.GetLocation().ToString(),
+                        *RootSnapXForm.GetRotation().ToString(),
+                        *RootSnapXForm.GetScale3D().ToString());
+                }
                 if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
                 {
                     Actor->SetActorTransform(RootSnapXForm);
+                    // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
+                    if (FBXAuthoritativeGuids.Contains(Guid))
+                    {
+                        const FVector PostScl = Actor->GetActorScale3D();
+                        if (FMath::Abs(PostScl.X) > 100000.0f || FMath::Abs(PostScl.Y) > 100000.0f || FMath::Abs(PostScl.Z) > 100000.0f)
+                        {
+                            UE_LOG(LogLiveSync, Warning,
+                                TEXT("[FBX][TRANSFORM_WARN] guid=%s reason=extreme_scale scl=(%s)"),
+                                *Guid.ToString(EGuidFormats::Digits),
+                                *PostScl.ToString());
+                        }
+                        const FVector PostLoc = Actor->GetActorLocation();
+                        const float LocMag = PostLoc.Size();
+                        if (LocMag > 1000000.0f)
+                        {
+                            UE_LOG(LogLiveSync, Warning,
+                                TEXT("[FBX][TRANSFORM_WARN] guid=%s reason=large_location loc=(%s) magnitude=%.1f"),
+                                *Guid.ToString(EGuidFormats::Digits),
+                                *PostLoc.ToString(), LocMag);
+                        }
+                    }
                 }
                 else
                 {
@@ -5948,9 +6137,41 @@ InterpolateTransforms(
             UE_LOG(LogLiveSync, Log,
                 TEXT("  DO SetActorTransform guid=%s (root smooth)"),
                 *Guid.ToString(EGuidFormats::Digits));
+            // MATSTALL: log the final applied transform.
+            if (GEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATSTALL][UE] transform_applied guid=%s actor=%s loc=(%s) rot=(%s) scl=(%s) interp_mode=smooth"),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    *Actor->GetName(),
+                    *RootSmoothXForm.GetLocation().ToString(),
+                    *RootSmoothXForm.GetRotation().ToString(),
+                    *RootSmoothXForm.GetScale3D().ToString());
+            }
             if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
             {
                 Actor->SetActorTransform(RootSmoothXForm);
+                // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
+                if (FBXAuthoritativeGuids.Contains(Guid))
+                {
+                    const FVector PostScl = Actor->GetActorScale3D();
+                    if (FMath::Abs(PostScl.X) > 100000.0f || FMath::Abs(PostScl.Y) > 100000.0f || FMath::Abs(PostScl.Z) > 100000.0f)
+                    {
+                        UE_LOG(LogLiveSync, Warning,
+                            TEXT("[FBX][TRANSFORM_WARN] guid=%s reason=extreme_scale scl=(%s)"),
+                            *Guid.ToString(EGuidFormats::Digits),
+                            *PostScl.ToString());
+                    }
+                    const FVector PostLoc = Actor->GetActorLocation();
+                    const float LocMag = PostLoc.Size();
+                    if (LocMag > 1000000.0f)
+                    {
+                        UE_LOG(LogLiveSync, Warning,
+                            TEXT("[FBX][TRANSFORM_WARN] guid=%s reason=large_location loc=(%s) magnitude=%.1f"),
+                            *Guid.ToString(EGuidFormats::Digits),
+                            *PostLoc.ToString(), LocMag);
+                    }
+                }
             }
             else
             {
@@ -5963,7 +6184,7 @@ InterpolateTransforms(
         {
             UE_LOG(LogLiveSync, Error,
                 TEXT("  SKIP SetActorTransform guid=%s (invalid transform)"),
-                *Guid.ToString(EGuidFormats::Digits));
+                    *Guid.ToString(EGuidFormats::Digits));
         }
 
         UE_LOG(LogLiveSync, Log,
@@ -6249,6 +6470,29 @@ OnActorDestroyed(
         // Phase 7A: Clean asset metadata on external actor destruction
         AssetMetadata.Remove(Guid);
         PendingAssetQueue.Remove(Guid);
+
+        // Phase 10J.5A: Clean material metadata to prevent stale entries
+        MaterialMetadata.Remove(Guid);
+        if (GEnableVerboseSyncLogs)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATSTALL][UE] mat_cleanup actor_destroyed guid=%s actor=%s"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Actor->GetName());
+        }
+
+        // Phase 10J.5E: Remove FBX authority only if the destroyed actor
+        // is the FBX-authoritative actor (not a stale procedural actor).
+        // Check by comparing with ActorCache entry for this GUID.
+        AActor* CachedActor = FindActorFast(Guid);
+        if (CachedActor == Actor)
+        {
+            FBXAuthoritativeGuids.Remove(Guid);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX][AUTH] cleanup actor_destroyed guid=%s actor=%s"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *Actor->GetName());
+        }
 
         if (bEnableVerboseSyncLogs)
         {
@@ -6810,20 +7054,23 @@ HandleCreateObject(
 
         const int32 ActorCachePreCount = ActorCache.Num();
 
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[CREATE][DIAG] ENTRY guid=%s prim=0x%02X loc=%s rot=(%.4f,%.4f,%.4f,%.4f) scale=%s parent=%s local=%d ts=%.3f"),
-            *Guid.ToString(EGuidFormats::Digits),
-            PrimitiveType,
-            *Location.ToString(),
-            Rotation.W, Rotation.X, Rotation.Y, Rotation.Z,
-            *Scale.ToString(),
-            *ParentGuid.ToString(EGuidFormats::Digits),
-            bIsLocalTransform ? 1 : 0,
-            FPlatformTime::Seconds());
+        if (GEnableVerboseSyncLogs)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CREATE][DIAG] ENTRY guid=%s prim=0x%02X loc=%s rot=(%.4f,%.4f,%.4f,%.4f) scale=%s parent=%s local=%d ts=%.3f"),
+                *Guid.ToString(EGuidFormats::Digits),
+                PrimitiveType,
+                *Location.ToString(),
+                Rotation.W, Rotation.X, Rotation.Y, Rotation.Z,
+                *Scale.ToString(),
+                *ParentGuid.ToString(EGuidFormats::Digits),
+                bIsLocalTransform ? 1 : 0,
+                FPlatformTime::Seconds());
 
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[CREATE][DIAG] ENTRY world=%s type=%s level=%s ActorCache=%d"),
-            *WorldName, WorldTypeStr, *LevelName, ActorCachePreCount);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CREATE][DIAG] ENTRY world=%s type=%s level=%s ActorCache=%d"),
+                *WorldName, WorldTypeStr, *LevelName, ActorCachePreCount);
+        }
 
         // Validate parsed payload integrity
         if (!Guid.IsValid())
@@ -6835,16 +7082,22 @@ HandleCreateObject(
 
         if (Scale.IsZero() || Scale.X <= 0.0f || Scale.Y <= 0.0f || Scale.Z <= 0.0f)
         {
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[CREATE][DIAG] SUSPICIOUS scale=%s — proceeding"),
-                *Scale.ToString());
+            if (GEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[CREATE][DIAG] SUSPICIOUS scale=%s — proceeding"),
+                    *Scale.ToString());
+            }
         }
 
         if (Location.SizeSquared() > 1e12f)
         {
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[CREATE][DIAG] SUSPICIOUS location magnitude=%f — proceeding"),
-                Location.Size());
+            if (GEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[CREATE][DIAG] SUSPICIOUS location magnitude=%f — proceeding"),
+                    Location.Size());
+            }
         }
     }
 
@@ -6974,31 +7227,34 @@ HandleCreateObject(
         const FString WorldName = World->GetName();
         const FString ActorClass = AActor::StaticClass()->GetName();
 
-        UE_LOG(
-            LogLiveSync,
-            Error,
-            TEXT("[CREATE][DIAG] SPAWN FAILED guid=%s class=%s world=%s spawnMs=%.1f"),
-            *Guid.ToString(
-                EGuidFormats::Digits),
-            *ActorClass,
-            *WorldName,
-            SpawnMs);
-
-        // Log possible reasons
-        UWorld* InnerWorld = World;
-        if (InnerWorld->WorldType == EWorldType::EditorPreview ||
-            InnerWorld->WorldType == EWorldType::Inactive)
+        if (GEnableVerboseSyncLogs)
         {
-            UE_LOG(LogLiveSync, Error,
-                TEXT("[CREATE][DIAG] SPAWN FAILED REASON: world type is %d (EditorPreview/Inactive)"),
-                (int32)InnerWorld->WorldType);
-        }
+            UE_LOG(
+                LogLiveSync,
+                Error,
+                TEXT("[CREATE][DIAG] SPAWN FAILED guid=%s class=%s world=%s spawnMs=%.1f"),
+                *Guid.ToString(
+                    EGuidFormats::Digits),
+                *ActorClass,
+                *WorldName,
+                SpawnMs);
 
-        if (InnerWorld->GetCurrentLevel() == nullptr ||
-            InnerWorld->GetCurrentLevel()->bIsVisible == false)
-        {
-            UE_LOG(LogLiveSync, Error,
-                TEXT("[CREATE][DIAG] SPAWN FAILED REASON: level is null or not visible"));
+            // Log possible reasons
+            UWorld* InnerWorld = World;
+            if (InnerWorld->WorldType == EWorldType::EditorPreview ||
+                InnerWorld->WorldType == EWorldType::Inactive)
+            {
+                UE_LOG(LogLiveSync, Error,
+                    TEXT("[CREATE][DIAG] SPAWN FAILED REASON: world type is %d (EditorPreview/Inactive)"),
+                    (int32)InnerWorld->WorldType);
+            }
+
+            if (InnerWorld->GetCurrentLevel() == nullptr ||
+                InnerWorld->GetCurrentLevel()->bIsVisible == false)
+            {
+                UE_LOG(LogLiveSync, Error,
+                    TEXT("[CREATE][DIAG] SPAWN FAILED REASON: level is null or not visible"));
+            }
         }
 
         return;
@@ -7006,14 +7262,17 @@ HandleCreateObject(
 
     if (SpawnMs > 50.0)
     {
-        UE_LOG(
-            LogLiveSync,
-            Warning,
-            TEXT("[CREATE][DIAG] STALL: SpawnActor took %.1fms "
-                 "for GUID=%s"),
-            SpawnMs,
-            *Guid.ToString(
-                EGuidFormats::Digits));
+        if (GEnableVerboseSyncLogs)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("[CREATE][DIAG] STALL: SpawnActor took %.1fms "
+                     "for GUID=%s"),
+                SpawnMs,
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+        }
     }
 
     // =====================================================
@@ -7026,22 +7285,25 @@ HandleCreateObject(
         const FString SpawnWorldName = NewActor->GetWorld() ? NewActor->GetWorld()->GetName() : TEXT("None");
         const FTransform SpawnXForm = NewActor->GetActorTransform();
 
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[CREATE][DIAG] SPAWN SUCCESS guid=%s name=%s class=%s world=%s spawnMs=%.1f"),
-            *Guid.ToString(EGuidFormats::Digits),
-            *ActorName,
-            *ActorClass,
-            *SpawnWorldName,
-            SpawnMs);
+        if (GEnableVerboseSyncLogs)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CREATE][DIAG] SPAWN SUCCESS guid=%s name=%s class=%s world=%s spawnMs=%.1f"),
+                *Guid.ToString(EGuidFormats::Digits),
+                *ActorName,
+                *ActorClass,
+                *SpawnWorldName,
+                SpawnMs);
 
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[CREATE][DIAG] SPAWN TRANSFORM loc=%s rot=(%.4f,%.4f,%.4f,%.4f) scale=%s"),
-            *SpawnXForm.GetLocation().ToString(),
-            (double)SpawnXForm.GetRotation().W,
-            (double)SpawnXForm.GetRotation().X,
-            (double)SpawnXForm.GetRotation().Y,
-            (double)SpawnXForm.GetRotation().Z,
-            *SpawnXForm.GetScale3D().ToString());
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CREATE][DIAG] SPAWN TRANSFORM loc=%s rot=(%.4f,%.4f,%.4f,%.4f) scale=%s"),
+                *SpawnXForm.GetLocation().ToString(),
+                (double)SpawnXForm.GetRotation().W,
+                (double)SpawnXForm.GetRotation().X,
+                (double)SpawnXForm.GetRotation().Y,
+                (double)SpawnXForm.GetRotation().Z,
+                *SpawnXForm.GetScale3D().ToString());
+        }
 
         // Verify actor is in a visible world
         if (NewActor->GetWorld() &&
@@ -7096,17 +7358,23 @@ HandleCreateObject(
     // Verify registry integration
     {
         AActor* CacheCheck = FindActorFast(Guid);
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[CREATE][DIAG] REGISTRY guid=%s ActorCache check=%s"),
-            *Guid.ToString(EGuidFormats::Digits),
-            CacheCheck ? TEXT("FOUND") : TEXT("MISSING"));
+        if (GEnableVerboseSyncLogs)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CREATE][DIAG] REGISTRY guid=%s ActorCache check=%s"),
+                *Guid.ToString(EGuidFormats::Digits),
+                CacheCheck ? TEXT("FOUND") : TEXT("MISSING"));
+        }
 
         // Immediate post-spawn actor destruction check
         if (CacheCheck && CacheCheck->IsPendingKillPending())
         {
-            UE_LOG(LogLiveSync, Error,
-                TEXT("[CREATE][DIAG] ACTOR PENDING DESTROY IMMEDIATELY AFTER SPAWN guid=%s — cleanup race!"),
-                *Guid.ToString(EGuidFormats::Digits));
+            if (GEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Error,
+                    TEXT("[CREATE][DIAG] ACTOR PENDING DESTROY IMMEDIATELY AFTER SPAWN guid=%s — cleanup race!"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
         }
     }
 
@@ -7127,7 +7395,7 @@ HandleCreateObject(
 
     {
         AActor* PostAttachActor = FindActorFast(Guid);
-        if (PostAttachActor)
+        if (PostAttachActor && GEnableVerboseSyncLogs)
         {
             AActor* CurrentParent = PostAttachActor->GetAttachParentActor();
             UE_LOG(LogLiveSync, Warning,
@@ -7205,18 +7473,24 @@ HandleCreateObject(
         MeshComp->SetStaticMesh(
             PrimitiveMesh);
 
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[CREATE][DIAG] PRIMITIVE guid=%s type=0x%02X mesh=%s"),
-            *Guid.ToString(EGuidFormats::Digits),
-            PrimitiveType,
-            *PrimitiveMesh->GetName());
+        if (GEnableVerboseSyncLogs)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CREATE][DIAG] PRIMITIVE guid=%s type=0x%02X mesh=%s"),
+                *Guid.ToString(EGuidFormats::Digits),
+                PrimitiveType,
+                *PrimitiveMesh->GetName());
+        }
     }
     else
     {
-        UE_LOG(LogLiveSync, Error,
-            TEXT("[CREATE][DIAG] PRIMITIVE RESOLVE FAILED guid=%s type=0x%02X — no mesh assigned, actor will be invisible!"),
-            *Guid.ToString(EGuidFormats::Digits),
-            PrimitiveType);
+        if (GEnableVerboseSyncLogs)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[CREATE][DIAG] PRIMITIVE RESOLVE FAILED guid=%s type=0x%02X — no mesh assigned, actor will be invisible!"),
+                *Guid.ToString(EGuidFormats::Digits),
+                PrimitiveType);
+        }
     }
 
     MeshComp->SetCollisionEnabled(
@@ -7236,7 +7510,7 @@ HandleCreateObject(
             FPlatformTime::Cycles64() -
             RegisterBeginCycles);
 
-    if (RegisterMs > 50.0)
+    if (RegisterMs > 50.0 && GEnableVerboseSyncLogs)
     {
         UE_LOG(
             LogLiveSync,
@@ -7248,13 +7522,16 @@ HandleCreateObject(
                 EGuidFormats::Digits));
     }
 
-    UE_LOG(
-        LogLiveSync,
-        Warning,
-        TEXT("[CREATE][DIAG] REGISTER COMPLETE guid=%s mesh=%s regMs=%.1f"),
-        *Guid.ToString(EGuidFormats::Digits),
-        PrimitiveMesh ? *PrimitiveMesh->GetName() : TEXT("NULL"),
-        RegisterMs);
+    if (GEnableVerboseSyncLogs)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Warning,
+            TEXT("[CREATE][DIAG] REGISTER COMPLETE guid=%s mesh=%s regMs=%.1f"),
+            *Guid.ToString(EGuidFormats::Digits),
+            PrimitiveMesh ? *PrimitiveMesh->GetName() : TEXT("NULL"),
+            RegisterMs);
+    }
 
     // NOTE: State initialization is handled by the caller
     // (ProcessBinaryPacket or RecoverMissingActors) via
@@ -7380,6 +7657,9 @@ HandleDeleteObject(
     {
         PendingAssetQueue.Remove(Guid);
     }
+
+    // Phase 10J.5E: Remove FBX authority on legacy delete
+    FBXAuthoritativeGuids.Remove(Guid);
 }
 
 
@@ -9031,6 +9311,21 @@ HandleDelete(
     {
         PendingAssetQueue.Remove(TargetGuid);
     }
+
+    // Phase 10J.5A: Clean material metadata to prevent stale entries
+    MaterialMetadata.Remove(TargetGuid);
+    if (GEnableVerboseSyncLogs)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATSTALL][UE] mat_cleanup delete guid=%s"),
+            *TargetGuid.ToString(EGuidFormats::Digits));
+    }
+
+    // Phase 10J.5E: Remove FBX authority on delete
+    FBXAuthoritativeGuids.Remove(TargetGuid);
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[FBX][AUTH] cleanup delete guid=%s"),
+        *TargetGuid.ToString(EGuidFormats::Digits));
 
     // Stage 5: Destroy the actor
     TargetActor->Destroy();
@@ -11325,8 +11620,17 @@ ResolvePendingMaterials()
         const TArray<FMaterialSlotRef>& Slots = It.Value();
 
         AActor* Actor = FindActorFast(Guid);
+        // MATSTALL: log ActorCache status for material resolve.
         if (!Actor)
         {
+            if (GEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATSTALL][UE] mat_resolve actor_missing guid=%s \u2014 removing stale metadata"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
+            // Phase 10J.5A: remove stale entry so it does not spam every tick.
+            It.RemoveCurrent();
             continue;
         }
 
@@ -11395,6 +11699,17 @@ ResolvePendingMaterials()
 
             MaterialAssignmentsSucceeded++;
 
+            // MATSTALL diagnostics: log successful SetMaterial.
+            if (GEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATSTALL][UE] mat_resolve_set slot=%d guid=%s actor=%s comp=%s"),
+                    Slot.SlotIndex,
+                    *Guid.ToString(EGuidFormats::Digits),
+                    *Actor->GetName(),
+                    *MeshComp->GetName());
+            }
+
             if (bEnableVerboseSyncLogs)
             {
                 UE_LOG(
@@ -11411,6 +11726,13 @@ ResolvePendingMaterials()
 
         if (!bAnyValidUnresolved)
         {
+            // MATSTALL: log when material metadata is fully resolved.
+            if (GEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATSTALL][UE] mat_resolve_complete guid=%s"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
             It.RemoveCurrent();
         }
     }
@@ -11734,6 +12056,24 @@ HandleMeshChunk(
         return;
     }
 
+    // Phase 10J.5E: Skip chunk accumulation for FBX-authoritative GUIDs.
+    if (FBXAuthoritativeGuids.Contains(Guid))
+    {
+        if (Payload.Num() <= 0)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MESH][AUTH_WARN] guid=%s reason=truncated_chunk_for_fbx_authoritative chunk=%u/%u payloadSize=%d"),
+                *Guid.ToString(EGuidFormats::Digits), ChunkIndex, ChunkCount, Payload.Num());
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MESH][AUTH] skip_chunk_fbx_authoritative guid=%s chunk=%u/%u"),
+                *Guid.ToString(EGuidFormats::Digits), ChunkIndex, ChunkCount);
+        }
+        return;
+    }
+
     if (PendingMeshReassembly.Num() >= MAX_CONCURRENT_MESH_REASSEMBLIES &&
         !PendingMeshReassembly.Contains(Guid))
     {
@@ -11827,6 +12167,19 @@ ReconstructCompletedMeshes()
         }
 
         const FGuid& Guid = Pair.Key;
+
+        // Phase 10J.5E: Skip reconstruction for FBX-authoritative GUIDs.
+        // Clean up any stale pending data that may have accumulated before
+        // FBX promotion.
+        if (FBXAuthoritativeGuids.Contains(Guid))
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][AUTH] skip_pt_mesh_fbx_authoritative guid=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
+            State.bReconstructed = true;
+            Reconstructed.Add(Guid);
+            continue;
+        }
 
         AActor* Actor = FindActorFast(Guid);
         if (!Actor)
@@ -12015,35 +12368,38 @@ ReconstructCompletedMeshes()
                 if (Idx < 0 || Idx >= TotalVertices)
                     InvalidIdxCount++;
             }
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[MESH][DIAG] GUID=%s: verts=%d tris=%d "
-                     "bbox=%s extent=%s "
-                     "NaN=%d zero=%d triIdxRange=[%d,%d] invalidIdx=%d"),
-                *Guid.ToString(EGuidFormats::Digits),
-                TotalVertices, Triangles.Num() / 3,
-                *LocalBox.ToString(), *LocalBox.GetExtent().ToString(),
-                NanCount, ZeroCount,
-                MinTriIdx, MaxTriIdx, InvalidIdxCount);
-            if (TotalVertices > 0)
+            if (GEnableVerboseSyncLogs)
             {
                 UE_LOG(LogLiveSync, Warning,
-                    TEXT("[MESH][DIAG] GUID=%s first 3 verts: v0=(%g,%g,%g) v1=(%g,%g,%g) v2=(%g,%g,%g)"),
+                    TEXT("[MESH][DIAG] GUID=%s: verts=%d tris=%d "
+                         "bbox=%s extent=%s "
+                         "NaN=%d zero=%d triIdxRange=[%d,%d] invalidIdx=%d"),
                     *Guid.ToString(EGuidFormats::Digits),
-                    Vertices[0].X, Vertices[0].Y, Vertices[0].Z,
-                    TotalVertices > 1 ? Vertices[1].X : 0,
-                    TotalVertices > 1 ? Vertices[1].Y : 0,
-                    TotalVertices > 1 ? Vertices[1].Z : 0,
-                    TotalVertices > 2 ? Vertices[2].X : 0,
-                    TotalVertices > 2 ? Vertices[2].Y : 0,
-                    TotalVertices > 2 ? Vertices[2].Z : 0);
-                // Compact axis diagnostic: first Blender→UE conversion + winding + bounds
-                const FVector& FirstBlenderV = Vertices[0];
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[MESH][AXIS] firstBlenderV=(%g,%g,%g) firstUEV=(%g,%g,%g) windingFlipped=%d boundsExtent=%s"),
-                    FirstBlenderV.X, -FirstBlenderV.Y, FirstBlenderV.Z,
-                    FirstBlenderV.X, FirstBlenderV.Y, FirstBlenderV.Z,
-                    bWindingFlipped ? 1 : 0,
-                    *LocalBox.GetExtent().ToString());
+                    TotalVertices, Triangles.Num() / 3,
+                    *LocalBox.ToString(), *LocalBox.GetExtent().ToString(),
+                    NanCount, ZeroCount,
+                    MinTriIdx, MaxTriIdx, InvalidIdxCount);
+                if (TotalVertices > 0)
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[MESH][DIAG] GUID=%s first 3 verts: v0=(%g,%g,%g) v1=(%g,%g,%g) v2=(%g,%g,%g)"),
+                        *Guid.ToString(EGuidFormats::Digits),
+                        Vertices[0].X, Vertices[0].Y, Vertices[0].Z,
+                        TotalVertices > 1 ? Vertices[1].X : 0,
+                        TotalVertices > 1 ? Vertices[1].Y : 0,
+                        TotalVertices > 1 ? Vertices[1].Z : 0,
+                        TotalVertices > 2 ? Vertices[2].X : 0,
+                        TotalVertices > 2 ? Vertices[2].Y : 0,
+                        TotalVertices > 2 ? Vertices[2].Z : 0);
+                    // Compact axis diagnostic: first Blender→UE conversion + winding + bounds
+                    const FVector& FirstBlenderV = Vertices[0];
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[MESH][AXIS] firstBlenderV=(%g,%g,%g) firstUEV=(%g,%g,%g) windingFlipped=%d boundsExtent=%s"),
+                        FirstBlenderV.X, -FirstBlenderV.Y, FirstBlenderV.Z,
+                        FirstBlenderV.X, FirstBlenderV.Y, FirstBlenderV.Z,
+                        bWindingFlipped ? 1 : 0,
+                        *LocalBox.GetExtent().ToString());
+                }
             }
         }
 
@@ -12171,23 +12527,26 @@ ReconstructCompletedMeshes()
             // Compute pre-scale extent by unscaling Vertices
             FBox PreScaleBox(ForceInit);
             for (const FVector& V : Vertices) { PreScaleBox += V / 100.0f; }
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[MESH][SCALE] preScaleExtent=%s postScaleExtent=%s "
-                     "sections=%d boundsOrigin=(%g,%g,%g) boundsExtent=%s "
-                     "sphereRadius=%g"),
-                *PreScaleBox.GetExtent().ToString(), *ProcExtent.ToString(),
-                FinalSectionCount,
-                ProcBounds.Origin.X, ProcBounds.Origin.Y, ProcBounds.Origin.Z,
-                *ProcExtent.ToString(),
-                ProcBounds.SphereRadius);
-            // STEP1: after CreateMeshSection
-            FBoxSphereBounds ActorBS1; Actor->GetActorBounds(false, ActorBS1.Origin, ActorBS1.BoxExtent);
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[MESH][STEP1] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
-                ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
-                Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
-                ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
-                *ProcExtent.ToString(), *ActorBS1.BoxExtent.ToString());
+            if (GEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH][SCALE] preScaleExtent=%s postScaleExtent=%s "
+                         "sections=%d boundsOrigin=(%g,%g,%g) boundsExtent=%s "
+                         "sphereRadius=%g"),
+                    *PreScaleBox.GetExtent().ToString(), *ProcExtent.ToString(),
+                    FinalSectionCount,
+                    ProcBounds.Origin.X, ProcBounds.Origin.Y, ProcBounds.Origin.Z,
+                    *ProcExtent.ToString(),
+                    ProcBounds.SphereRadius);
+                // STEP1: after CreateMeshSection
+                FBoxSphereBounds ActorBS1; Actor->GetActorBounds(false, ActorBS1.Origin, ActorBS1.BoxExtent);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MESH][STEP1] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
+                    ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
+                    Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
+                    ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
+                    *ProcExtent.ToString(), *ActorBS1.BoxExtent.ToString());
+            }
         }
 
         MeshSectionsBuilt += NumSections;
@@ -12227,28 +12586,31 @@ ReconstructCompletedMeshes()
             ProcMesh->SetHiddenInGame(false, true);
             ProcMesh->UpdateBounds();
             ProcMesh->MarkRenderStateDirty();
-            // STEP2: after SetRootComponent(ProcMesh)
+            if (GEnableVerboseSyncLogs)
             {
-                FBoxSphereBounds ProcBS2 = ProcMesh->Bounds;
-                FBoxSphereBounds ActorBS2; Actor->GetActorBounds(false, ActorBS2.Origin, ActorBS2.BoxExtent);
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[MESH][STEP2] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
-                    ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
-                    Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
-                    ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
-                    *ProcBS2.GetBox().GetExtent().ToString(), *ActorBS2.BoxExtent.ToString());
-            }
+                // STEP2: after SetRootComponent(ProcMesh)
+                {
+                    FBoxSphereBounds ProcBS2 = ProcMesh->Bounds;
+                    FBoxSphereBounds ActorBS2; Actor->GetActorBounds(false, ActorBS2.Origin, ActorBS2.BoxExtent);
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[MESH][STEP2] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
+                        ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
+                        Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
+                        ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
+                        *ProcBS2.GetBox().GetExtent().ToString(), *ActorBS2.BoxExtent.ToString());
+                }
 
-            // STEP3: after visibility restore (bounds already updated above)
-            {
-                FBoxSphereBounds ProcBS3 = ProcMesh->Bounds;
-                FBoxSphereBounds ActorBS3; Actor->GetActorBounds(false, ActorBS3.Origin, ActorBS3.BoxExtent);
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[MESH][STEP3] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
-                    ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
-                    Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
-                    ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
-                    *ProcBS3.GetBox().GetExtent().ToString(), *ActorBS3.BoxExtent.ToString());
+                // STEP3: after visibility restore (bounds already updated above)
+                {
+                    FBoxSphereBounds ProcBS3 = ProcMesh->Bounds;
+                    FBoxSphereBounds ActorBS3; Actor->GetActorBounds(false, ActorBS3.Origin, ActorBS3.BoxExtent);
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[MESH][STEP3] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
+                        ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
+                        Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
+                        ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
+                        *ProcBS3.GetBox().GetExtent().ToString(), *ActorBS3.BoxExtent.ToString());
+                }
             }
         }
 
@@ -12296,6 +12658,19 @@ BuildV1MeshFromReassembly()
 
         const FV1MeshReassemblyKey& Key = Pair.Key;
         const FGuid& Guid = Key.Guid;
+
+        // Phase 10J.5E: Skip V1 reconstruction for FBX-authoritative GUIDs.
+        // Clean up stale pending data that may have accumulated before FBX
+        // promotion.
+        if (FBXAuthoritativeGuids.Contains(Guid))
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][AUTH] skip_v1_pt_mesh_fbx_authoritative guid=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
+            State.bReconstructed = true;
+            Reconstructed.Add(Key);
+            continue;
+        }
 
         // Resolve actor from GUID
         AActor* Actor = FindActorFast(Guid);
@@ -13261,6 +13636,162 @@ BuildV1MeshFromReassembly()
         PendingV1MeshReassembly.Remove(Key);
     }
 }
+
+
+// =========================================================
+// Phase 10J.5D.5: Deferred FBX visibility repair
+// =========================================================
+// Scheduled by OnScheduleRepair callback after FBX import.
+// Processes entries in tick pipeline with TWeakObjectPtr
+// safety guards.
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ProcessDeferredRepairs()
+{
+    const double Now = FPlatformTime::Seconds();
+    const double ScheduleDelay = 0.1; // ~2 ticks at 60fps
+
+    TArray<FGuid> Completed;
+
+    for (const FDeferredFBXRepairEntry& Entry : DeferredFBXRepairs)
+    {
+        if (Entry.PassNumber == 1)
+        {
+            // Next-tick pass: always execute.
+        }
+        else if (Entry.PassNumber == 2)
+        {
+            // Delayed pass: wait for ScheduleDelay.
+            if (Now - Entry.ScheduleTime < ScheduleDelay)
+                continue;
+        }
+
+        // Use TWeakObjectPtr for actor/component/mesh safety.
+        // Resolving from ActorCache returns weak pointer that survives
+        // brief destruction races between scheduling and execution.
+        TWeakObjectPtr<AActor> WeakActor = FindActorFast(Entry.Guid);
+        AActor* Actor = WeakActor.Get();
+        if (!Actor)
+        {
+            Completed.Add(Entry.Guid);
+            continue;
+        }
+
+        AStaticMeshActor* SMA = Cast<AStaticMeshActor>(Actor);
+        if (!SMA)
+        {
+            Completed.Add(Entry.Guid);
+            continue;
+        }
+
+        TWeakObjectPtr<UStaticMeshComponent> WeakSMC(SMA->GetStaticMeshComponent());
+        UStaticMeshComponent* SMC = WeakSMC.Get();
+        if (!SMC)
+        {
+            Completed.Add(Entry.Guid);
+            continue;
+        }
+
+        TWeakObjectPtr<UStaticMesh> WeakMesh(SMC->GetStaticMesh());
+        UStaticMesh* Mesh = WeakMesh.Get();
+        if (!Mesh)
+        {
+            Completed.Add(Entry.Guid);
+            continue;
+        }
+
+        // Full repair (same as EnsureFBXMeshRenderable + RefreshFBXStaticMeshComponent)
+        SMC->SetVisibility(true, true);
+        SMC->SetHiddenInGame(false, true);
+        Actor->SetActorHiddenInGame(false);
+        SMC->UpdateBounds();
+        SMC->MarkRenderStateDirty();
+
+        // Also run EnsureFBXMeshRenderable for material + visibility safety
+        FLiveSyncFBXImporter::EnsureFBXMeshRenderable(SMC, Mesh, SMA, Entry.Guid);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][DEFERRED_REPAIR] guid=%s pass=%d reason=post_import%s"),
+            *Entry.Guid.ToString(EGuidFormats::Digits),
+            Entry.PassNumber,
+            Entry.PassNumber == 2 ? TEXT("_delay") : TEXT(""));
+
+        Completed.Add(Entry.Guid);
+    }
+
+    // Remove completed entries
+    for (const FGuid& G : Completed)
+    {
+        DeferredFBXRepairs.RemoveAll([&](const FDeferredFBXRepairEntry& E) {
+            return E.Guid == G;
+        });
+    }
+}
+
+
+void UUELiveSyncSubsystem::
+RepairAllFBXActors()
+{
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[FBX][MANUAL_REPAIR] starting repair for %d FBX-authoritative GUIDs"),
+        FBXAuthoritativeGuids.Num());
+
+    int32 RepairedCount = 0;
+    for (const FGuid& Guid : FBXAuthoritativeGuids)
+    {
+        TWeakObjectPtr<AActor> WeakActor = FindActorFast(Guid);
+        AActor* Actor = WeakActor.Get();
+        if (!Actor)
+            continue;
+
+        AStaticMeshActor* SMA = Cast<AStaticMeshActor>(Actor);
+        if (!SMA)
+            continue;
+
+        TWeakObjectPtr<UStaticMeshComponent> WeakSMC(SMA->GetStaticMeshComponent());
+        UStaticMeshComponent* SMC = WeakSMC.Get();
+        if (!SMC)
+            continue;
+
+        TWeakObjectPtr<UStaticMesh> WeakMesh(SMC->GetStaticMesh());
+        UStaticMesh* Mesh = WeakMesh.Get();
+        if (!Mesh)
+            continue;
+
+        FLiveSyncFBXImporter::EnsureFBXMeshRenderable(SMC, Mesh, SMA, Guid);
+        ++RepairedCount;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][MANUAL_REPAIR] repaired guid=%s actor=%s"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *Actor->GetName());
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[FBX][MANUAL_REPAIR] repair complete: %d actors repaired"), RepairedCount);
+}
+
+
+// =========================================================
+// Phase 10J.5D.5: Console command — UE.LiveSync.RepairFBX
+// =========================================================
+
+static FAutoConsoleCommandWithWorld GRepairFBXCommand(
+    TEXT("UE.LiveSync.RepairFBX"),
+    TEXT("Manually repair visibility for all FBX-authoritative actors"),
+    FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World)
+    {
+        if (!World)
+            return;
+        UUELiveSyncSubsystem* Subsystem =
+            World->GetSubsystem<UUELiveSyncSubsystem>();
+        if (Subsystem)
+        {
+            Subsystem->RepairAllFBXActors();
+        }
+    })
+);
 
 
 #include "UELiveSyncSubsystem_Replay.inl"

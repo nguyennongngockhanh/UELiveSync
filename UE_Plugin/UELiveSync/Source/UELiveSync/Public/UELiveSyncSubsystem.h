@@ -73,6 +73,11 @@ public:
     FText GetDiagnosticsText();
 #endif
 
+    // =====================================================
+    // DEFERRED FBX REPAIR (Phase 10J.5D.5)
+    // =====================================================
+    void RepairAllFBXActors();
+
 private:
 
     // =====================================================
@@ -743,6 +748,27 @@ private:
 
     // Count of successful SetMaterial() calls this session
     int32 MaterialAssignmentsSucceeded = 0;
+
+    // =====================================================
+    // FBX AUTHORITY (Phase 10J.5E)
+    // =====================================================
+    // Per-GUID set of FBX-authoritative GUIDs. Once a GUID has
+    // been promoted to FBX/StaticMeshAuthority, PT_Mesh packets
+    // for that GUID must not spawn/update a procedural mesh.
+    TSet<FGuid> FBXAuthoritativeGuids;
+
+    // =====================================================
+    // DEFERRED FBX REPAIR (Phase 10J.5D.5)
+    // =====================================================
+    struct FDeferredFBXRepairEntry
+    {
+        FGuid  Guid;
+        int32  PassNumber   = 0;   // 1=next-tick, 2=delayed
+        double ScheduleTime = 0.0;
+    };
+    TArray<FDeferredFBXRepairEntry> DeferredFBXRepairs;
+
+    void ProcessDeferredRepairs();
 
     // =====================================================
     // MESH CHUNK REASSEMBLY DATA (Phase 7C Stage 1B)

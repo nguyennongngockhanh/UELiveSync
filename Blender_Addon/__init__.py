@@ -550,6 +550,117 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue(
 # PHASE 7C STAGE 3A.1: FBX MESH HANDOFF OPERATOR
 # =========================================================
 
+# =========================================================
+# FBX LOCAL-PITCH EXPORT HELPER (Phase 10J)
+# =========================================================
+# Exports a Blender object as an FBX with geometry baked into
+# local-space (identity transform).  This prevents the UE actor
+# from seeing a double-offset pivot:
+#   - Blender object transform (e.g. X=410)
+#   - FBX scene-node transform  (also X=410)
+# Result: mesh vertices are relative to object origin,
+# UE actor transform aligns the visible geometry correctly.
+# =========================================================
+
+def _export_object_local_fbx(obj, filepath, depsgraph):
+    """Export *obj* to *filepath* with identity-transform pivot.
+
+    Creates a temporary copy object whose mesh is evaluated
+    (modifiers applied) and whose transform is identity (0,0,0;
+    1,1,1 scale).  Selection state is restored after export.
+
+    Uses bmesh.from_mesh/to_mesh for Blender 5.1 compatibility
+    (copy_attributes_to is not available until Blender 4.2+).
+    """
+    import bpy
+    import bmesh
+
+    # Preserve original selection and active object
+    orig_selected = [o for o in bpy.context.selected_objects]
+    orig_active = bpy.context.active_object
+
+    # Create evaluated mesh data-block
+    evaluated_obj = obj.evaluated_get(depsgraph)
+    mesh = evaluated_obj.to_mesh()
+    if mesh is None:
+        print("[FBX] Cannot evaluate mesh for local-pivot export")
+        return False
+
+    try:
+        # Create a temporary object with identity transform
+        temp_obj_name = f"_UELivesyncFBX_{obj.name}"
+        temp_mesh = bpy.data.meshes.new(temp_obj_name + "_mesh")
+
+        # Copy source mesh into temp mesh using bmesh (Blender 5.1 compatible)
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        bm.to_mesh(temp_mesh)
+        bm.free()
+        temp_mesh.update()
+
+        temp_obj = bpy.data.objects.new(temp_obj_name, temp_mesh)
+        bpy.context.collection.objects.link(temp_obj)
+
+        # Identity transform
+        temp_obj.location = (0.0, 0.0, 0.0)
+        temp_obj.rotation_euler = (0.0, 0.0, 0.0)
+        temp_obj.scale = (1.0, 1.0, 1.0)
+
+        # Copy material slots to temp mesh (if any)
+        if hasattr(obj, "material_slots") and obj.material_slots:
+            for slot_index, slot in enumerate(obj.material_slots):
+                if slot.material is not None:
+                    if slot_index < len(temp_mesh.materials):
+                        temp_mesh.materials[slot_index] = slot.material
+                    else:
+                        temp_mesh.materials.append(slot.material)
+
+        # Select only the temp object for export
+        bpy.ops.object.select_all(action='DESELECT')
+        temp_obj.select_set(True)
+        bpy.context.view_layer.objects.active = temp_obj
+
+        # Export with identity transform baked (bake_space_transform=True
+        # is redundant because transform IS identity, but we keep it for safety)
+        try:
+            bpy.ops.export_scene.fbx(
+                filepath=filepath,
+                use_selection=True,
+                object_types={'MESH'},
+                apply_scale_options='FBX_SCALE_UNITS',
+                bake_space_transform=True,  # bake identity → no node transform
+                mesh_smooth_type='FACE',
+                use_mesh_modifiers=False,    # already evaluated
+                use_tspace=False,
+            )
+        except Exception as e:
+            print(f"[FBX] Export failed: {e}")
+            return False
+
+        return True
+
+    finally:
+        # Cleanup: remove temp mesh and object
+        try:
+            if 'temp_mesh' in locals():
+                bpy.data.meshes.remove(temp_mesh)
+            if 'temp_obj' in locals():
+                bpy.context.collection.objects.unlink(temp_obj)
+                bpy.data.objects.remove(temp_obj)
+        except Exception:
+            pass
+
+        # Restore selection
+        bpy.ops.object.select_all(action='DESELECT')
+        for o in orig_selected:
+            try:
+                o.select_set(True)
+            except Exception:
+                pass
+        if orig_active:
+            bpy.context.view_layer.objects.active = orig_active
+
+
 class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
     bpy.types.Operator
 ):
@@ -588,6 +699,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
         import json
         import time
         import math
+        import struct
 
         fbx_cache_root = \
             os.path.expanduser(
@@ -622,18 +734,11 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     f"{safe_name}.fbx",
                 )
 
-                # Export selected object only as FBX
-                import bpy
-                bpy.ops.export_scene.fbx(
-                    filepath=fbx_path,
-                    use_selection=True,
-                    object_types={'MESH'},
-                    apply_scale_options='FBX_SCALE_UNITS',
-                    bake_space_transform=False,
-                    mesh_smooth_type='FACE',
-                    use_mesh_modifiers=True,
-                    use_tspace=False,
-                )
+                # Export with local-pivot helper (Phase 10J)
+                depsgraph = context.evaluated_depsgraph_get()
+                if not _export_object_local_fbx(obj, fbx_path, depsgraph):
+                    print(f"[FBX] Export failed — {fbx_path}")
+                    continue
 
                 if not os.path.isfile(fbx_path):
                     print(
@@ -643,13 +748,15 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     continue
 
                 # Compute mesh stats from evaluated mesh
-                depsgraph = \
-                    context.evaluated_depsgraph_get()
+                # (depsgraph already obtained above)
                 evaluated_obj = \
                     obj.evaluated_get(depsgraph)
 
                 mesh = evaluated_obj.to_mesh()
                 if mesh is None:
+                    print(
+                        f"[FBX] Cannot evaluate mesh for stats: {obj.name}"
+                    )
                     continue
 
                 try:
@@ -658,6 +765,16 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     tri_count = len(mesh.loop_triangles)
                     mat_slot_count = \
                         len(mesh.materials)
+                    geometry_hash = \
+                        network.compute_fbx_geometry_hash(mesh)
+                    if geometry_hash == 0:
+                        geometry_hash = network.xxh64(
+                            struct.pack(
+                                '<II',
+                                vert_count,
+                                tri_count,
+                            )
+                        )
                 finally:
                     evaluated_obj.to_mesh_clear()
 
@@ -685,6 +802,12 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         manifest, f, indent=2
                     )
 
+                print(
+                    f"[FBX][BLENDER] geometry_hash guid={guid_hex[:8]} "
+                    f"hash={geometry_hash} verts={vert_count} "
+                    f"tris={tri_count} mats={mat_slot_count}"
+                )
+
                 # Build and send FBX import request packet
                 payload = \
                     network.serialize_fbx_import_request(
@@ -695,6 +818,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         tri_count=tri_count,
                         mat_slot_count=mat_slot_count,
                         timestamp=time.time(),
+                        geometry_hash=geometry_hash,
                     )
 
                 network.send_objects(
@@ -916,11 +1040,6 @@ class UELIVESYNC_PT_panel(
         layout.operator(
             "uelivesync.rebind_all",
             icon='UV_SYNC_SELECT',
-        )
-
-        layout.operator(
-            "uelivesync.sync_selected_mesh_to_ue",
-            icon='MESH_DATA',
         )
 
         layout.operator(

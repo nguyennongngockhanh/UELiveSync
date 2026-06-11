@@ -576,7 +576,7 @@ static_assert(
 // FBX IMPORT REQUEST PAYLOAD (Phase 7C Stage 3A.1)
 // =========================================================
 
-// PT_FBXImportRequest (0x16) fixed-size payload: 680 bytes
+// PT_FBXImportRequest (0x16) fixed-size payload: 688 bytes
 // Wire format:
 //   [0-15]   ObjectGUID   FGuid      — object GUID
 //   [16-19]  Version      uint32     — payload format version (1)
@@ -586,7 +586,9 @@ static_assert(
 //   [664-667] TriCount     uint32     — triangle count
 //   [668-671] MatSlotCount uint32     — material slot count
 //   [672-679] Timestamp    double     — export timestamp (Unix epoch seconds)
+//   [680-687] GeometryHash uint64     — geometry content signature (Phase 10J.5F)
 //
+// Backward compatible: old 680-byte payloads are accepted (GeometryHash = 0).
 // UE generates destination AssetPath internally:
 //   /Game/UELiveSync/Imported/<SanitizedObjectName>_<GuidShort>
 struct FFBXImportRequestPayload
@@ -599,11 +601,12 @@ struct FFBXImportRequestPayload
     uint32   TriCount      = 0;
     uint32   MatSlotCount  = 0;
     double   Timestamp     = 0.0;
+    uint64   GeometryHash  = 0;    // Phase 10J.5F: geometry content signature
 };
 
 static_assert(
-    sizeof(FFBXImportRequestPayload) == 680,
-    "FFBXImportRequestPayload must be exactly 680 bytes");
+    sizeof(FFBXImportRequestPayload) == 688,
+    "FFBXImportRequestPayload must be exactly 688 bytes");
 
 #pragma pack(pop)
 
@@ -1184,6 +1187,7 @@ struct FLiveSyncStats
     std::atomic<int32> FBXImportFailed{0};                // Failed FBX imports (UE import API error)
     std::atomic<int32> FBXImportActorsSpawned{0};         // New StaticMeshActor spawned
     std::atomic<int32> FBXImportActorsUpdated{0};         // Existing StaticMeshActor updated
+    std::atomic<int32> FBXImportSkipped{0};               // Redundant imports skipped (fingerprint match)
 };
 
 // =========================================================

@@ -63,10 +63,10 @@ test("T1.2: constant is int",
 # T2: Payload size constant
 # =============================================================
 
-banner("T2 — FBX_IMPORT_REQUEST_PAYLOAD_SIZE == 680")
+banner("T2 — FBX_IMPORT_REQUEST_PAYLOAD_SIZE == 688")
 
-test("T2.1: FBX_IMPORT_REQUEST_PAYLOAD_SIZE == 680",
-      network.FBX_IMPORT_REQUEST_PAYLOAD_SIZE == 680,
+test("T2.1: FBX_IMPORT_REQUEST_PAYLOAD_SIZE == 688",
+      network.FBX_IMPORT_REQUEST_PAYLOAD_SIZE == 688,
       f"got {network.FBX_IMPORT_REQUEST_PAYLOAD_SIZE}")
 
 
@@ -90,8 +90,8 @@ payload = network.serialize_fbx_import_request(
     timestamp=1234567890.0,
 )
 
-test("T3.1: payload is 680 bytes",
-      len(payload) == 680,
+test("T3.1: payload is 688 bytes",
+      len(payload) == 688,
       f"got {len(payload)}")
 
 test("T3.2: payload is bytes",
@@ -175,6 +175,16 @@ ts = struct.unpack_from("<d", payload, 672)[0]
 test("T3.15: Timestamp at offset 672",
       abs(ts - 1234567890.0) < 0.001,
       f"got {ts}")
+
+# Verify GeometryHash at offset 680 (Phase 10J.5F)
+geom_hash = struct.unpack_from("<Q", payload, 680)[0]
+test("T3.16: GeometryHash == 0 at offset 680 (default/old protocol)",
+      geom_hash == 0,
+      f"got {geom_hash}")
+
+test("T3.17: payload total size is 688 bytes",
+      len(payload) == 688,
+      f"got {len(payload)}")
 
 
 # =============================================================
@@ -405,17 +415,28 @@ if os.path.isfile(ue_cpp_path) and os.path.isfile(ue_importer_cpp_path):
 
     # Check both files for moved/remaining patterns
     # T9.1: No RegisterComponent immediately after SetStaticMesh in HandleFBXImport
-    set_mesh_pos = importer_text.find("GetStaticMeshComponent()->SetStaticMesh")
+    # Accept both direct call and local-variable call patterns.
+    set_mesh_patterns = [
+        "GetStaticMeshComponent()->SetStaticMesh",
+        "SMC->SetStaticMesh",
+    ]
     has_register_after_set = False
-    if set_mesh_pos >= 0:
-        snippet = importer_text[set_mesh_pos:set_mesh_pos + 500]
-        has_register_after_set = "RegisterComponent" in snippet
+    for pattern in set_mesh_patterns:
+        pos = importer_text.find(pattern)
+        if pos >= 0:
+            snippet = importer_text[pos:pos + 500]
+            if "RegisterComponent" in snippet:
+                has_register_after_set = True
+                break
     test("T9.1: No RegisterComponent after SetStaticMesh in HandleFBXImport",
           not has_register_after_set,
           "RegisterComponent() still present after SetStaticMesh")
 
     # T9.2: SetStaticMesh still present in importer
-    has_set_static_mesh = "GetStaticMeshComponent()->SetStaticMesh" in importer_text
+    has_set_static_mesh = (
+        "GetStaticMeshComponent()->SetStaticMesh" in importer_text
+        or "SMC->SetStaticMesh" in importer_text
+    )
     test("T9.2: SetStaticMesh still present in importer",
           has_set_static_mesh,
           "SetStaticMesh call not found in LiveSyncFBXImporter.cpp")
@@ -498,8 +519,12 @@ if os.path.isfile(ue_importer_cpp_path):
           "Asset destination not found")
 
     # T10.12: Actor update branch (SetStaticMesh)
+    has_set_mesh = (
+        "GetStaticMeshComponent()->SetStaticMesh" in importer_text
+        or "SMC->SetStaticMesh" in importer_text
+    )
     test("T10.12: Actor update branch (SetStaticMesh)",
-          "GetStaticMeshComponent()->SetStaticMesh" in importer_text,
+          has_set_mesh,
           "SetStaticMesh not found in importer")
 
     # T10.13: Actor spawn branch (!MeshActor)
