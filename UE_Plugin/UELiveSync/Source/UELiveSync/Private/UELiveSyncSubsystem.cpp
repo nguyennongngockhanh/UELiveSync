@@ -75,6 +75,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "ProceduralMeshComponent.h"
 #include "KismetProceduralMeshLibrary.h"
 
@@ -3918,6 +3919,95 @@ ProcessBinaryPacket(
             }
 
             HandleMaterialDef(Guid, Slots, ObjectCount);
+
+            // Phase 10J.5H+5J: parse MATX extension block (optional properties)
+            TArray<FMaterialSlotBasicProperties> BasicProps;
+            if (Ptr + (int32)sizeof(uint32) <= PacketEnd)
+            {
+                uint32 MatxMagic = 0;
+                FMemory::Memcpy(&MatxMagic, Ptr, sizeof(uint32));
+                if (MatxMagic == MATX_MAGIC)
+                {
+                    // Phase 10J.5J: MATX receive trace
+                    int32 RemainingBytes = PacketEnd - (Ptr + sizeof(uint32) + sizeof(uint8));
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MAT][RECV] guid=%s slotCount=%d hasMATX=1 remainingBytes=%d"),
+                        *Guid.ToString(EGuidFormats::Digits),
+                        ObjectCount, RemainingBytes);
+                    Ptr += sizeof(uint32);
+                    if (Ptr < PacketEnd)
+                    {
+                        uint8 ExVersion = *Ptr; Ptr++;
+                        if (ExVersion == MATX_VERSION_CURRENT && Ptr < PacketEnd)
+                        {
+                            uint8 ExtSlotCount = *Ptr; Ptr++;
+                            BasicProps.Reserve(ExtSlotCount);
+                            for (uint8 es = 0; es < ExtSlotCount && es < MAX_MATERIAL_SLOTS; es++)
+                            {
+                                if (Ptr + MATX_PROP_SLOT_SIZE > PacketEnd)
+                                {
+                                    UE_LOG(LogLiveSync, Warning,
+                                        TEXT("[MATERIAL] Truncated MATX slot %u/%u for GUID=%s"),
+                                        es, ExtSlotCount,
+                                        *Guid.ToString(EGuidFormats::Digits));
+                                    break;
+                                }
+
+                                FMaterialSlotBasicProperties Prop;
+                                Prop.bHasProperties = true;
+                                int8 SlotIdx = static_cast<int8>(*Ptr); Ptr += sizeof(uint8);
+
+                                float R, G, B, A;
+                                FMemory::Memcpy(&R, Ptr, sizeof(float)); Ptr += sizeof(float);
+                                FMemory::Memcpy(&G, Ptr, sizeof(float)); Ptr += sizeof(float);
+                                FMemory::Memcpy(&B, Ptr, sizeof(float)); Ptr += sizeof(float);
+                                FMemory::Memcpy(&A, Ptr, sizeof(float)); Ptr += sizeof(float);
+
+                                Prop.BaseColor = FLinearColor(R, G, B);
+                                Prop.Alpha = FMath::Clamp(A, 0.0f, 1.0f);
+
+                                FMemory::Memcpy(&Prop.Roughness, Ptr, sizeof(float)); Ptr += sizeof(float);
+                                FMemory::Memcpy(&Prop.Metallic, Ptr, sizeof(float)); Ptr += sizeof(float);
+                                Prop.Roughness = FMath::Clamp(Prop.Roughness, 0.0f, 1.0f);
+                                Prop.Metallic = FMath::Clamp(Prop.Metallic, 0.0f, 1.0f);
+
+                                // Store at slot position
+                                if (SlotIdx >= 0 && SlotIdx < MAX_MATERIAL_SLOTS)
+                                {
+                                    if (BasicProps.Num() <= SlotIdx)
+                                        BasicProps.SetNum(SlotIdx + 1);
+                                    BasicProps[SlotIdx] = Prop;
+
+                                    // Phase 10J.5J: MATX parse trace
+                                    UE_LOG(LogLiveSync, Log,
+                                        TEXT("[MAT][PARSE] guid=%s slot=%d color=(%.3f,%.3f,%.3f,%.3f) "
+                                             "roughness=%.3f metallic=%.3f alpha=%.3f"),
+                                        *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+                                        Prop.BaseColor.R, Prop.BaseColor.G,
+                                        Prop.BaseColor.B, Prop.BaseColor.A,
+                                        Prop.Roughness, Prop.Metallic, Prop.Alpha);
+                                }
+                            }
+                        }
+                        else if (ExVersion != 0)
+                        {
+                            UE_LOG(LogLiveSync, Verbose,
+                                TEXT("[MATERIAL] Unknown MATX version %u for GUID=%s \u2014 skipping"),
+                                ExVersion, *Guid.ToString(EGuidFormats::Digits));
+                        }
+                    }
+                }
+            }
+
+            // Apply generated material if we have basic properties
+            for (const FMaterialSlotBasicProperties& BP : BasicProps)
+            {
+                if (BP.bHasProperties)
+                {
+                    ParseAndApplyGeneratedMaterial(Guid, BasicProps);
+                    break;
+                }
+            }
         }
 
         Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
@@ -4035,20 +4125,20 @@ ProcessBinaryPacket(
             // =====================================================
             bool bHasFullAttr = (Flags & MESH_CHUNK_FLAG_FULL_ATTR) != 0;
 
-            // Phase 10J.5E: Skip v1 chunk accumulation for FBX-authoritative GUIDs.
-            if (bHasFullAttr && FBXAuthoritativeGuids.Contains(Guid))
+            // Phase 10J.5E/K: Skip v1 chunk accumulation for FBX-authoritative AND FBX-pending GUIDs.
+            if (bHasFullAttr && (FBXAuthoritativeGuids.Contains(Guid) || FBXPendingGuids.Contains(Guid)))
             {
-                if (PayloadSize <= 0)
+                if (FBXPendingGuids.Contains(Guid))
                 {
-                    UE_LOG(LogLiveSync, Warning,
-                        TEXT("[MESH][AUTH_WARN] guid=%s reason=truncated_chunk_for_fbx_authoritative chunk=%u/%u payloadSize=%d"),
-                        *Guid.ToString(EGuidFormats::Digits), ChunkIndex, ChunkCount, PayloadSize);
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MESH][AUTH] skip_pt_mesh_fbx_pending guid=%s"),
+                        *Guid.ToString(EGuidFormats::Digits));
                 }
                 else
                 {
-                    UE_LOG(LogLiveSync, Verbose,
-                        TEXT("[MESH][AUTH] skip_v1_chunk_fbx_authoritative guid=%s chunk=%u/%u"),
-                        *Guid.ToString(EGuidFormats::Digits), ChunkIndex, ChunkCount);
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MESH][AUTH] skip_pt_mesh_fbx_authoritative guid=%s"),
+                        *Guid.ToString(EGuidFormats::Digits));
                 }
                 Ptr += PayloadSize;
                 continue;
@@ -4203,6 +4293,14 @@ ProcessBinaryPacket(
         }
 
         {
+            // Phase 10J.5K: Extract GUID to mark FBX pending before import.
+            FGuid FbxRequestGuid;
+            FMemory::Memcpy(&FbxRequestGuid, Ptr, sizeof(FGuid));
+            FBXPendingGuids.Add(FbxRequestGuid);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX][AUTH] mark_pending guid=%s reason=fbx_request_received"),
+                *FbxRequestGuid.ToString(EGuidFormats::Digits));
+
             FFBXImportContext Ctx;
             Ctx.World = GetWorld();
             Ctx.Stats = &Stats;
@@ -4211,6 +4309,7 @@ ProcessBinaryPacket(
             Ctx.OnMarkFbxAuthority = [this](const FGuid& G)
             {
                 FBXAuthoritativeGuids.Add(G);
+                FBXPendingGuids.Remove(G);
                 UE_LOG(LogLiveSync, Log,
                     TEXT("[FBX][AUTH] guid=%s authority=fbx"),
                     *G.ToString(EGuidFormats::Digits));
@@ -4228,6 +4327,39 @@ ProcessBinaryPacket(
                 Entry2.PassNumber = 2;
                 Entry2.ScheduleTime = FPlatformTime::Seconds();
                 DeferredFBXRepairs.Add(Entry2);
+            };
+            // Phase 10J.5L: After EnsureFBXMeshRenderable fallback, restore generated MIDs.
+            Ctx.OnRestoreGeneratedMaterials = [this](const FGuid& G, UStaticMeshComponent* SMC)
+            {
+                if (!SMC)
+                    return;
+                const FString GuidShort = G.ToString(EGuidFormats::Short);
+                const int32 NumSlots = SMC->GetNumMaterials();
+                int32 RestoredCount = 0;
+                for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
+                {
+                    const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
+                    TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
+                    if (Found && *Found)
+                    {
+                        UMaterialInterface* CurrentMat = SMC->GetMaterial(SlotIdx);
+                        if (CurrentMat != *Found)
+                        {
+                            SMC->SetMaterial(SlotIdx, *Found);
+                            ++RestoredCount;
+                            UE_LOG(LogLiveSync, Log,
+                                TEXT("[MAT][RESTORE] guid=%s slot=%d restored=MID_UELiveSync_%s_%d"),
+                                *G.ToString(EGuidFormats::Digits), SlotIdx,
+                                *GuidShort, SlotIdx);
+                        }
+                    }
+                }
+                if (RestoredCount > 0)
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MAT][AUTH] guid=%s slot_count=%d authority=generated_mid"),
+                        *G.ToString(EGuidFormats::Digits), RestoredCount);
+                }
             };
             FLiveSyncFBXImporter::HandleImport(Ptr, ObjSize, Ctx);
         }
@@ -11574,6 +11706,192 @@ CacheMaterialPath(
 
 
 // =========================================================
+// MAKE GENERATED MATERIAL KEY (Phase 10J.5H)
+// =========================================================
+
+FString UUELiveSyncSubsystem::
+MakeGeneratedMaterialKey(
+    const FGuid& Guid,
+    int32 SlotIndex) const
+{
+    return FString::Printf(TEXT("%s_%d"),
+        *Guid.ToString(EGuidFormats::Short),
+        SlotIndex);
+}
+
+
+// =========================================================
+// GET OR CREATE GENERATED MID (Phase 10J.5H)
+// =========================================================
+
+UMaterialInstanceDynamic* UUELiveSyncSubsystem::
+GetOrCreateGeneratedMID(
+    const FGuid& Guid,
+    int32 SlotIndex,
+    const FMaterialSlotBasicProperties& Props)
+{
+    const FString Key = MakeGeneratedMaterialKey(Guid, SlotIndex);
+    TObjectPtr<UMaterialInstanceDynamic>* Existing = GeneratedMaterialCache.Find(Key);
+    if (Existing && *Existing)
+    {
+        // Update existing MID params
+        UMaterialInstanceDynamic* MID = *Existing;
+        MID->SetVectorParameterValue(FName("Base Color"), Props.BaseColor);
+        MID->SetVectorParameterValue(FName("BaseColor"), Props.BaseColor);
+        MID->SetVectorParameterValue(FName("Color"), Props.BaseColor);
+        MID->SetVectorParameterValue(FName("Diffuse Color"), Props.BaseColor);
+        MID->SetVectorParameterValue(FName("DiffuseColor"), Props.BaseColor);
+        MID->SetScalarParameterValue(FName("Roughness"), Props.Roughness);
+        MID->SetScalarParameterValue(FName("Metallic"), Props.Metallic);
+        MID->SetScalarParameterValue(FName("Alpha"), Props.Alpha);
+        MID->SetScalarParameterValue(FName("Opacity"), Props.Alpha);
+        return MID;
+    }
+
+    // Load base material
+    static const FSoftObjectPath BaseMatPath(
+        TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+    UMaterialInterface* BaseMat = Cast<UMaterialInterface>(BaseMatPath.TryLoad());
+    if (!BaseMat)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MATERIAL] Failed to load BasicShapeMaterial for generated MID"));
+        return nullptr;
+    }
+
+    UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(BaseMat, this);
+    if (!MID)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MATERIAL] Failed to create generated MID for GUID=%s slot=%d"),
+            *Guid.ToString(EGuidFormats::Digits), SlotIndex);
+        return nullptr;
+    }
+
+    // Phase 10J.5L: name the MID clearly for UE material list visibility
+    const FString GuidShort = Guid.ToString(EGuidFormats::Short);
+    MID->Rename(*FString::Printf(TEXT("MID_UELiveSync_%s_%d"), *GuidShort, SlotIndex), this);
+
+    MID->SetVectorParameterValue(FName("Base Color"), Props.BaseColor);
+    MID->SetVectorParameterValue(FName("BaseColor"), Props.BaseColor);
+    MID->SetVectorParameterValue(FName("Color"), Props.BaseColor);
+    MID->SetVectorParameterValue(FName("Diffuse Color"), Props.BaseColor);
+    MID->SetVectorParameterValue(FName("DiffuseColor"), Props.BaseColor);
+    MID->SetScalarParameterValue(FName("Roughness"), Props.Roughness);
+    MID->SetScalarParameterValue(FName("Metallic"), Props.Metallic);
+    MID->SetScalarParameterValue(FName("Alpha"), Props.Alpha);
+    MID->SetScalarParameterValue(FName("Opacity"), Props.Alpha);
+
+    MID->SetFlags(RF_Transient);
+
+    GeneratedMaterialCache.Add(Key, MID);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MAT][GEN] create guid=%s slot=%d name=MID_UELiveSync_%s_%d "
+             "color=(%.1f,%.1f,%.1f,%.1f) roughness=%.3f metallic=%.3f"),
+        *Guid.ToString(EGuidFormats::Digits), SlotIndex,
+        *GuidShort, SlotIndex,
+        Props.BaseColor.R, Props.BaseColor.G, Props.BaseColor.B, Props.BaseColor.A,
+        Props.Roughness, Props.Metallic);
+
+    return MID;
+}
+
+
+// =========================================================
+// PARSE AND APPLY GENERATED MATERIAL (Phase 10J.5H)
+// =========================================================
+
+bool UUELiveSyncSubsystem::
+ParseAndApplyGeneratedMaterial(
+    const FGuid& Guid,
+    const TArray<FMaterialSlotBasicProperties>& BasicProps)
+{
+    // Resolve actor
+    AActor* Actor = FindActorFast(Guid);
+    if (!Actor)
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MATERIAL] Generated material: no actor for GUID=%s"),
+            *Guid.ToString(EGuidFormats::Digits));
+        return false;
+    }
+
+    UStaticMeshComponent* SMC = Actor->FindComponentByClass<UStaticMeshComponent>();
+    if (!SMC)
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MATERIAL] Generated material: no StaticMeshComponent on actor=%s"),
+            *Actor->GetName());
+        return false;
+    }
+
+    int32 AppliedCount = 0;
+    for (int32 SlotIdx = 0; SlotIdx < BasicProps.Num(); SlotIdx++)
+    {
+        const FMaterialSlotBasicProperties& Props = BasicProps[SlotIdx];
+        if (!Props.bHasProperties)
+            continue;
+
+        if (SlotIdx >= SMC->GetNumMaterials())
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MATERIAL] Generated material: slot %d out of range (%d materials)"),
+                SlotIdx, SMC->GetNumMaterials());
+            continue;
+        }
+
+        UMaterialInstanceDynamic* MID = GetOrCreateGeneratedMID(Guid, SlotIdx, Props);
+        if (!MID)
+            continue;
+
+        SMC->SetMaterial(SlotIdx, MID);
+        AppliedCount++;
+
+        // Phase 10J.5M: log per-parameter detail for verification
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MAT][GEN_PARAM] guid=%s slot=%d "
+                 "BaseColor=(%.3f,%.3f,%.3f,%.3f) "
+                 "Roughness=%.3f Metallic=%.3f Alpha=%.3f"),
+            *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+            Props.BaseColor.R, Props.BaseColor.G, Props.BaseColor.B, Props.BaseColor.A,
+            Props.Roughness, Props.Metallic, Props.Alpha);
+    }
+
+    if (AppliedCount > 0)
+    {
+        MaterialGeneratedApplied++;
+        // Phase 10J.5I: log each slot apply for runtime diagnostics
+        for (int32 SlotIdx = 0; SlotIdx < BasicProps.Num(); SlotIdx++)
+        {
+            if (!BasicProps[SlotIdx].bHasProperties)
+                continue;
+            UMaterialInterface* PrevMat = SlotIdx < SMC->GetNumMaterials()
+                ? SMC->GetMaterial(SlotIdx) : nullptr;
+            FString PrevName = PrevMat ? PrevMat->GetFName().ToString() : TEXT("null");
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MAT][GEN] apply guid=%s slot=%d color=(%.1f,%.1f,%.1f,%.1f) roughness=%.3f metallic=%.3f component=%s previous=%s"),
+                *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+                BasicProps[SlotIdx].BaseColor.R,
+                BasicProps[SlotIdx].BaseColor.G,
+                BasicProps[SlotIdx].BaseColor.B,
+                BasicProps[SlotIdx].BaseColor.A,
+                BasicProps[SlotIdx].Roughness,
+                BasicProps[SlotIdx].Metallic,
+                *SMC->GetName(), *PrevName);
+        }
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL] Applied %d generated material(s) to %s (GUID=%s)"),
+            AppliedCount, *Actor->GetName(),
+            *Guid.ToString(EGuidFormats::Digits));
+        return true;
+    }
+
+    return false;
+}
+
+
+// =========================================================
 // HANDLE MATERIAL DEF (Phase 7B Stage 1C)
 // =========================================================
 
@@ -12056,21 +12374,22 @@ HandleMeshChunk(
         return;
     }
 
-    // Phase 10J.5E: Skip chunk accumulation for FBX-authoritative GUIDs.
-    if (FBXAuthoritativeGuids.Contains(Guid))
+    // Phase 10J.5E/K: Skip chunk accumulation for FBX-authoritative AND FBX-pending GUIDs.
+    if (FBXAuthoritativeGuids.Contains(Guid) || FBXPendingGuids.Contains(Guid))
     {
-        if (Payload.Num() <= 0)
+        if (FBXPendingGuids.Contains(Guid))
         {
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[MESH][AUTH_WARN] guid=%s reason=truncated_chunk_for_fbx_authoritative chunk=%u/%u payloadSize=%d"),
-                *Guid.ToString(EGuidFormats::Digits), ChunkIndex, ChunkCount, Payload.Num());
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][AUTH] skip_pt_mesh_fbx_pending guid=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
         }
         else
         {
-            UE_LOG(LogLiveSync, Verbose,
-                TEXT("[MESH][AUTH] skip_chunk_fbx_authoritative guid=%s chunk=%u/%u"),
-                *Guid.ToString(EGuidFormats::Digits), ChunkIndex, ChunkCount);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][AUTH] skip_pt_mesh_fbx_authoritative guid=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
         }
+        Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
@@ -12659,14 +12978,22 @@ BuildV1MeshFromReassembly()
         const FV1MeshReassemblyKey& Key = Pair.Key;
         const FGuid& Guid = Key.Guid;
 
-        // Phase 10J.5E: Skip V1 reconstruction for FBX-authoritative GUIDs.
-        // Clean up stale pending data that may have accumulated before FBX
-        // promotion.
-        if (FBXAuthoritativeGuids.Contains(Guid))
+        // Phase 10J.5E/K: Skip V1 reconstruction for FBX-authoritative AND
+        // FBX-pending GUIDs.
+        if (FBXAuthoritativeGuids.Contains(Guid) || FBXPendingGuids.Contains(Guid))
         {
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[MESH][AUTH] skip_v1_pt_mesh_fbx_authoritative guid=%s"),
-                *Guid.ToString(EGuidFormats::Digits));
+            if (FBXPendingGuids.Contains(Guid))
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][AUTH] skip_pt_mesh_fbx_pending guid=%s"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MESH][AUTH] skip_v1_pt_mesh_fbx_authoritative guid=%s"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
             State.bReconstructed = true;
             Reconstructed.Add(Key);
             continue;

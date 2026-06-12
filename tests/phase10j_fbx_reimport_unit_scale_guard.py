@@ -96,8 +96,8 @@ def main():
     check(t10a and t10b, "T10: VALIDATE2 logs rawExtent and activeFix",
           f"rawExtent={t10a} activeFix={t10b}")
 
-    # T11: Skip path runs unit guard
-    t11 = "ApplyUnitScaleGuard(SMC, Guid)" in imp
+    # T11: Skip path runs unit guard (signature may include bGeometryHashChanged)
+    t11 = "ApplyUnitScaleGuard(SMC, Guid" in imp
     check(t11, "T11: Skip path runs unit guard (via EnsureFBXMeshRenderable)")
 
     # T12: Deferred path runs unit guard without resetting from compensated bounds

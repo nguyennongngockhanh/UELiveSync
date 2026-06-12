@@ -21,6 +21,18 @@ from . import network
 from . import sync
 
 
+# Phase 10J.5M: dual-logging helper for FBX diagnostics.
+# Writes to both Blender console and the shared debug file
+# (~/.cache/uelivesync/uelivesync_blender_debug.log).
+def _fbx_log(msg):
+    """Log msg to console AND to Blender debug file."""
+    print(msg)
+    try:
+        network._append_blender_debug_log(msg)
+    except Exception:
+        pass
+
+
 # =========================================================
 # PREFERENCE CHANGE CALLBACKS
 # =========================================================
@@ -562,38 +574,95 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue(
 # UE actor transform aligns the visible geometry correctly.
 # =========================================================
 
+def _compute_mesh_bounds_quick(mesh_or_bm):
+    """Return (min_corner, max_corner) tuple for a mesh or bmesh."""
+    verts = mesh_or_bm.vertices if hasattr(mesh_or_bm, "vertices") else mesh_or_bm.verts
+    xs = [v.co.x for v in verts]
+    ys = [v.co.y for v in verts]
+    zs = [v.co.z for v in verts]
+    return ((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
+
+
 def _export_object_local_fbx(obj, filepath, depsgraph):
     """Export *obj* to *filepath* with identity-transform pivot.
 
-    Creates a temporary copy object whose mesh is evaluated
-    (modifiers applied) and whose transform is identity (0,0,0;
-    1,1,1 scale).  Selection state is restored after export.
-
-    Uses bmesh.from_mesh/to_mesh for Blender 5.1 compatibility
-    (copy_attributes_to is not available until Blender 4.2+).
+    Phase 10J.5O: unit conversion via FBX_SCALE_UNITS (Blender export)
+    with bConvertSceneUnit=true on UE side. Single conversion
+    through FBX file unit metadata.
     """
     import bpy
     import bmesh
+    import math
+
+    guid_str = ""
+    try:
+        from . import sync as _sync_mod
+        guid_str = _sync_mod.ensure_guid(obj)
+    except Exception:
+        pass
+    guid_short = guid_str[:8] if guid_str else "?" * 8
+
+    _fbx_log(f"[FBX][EXPORT_ENTER] guid={guid_short} obj={obj.name}")
 
     # Preserve original selection and active object
     orig_selected = [o for o in bpy.context.selected_objects]
     orig_active = bpy.context.active_object
 
+    _fbx_log(f"[FBX][BOUNDS_SRC] guid={guid_short} obj={obj.name} "
+             f"mode={'EDIT' if obj.mode == 'EDIT' else 'OBJECT'} "
+             f"objectScale=({obj.scale[0]:.4f},{obj.scale[1]:.4f},{obj.scale[2]:.4f})")
+
     # Create evaluated mesh data-block
     evaluated_obj = obj.evaluated_get(depsgraph)
     mesh = evaluated_obj.to_mesh()
     if mesh is None:
-        print("[FBX] Cannot evaluate mesh for local-pivot export")
+        _fbx_log("[FBX] Cannot evaluate mesh for local-pivot export")
         return False
 
     try:
+        if len(mesh.vertices) > 0:
+            bmin, bmax = _compute_mesh_bounds_quick(mesh)
+            extent = ((bmax[0] - bmin[0]) / 2, (bmax[1] - bmin[1]) / 2, (bmax[2] - bmin[2]) / 2)
+            _fbx_log(f"[FBX][BOUNDS_EVAL] guid={guid_short} "
+                     f"bounds=({bmin[0]:.4f},{bmin[1]:.4f},{bmin[2]:.4f})-({bmax[0]:.4f},{bmax[1]:.4f},{bmax[2]:.4f}) "
+                     f"halfExtent=({extent[0]:.4f},{extent[1]:.4f},{extent[2]:.4f}) "
+                     f"vertCount={len(mesh.vertices)} units=blender_units")
+        else:
+            _fbx_log(f"[FBX][BOUNDS_EVAL] guid={guid_short} empty_mesh")
+
         # Create a temporary object with identity transform
         temp_obj_name = f"_UELivesyncFBX_{obj.name}"
         temp_mesh = bpy.data.meshes.new(temp_obj_name + "_mesh")
 
-        # Copy source mesh into temp mesh using bmesh (Blender 5.1 compatible)
         bm = bmesh.new()
         bm.from_mesh(mesh)
+
+        if len(bm.verts) > 0:
+            pbmin, pbmax = _compute_mesh_bounds_quick(bm)
+            pre_max = max(abs(pbmin[0]), abs(pbmin[1]), abs(pbmin[2]), abs(pbmax[0]), abs(pbmax[1]), abs(pbmax[2]))
+            _fbx_log(f"[FBX][BOUNDS_PRE_BAKE] guid={guid_short} "
+                     f"bounds=({pbmin[0]:.4f},{pbmin[1]:.4f},{pbmin[2]:.4f})-({pbmax[0]:.4f},{pbmax[1]:.4f},{pbmax[2]:.4f}) "
+                     f"maxExtent={pre_max:.4f}")
+        else:
+            pre_max = 0.0
+
+        _fbx_log(f"[FBX][UNIT_BAKE] guid={guid_short} "
+                 f"action=fbx_scale_units scale=1.0 reason=fbx_unit_metadata "
+                 f"maxCoord={pre_max:.4f}")
+
+        # Phase 10J.5O: NO vertex bake — FBX_SCALE_UNITS handles conversion
+        # through FBX file unit metadata.
+
+        if len(bm.verts) > 0:
+            post_min, post_max_coord = _compute_mesh_bounds_quick(bm)
+            post_max_val = max(abs(post_min[0]), abs(post_min[1]), abs(post_min[2]),
+                               abs(post_max_coord[0]), abs(post_max_coord[1]), abs(post_max_coord[2]))
+            _fbx_log(f"[FBX][BOUNDS_POST_BAKE] guid={guid_short} "
+                     f"bakeScale=1.0 "
+                     f"bounds=({post_min[0]:.4f},{post_min[1]:.4f},{post_min[2]:.4f})-("
+                     f"{post_max_coord[0]:.4f},{post_max_coord[1]:.4f},{post_max_coord[2]:.4f}) "
+                     f"maxExtent={post_max_val:.4f}")
+
         bm.to_mesh(temp_mesh)
         bm.free()
         temp_mesh.update()
@@ -601,12 +670,10 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
         temp_obj = bpy.data.objects.new(temp_obj_name, temp_mesh)
         bpy.context.collection.objects.link(temp_obj)
 
-        # Identity transform
         temp_obj.location = (0.0, 0.0, 0.0)
         temp_obj.rotation_euler = (0.0, 0.0, 0.0)
         temp_obj.scale = (1.0, 1.0, 1.0)
 
-        # Copy material slots to temp mesh (if any)
         if hasattr(obj, "material_slots") and obj.material_slots:
             for slot_index, slot in enumerate(obj.material_slots):
                 if slot.material is not None:
@@ -615,32 +682,34 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
                     else:
                         temp_mesh.materials.append(slot.material)
 
-        # Select only the temp object for export
         bpy.ops.object.select_all(action='DESELECT')
         temp_obj.select_set(True)
         bpy.context.view_layer.objects.active = temp_obj
 
-        # Export with identity transform baked (bake_space_transform=True
-        # is redundant because transform IS identity, but we keep it for safety)
+        _fbx_log(f"[FBX][EXPORT_SETTINGS] guid={guid_short} "
+                 f"global_scale=1.0 apply_scale_options=FBX_SCALE_UNITS "
+                 f"bake_space_transform=0 use_mesh_modifiers=0 use_tspace=0 "
+                 f"unit_strategy=fbx_scale_units")
+
         try:
             bpy.ops.export_scene.fbx(
                 filepath=filepath,
                 use_selection=True,
                 object_types={'MESH'},
+                global_scale=1.0,
                 apply_scale_options='FBX_SCALE_UNITS',
-                bake_space_transform=True,  # bake identity → no node transform
+                bake_space_transform=False,
                 mesh_smooth_type='FACE',
-                use_mesh_modifiers=False,    # already evaluated
+                use_mesh_modifiers=False,
                 use_tspace=False,
             )
         except Exception as e:
-            print(f"[FBX] Export failed: {e}")
+            _fbx_log(f"[FBX] Export failed: {e}")
             return False
 
         return True
 
     finally:
-        # Cleanup: remove temp mesh and object
         try:
             if 'temp_mesh' in locals():
                 bpy.data.meshes.remove(temp_mesh)
@@ -650,7 +719,6 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
         except Exception:
             pass
 
-        # Restore selection
         bpy.ops.object.select_all(action='DESELECT')
         for o in orig_selected:
             try:
@@ -701,12 +769,20 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
         import math
         import struct
 
+        # Phase 10J.5J: monotonic trace sequence for manual sync
+        seq = 0
+        with network._seq_lock:
+            network._sequence_id += 1
+            seq = network._sequence_id
+
         fbx_cache_root = \
             os.path.expanduser(
                 "~/.cache/uelivesync/fbx"
             )
 
         synced_count = 0
+        # Phase 10J.5J: collect material data to send alongside FBX
+        mat_payloads_to_send = []
 
         for obj in selected:
 
@@ -733,6 +809,29 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     obj_dir,
                     f"{safe_name}.fbx",
                 )
+
+                # Phase 10J.5I+5J: flush edit mode changes before evaluation
+                # obj.update_from_editmode() + view_layer.update() ensures
+                # vertex position changes propagate to evaluated depsgraph.
+                _flushed = 0
+                if obj.type == 'MESH' and obj.data is not None:
+                    try:
+                        obj.update_from_editmode()
+                        _flushed |= 0x1
+                    except Exception:
+                        pass
+                try:
+                    context.view_layer.update()
+                    _flushed |= 0x2
+                except Exception:
+                    pass
+                print(f"[BLENDER][EDIT_FLUSH] guid={guid_hex[:8]} "
+                      f"object={obj.name} update_from_editmode={bool(_flushed & 0x1)} "
+                      f"view_layer_update={bool(_flushed & 0x2)}")
+
+                # Phase 10J.5J: log sync request trace
+                print(f"[SYNC][REQ] seq={seq} guid={guid_hex[:8]} "
+                      f"name={obj.name} mode=FBX reason=manual_sync")
 
                 # Export with local-pivot helper (Phase 10J)
                 depsgraph = context.evaluated_depsgraph_get()
@@ -802,11 +901,59 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         manifest, f, indent=2
                     )
 
-                print(
-                    f"[FBX][BLENDER] geometry_hash guid={guid_hex[:8]} "
-                    f"hash={geometry_hash} verts={vert_count} "
-                    f"tris={tri_count} mats={mat_slot_count}"
-                )
+                # Phase 10J.5L: compute mesh bounds (both meters and expected cm)
+                bounds_min_m = (0.0, 0.0, 0.0)
+                bounds_max_m = (0.0, 0.0, 0.0)
+                try:
+                    verts = mesh.vertices
+                    if len(verts) > 0:
+                        xs = [v.co.x for v in verts]
+                        ys = [v.co.y for v in verts]
+                        zs = [v.co.z for v in verts]
+                        bounds_min_m = (min(xs), min(ys), min(zs))
+                        bounds_max_m = (max(xs), max(ys), max(zs))
+                except Exception:
+                    pass
+
+                # cm bounds = meter bounds * 100 (via FBX_SCALE_UNITS conversion)
+                bounds_min_cm = (bounds_min_m[0] * 100.0, bounds_min_m[1] * 100.0, bounds_min_m[2] * 100.0)
+                bounds_max_cm = (bounds_max_m[0] * 100.0, bounds_max_m[1] * 100.0, bounds_max_m[2] * 100.0)
+
+                _fbx_log(f"[FBX][UNIT_BAKE] guid={guid_hex[:8]} scale=1.0 "
+                         f"source=fbx_scale_units")
+                _fbx_log(f"[FBX][EXPORT] seq={seq} guid={guid_hex[:8]} "
+                         f"path={fbx_path} geomHash=0x{geometry_hash:x} "
+                         f"verts={vert_count} tris={tri_count} mats={mat_slot_count} "
+                         f"bounds_m=({bounds_min_m[0]:.3f},{bounds_min_m[1]:.3f},{bounds_min_m[2]:.3f})-({bounds_max_m[0]:.3f},{bounds_max_m[1]:.3f},{bounds_max_m[2]:.3f}) "
+                         f"bounds_cm=({bounds_min_cm[0]:.3f},{bounds_min_cm[1]:.3f},{bounds_min_cm[2]:.3f})-({bounds_max_cm[0]:.3f},{bounds_max_cm[1]:.3f},{bounds_max_cm[2]:.3f}) "
+                         f"global_scale=1.0 convert_units=1")
+
+                # Phase 10J.5L: update auto-sync geometry version to prevent PT_Mesh emission
+                # for this GUID in the same sync cycle. The FBX export is authoritative.
+                try:
+                    mesh_data_for_hash = network.extract_evaluated_mesh_data(obj)
+                    if mesh_data_for_hash is not None:
+                        auto_sync_hash = network.compute_geometry_version_hash(
+                            mesh_data_for_hash["vertices"],
+                            mesh_data_for_hash["triangles"],
+                            mesh_data_for_hash["material_indices"],
+                        )
+                        sync._last_geometry_version[guid_hex] = auto_sync_hash
+                        print(f"[FBX][AUTO_SYNC_BLOCK] guid={guid_hex[:8]} "
+                              f"autoSyncHash=0x{auto_sync_hash:x} reason=fbx_authoritative")
+                except Exception as _hash_exc:
+                    print(f"[FBX][AUTO_SYNC_BLOCK] guid={guid_hex[:8]} "
+                          f"failed_to_compute_hash: {_hash_exc}")
+
+                # Phase 10J.5J: log geometry decision
+                prev_geom = sync._last_geometry_version.get(guid_hex)
+                send_fbx = 1
+                if prev_geom is not None and geometry_hash != 0:
+                    if prev_geom == geometry_hash:
+                        send_fbx = 0
+                print(f"[SYNC][DECIDE] seq={seq} guid={guid_hex[:8]} "
+                      f"sendFBX={send_fbx} reason={'geometry_changed' if geometry_hash != prev_geom else 'unchanged'} "
+                      f"oldGeomHash={prev_geom or 0} newGeomHash={geometry_hash}")
 
                 # Build and send FBX import request packet
                 payload = \
@@ -833,11 +980,91 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     f"{vert_count} vert)"
                 )
 
+                # Phase 10J.5J: material property dirty detection for Sync FBX
+                # Collect current material property signature
+                current_prop_sig = None
+                try:
+                    current_prop_sig = {}
+                    for slot_idx, slot in enumerate(obj.material_slots):
+                        if slot and slot.material:
+                            p = network.get_material_basic_properties(slot.material)
+                            if p is not None:
+                                current_prop_sig[slot_idx] = (
+                                    p.get("BaseColorR", 0.0),
+                                    p.get("BaseColorG", 0.0),
+                                    p.get("BaseColorB", 0.0),
+                                    p.get("Alpha", 1.0),
+                                    p.get("Roughness", 0.5),
+                                    p.get("Metallic", 0.0),
+                                )
+                except Exception:
+                    current_prop_sig = None
+
+                if current_prop_sig is not None:
+                    prev_prop_sig = sync._last_material_property_sig.get(guid_hex)
+                    if prev_prop_sig is None or current_prop_sig != prev_prop_sig:
+                        print(f"[SYNC][DECIDE] seq={seq} guid={guid_hex[:8]} "
+                              f"sendMAT=1 reason=property_changed oldMatSig={'None'} "
+                              f"newMatSig={list(current_prop_sig.keys())}")
+                        # Extract material slots with MATX for send
+                        mat_props = {}
+                        for slot_idx, slot in enumerate(obj.material_slots):
+                            if slot and slot.material:
+                                p = network.get_material_basic_properties(slot.material)
+                                if p is not None:
+                                    mat_props[slot_idx] = p
+                        # Build material packet payload
+                        try:
+                            mat_payload = network.serialize_material_slots(
+                                guid_obj, 
+                                {i: (0, 0) for i in range(len(mat_props))},  # identity placeholder
+                                mat_props
+                            )
+                            mat_payloads_to_send.append(mat_payload)
+                            # Log MATX send details
+                            for si in mat_props:
+                                pp = mat_props[si]
+                                print(f"[MAT][SEND] seq={seq} guid={guid_hex[:8]} "
+                                      f"slot={si} matx=1 propertySig=1 "
+                                      f"color=({pp.get('BaseColorR',0):.3f},{pp.get('BaseColorG',0):.3f},{pp.get('BaseColorB',0):.3f},{pp.get('Alpha',1):.3f}) "
+                                      f"roughness={pp.get('Roughness',0.5):.3f} "
+                                      f"metallic={pp.get('Metallic',0):.3f} "
+                                      f"alpha={pp.get('Alpha',1):.3f}")
+                                network._append_blender_debug_log(
+                                    f"[MAT][SEND] guid={guid_hex[:8]} "
+                                    f"slot={si} matx=1 "
+                                    f"color=({pp.get('BaseColorR',0):.3f},{pp.get('BaseColorG',0):.3f},{pp.get('BaseColorB',0):.3f},{pp.get('Alpha',1):.3f}) "
+                                    f"roughness={pp.get('Roughness',0.5):.3f} "
+                                    f"metallic={pp.get('Metallic',0):.3f}"
+                                )
+                        except Exception as _mat_exc:
+                            print(f"[MAT][ERROR] failed to build material payload for {obj.name}: {_mat_exc}")
+                    else:
+                        print(f"[SYNC][DECIDE] seq={seq} guid={guid_hex[:8]} "
+                              f"sendMAT=0 reason=property_unchanged")
+                    sync._last_material_property_sig[guid_hex] = current_prop_sig
+
                 synced_count += 1
 
             except Exception as e:
                 print(
                     f"[FBX] ERROR: {obj.name} — {e}"
+                )
+
+        # Phase 10J.5J: send PT_Material alongside Sync FBX
+        # when material property signature changed for selected objects.
+        if mat_payloads_to_send:
+            print(f"[MAT][SEND] seq={seq} sending {len(mat_payloads_to_send)} "
+                  f"material packet(s) alongside FBX sync")
+            # Phase 10J.5L: log to Blender debug file
+            network._append_blender_debug_log(
+                f"[MAT][SEND] manual_fbx count={len(mat_payloads_to_send)} seq={seq}"
+            )
+            for payload in mat_payloads_to_send:
+                network.send_objects(
+                    [payload],
+                    packet_type=network.PT_Material,
+                    version=network.LIVE_SYNC_VERSION_V5,
                 )
 
         if synced_count > 0:

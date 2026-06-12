@@ -19,6 +19,8 @@ struct FFBXImportContext
     TFunction<void(const FGuid&)> OnMarkFbxAuthority;
     // Phase 10J.5D.5: Called to schedule deferred visibility repair.
     TFunction<void(const FGuid&)> OnScheduleRepair;
+    // Phase 10J.5L: Called after EnsureFBXMeshRenderable to restore generated MIDs.
+    TFunction<void(const FGuid&, UStaticMeshComponent*)> OnRestoreGeneratedMaterials;
 };
 
 class FLiveSyncFBXImporter
@@ -35,6 +37,7 @@ public:
         UStaticMeshComponent* SMC,
         UStaticMesh* StaticMesh,
         AActor* OwnerActor,
-        const FGuid& Guid
+        const FGuid& Guid,
+        bool bGeometryHashChanged = false
     );
 };

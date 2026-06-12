@@ -1,9 +1,29 @@
+import os
 import socket
 import struct
 import sys
 import threading
 import queue
 import time
+
+
+# Phase 10J.5L: Blender-side debug log for material extraction diagnostics.
+# Written to ~/.cache/uelivesync/uelivesync_blender_debug.log
+# Append-only; safe to read while addon is running.
+BLENDER_DEBUG_LOG_PATH = os.path.join(
+    os.path.expanduser("~/.cache/uelivesync"),
+    "uelivesync_blender_debug.log",
+)
+
+
+def _append_blender_debug_log(msg):
+    """Append a line to the Blender debug log file."""
+    try:
+        os.makedirs(os.path.dirname(BLENDER_DEBUG_LOG_PATH), exist_ok=True)
+        with open(BLENDER_DEBUG_LOG_PATH, "a") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
 
 
 # =========================================================
@@ -645,13 +665,157 @@ LIVE_SYNC_V5_MATERIAL_OBJECT_BASE_SIZE = 17
 
 MAX_MATERIAL_SLOTS = 8
 
+# =========================================================
+# MATERIAL BASIC PROPERTIES EXTENSION (Phase 10J.5H)
+# =========================================================
 
-def serialize_material_slots(guid_obj, slots):
+# MATX magic: 'MATX' as little-endian uint32
+MATX_MAGIC = 0x4D415458
+MATX_VERSION = 1
+# Per-slot extension: SlotIndex(1) + R(4) + G(4) + B(4) + A(4) + Roughness(4) + Metallic(4)
+MATX_PROP_SLOT_SIZE = 25
+
+
+def get_material_basic_properties(material):
+    """Extract basic material properties from a Blender material.
+
+    Priority (Phase 10J.5L):
+    1. Principled BSDF Base Color (if non-default)
+    2. material.diffuse_color (if user set viewport color)
+    3. Principled BSDF Base Color (even if default, as fallback)
+
+    Roughness/Metallic are always read from Principled BSDF if available.
+
+    Returns:
+        dict with BaseColorR/G/B/A (0..1), Roughness (0..1), Metallic (0..1)
+        All floats clamped to [0, 1].
+        Returns None if material is None.
+    """
+    if material is None:
+        return None
+
+    DEFAULT_PRINCIPLED_COLOR = (0.8, 0.8, 0.8, 1.0)
+
+    props = {}
+    source = "default"
+    mat_name = material.name if material else "None"
+
+    # Try Principled BSDF node inputs
+    if material.node_tree and material.node_tree.nodes:
+        principled = None
+        for node in material.node_tree.nodes:
+            if getattr(node, "type", None) == "BSDF_PRINCIPLED":
+                principled = node
+                break
+
+        if principled:
+            # Phase 10J.5L: robust socket name matching — try common variants
+            bc = None
+            bc_sock_name = None
+            for _sock_name in ("Base Color", "Basecolour", "base_color", "BaseColor", "Color"):
+                bc = principled.inputs.get(_sock_name)
+                if bc is not None:
+                    bc_sock_name = _sock_name
+                    break
+
+            if bc is not None:
+                v = bc.default_value
+                p_color = (v[0], v[1], v[2], v[3] if len(v) > 3 else 1.0)
+                is_default = (
+                    abs(p_color[0] - DEFAULT_PRINCIPLED_COLOR[0]) < 0.001
+                    and abs(p_color[1] - DEFAULT_PRINCIPLED_COLOR[1]) < 0.001
+                    and abs(p_color[2] - DEFAULT_PRINCIPLED_COLOR[2]) < 0.001
+                    and abs(p_color[3] - DEFAULT_PRINCIPLED_COLOR[3]) < 0.001
+                )
+
+                # Check if diffuse_color differs from principled default
+                dc = material.diffuse_color
+                dc_color = (dc[0], dc[1], dc[2], dc[3] if len(dc) > 3 else 1.0)
+                dc_is_default = (
+                    abs(dc_color[0] - DEFAULT_PRINCIPLED_COLOR[0]) < 0.001
+                    and abs(dc_color[1] - DEFAULT_PRINCIPLED_COLOR[1]) < 0.001
+                    and abs(dc_color[2] - DEFAULT_PRINCIPLED_COLOR[2]) < 0.001
+                    and abs(dc_color[3] - DEFAULT_PRINCIPLED_COLOR[3]) < 0.001
+                )
+
+                if is_default and not dc_is_default:
+                    # Principled color is default gray but diffuse_color is set → use diffuse_color
+                    props["BaseColorR"] = max(0.0, min(1.0, dc[0]))
+                    props["BaseColorG"] = max(0.0, min(1.0, dc[1]))
+                    props["BaseColorB"] = max(0.0, min(1.0, dc[2]))
+                    props["Alpha"] = max(0.0, min(1.0, dc[3] if len(dc) > 3 else 1.0))
+                    source = "diffuse_color_override"
+                else:
+                    # Use Principled BSDF color
+                    props["BaseColorR"] = max(0.0, min(1.0, v[0]))
+                    props["BaseColorG"] = max(0.0, min(1.0, v[1]))
+                    props["BaseColorB"] = max(0.0, min(1.0, v[2]))
+                    props["Alpha"] = max(0.0, min(1.0, v[3] if len(v) > 3 else 1.0))
+                    source = "principled"
+            else:
+                # Base Color socket not found — enumerate all socket names for diagnostics
+                socket_names = [s.name for s in principled.inputs]
+                _append_blender_debug_log(
+                    f"[MAT][SOCKETS] mat={mat_name} sockets={socket_names}"
+                )
+                # Fall back to diffuse_color
+                dc = material.diffuse_color
+                props["BaseColorR"] = max(0.0, min(1.0, dc[0]))
+                props["BaseColorG"] = max(0.0, min(1.0, dc[1]))
+                props["BaseColorB"] = max(0.0, min(1.0, dc[2]))
+                props["Alpha"] = max(0.0, min(1.0, dc[3] if len(dc) > 3 else 1.0))
+                source = "diffuse_color_fallback"
+
+            r = principled.inputs.get("Roughness")
+            props["Roughness"] = max(0.0, min(1.0, r.default_value)) if r is not None else 0.5
+
+            m = principled.inputs.get("Metallic")
+            props["Metallic"] = max(0.0, min(1.0, m.default_value)) if m is not None else 0.0
+        else:
+            # No Principled BSDF node — fallback to diffuse_color
+            dc = material.diffuse_color
+            props["BaseColorR"] = max(0.0, min(1.0, dc[0]))
+            props["BaseColorG"] = max(0.0, min(1.0, dc[1]))
+            props["BaseColorB"] = max(0.0, min(1.0, dc[2]))
+            props["Alpha"] = max(0.0, min(1.0, dc[3] if len(dc) > 3 else 1.0))
+            props["Roughness"] = 0.5
+            props["Metallic"] = 0.0
+            source = "diffuse_color_no_principled"
+    else:
+        # No node tree — fallback to diffuse_color
+        dc = material.diffuse_color
+        props["BaseColorR"] = max(0.0, min(1.0, dc[0]))
+        props["BaseColorG"] = max(0.0, min(1.0, dc[1]))
+        props["BaseColorB"] = max(0.0, min(1.0, dc[2]))
+        props["Alpha"] = max(0.0, min(1.0, dc[3] if len(dc) > 3 else 1.0))
+        props["Roughness"] = 0.5
+        props["Metallic"] = 0.0
+        source = "diffuse_color_no_nodes"
+
+    # Phase 10J.5L: log extraction to debug file
+    _append_blender_debug_log(
+        f"[MAT][EXTRACT] mat={mat_name} "
+        f"use_nodes={material.use_nodes if material else 'N/A'} "
+        f"source={source} "
+        f"color=({props.get('BaseColorR', 0):.3f},{props.get('BaseColorG', 0):.3f},{props.get('BaseColorB', 0):.3f},{props.get('Alpha', 1):.3f}) "
+        f"roughness={props.get('Roughness', 0.5):.3f} "
+        f"metallic={props.get('Metallic', 0):.3f}"
+    )
+
+    return props
+
+
+def serialize_material_slots(guid_obj, slots, properties=None):
     """Serialize material slot data for one object into PT_Material wire format.
+
+    Preserves old identity block exactly as before.
+    Appends MATX extension block when properties dict is provided.
 
     Args:
         guid_obj: uuid.UUID of the target object.
         slots: dict mapping slot_index -> (material_low, material_high)
+        properties: optional dict mapping slot_index -> material property dict
+                    (as returned by get_material_basic_properties)
 
     Returns:
         bytes payload for one object in PT_Material batch.
@@ -674,6 +838,29 @@ def serialize_material_slots(guid_obj, slots):
         low, high = slots.get(slot_index, (0, 0))
         payload.extend(struct.pack("<B", slot_index & 0xFF))
         payload.extend(struct.pack("<QQ", low & 0xFFFFFFFFFFFFFFFF, high & 0xFFFFFFFFFFFFFFFF))
+
+    # MATX extension block (optional)
+    if properties is not None and properties:
+        ext_slot_count = min(len(properties), MAX_MATERIAL_SLOTS)
+        payload.extend(struct.pack("<I", MATX_MAGIC))
+        payload.extend(struct.pack("<B", MATX_VERSION))
+        payload.extend(struct.pack("<B", ext_slot_count))
+        for slot_index in range(ext_slot_count):
+            p = properties.get(slot_index)
+            if p is None:
+                payload.extend(struct.pack("<B", slot_index & 0xFF))
+                payload.extend(struct.pack("<ffff", 0.8, 0.8, 0.8, 1.0))
+                payload.extend(struct.pack("<ff", 0.5, 0.0))
+            else:
+                payload.extend(struct.pack("<B", slot_index & 0xFF))
+                payload.extend(struct.pack("<ffff",
+                    p.get("BaseColorR", 0.8),
+                    p.get("BaseColorG", 0.8),
+                    p.get("BaseColorB", 0.8),
+                    p.get("Alpha", 1.0)))
+                payload.extend(struct.pack("<ff",
+                    p.get("Roughness", 0.5),
+                    p.get("Metallic", 0.0)))
 
     return bytes(payload)
 
@@ -1007,6 +1194,15 @@ def extract_evaluated_mesh_data(obj):
     """
     try:
         import bpy
+        # Phase 10J.5I+5J: flush edit mode changes before evaluation.
+        # obj.update_from_editmode() is needed because view_layer.update()
+        # alone may not flush edit-mode vertex coordinate changes for the
+        # object whose data-block is being read. Both are required.
+        try:
+            bpy.context.view_layer.update()
+        except Exception:
+            pass
+
         depsgraph = bpy.context.evaluated_depsgraph_get()
         if depsgraph is None:
             return None

@@ -405,6 +405,26 @@ private:
         const FMaterialIdentityRef& Identity,
         const FSoftObjectPath& Path);
 
+    /** Parse MATX extension block after old identity data and apply
+     *  generated material to the resolved FBX actor/component.
+     */
+    bool ParseAndApplyGeneratedMaterial(
+        const FGuid& Guid,
+        const TArray<FMaterialSlotBasicProperties>& BasicProps);
+
+    /** Create or update a UMaterialInstanceDynamic from BasicShapeMaterial
+     *  with the given basic properties.
+     */
+    UMaterialInstanceDynamic* GetOrCreateGeneratedMID(
+        const FGuid& Guid,
+        int32 SlotIndex,
+        const FMaterialSlotBasicProperties& Props);
+
+    /** Build a consistent cache key for generated materials. */
+    FString MakeGeneratedMaterialKey(
+        const FGuid& Guid,
+        int32 SlotIndex) const;
+
     // =====================================================
     // MESH CHUNK REASSEMBLY (Phase 7C Stage 1B/1C)
     // =====================================================
@@ -750,12 +770,27 @@ private:
     int32 MaterialAssignmentsSucceeded = 0;
 
     // =====================================================
+    // GENERATED MATERIAL CACHE (Phase 10J.5H)
+    // =====================================================
+    // Cache key: "GUID8_SlotIndex" (see MakeGeneratedMaterialKey).
+    // Stores runtime MID created from Blender material properties.
+    TMap<FString, TObjectPtr<UMaterialInstanceDynamic>> GeneratedMaterialCache;
+
+    // Count of generated material applications.
+    int32 MaterialGeneratedApplied = 0;
+
+    // =====================================================
     // FBX AUTHORITY (Phase 10J.5E)
     // =====================================================
     // Per-GUID set of FBX-authoritative GUIDs. Once a GUID has
     // been promoted to FBX/StaticMeshAuthority, PT_Mesh packets
     // for that GUID must not spawn/update a procedural mesh.
     TSet<FGuid> FBXAuthoritativeGuids;
+
+    // Phase 10J.5K: Per-GUID set of FBX-pending GUIDs. While pending,
+    // PT_Mesh for that GUID is rejected to prevent race between
+    // PT_FBXImportRequest and PT_Mesh.
+    TSet<FGuid> FBXPendingGuids;
 
     // =====================================================
     // DEFERRED FBX REPAIR (Phase 10J.5D.5)

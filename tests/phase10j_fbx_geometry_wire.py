@@ -192,10 +192,10 @@ def main():
           f"fallback={t14}")
 
     # =========================================================
-    # T15: [FBX][BLENDER] log present before send
+    # T15: FBX export trace log present before send (Phase 10J.5J)
     # =========================================================
-    t15 = "[FBX][BLENDER]" in init
-    check(t15, "T15: [FBX][BLENDER] log present in operator path",
+    t15 = "[FBX][EXPORT]" in init
+    check(t15, "T15: [FBX][EXPORT] trace log present in operator path",
           f"log={t15}")
 
     total = PASS + FAIL

@@ -126,17 +126,15 @@ static FString SanitizeObjectName(const FString& RawName)
 }
 
 // =========================================================
-// Phase 10J.5D.8: Per-GUID raw-bounds extent cache + active
-// unit-scale fix state for detecting and repairing FBX
-// reimport unit-scale shrink (100x) without self-reset.
+// Phase 10J.5K: Unit invariant enforcement — NO scale compensation.
+// Blender meter → UE centimeter is represented in mesh vertex data,
+// NOT in actor/component RelativeScale.
+// GBoundsExtentCache tracks raw bounds for diagnostic comparison only.
+// No GActiveUnitScaleFix — scale compensation is disabled.
 // =========================================================
 
-// Last known good raw mesh bounds extent per GUID.
+// Last known good raw mesh bounds extent per GUID (diagnostic only).
 static TMap<FGuid, FVector> GBoundsExtentCache;
-
-// Active unit-scale fix value per GUID. Present when a fix is applied.
-// Used to track the fix and prevent immediate self-reset from compensated bounds.
-static TMap<FGuid, float> GActiveUnitScaleFix;
 
 static bool IsValidFBXBoundsExtent(const FVector& Extent)
 {
@@ -188,100 +186,129 @@ static void ApplyUnitScaleGuard(UStaticMeshComponent* SMC, const FGuid& Guid)
     if (!SMC)
         return;
 
-    // Use raw mesh bounds (before component scale compensation)
+    // Phase 10J.5K: Enforce scale invariant — actor and component scale must be 1.
+    // No scale compensation is allowed. Unit conversion is in mesh vertex data.
+    const FVector ActorScale = SMC->GetOwner() ? SMC->GetOwner()->GetActorScale3D() : FVector::OneVector;
+    const FVector CompRelScale = SMC->GetRelativeScale3D();
     const FVector RawExtent = GetRawFBXMeshBoundsExtent(SMC);
     const float RawMax = FMath::Max3(RawExtent.X, RawExtent.Y, RawExtent.Z);
-    const FVector* CachedExtent = GBoundsExtentCache.Find(Guid);
-    const float* ActiveFix = GActiveUnitScaleFix.Find(Guid);
 
-    if (CachedExtent)
+    bool bScaleViolation = false;
+    FString ScaleReason = TEXT("ok");
+
+    if (FMath::Abs(ActorScale.X - 1.0f) > 0.001f ||
+        FMath::Abs(ActorScale.Y - 1.0f) > 0.001f ||
+        FMath::Abs(ActorScale.Z - 1.0f) > 0.001f)
     {
-        const float CachedMax = FMath::Max3(CachedExtent->X, CachedExtent->Y, CachedExtent->Z);
-        const float Ratio = (RawMax > 0.001f && CachedMax > 10.0f) ? (CachedMax / RawMax) : 0.0f;
-
-        if (CVarLiveSyncFBXVerboseLogs.GetValueOnGameThread() != 0)
-        {
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[FBX][UNIT_CHECK] guid=%s lastGoodMax=%.3f rawMax=%.3f ratio=%.3f active=%.4f"),
-                *Guid.ToString(EGuidFormats::Digits),
-                CachedMax, RawMax, Ratio, ActiveFix ? *ActiveFix : 0.0f);
-        }
-
-        // ----- ACTIVE FIX EXISTS — decide keep or reset -----
-        if (ActiveFix)
-        {
-            if (RawMax > 0.001f && CachedMax > 10.0f && Ratio >= 0.5f && Ratio <= 2.0f)
-            {
-                // Raw bounds returned to normal — reset fix
-                SMC->SetRelativeScale3D(FVector::OneVector);
-                SMC->UpdateBounds();
-                SMC->MarkRenderStateDirty();
-                GActiveUnitScaleFix.Remove(Guid);
-
-                UE_LOG(LogLiveSync, Log,
-                    TEXT("[FBX][UNIT_FIX] reset guid=%s"
-                         " rawCurrent=(%s) reason=raw_bounds_normal ratio=%.3f"),
-                    *Guid.ToString(EGuidFormats::Digits),
-                    *RawExtent.ToString(), Ratio);
-            }
-            else
-            {
-                // Raw bounds are still not normal — keep or re-apply active fix
-                const float StoredFix = *ActiveFix;
-                SMC->SetRelativeScale3D(FVector(StoredFix));
-                SMC->UpdateBounds();
-                SMC->MarkRenderStateDirty();
-
-                UE_LOG(LogLiveSync, Log,
-                    TEXT("[FBX][UNIT_FIX] keep guid=%s"
-                         " rawCurrent=(%s) scaleFix=%.4f reason=raw_bounds_still_tiny"),
-                    *Guid.ToString(EGuidFormats::Digits),
-                    *RawExtent.ToString(), StoredFix);
-            }
-            return; // ActiveFix handled; do not fall through to APPLY
-        }
-
-        // ----- NO ACTIVE FIX — check if shrink applies -----
-        const bool bShrinkDetected = RawMax > 0.001f && CachedMax > 10.0f
-            && Ratio >= 50.0f && Ratio <= 150.0f;
-
-        if (bShrinkDetected)
-        {
-            const float ScaleFix = FMath::Clamp(Ratio, 50.0f, 150.0f);
-            SMC->SetRelativeScale3D(FVector(ScaleFix));
-            SMC->UpdateBounds();
-            SMC->MarkRenderStateDirty();
-            SMC->SetVisibility(true, true);
-            SMC->SetHiddenInGame(false, true);
-            if (AActor* Owner = SMC->GetOwner())
-                Owner->SetActorHiddenInGame(false);
-
-            GActiveUnitScaleFix.Add(Guid, ScaleFix);
-
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[FBX][UNIT_FIX] apply guid=%s"
-                     " rawCurrent=(%s) lastGood=(%s) ratio=%.3f scaleFix=%.4f"),
-                *Guid.ToString(EGuidFormats::Digits),
-                *RawExtent.ToString(),
-                *CachedExtent->ToString(),
-                Ratio, ScaleFix);
-            return;
-        }
+        bScaleViolation = true;
+        ScaleReason = TEXT("actor_scale_not_1");
+    }
+    if (FMath::Abs(CompRelScale.X - 1.0f) > 0.001f ||
+        FMath::Abs(CompRelScale.Y - 1.0f) > 0.001f ||
+        FMath::Abs(CompRelScale.Z - 1.0f) > 0.001f)
+    {
+        bScaleViolation = true;
+        ScaleReason = TEXT("comp_rel_scale_not_1");
     }
 
-    // No active fix — log UNIT_OK if cached bounds exist and raw bounds are normal
-    if (CachedExtent && IsValidFBXBoundsExtent(RawExtent))
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[FBX][SCALE_INVARIANT] guid=%s actorScale=(%.3f,%.3f,%.3f) "
+             "compRelScale=(%.3f,%.3f,%.3f) rawExtent=(%.1f,%.1f,%.1f) "
+             "status=%s reason=%s"),
+        *Guid.ToString(EGuidFormats::Digits),
+        ActorScale.X, ActorScale.Y, ActorScale.Z,
+        CompRelScale.X, CompRelScale.Y, CompRelScale.Z,
+        RawExtent.X, RawExtent.Y, RawExtent.Z,
+        bScaleViolation ? TEXT("violation") : TEXT("ok"),
+        *ScaleReason);
+
+    // Enforce scale invariant — reset to 1 if violated
+    if (bScaleViolation)
     {
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[FBX][UNIT_OK] guid=%s rawExtent=(%s) cached=1"),
+        const FString ScaleFixLog = FString::Printf(
+            TEXT("[FBX][UNIT_INVALID] guid=%s actorScale=(%.3f,%.3f,%.3f) "
+                 "compRelScale=(%.3f,%.3f,%.3f) rawExtent=(%.1f,%.1f,%.1f) "
+                 "reason=imported_raw_bounds_100x_too_small_no_scale_compensation"),
             *Guid.ToString(EGuidFormats::Digits),
-            *RawExtent.ToString());
+            ActorScale.X, ActorScale.Y, ActorScale.Z,
+            CompRelScale.X, CompRelScale.Y, CompRelScale.Z,
+            RawExtent.X, RawExtent.Y, RawExtent.Z);
+        UE_LOG(LogLiveSync, Warning, TEXT("%s"), *ScaleFixLog);
+
+        if (AActor* Owner = SMC->GetOwner())
+        {
+            Owner->SetActorScale3D(FVector::OneVector);
+        }
+        SMC->SetRelativeScale3D(FVector::OneVector);
+        SMC->UpdateBounds();
+        SMC->MarkRenderStateDirty();
+    }
+
+    // Phase 10J.5L: log rawExtent with diagnostic ratio against cached extent
+    {
+        const FVector* Cached = GBoundsExtentCache.Find(Guid);
+        if (Cached)
+        {
+            const float CachedMax = FMath::Max3(Cached->X, Cached->Y, Cached->Z);
+            const float Ratio = (RawMax > 0.001f && CachedMax > 0.0f) ? (CachedMax / RawMax) : 0.0f;
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX][RAW_EXTENT] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
+                     "expectedCmExtent=(%.1f,%.1f,%.1f) ratio=%.1f isInvalid=%s"),
+                *Guid.ToString(EGuidFormats::Digits),
+                RawExtent.X, RawExtent.Y, RawExtent.Z,
+                Cached->X, Cached->Y, Cached->Z,
+                Ratio,
+                IsValidFBXBoundsExtent(RawExtent) ? TEXT("0") : TEXT("1"));
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX][RAW_EXTENT] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
+                     "expectedCmExtent=none ratio=n/a isInvalid=%s"),
+                *Guid.ToString(EGuidFormats::Digits),
+                RawExtent.X, RawExtent.Y, RawExtent.Z,
+                IsValidFBXBoundsExtent(RawExtent) ? TEXT("0") : TEXT("1"));
+        }
     }
 
     // Only update cache with raw mesh bounds that are valid (not tiny)
     if (IsValidFBXBoundsExtent(RawExtent))
     {
-        GBoundsExtentCache.Add(Guid, RawExtent);
+        // Phase 10J.5M: first-import oversize gate — reject suspiciously large first-time extent
+        const bool bFirstTimeNoCache = (GBoundsExtentCache.Find(Guid) == nullptr);
+        if (bFirstTimeNoCache && RawMax > 5000.0f)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[FBX][CACHE_GATE] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
+                     "reason=first_import_oversize_rejected maxVal=%.1f threshold=5000"),
+                *Guid.ToString(EGuidFormats::Digits),
+                RawExtent.X, RawExtent.Y, RawExtent.Z,
+                RawMax);
+        }
+        else
+        {
+            GBoundsExtentCache.Add(Guid, RawExtent);
+        }
+    }
+    else
+    {
+        // Phase 10J.5L: log unit-invalid state — do NOT let this overwrite good cache
+        const FVector* Cached = GBoundsExtentCache.Find(Guid);
+        if (Cached)
+        {
+            const float CachedMax = FMath::Max3(Cached->X, Cached->Y, Cached->Z);
+            const float Ratio = (RawMax > 0.001f && CachedMax > 0.0f) ? (CachedMax / RawMax) : 0.0f;
+            if (Ratio >= 50.0f && Ratio <= 150.0f)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[FBX][UNIT_INVALID] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
+                         "expectedCmExtent=(%.1f,%.1f,%.1f) ratio=%.1f reason=imported_meter_size"),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    RawExtent.X, RawExtent.Y, RawExtent.Z,
+                    Cached->X, Cached->Y, Cached->Z,
+                    Ratio);
+            }
+        }
     }
 }
 
@@ -441,7 +468,8 @@ void FLiveSyncFBXImporter::EnsureFBXMeshRenderable(
     UStaticMeshComponent* SMC,
     UStaticMesh* StaticMesh,
     AActor* OwnerActor,
-    const FGuid& Guid)
+    const FGuid& Guid,
+    bool bGeometryHashChanged)
 {
     check(SMC);
     check(StaticMesh);
@@ -597,8 +625,8 @@ static void LogExtendedFBXValidate(
         LastGoodExtentStr = Cached ? Cached->ToString() : TEXT("none");
     }
     const FVector RawExtent = GetRawFBXMeshBoundsExtent(SMC);
-    const float* ActiveFixVal = GActiveUnitScaleFix.Find(Guid);
-    const float ActiveFix = ActiveFixVal ? *ActiveFixVal : 0.0f;
+    // Phase 10J.5K: GActiveUnitScaleFix removed — no scale compensation.
+    const float ActiveFix = 0.0f;
 
     if (CVarLiveSyncFBXVerboseLogs.GetValueOnGameThread() != 0)
     {
@@ -896,8 +924,8 @@ bool FLiveSyncFBXImporter::HandleImport(
         FFBXImportSemanticSignature CurrentSig = ComputeFBXSemanticSignature(FbxPathStr, Request);
         const FFBXImportSemanticSignature* CachedSig = GSemanticSignatureCache.Find(Request.ObjectGUID);
 
-        AActor* ExistingActor = Context.FindActor(Request.ObjectGUID);
-        if (!ExistingActor)
+        AActor* CoalesceCheckActor = Context.FindActor(Request.ObjectGUID);
+        if (!CoalesceCheckActor)
         {
             UE_LOG(LogLiveSync, Log,
                 TEXT("[FBX][COALESCE] import guid=%s reason=actor_missing"),
@@ -905,7 +933,7 @@ bool FLiveSyncFBXImporter::HandleImport(
         }
         else
         {
-            AStaticMeshActor* SMA = Cast<AStaticMeshActor>(ExistingActor);
+            AStaticMeshActor* SMA = Cast<AStaticMeshActor>(CoalesceCheckActor);
             if (!SMA)
             {
                 UE_LOG(LogLiveSync, Log,
@@ -1026,8 +1054,14 @@ bool FLiveSyncFBXImporter::HandleImport(
     if (FbxFactory)
     {
         FbxFactory->ImportUI->bAutomatedImportShouldDetectType = true;
+        // Phase 10J.5O: Blender exports vertex data in meters; FBX_SCALE_UNITS
+        // sets the FBX file unit metadata. UE converts via bConvertSceneUnit=true.
         FbxFactory->ImportUI->StaticMeshImportData->bConvertSceneUnit = true;
         ImportTask->Factory = FbxFactory;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][IMPORT_SETTINGS] guid=%s bConvertSceneUnit=1 importScale=1"),
+            *Request.ObjectGUID.ToString(EGuidFormats::Digits));
     }
 
     IAssetTools& AssetTools =
@@ -1094,10 +1128,103 @@ bool FLiveSyncFBXImporter::HandleImport(
             *AssetPackagePath);
     }
 
+    // Phase 10J.5P: Unit sanity guard — reject imported mesh if rawExtent is
+    // ~1/100 of cached good extent (meter-size reimport regression).
+    // Named constants for meter-size ratio window. Cache-based only: the FBX
+    // request payload does not carry Blender bounds — no current expected cm
+    // extent is available without a protocol change.
+    constexpr float MeterSizeMinRatio = 50.0f;
+    constexpr float MeterSizeMaxRatio = 250.0f;
+    {
+        const FVector NewMeshExtent = StaticMesh->GetBounds().BoxExtent;
+        const float NewMax = FMath::Max3(NewMeshExtent.X, NewMeshExtent.Y, NewMeshExtent.Z);
+        const FVector* CachedExtent = GBoundsExtentCache.Find(Request.ObjectGUID);
+        if (CachedExtent && IsValidFBXBoundsExtent(*CachedExtent))
+        {
+            const float CachedMax = FMath::Max3(CachedExtent->X, CachedExtent->Y, CachedExtent->Z);
+            if (NewMax > 0.001f && CachedMax > 0.0f)
+            {
+                const float RatioSmall = CachedMax / NewMax;
+                const float RatioLarge = NewMax / CachedMax;
+
+                // Phase 10J.5P: reject meter-size (1/100) import.
+                // Window widened from 50-150 to 50-250 (10J.5P) to catch cases
+                // where the cache holds a 2x extent and regression ratio is ~195.
+                if (RatioSmall >= MeterSizeMinRatio && RatioSmall <= MeterSizeMaxRatio)
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[FBX][UNIT_INVALID] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
+                             "expectedCmExtent=(%.1f,%.1f,%.1f) ratio=%.1f reason=reimport_meter_size_regression "
+                             "action=reject_keep_previous"),
+                        *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                        NewMeshExtent.X, NewMeshExtent.Y, NewMeshExtent.Z,
+                        CachedExtent->X, CachedExtent->Y, CachedExtent->Z,
+                        RatioSmall);
+
+                    // Keep previous visible mesh — do NOT replace it with meter-size mesh.
+                    {
+                        FFBXImportSemanticSignature RejectSig = ComputeFBXSemanticSignature(FbxPathStr, Request);
+                        GSemanticSignatureCache.Add(Request.ObjectGUID, RejectSig);
+                    }
+
+                    Context.Stats->FBXImportSkipped.fetch_add(1, std::memory_order_relaxed);
+                    Context.Stats->FBXImportFailed.fetch_add(1, std::memory_order_relaxed);
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[FBX][UNIT_INVALID] guid=%s rejected — keeping previous good mesh"),
+                        *Request.ObjectGUID.ToString(EGuidFormats::Digits));
+                    return true;
+                }
+
+                // Phase 10J.5M: reject 100x-too-large import (e.g. double cm bake)
+                if (RatioLarge >= MeterSizeMinRatio && RatioLarge <= MeterSizeMaxRatio)
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[FBX][UNIT_INVALID] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
+                             "expectedCmExtent=(%.1f,%.1f,%.1f) ratio=%.2f reason=imported_100x_too_large "
+                             "action=keep_previous_mesh"),
+                        *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                        NewMeshExtent.X, NewMeshExtent.Y, NewMeshExtent.Z,
+                        CachedExtent->X, CachedExtent->Y, CachedExtent->Z,
+                        RatioLarge);
+
+                    {
+                        FFBXImportSemanticSignature RejectSig = ComputeFBXSemanticSignature(FbxPathStr, Request);
+                        GSemanticSignatureCache.Add(Request.ObjectGUID, RejectSig);
+                    }
+
+                    Context.Stats->FBXImportSkipped.fetch_add(1, std::memory_order_relaxed);
+                    Context.Stats->FBXImportFailed.fetch_add(1, std::memory_order_relaxed);
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[FBX][UNIT_INVALID] guid=%s rejected — keeping previous good mesh"),
+                        *Request.ObjectGUID.ToString(EGuidFormats::Digits));
+                    return true;
+                }
+            }
+        }
+        else if (!CachedExtent && IsValidFBXBoundsExtent(NewMeshExtent))
+        {
+            // First import — valid extent, accept it
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX][FIRST_IMPORT] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
+                     "action=accept_first_import"),
+                *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                NewMeshExtent.X, NewMeshExtent.Y, NewMeshExtent.Z);
+        }
+        else if (!CachedExtent && !IsValidFBXBoundsExtent(NewMeshExtent))
+        {
+            // First import but extent is invalid
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[FBX][UNIT_FAIL_NO_GOOD_MESH] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
+                     "reason=initial_import_oversized_or_tiny action=accept_anyway_no_cache"),
+                *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                NewMeshExtent.X, NewMeshExtent.Y, NewMeshExtent.Z);
+        }
+    }
+
     // Phase 10J.5F: Update semantic signature cache after successful import.
     {
-        FFBXImportSemanticSignature CurrentSig = ComputeFBXSemanticSignature(FbxPathStr, Request);
-        GSemanticSignatureCache.Add(Request.ObjectGUID, CurrentSig);
+        FFBXImportSemanticSignature UpdatedSig = ComputeFBXSemanticSignature(FbxPathStr, Request);
+        GSemanticSignatureCache.Add(Request.ObjectGUID, UpdatedSig);
     }
 
     // Spawn or update StaticMeshActor by LiveSync GUID
@@ -1170,6 +1297,11 @@ bool FLiveSyncFBXImporter::HandleImport(
             // Phase 10J.5D: ensure renderable with material fallback.
             EnsureFBXMeshRenderable(SMC, StaticMesh, MeshActor,
                 Request.ObjectGUID);
+            // Phase 10J.5L: restore generated MIDs after fallback (authoritative override)
+            if (Context.OnRestoreGeneratedMaterials)
+            {
+                Context.OnRestoreGeneratedMaterials(Request.ObjectGUID, SMC);
+            }
             LogExtendedFBXValidate(MeshActor, SMC, Request.ObjectGUID);
 
             if (Context.OnScheduleRepair)
@@ -1267,6 +1399,11 @@ bool FLiveSyncFBXImporter::HandleImport(
             // Phase 10J.5D: ensure renderable with material fallback.
             EnsureFBXMeshRenderable(SMC, StaticMesh, MeshActor,
                 Request.ObjectGUID);
+            // Phase 10J.5L: restore generated MIDs after fallback (authoritative override)
+            if (Context.OnRestoreGeneratedMaterials)
+            {
+                Context.OnRestoreGeneratedMaterials(Request.ObjectGUID, SMC);
+            }
             LogExtendedFBXValidate(MeshActor, SMC, Request.ObjectGUID);
 
             if (Context.OnScheduleRepair)
@@ -1286,11 +1423,13 @@ bool FLiveSyncFBXImporter::HandleImport(
         }
 
         // Apply existing transform if available (fix for spawn at 0,0,0).
+        // Phase 10J.5K: NEVER restore actor scale — always enforce scale=1.
         if (bHasExistingTransform)
         {
             MeshActor->SetActorLocation(ExistingLocation);
             MeshActor->SetActorRotation(ExistingRotation);
-            MeshActor->SetActorScale3D(ExistingScale);
+            // Do NOT restore ExistingScale — invariant requires scale=1
+            MeshActor->SetActorScale3D(FVector::OneVector);
             UE_LOG(LogLiveSync, Log,
                 TEXT("[FBX] Applied existing transform to spawned actor for GUID %s"),
                 *Request.ObjectGUID.ToString(EGuidFormats::Digits));

@@ -204,6 +204,33 @@ struct FMaterialSlotRef
 static constexpr int32
     MAX_MATERIAL_SLOTS = 8;
 
+
+// =========================================================
+// MATERIAL BASIC PROPERTIES EXTENSION (Phase 10J.5H)
+// =========================================================
+// Optional per-slot basic material properties carried in the
+// MATX extension block appended after the old identity block.
+// =========================================================
+
+static constexpr uint32
+    MATX_MAGIC        = 0x4D415458;  // 'MATX' LE
+static constexpr uint8
+    MATX_VERSION_CURRENT = 1;
+static constexpr int32
+    MATX_HEADER_SIZE  = 6;         // Magic(4) + Version(1) + SlotCount(1)
+static constexpr int32
+    MATX_PROP_SLOT_SIZE = 25;     // SlotIndex(1) + RGBA(16) + Roughness(4) + Metallic(4)
+// Total extension for N slots: MATX_HEADER_SIZE + N * MATX_PROP_SLOT_SIZE
+
+struct FMaterialSlotBasicProperties
+{
+    bool        bHasProperties = false;
+    FLinearColor BaseColor      = FLinearColor::White;
+    float       Roughness       = 0.5f;
+    float       Metallic        = 0.0f;
+    float       Alpha           = 1.0f;
+};
+
 // =========================================================
 // MESH CHUNK CONSTANTS (Phase 7C)
 // =========================================================

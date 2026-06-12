@@ -289,7 +289,7 @@ def main():
     check(tr, "TR: ApplyUnitScaleGuard calls SetRelativeScale3D on component", f"set_rel_scale3d={tr}")
 
     # ApplyUnitScaleGuard called from EnsureFBXMeshRenderable
-    ts = "ApplyUnitScaleGuard(SMC, Guid)" in imp
+    ts = "ApplyUnitScaleGuard(SMC, Guid" in imp
     check(ts, "TS: EnsureFBXMeshRenderable calls ApplyUnitScaleGuard", f"call_in_ensure={ts}")
 
     # IsLikelyUnitScaleShrink helper exists

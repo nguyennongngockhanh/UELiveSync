@@ -53,6 +53,7 @@ try:
         LIVE_SYNC_VERSION_V5,
         get_mesh_identity_hash,
         get_material_identity_hash,
+        get_material_basic_properties,
         serialize_asset_identity,
         serialize_collection_identity,
         serialize_collection_membership,
@@ -141,6 +142,7 @@ try:
         _keyframes_sent as _net_keyframes_sent,
         _animated_objects_scanned as _net_animated_objects_scanned,
         pack_ue_fguid,
+        _append_blender_debug_log,
     )
 except ImportError:
     from network import (
@@ -243,6 +245,7 @@ except ImportError:
         _keyframes_sent as _net_keyframes_sent,
         _animated_objects_scanned as _net_animated_objects_scanned,
         pack_ue_fguid,
+        _append_blender_debug_log,
     )
 
 
@@ -261,6 +264,10 @@ _last_mesh_identity = {}
 # Phase 7B: Per-GUID last material slot identities for change detection
 # Maps guid -> {slot_index: (material_identity_low, material_identity_high)}
 _last_material_identity = {}
+
+# Phase 10J.5I: Per-GUID last material property signature for change detection
+# Maps guid -> {slot_index: (r, g, b, a, roughness, metallic)}
+_last_material_property_sig = {}
 
 # Phase 7C: Per-GUID last geometry version hash for change detection
 # Maps guid -> SHA-256 hex string of evaluated mesh geometry.
@@ -1582,7 +1589,38 @@ def check_updates():
         prev_slots = _last_material_identity.get(guid)
         is_first_material = (prev_slots is None)
 
-        if not is_first_material and current_slots != prev_slots:
+        # Phase 10J.5I: also compare material property signatures
+        # so that BaseColor/Roughness/Metallic/Alpha changes trigger
+        # PT_Material even when material name/hash is unchanged.
+        bPropertiesChanged = False
+        current_prop_sig = None
+        try:
+            current_prop_sig = {}
+            for slot_index, slot in enumerate(obj.material_slots):
+                if slot and slot.material:
+                    p = get_material_basic_properties(slot.material)
+                    if p is not None:
+                        current_prop_sig[slot_index] = (
+                            p.get("BaseColorR", 0.0),
+                            p.get("BaseColorG", 0.0),
+                            p.get("BaseColorB", 0.0),
+                            p.get("Alpha", 1.0),
+                            p.get("Roughness", 0.5),
+                            p.get("Metallic", 0.0),
+                        )
+        except Exception:
+            current_prop_sig = None
+
+        if is_first_material:
+            bPropertiesChanged = True
+        elif current_slots != prev_slots:
+            bPropertiesChanged = True
+        elif current_prop_sig is not None:
+            prev_prop_sig = _last_material_property_sig.get(guid)
+            if prev_prop_sig is None or current_prop_sig != prev_prop_sig:
+                bPropertiesChanged = True
+
+        if not is_first_material and bPropertiesChanged:
             _mat_stall_cur_count = len(current_slots)
             _mat_stall_prev_count = len(prev_slots) if prev_slots is not None else 0
             # MATSTALL: log material slot change for diagnostics.
@@ -1594,10 +1632,31 @@ def check_updates():
                     f"prev_keys={list(prev_slots.keys()) if prev_slots else 'None'} "
                     f"cur_keys={list(current_slots.keys()) if current_slots else 'None'}"
                 )
+            # Phase 10J.5I: log dirty reason
+            _mat_reason = "identity" if current_slots != prev_slots else "properties"
+            print(f"[MAT][DIRTY] property_changed guid={guid} reason={_mat_reason} slots={_mat_stall_cur_count}")
+            _append_blender_debug_log(
+                f"[MAT][SIG] guid={guid} "
+                f"reason={_mat_reason} "
+                f"slots={_mat_stall_cur_count}"
+            )
+
             # Phase 10J: exception-isolated material send
+            # Phase 10J.5H: extract basic material properties for each slot
+            mat_props = None
+            try:
+                mat_props = {}
+                for slot_index, slot in enumerate(obj.material_slots):
+                    if slot and slot.material:
+                        p = get_material_basic_properties(slot.material)
+                        if p is not None:
+                            mat_props[slot_index] = p
+            except Exception:
+                mat_props = None
+
             try:
                 material_payloads_to_send.append(
-                    serialize_material_slots(guid_obj, current_slots)
+                    serialize_material_slots(guid_obj, current_slots, mat_props)
                 )
             except Exception as _send_exc:
                 if _verbose_logging:
@@ -1613,6 +1672,12 @@ def check_updates():
             _mat_stall_guids.add(guid)
 
         _last_material_identity[guid] = current_slots
+
+        # Phase 10J.5I: update property signature for dirty detection
+        if current_prop_sig is not None:
+            _last_material_property_sig[guid] = current_prop_sig
+        elif guid in _last_material_property_sig:
+            del _last_material_property_sig[guid]
 
         # =================================================
         # Phase 7C Stage 1D: Geometry change detection
@@ -1912,6 +1977,11 @@ def check_updates():
 
         if _verbose_logging:
             print(f"[MATERIAL][SEND] Sending {len(material_payloads_to_send)} material slot packet(s)")
+
+        # Phase 10J.5L: log to Blender debug file
+        _append_blender_debug_log(
+            f"[MAT][SEND] auto_sync count={len(material_payloads_to_send)}"
+        )
 
         send_objects(
             material_payloads_to_send,
@@ -2443,6 +2513,7 @@ def start_sync():
     tracked_objects.clear()
     _last_mesh_identity.clear()
     _last_material_identity.clear()
+    _last_material_property_sig.clear()  # Phase 10J.5I
     _last_geometry_version.clear()
     _last_object_names.clear()
     _last_visibility_state.clear()
