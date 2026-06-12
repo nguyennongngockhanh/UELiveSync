@@ -12,6 +12,7 @@
 #include "Factories/FbxFactory.h"
 #include "Factories/FbxImportUI.h"
 #include "Factories/FbxStaticMeshImportData.h"
+#include "ObjectTools.h"
 #endif
 
 static TAutoConsoleVariable<int32> CVarLiveSyncFBXVerboseLogs(
@@ -135,6 +136,8 @@ static FString SanitizeObjectName(const FString& RawName)
 
 // Last known good raw mesh bounds extent per GUID (diagnostic only).
 static TMap<FGuid, FVector> GBoundsExtentCache;
+// Phase 10J.5Q: Tracks last assigned temp mesh path per GUID for cleanup.
+static TMap<FGuid, FString> GLastAssignedMeshPath;
 
 static bool IsValidFBXBoundsExtent(const FVector& Extent)
 {
@@ -917,6 +920,15 @@ bool FLiveSyncFBXImporter::HandleImport(
         FString::Printf(TEXT("%s_%s"), *SafeName, *GuidShort);
     const FString AssetPackagePath =
         AssetBasePath / AssetName;
+    // Phase 10J.5Q: Import to unique-per-sync path.
+    // Each sync creates a fresh asset so bReplaceExisting=false never mutates
+    // an existing mesh. Assign directly to SMC — no rename needed.
+    const FString SyncSuffix =
+        FString::Printf(TEXT("_%s"), *FGuid::NewGuid().ToString().Left(8));
+    const FString PendingAssetName =
+        AssetName + SyncSuffix;
+    const FString PendingPackagePath =
+        AssetBasePath / PendingAssetName;
 
 #if WITH_EDITOR
     // Phase 10J.5F: Compute semantic signature (incl. geometry hash) and check cache before import.
@@ -1024,13 +1036,10 @@ bool FLiveSyncFBXImporter::HandleImport(
         }
     }
 
-    // Check if the target asset already exists (for lifecycle diagnostics)
-    const FString FullAssetPath =
-        FString::Printf(TEXT("%s.%s"), *AssetPackagePath, *AssetName);
-    const bool bReplacingExistingAsset =
-        StaticLoadObject(UStaticMesh::StaticClass(), nullptr, *FullAssetPath) != nullptr;
+    const FString FullPendingPath =
+        FString::Printf(TEXT("%s.%s"), *PendingPackagePath, *PendingAssetName);
 
-    // Import FBX as StaticMesh using AssetImportTask
+    // === Phase 10J.5Q: Import to pending path ===
     UAssetImportTask* ImportTask = NewObject<UAssetImportTask>();
     if (!ImportTask)
     {
@@ -1043,9 +1052,11 @@ bool FLiveSyncFBXImporter::HandleImport(
 
     ImportTask->Filename = FbxPathStr;
     ImportTask->DestinationPath = AssetBasePath;
-    ImportTask->DestinationName = AssetName;
-    ImportTask->bReplaceExisting = true;
-    ImportTask->bReplaceExistingSettings = true;
+    // Phase 10J.5Q: Import to pending path with bReplaceExisting=false
+    // so the existing asset is never mutated in-place.
+    ImportTask->DestinationName = PendingAssetName;
+    ImportTask->bReplaceExisting = false;
+    ImportTask->bReplaceExistingSettings = false;
     ImportTask->bAutomated = true;
     ImportTask->bSave = false;
     ImportTask->bAsync = false;
@@ -1068,76 +1079,50 @@ bool FLiveSyncFBXImporter::HandleImport(
         FAssetToolsModule::GetModule().Get();
     AssetTools.ImportAssetTasks({ ImportTask });
 
-    // Check import result
+    // === Phase 10J.5Q: Check pending import result ===
     TArray<UObject*> ImportedObjects = ImportTask->GetObjects();
-    UObject* ImportedAsset = nullptr;
+    UObject* PendingAsset = nullptr;
     if (ImportedObjects.Num() > 0)
     {
-        ImportedAsset = ImportedObjects[0];
+        PendingAsset = ImportedObjects[0];
     }
 
-    if (!ImportedAsset)
+    if (!PendingAsset)
     {
-        // Try finding by package path as fallback
-        ImportedAsset = StaticLoadObject(
-            UObject::StaticClass(), nullptr,
-            *FString::Printf(TEXT("%s.%s"), *AssetPackagePath, *AssetName));
+        PendingAsset = StaticLoadObject(
+            UObject::StaticClass(), nullptr, *FullPendingPath);
     }
 
-    if (!ImportedAsset)
+    if (!PendingAsset)
     {
         Context.Stats->FBXImportFailed.fetch_add(
             1, std::memory_order_relaxed);
         UE_LOG(LogLiveSync, Warning,
-            TEXT("[FBX] Import failed — no asset created for %s"),
+            TEXT("[FBX] Pending import failed — no asset created for %s"),
             *FbxPathStr);
         return false;
     }
 
-    UStaticMesh* StaticMesh = Cast<UStaticMesh>(ImportedAsset);
-    if (!StaticMesh)
+    UStaticMesh* PendingMesh = Cast<UStaticMesh>(PendingAsset);
+    if (!PendingMesh)
     {
         Context.Stats->FBXImportFailed.fetch_add(
             1, std::memory_order_relaxed);
         UE_LOG(LogLiveSync, Warning,
-            TEXT("[FBX] Imported asset is not a StaticMesh: %s"),
-            *ImportedAsset->GetName());
+            TEXT("[FBX] Pending asset is not a StaticMesh: %s"),
+            *PendingAsset->GetName());
         return false;
     }
 
-    Context.Stats->FBXImportSucceeded.fetch_add(
-        1, std::memory_order_relaxed);
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[FBX] Imported StaticMesh: %s (%d verts, %d tris, %d mat slots)"),
-        *StaticMesh->GetName(),
-        Request.VertCount,
-        Request.TriCount,
-        Request.MatSlotCount);
-
-    // Lifecycle diagnostics: new vs replaced asset
-    if (bReplacingExistingAsset)
-    {
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[FBX] Replaced existing imported asset: %s"),
-            *AssetPackagePath);
-    }
-    else
-    {
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[FBX] Created new imported asset: %s"),
-            *AssetPackagePath);
-    }
-
-    // Phase 10J.5P: Unit sanity guard — reject imported mesh if rawExtent is
-    // ~1/100 of cached good extent (meter-size reimport regression).
-    // Named constants for meter-size ratio window. Cache-based only: the FBX
-    // request payload does not carry Blender bounds — no current expected cm
-    // extent is available without a protocol change.
+    // === Phase 10J.5Q: Validate pending mesh bounds BEFORE any rename/swap ===
+    // Cache-based only: the FBX request payload does not carry Blender bounds,
+    // so no current expected cm extent is available without a protocol change.
+    const FVector PendingExtent = PendingMesh->GetBounds().BoxExtent;
     constexpr float MeterSizeMinRatio = 50.0f;
     constexpr float MeterSizeMaxRatio = 250.0f;
+    bool bAcceptPending = false;
     {
-        const FVector NewMeshExtent = StaticMesh->GetBounds().BoxExtent;
-        const float NewMax = FMath::Max3(NewMeshExtent.X, NewMeshExtent.Y, NewMeshExtent.Z);
+        const float NewMax = FMath::Max3(PendingExtent.X, PendingExtent.Y, PendingExtent.Z);
         const FVector* CachedExtent = GBoundsExtentCache.Find(Request.ObjectGUID);
         if (CachedExtent && IsValidFBXBoundsExtent(*CachedExtent))
         {
@@ -1147,79 +1132,99 @@ bool FLiveSyncFBXImporter::HandleImport(
                 const float RatioSmall = CachedMax / NewMax;
                 const float RatioLarge = NewMax / CachedMax;
 
-                // Phase 10J.5P: reject meter-size (1/100) import.
-                // Window widened from 50-150 to 50-250 (10J.5P) to catch cases
-                // where the cache holds a 2x extent and regression ratio is ~195.
                 if (RatioSmall >= MeterSizeMinRatio && RatioSmall <= MeterSizeMaxRatio)
                 {
                     UE_LOG(LogLiveSync, Warning,
                         TEXT("[FBX][UNIT_INVALID] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
-                             "expectedCmExtent=(%.1f,%.1f,%.1f) ratio=%.1f reason=reimport_meter_size_regression "
-                             "action=reject_keep_previous"),
+                             "expectedCmExtent=(%.1f,%.1f,%.1f) ratio=%.1f "
+                             "reason=reimport_meter_size_regression action=reject_keep_previous"),
                         *Request.ObjectGUID.ToString(EGuidFormats::Digits),
-                        NewMeshExtent.X, NewMeshExtent.Y, NewMeshExtent.Z,
+                        PendingExtent.X, PendingExtent.Y, PendingExtent.Z,
                         CachedExtent->X, CachedExtent->Y, CachedExtent->Z,
                         RatioSmall);
 
-                    // Keep previous visible mesh — do NOT replace it with meter-size mesh.
-                    {
-                        FFBXImportSemanticSignature RejectSig = ComputeFBXSemanticSignature(FbxPathStr, Request);
-                        GSemanticSignatureCache.Add(Request.ObjectGUID, RejectSig);
-                    }
-
-                    Context.Stats->FBXImportSkipped.fetch_add(1, std::memory_order_relaxed);
-                    Context.Stats->FBXImportFailed.fetch_add(1, std::memory_order_relaxed);
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("[FBX][UNIT_INVALID] guid=%s rejected — keeping previous good mesh"),
-                        *Request.ObjectGUID.ToString(EGuidFormats::Digits));
-                    return true;
+                    bAcceptPending = false;
                 }
-
-                // Phase 10J.5M: reject 100x-too-large import (e.g. double cm bake)
-                if (RatioLarge >= MeterSizeMinRatio && RatioLarge <= MeterSizeMaxRatio)
+                else if (RatioLarge >= MeterSizeMinRatio && RatioLarge <= MeterSizeMaxRatio)
                 {
                     UE_LOG(LogLiveSync, Warning,
                         TEXT("[FBX][UNIT_INVALID] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
-                             "expectedCmExtent=(%.1f,%.1f,%.1f) ratio=%.2f reason=imported_100x_too_large "
-                             "action=keep_previous_mesh"),
+                             "expectedCmExtent=(%.1f,%.1f,%.1f) ratio=%.2f "
+                             "reason=imported_100x_too_large action=reject_keep_previous"),
                         *Request.ObjectGUID.ToString(EGuidFormats::Digits),
-                        NewMeshExtent.X, NewMeshExtent.Y, NewMeshExtent.Z,
+                        PendingExtent.X, PendingExtent.Y, PendingExtent.Z,
                         CachedExtent->X, CachedExtent->Y, CachedExtent->Z,
                         RatioLarge);
 
-                    {
-                        FFBXImportSemanticSignature RejectSig = ComputeFBXSemanticSignature(FbxPathStr, Request);
-                        GSemanticSignatureCache.Add(Request.ObjectGUID, RejectSig);
-                    }
-
-                    Context.Stats->FBXImportSkipped.fetch_add(1, std::memory_order_relaxed);
-                    Context.Stats->FBXImportFailed.fetch_add(1, std::memory_order_relaxed);
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("[FBX][UNIT_INVALID] guid=%s rejected — keeping previous good mesh"),
-                        *Request.ObjectGUID.ToString(EGuidFormats::Digits));
-                    return true;
+                    bAcceptPending = false;
+                }
+                else
+                {
+                    bAcceptPending = true;
                 }
             }
+            else
+            {
+                bAcceptPending = true;
+            }
         }
-        else if (!CachedExtent && IsValidFBXBoundsExtent(NewMeshExtent))
+        else if (!CachedExtent && IsValidFBXBoundsExtent(PendingExtent))
         {
-            // First import — valid extent, accept it
             UE_LOG(LogLiveSync, Log,
-                TEXT("[FBX][FIRST_IMPORT] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
+                TEXT("[FBX][FIRST_IMPORT] guid=%s pendingExtent=(%.1f,%.1f,%.1f) "
                      "action=accept_first_import"),
                 *Request.ObjectGUID.ToString(EGuidFormats::Digits),
-                NewMeshExtent.X, NewMeshExtent.Y, NewMeshExtent.Z);
+                PendingExtent.X, PendingExtent.Y, PendingExtent.Z);
+            bAcceptPending = true;
         }
-        else if (!CachedExtent && !IsValidFBXBoundsExtent(NewMeshExtent))
+        else if (!CachedExtent && !IsValidFBXBoundsExtent(PendingExtent))
         {
-            // First import but extent is invalid
             UE_LOG(LogLiveSync, Warning,
-                TEXT("[FBX][UNIT_FAIL_NO_GOOD_MESH] guid=%s rawExtent=(%.1f,%.1f,%.1f) "
+                TEXT("[FBX][UNIT_FAIL_NO_GOOD_MESH] guid=%s pendingExtent=(%.1f,%.1f,%.1f) "
                      "reason=initial_import_oversized_or_tiny action=accept_anyway_no_cache"),
                 *Request.ObjectGUID.ToString(EGuidFormats::Digits),
-                NewMeshExtent.X, NewMeshExtent.Y, NewMeshExtent.Z);
+                PendingExtent.X, PendingExtent.Y, PendingExtent.Z);
+            bAcceptPending = true;
+        }
+        else
+        {
+            bAcceptPending = true;
         }
     }
+
+    if (!bAcceptPending)
+    {
+        // Delete pending mesh — never reaches the visible component.
+        {
+            FFBXImportSemanticSignature RejectSig = ComputeFBXSemanticSignature(FbxPathStr, Request);
+            GSemanticSignatureCache.Add(Request.ObjectGUID, RejectSig);
+        }
+
+        TArray<UObject*> ToDelete = { PendingMesh };
+        ObjectTools::DeleteObjects(ToDelete, false);
+
+        Context.Stats->FBXImportSkipped.fetch_add(1, std::memory_order_relaxed);
+        Context.Stats->FBXImportFailed.fetch_add(1, std::memory_order_relaxed);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][UNIT_INVALID] guid=%s pending rejected — deleted, keeping previous good mesh"),
+            *Request.ObjectGUID.ToString(EGuidFormats::Digits));
+        return true;
+    }
+
+    // Phase 10J.5Q: Pending mesh is valid. Use it directly — no rename needed.
+    // Each sync creates a unique-path asset; assigning it to the SMC is safe.
+    UStaticMesh* StaticMesh = PendingMesh;
+
+    Context.Stats->FBXImportSucceeded.fetch_add(
+        1, std::memory_order_relaxed);
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[FBX] Imported StaticMesh: %s (%d verts, %d tris, %d mat slots) "
+             "pendingExtent=(%.1f,%.1f,%.1f)"),
+        *StaticMesh->GetName(),
+        Request.VertCount,
+        Request.TriCount,
+        Request.MatSlotCount,
+        PendingExtent.X, PendingExtent.Y, PendingExtent.Z);
 
     // Phase 10J.5F: Update semantic signature cache after successful import.
     {
@@ -1275,6 +1280,19 @@ bool FLiveSyncFBXImporter::HandleImport(
                 // reimported in place with the same address.
                 SMC->SetStaticMesh(nullptr);
                 RefreshFBXStaticMeshComponent(SMC, MeshActor);
+            }
+
+            // Phase 10J.5Q: VISIBLE_EXTENT_FINAL — log the mesh extent that
+            // the player will actually see after this mesh assignment.
+            {
+                const FVector AssignedExtent = StaticMesh->GetBounds().BoxExtent;
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[FBX][VISIBLE_EXTENT_FINAL] guid=%s mesh=%s extent=(%.1f,%.1f,%.1f) "
+                         "pendingExtent=(%.1f,%.1f,%.1f)"),
+                    *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                    *StaticMesh->GetName(),
+                    AssignedExtent.X, AssignedExtent.Y, AssignedExtent.Z,
+                    PendingExtent.X, PendingExtent.Y, PendingExtent.Z);
             }
 
             SMC->SetStaticMesh(StaticMesh);
@@ -1350,13 +1368,27 @@ bool FLiveSyncFBXImporter::HandleImport(
         ActorToDestroy = PreExistingActor;
     }
 
-    // Rename/new asset path warning: same GUID, different asset path
-    if (MeshActor && !bReplacingExistingAsset)
+    // Phase 10J.5Q: Cleanup previous temp mesh for this GUID (update path).
+    // Each sync creates a unique-path mesh; delete the last one to prevent
+    // orphan accumulation.
     {
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[FBX] Possible rename/new asset path detected for GUID %s: importing to new asset path %s. Previous imported asset may remain orphaned."),
-            *Request.ObjectGUID.ToString(EGuidFormats::Digits),
-            *AssetPackagePath);
+        FString* PrevPath = GLastAssignedMeshPath.Find(Request.ObjectGUID);
+        if (PrevPath && MeshActor)
+        {
+            UStaticMeshComponent* CheckSMC = MeshActor->GetStaticMeshComponent();
+            UStaticMesh* PrevMesh = Cast<UStaticMesh>(
+                StaticLoadObject(UStaticMesh::StaticClass(), nullptr, **PrevPath));
+            if (PrevMesh && PrevMesh != StaticMesh && CheckSMC && CheckSMC->GetStaticMesh() == StaticMesh)
+            {
+                TArray<UObject*> ToDelete = { PrevMesh };
+                ObjectTools::DeleteObjects(ToDelete, false);
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[FBX][CLEANUP] guid=%s previous temp mesh deleted: %s"),
+                    *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                    **PrevPath);
+            }
+        }
+        GLastAssignedMeshPath.Add(Request.ObjectGUID, StaticMesh->GetPathName());
     }
 
     if (!MeshActor)
@@ -1391,6 +1423,18 @@ bool FLiveSyncFBXImporter::HandleImport(
         {
             UStaticMeshComponent* SMC =
                 MeshActor->GetStaticMeshComponent();
+
+            // Phase 10J.5Q: VISIBLE_EXTENT_FINAL on spawn
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX][VISIBLE_EXTENT_FINAL] guid=%s mesh=%s extent=(%.1f,%.1f,%.1f) "
+                     "pendingExtent=(%.1f,%.1f,%.1f) action=spawn"),
+                *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                *StaticMesh->GetName(),
+                StaticMesh->GetBounds().BoxExtent.X,
+                StaticMesh->GetBounds().BoxExtent.Y,
+                StaticMesh->GetBounds().BoxExtent.Z,
+                PendingExtent.X, PendingExtent.Y, PendingExtent.Z);
+
             SMC->SetStaticMesh(StaticMesh);
 
             // Phase 10J.5B.2: refresh after initial mesh assignment.

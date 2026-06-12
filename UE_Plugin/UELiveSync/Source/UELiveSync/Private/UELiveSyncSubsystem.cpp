@@ -11856,6 +11856,17 @@ ParseAndApplyGeneratedMaterial(
             *Guid.ToString(EGuidFormats::Digits), SlotIdx,
             Props.BaseColor.R, Props.BaseColor.G, Props.BaseColor.B, Props.BaseColor.A,
             Props.Roughness, Props.Metallic, Props.Alpha);
+        // Phase 10J.5Q: MAT MESH_STABILITY — verify material-only sync
+        // does not change mesh geometry (extent should match last FBX import).
+        if (UStaticMesh* StaticMesh = SMC->GetStaticMesh())
+        {
+            const FVector MeshExtent = StaticMesh->GetBounds().BoxExtent;
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MAT][MESH_STABILITY] guid=%s slot=%d mesh=%s extent=(%.1f,%.1f,%.1f)"),
+                *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+                *StaticMesh->GetName(),
+                MeshExtent.X, MeshExtent.Y, MeshExtent.Z);
+        }
     }
 
     if (AppliedCount > 0)
