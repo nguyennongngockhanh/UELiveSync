@@ -1114,6 +1114,12 @@ bool FLiveSyncFBXImporter::HandleImport(
         return false;
     }
 
+    // Phase 10J.6: TEMP_IMPORT log at confirmed temp asset.
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[FBX][TEMP_IMPORT] guid=%s path=%s"),
+        *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+        *PendingMesh->GetPathName());
+
     // === Phase 10J.5Q: Validate pending mesh bounds BEFORE any rename/swap ===
     // Cache-based only: the FBX request payload does not carry Blender bounds,
     // so no current expected cm extent is available without a protocol change.
@@ -1208,6 +1214,9 @@ bool FLiveSyncFBXImporter::HandleImport(
         UE_LOG(LogLiveSync, Log,
             TEXT("[FBX][UNIT_INVALID] guid=%s pending rejected — deleted, keeping previous good mesh"),
             *Request.ObjectGUID.ToString(EGuidFormats::Digits));
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][TEMP_KEEP_PREVIOUS] guid=%s reason=validation_failed action=keep_existing_mesh"),
+            *Request.ObjectGUID.ToString(EGuidFormats::Digits));
         return true;
     }
 
@@ -1280,6 +1289,15 @@ bool FLiveSyncFBXImporter::HandleImport(
                 // reimported in place with the same address.
                 SMC->SetStaticMesh(nullptr);
                 RefreshFBXStaticMeshComponent(SMC, MeshActor);
+            }
+
+            // Phase 10J.6: TEMP_ASSIGN log before final assignment.
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[FBX][TEMP_ASSIGN] guid=%s newMesh=%s previousMesh=%s"),
+                    *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                    *StaticMesh->GetName(),
+                    CurrentMesh ? *CurrentMesh->GetName() : TEXT("none"));
             }
 
             // Phase 10J.5Q: VISIBLE_EXTENT_FINAL — log the mesh extent that
@@ -1368,25 +1386,65 @@ bool FLiveSyncFBXImporter::HandleImport(
         ActorToDestroy = PreExistingActor;
     }
 
-    // Phase 10J.5Q: Cleanup previous temp mesh for this GUID (update path).
+    // Phase 10J.6: Cleanup previous temp mesh for this GUID.
     // Each sync creates a unique-path mesh; delete the last one to prevent
-    // orphan accumulation.
+    // orphan accumulation.  Only delete after the new mesh is safely assigned
+    // to the SMC — never delete the mesh currently in use.
     {
         FString* PrevPath = GLastAssignedMeshPath.Find(Request.ObjectGUID);
         if (PrevPath && MeshActor)
         {
             UStaticMeshComponent* CheckSMC = MeshActor->GetStaticMeshComponent();
-            UStaticMesh* PrevMesh = Cast<UStaticMesh>(
-                StaticLoadObject(UStaticMesh::StaticClass(), nullptr, **PrevPath));
-            if (PrevMesh && PrevMesh != StaticMesh && CheckSMC && CheckSMC->GetStaticMesh() == StaticMesh)
+            if (!CheckSMC)
             {
-                TArray<UObject*> ToDelete = { PrevMesh };
-                ObjectTools::DeleteObjects(ToDelete, false);
-                UE_LOG(LogLiveSync, Log,
-                    TEXT("[FBX][CLEANUP] guid=%s previous temp mesh deleted: %s"),
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[FBX][TEMP_DELETE_FAIL] guid=%s reason=no_smc path=%s"),
                     *Request.ObjectGUID.ToString(EGuidFormats::Digits),
                     **PrevPath);
             }
+            else
+            {
+                UStaticMesh* PrevMesh = Cast<UStaticMesh>(
+                    StaticLoadObject(UStaticMesh::StaticClass(), nullptr, **PrevPath));
+                if (!PrevMesh)
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[FBX][TEMP_DELETE_FAIL] guid=%s reason=load_failed path=%s"),
+                        *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                        **PrevPath);
+                }
+                else if (PrevMesh == StaticMesh)
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[FBX][TEMP_DELETE_FAIL] guid=%s reason=same_mesh path=%s"),
+                        *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                        **PrevPath);
+                }
+                else if (CheckSMC->GetStaticMesh() != StaticMesh)
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[FBX][TEMP_DELETE_FAIL] guid=%s reason=smc_mismatch path=%s"),
+                        *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                        **PrevPath);
+                }
+                else
+                {
+                    TArray<UObject*> ToDelete = { PrevMesh };
+                    ObjectTools::DeleteObjects(ToDelete, false);
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[FBX][TEMP_CLEANUP] guid=%s previous temp mesh deleted: %s"),
+                        *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                        **PrevPath);
+                }
+            }
+        }
+        else if (PrevPath && !MeshActor)
+        {
+            // Spawn path — no previous mesh to clean up; still record for future.
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX][TEMP_CLEANUP] guid=%s reason=spawn_path_nothing_to_cleanup path=%s"),
+                *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                **PrevPath);
         }
         GLastAssignedMeshPath.Add(Request.ObjectGUID, StaticMesh->GetPathName());
     }
@@ -1423,6 +1481,12 @@ bool FLiveSyncFBXImporter::HandleImport(
         {
             UStaticMeshComponent* SMC =
                 MeshActor->GetStaticMeshComponent();
+
+            // Phase 10J.6: TEMP_ASSIGN on spawn
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX][TEMP_ASSIGN] guid=%s newMesh=%s action=spawn"),
+                *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                *StaticMesh->GetName());
 
             // Phase 10J.5Q: VISIBLE_EXTENT_FINAL on spawn
             UE_LOG(LogLiveSync, Log,
