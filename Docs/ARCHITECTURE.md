@@ -60,6 +60,18 @@ ProcessQueuedPackets → InterpolateTransforms → ResolvePendingAttachments
 - **ComputeWorldStateHash**: FNV-1a 64-bit across all domains, sorted GUIDs
 - **EWorldReplayDomain**: Unknown(0), Collection(1), Lifecycle(2), Rename(3), Transform(4)
 
+## FBX Mesh Temp Import Architecture
+
+- **Do not use UE FBX reimport-over-existing StaticMesh for live sync.** UE 5.7.4 reimport can regress to meter-size geometry under certain conditions.
+- **Live sync uses unique temp StaticMesh asset per sync.** Each sync exports FBX to a unique temp path, imports it as a new StaticMesh asset, validates the imported mesh, then assigns it to the SMC.
+- **Previous temp mesh cleanup** happens after successful assignment. If assignment fails, the previous mesh is preserved for diagnostics.
+- **Material generated MID** is restored after FBX mesh assignment to prevent material loss.
+- **Unit conversion policy**:
+  - Blender writes FBX with meter unit metadata using `apply_scale_options='FBX_SCALE_UNITS'` (`UnitScaleFactor=100`), `global_scale=1.0`, `bake_space_transform=False`.
+  - UE converts scene unit to cm with `bConvertSceneUnit=true`.
+  - No actor or component scale compensation — actor scale remains `(1,1,1)`, StaticMeshComponent relative scale remains `(1,1,1)`.
+  - Invalid unit imports are rejected/preserved rather than compensated.
+
 ## Packet Types
 
 | Type | Value | Payload | Description |

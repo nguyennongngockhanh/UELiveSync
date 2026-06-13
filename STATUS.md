@@ -50,6 +50,10 @@
 - **Phase 7D** — Active Camera Sync (implemented) ✅
 - **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.2 UE BoolTrack apply done) ✅
 - **Phase 7C Stage 3A–5** — FBX Mesh Handoff Import + Importer Hardening + Asset Lifecycle Diagnostics + Scene Unit Conversion + Rename Asset Path Diagnostics (all stages complete) ✅
+- **Phase 10J.5O — FBX Unit Scale Policy** — Blender FBX export: `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `bake_space_transform=False`. UE import: `bConvertSceneUnit=true`. No actor/component scale compensation. ✅
+- **Phase 10J.5Q — FBX Unique Temp Import Path** — Each sync imports to a unique temp StaticMesh asset path. No reimport-over-existing. No package rename-over-existing. Direct validated assignment. Previous temp mesh cleanup after success. ✅
+- **Phase 10J.6 — FBX Temp Asset Lifecycle Hardening** — `[FBX][TEMP_IMPORT/ASSIGN/CLEANUP/KEEP_PREVIOUS/DELETE_FAIL/UNIT_INVALID/SCALE_INVARIANT]` diagnostics. Runtime smoke 6/6 PASS. ✅
+- **Phase 10J.7 — FBX Test Debt Cleanup** — 4 test files updated for temp import lifecycle architecture. 18/18 phase10j tests PASS. Build PASS (target up to date). ✅
 - **Phase 8** — High Performance Streaming (diagnostics + benchmark complete) ✅
 
 ## Current Roadmap
@@ -62,10 +66,14 @@
 6. ~~**Phase 7E — Sequencer + Keyframe Replication**~~ **Stage 9C CLOSEOUT** ✅
 7. **Phase 7E Stage 10A — Visibility Keyframes** (Stages 10A.1–10A.2 complete) ✅
 8. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
-9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. Next: Phase 9 production readiness. **COMPLETE** ✅
+9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. **COMPLETE** ✅
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
 11. ~~**Manual Selected-Object Full Mesh Attribute Sync**~~ — superseded by Stage 3A FBX handoff 🔒
-12. **Phase 7C Stage 3A–5 — FBX Mesh Handoff Import** — Blender exports FBX → UE imports StaticMesh asset. Asset lifecycle diagnostics + scene unit conversion fix + rename asset path diagnostics (COMPLETE) ✅
+12. ~~**Phase 7C Stage 3A–5 — FBX Mesh Handoff Import**~~ **COMPLETE** ✅
+13. **Phase 10J.5O — FBX Unit Scale Policy** — Blender FBX export with `FBX_SCALE_UNITS`, UE import with `bConvertSceneUnit=true`, no scale compensation. **COMPLETE** ✅
+14. **Phase 10J.5Q — FBX Unique Temp Import Path** — Unique temp StaticMesh per sync, validated assignment, previous cleanup. **COMPLETE** ✅
+15. **Phase 10J.6 — FBX Temp Asset Lifecycle Hardening** — Diagnostic markers for temp import lifecycle. Runtime smoke 6/6 PASS. **COMPLETE** ✅
+16. **Phase 10J.7 — FBX Test Debt Cleanup** — Tests updated for current architecture. 18/18 phase10j PASS. **COMPLETE** ✅
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
@@ -767,6 +775,15 @@ All verified in regression run.
 ## Phase 6I.1 Final Closeout Regression (archived above)
 
 ## Recent Changes
+
+- **Phase 10J.7 — FBX Test Debt Cleanup** (2026-06-13): Updated 4 Phase 10J test files (authority over PT_Mesh, BMesh copy, intermittent visibility repair, reimport coalesce) to match current temp import lifecycle architecture. Removed `skip_chunk_fbx_authoritative`, `skip_v1_chunk_fbx_authoritative`, `[MESH][AUTH_WARN]`, `[FBX][UNIT_FIX/OK/CHECK]`, `bake_space_transform=True`, `Cast<AStaticMeshActor>` old references. Replaced with `FBXPendingGuids`, `bake_space_transform=False`, `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `[FBX][TEMP_IMPORT/ASSIGN/CLEANUP/KEEP_PREVIOUS/DELETE_FAIL/UNIT_INVALID/SCALE_INVARIANT]`, `[MAT][MESH_STABILITY]`. 18/18 phase10j tests PASS. Build PASS (target up to date). No source code changed. Commit: `6a96964`.
+
+- **Phase 10J.6 — FBX Temp Asset Lifecycle Hardening** (2026-06-13): Added diagnostic markers for temp import lifecycle: `[FBX][TEMP_IMPORT]`, `[FBX][TEMP_ASSIGN]`, `[FBX][TEMP_CLEANUP]`, `[FBX][TEMP_KEEP_PREVIOUS]`, `[FBX][TEMP_DELETE_FAIL]`. Hardened temp asset lifecycle with unit/scale invariant checks: `[FBX][UNIT_INVALID]`, `[FBX][SCALE_INVARIANT]`. Runtime smoke 6/6 syncs PASS. Commit: `ebd399a`.
+
+- **Phase 10J.5Q — FBX Unique Temp Import Path** (2026-06-13): Replaced FBX reimport-over-existing StaticMesh with unique temp StaticMesh asset per sync. Each sync: exports FBX → imports to unique temp path → validates imported mesh → assigns to SMC → cleans up previous temp mesh. No package rename-over-existing. No UE reimport-over-existing path. Fixed manual meter-size regression from reimport path. Commit: `01e8ddf`.
+
+- **Phase 10J.5O — FBX Unit Scale Policy** (2026-06-13): Established unit conversion policy: Blender FBX export with `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `bake_space_transform=False`. UE FBX import with `bConvertSceneUnit=true`. No actor or component scale compensation. Invalid unit imports are rejected/preserved rather than compensated. Scale invariant diagnostics added. Commits: `3339aec`, `01e8ddf`.
+
 - **Phase 10D — Runtime Gap Closure** (2026-06-10): All Phase 10D runtime gaps closed and validated.
   - **StopNetworkThread sequencer state reset** (commit `1ef954a`): Resets `bHasSequencerOpState`, `LastSequencerOpSequence`, `bHasLiveSyncSequence`, `LiveSyncSequence`, `LiveSyncGuidToSequencerBinding`, `PendingSequencerBindings` on disconnect, preventing stale SEQOP rejection after reconnect.
   - **Runtime validation results**:

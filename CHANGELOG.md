@@ -1,5 +1,23 @@
 # Changelog
 
+## [unreleased]
+
+### Added
+- FBX temp asset lifecycle diagnostics: `[FBX][TEMP_IMPORT/ASSIGN/CLEANUP/KEEP_PREVIOUS/DELETE_FAIL/UNIT_INVALID/SCALE_INVARIANT]`.
+- FBX unit/scale invariant checks — invalid unit imports are rejected/preserved, actor and component scale stay at 1.
+
+### Changed
+- FBX mesh sync now uses unique temp StaticMesh asset per sync instead of reimport-over-existing.
+- Temp mesh assignment is validated before applying; previous temp mesh cleaned up after success.
+- Blender FBX export policy: `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `bake_space_transform=False`.
+- Material generated MID is restored after FBX mesh assignment.
+- Phase 10J tests updated for current temp import lifecycle architecture (18/18 PASS).
+
+### Fixed
+- Fixed UE 5.7.4 FBX reimport meter-size regression — no longer uses reimport-over-existing path.
+- Fixed material sync losing generated MID after FBX mesh refresh.
+- Fixed scale invariant regressions — actor/component scale preserved at 1.
+
 ## [0.2.4] - 2026-06-10
 
 ### Added
