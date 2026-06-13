@@ -748,6 +748,30 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  TexMatApplyReq:      %d"),
+        TextureMaterialApplyRequests);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TexMatApplySucceed:  %d"),
+        TextureMaterialApplySucceeded);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TexMatApplySkip:     %d"),
+        TextureMaterialApplySkipped);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TexMatApplyFail:     %d"),
+        TextureMaterialApplyFailed);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  MatAssignments:      %d"),
         MaterialAssignmentsSucceeded);
 
@@ -1509,6 +1533,11 @@ ConsoleReset()
     TextureResolveSkipped = 0;
     TextureImportFailed = 0;
     TextureImportCache.Empty();
+
+    TextureMaterialApplyRequests = 0;
+    TextureMaterialApplySucceeded = 0;
+    TextureMaterialApplySkipped = 0;
+    TextureMaterialApplyFailed = 0;
 
     PendingMeshReassembly.Empty();
     MeshChunksReceived = 0;

@@ -12020,6 +12020,9 @@ ParseAndApplyGeneratedMaterial(
         if (!MID)
             continue;
 
+        // Phase 10K.3: apply imported textures to generated MID
+        ApplyImportedTexturesToGeneratedMID(Guid, SlotIdx, MID);
+
         SMC->SetMaterial(SlotIdx, MID);
         AppliedCount++;
 
@@ -12190,6 +12193,132 @@ ImportTexturesFromMtexRecs(
     (void)Guid;
     (void)TexMaps;
 #endif
+}
+
+
+// =========================================================
+// PHASE 10K.3 — APPLY IMPORTED TEXTURES TO GENERATED MID
+// =========================================================
+
+bool UUELiveSyncSubsystem::
+ApplyImportedTexturesToGeneratedMID(
+    const FGuid& Guid,
+    int32 SlotIndex,
+    UMaterialInstanceDynamic* MID)
+{
+    CHECK_GAME_THREAD();
+
+    if (!MID)
+    {
+        return false;
+    }
+
+    const FString GuidStr = Guid.ToString(EGuidFormats::Digits);
+    TextureMaterialApplyRequests++;
+
+    const TArray<FMaterialTextureMapRef>* TexMaps = MaterialTextureMapCache.Find(Guid);
+    if (!TexMaps || TexMaps->Num() == 0)
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MAT][TEX_SKIP] guid=%s slot=%d reason=no_mtex_records"),
+            *GuidStr, SlotIndex);
+        TextureMaterialApplySkipped++;
+        return false;
+    }
+
+    int32 AppliedCount = 0;
+
+    for (const FMaterialTextureMapRef& TexRef : *TexMaps)
+    {
+        if (TexRef.SlotIndex != SlotIndex)
+            continue;
+
+        TSoftObjectPtr<UTexture2D>* CachedTexture = TextureImportCache.Find(TexRef.Path);
+        if (!CachedTexture || !CachedTexture->IsValid())
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MAT][TEX_SKIP] guid=%s slot=%d channel=%u reason=no_imported_texture"),
+                *GuidStr, SlotIndex, TexRef.Channel);
+            TextureMaterialApplySkipped++;
+            continue;
+        }
+
+        UTexture2D* Texture = CachedTexture->Get();
+        if (!Texture)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MAT][TEX_SKIP] guid=%s slot=%d channel=%u reason=texture_not_loaded"),
+                *GuidStr, SlotIndex, TexRef.Channel);
+            TextureMaterialApplySkipped++;
+            continue;
+        }
+
+        FString ParamName;
+        FString ChannelName;
+        bool bValidChannel = true;
+
+        switch (static_cast<EMTEXChannel>(TexRef.Channel))
+        {
+        case EMTEXChannel::BaseColor:
+            ParamName = TEXT("BaseColorTexture");
+            ChannelName = TEXT("BaseColor");
+            break;
+        case EMTEXChannel::Roughness:
+            ParamName = TEXT("RoughnessTexture");
+            ChannelName = TEXT("Roughness");
+            break;
+        case EMTEXChannel::Metallic:
+            ParamName = TEXT("MetallicTexture");
+            ChannelName = TEXT("Metallic");
+            break;
+        case EMTEXChannel::Alpha:
+            ParamName = TEXT("AlphaTexture");
+            ChannelName = TEXT("Alpha");
+            break;
+        case EMTEXChannel::Normal:
+            ParamName = TEXT("NormalTexture");
+            ChannelName = TEXT("Normal");
+            break;
+        default:
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MAT][TEX_SKIP] guid=%s slot=%d channel=%u reason=unsupported_channel"),
+                *GuidStr, SlotIndex, TexRef.Channel);
+            bValidChannel = false;
+            break;
+        }
+
+        if (!bValidChannel)
+        {
+            TextureMaterialApplySkipped++;
+            continue;
+        }
+
+        MID->SetTextureParameterValue(*ParamName, Texture);
+        AppliedCount++;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MAT][TEX_APPLY] guid=%s slot=%d channel=%s texture=%s param=%s"),
+            *GuidStr, SlotIndex, *ChannelName,
+            *TexRef.ImageName, *ParamName);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MAT][TEX_PARAM] guid=%s slot=%d param=%s value=%s"),
+            *GuidStr, SlotIndex, *ParamName, *TexRef.ImageName);
+    }
+
+    if (AppliedCount > 0)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MAT][TEX_WARN] guid=%s "
+                 "reason=parent_material_may_not_use_texture_params "
+                 "parent=/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"),
+            *GuidStr);
+
+        TextureMaterialApplySucceeded++;
+        return true;
+    }
+
+    return false;
 }
 
 

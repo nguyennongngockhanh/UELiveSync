@@ -436,6 +436,16 @@ private:
         const FGuid& Guid,
         const TArray<FMaterialTextureMapRef>& TexMaps);
 
+    /** Phase 10K.3: apply imported/cached MTEX textures to a
+     *  generated material MID. Looks up MaterialTextureMapCache
+     *  and TextureImportCache for the given GUID + SlotIndex.
+     *  Sets texture parameters on the MID. Logs per-channel.
+     */
+    bool ApplyImportedTexturesToGeneratedMID(
+        const FGuid& Guid,
+        int32 SlotIndex,
+        class UMaterialInstanceDynamic* MID);
+
     // =====================================================
     // MESH CHUNK REASSEMBLY (Phase 7C Stage 1B/1C)
     // =====================================================
@@ -813,6 +823,12 @@ private:
 
     // Path → imported texture cache (Phase 10K.2)
     TMap<FString, TSoftObjectPtr<UTexture2D>> TextureImportCache;
+
+    // Phase 10K.3: texture material apply counters
+    int32 TextureMaterialApplyRequests = 0;
+    int32 TextureMaterialApplySucceeded = 0;
+    int32 TextureMaterialApplySkipped = 0;
+    int32 TextureMaterialApplyFailed = 0;
 
     // =====================================================
     // FBX AUTHORITY (Phase 10J.5E)
