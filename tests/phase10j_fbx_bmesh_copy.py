@@ -105,13 +105,17 @@ if not func_body:
 else:
     check("use_selection=True", "use_selection=True" in func_body)
 
-# --- Test 5: export_scene.fbx bake_space_transform=True ---
-print("\nTest 5: export_scene.fbx bake_space_transform=True")
+# --- Test 5: export_scene.fbx bake_space_transform=False with global_scale=1.0 ---
+print("\nTest 5: export_scene.fbx bake_space_transform=False, global_scale=1.0")
 if not func_body:
-    check("bake_space_transform=True", False, "Function body not found")
+    check("bake_space_transform=False", False, "Function body not found")
 else:
-    check("bake_space_transform=True",
-          "bake_space_transform=True" in func_body)
+    check("bake_space_transform=False",
+          "bake_space_transform=False" in func_body)
+    check("global_scale=1.0",
+          "global_scale=1.0" in func_body)
+    check("apply_scale_options='FBX_SCALE_UNITS'",
+          "apply_scale_options='FBX_SCALE_UNITS'" in func_body)
 
 # --- Test 6: FBXImportRequest serialization unchanged ---
 print("\nTest 6: FBXImportRequest serialization unchanged")

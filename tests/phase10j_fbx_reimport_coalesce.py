@@ -144,12 +144,19 @@ def main():
     # =========================================================
     has_refresh_on_skip = "RefreshFBXStaticMeshComponent(SMC," in content
     has_find_actor = "Context.FindActor(Request.ObjectGUID)" in content
-    has_sma_cast = "Cast<AStaticMeshActor>(ExistingActor)" in content
+    has_sma_cast = "Cast<AStaticMeshActor>(CoalesceCheckActor)" in content
     has_onactorcached = "Context.OnActorCached(Request.ObjectGUID, SMA)" in content
+    has_temp_import_assign = "[FBX][TEMP_ASSIGN]" in content
+    has_temp_import_cleanup = "[FBX][TEMP_CLEANUP]" in content
     check(
         has_refresh_on_skip and has_find_actor and has_sma_cast and has_onactorcached,
-        "T6: Skip path calls RefreshFBXStaticMeshComponent and OnActorCached on existing actor",
+        "T6: Skip path calls RefreshFBXStaticMeshComponent and OnActorCached on CoalesceCheckActor",
         f"refresh={has_refresh_on_skip} find={has_find_actor} cast={has_sma_cast} onactor={has_onactorcached}",
+    )
+    check(
+        has_temp_import_assign and has_temp_import_cleanup,
+        "T6b: Non-skip import path uses TEMP_ASSIGN and TEMP_CLEANUP lifecycle",
+        f"temp_assign={has_temp_import_assign} temp_cleanup={has_temp_import_cleanup}",
     )
 
     # =========================================================

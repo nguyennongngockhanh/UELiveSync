@@ -104,14 +104,26 @@ t("FBXAuthoritativeGuids.Contains(Guid)" in subsystem_src,
 t("skip_pt_mesh_fbx_authoritative" in subsystem_src,
   "T6: [MESH][AUTH] skip_pt_mesh_fbx_authoritative log marker present")
 
-t("skip_chunk_fbx_authoritative" in subsystem_src,
-  "T6b: [MESH][AUTH] skip_chunk_fbx_authoritative log marker present (HandleMeshChunk)")
-
-t("skip_v1_chunk_fbx_authoritative" in subsystem_src,
-  "T6c: [MESH][AUTH] skip_v1_chunk_fbx_authoritative log marker present (V1 path)")
-
 t("skip_v1_pt_mesh_fbx_authoritative" in subsystem_src,
-  "T6d: [MESH][AUTH] skip_v1_pt_mesh_fbx_authoritative log marker present (V1 Build)")
+  "T6b: [MESH][AUTH] skip_v1_pt_mesh_fbx_authoritative log marker present (V1 Build)")
+
+# =========================================================
+# T6c: skip_pt_mesh_fbx_pending log marker exists (pending rejection).
+# =========================================================
+t("skip_pt_mesh_fbx_pending" in subsystem_src,
+  "T6c: [MESH][AUTH] skip_pt_mesh_fbx_pending log marker present")
+
+# =========================================================
+# T6d: FBXPendingGuids declared in header.
+# =========================================================
+t("FBXPendingGuids" in header_src and "TSet<FGuid>" in header_src,
+  "T6d: FBXPendingGuids TSet declared in UELiveSyncSubsystem.h")
+
+# =========================================================
+# T6e: FBX handler adds FBXPendingGuids before import.
+# =========================================================
+t("FBXPendingGuids.Add(" in subsystem_src,
+  "T6e: FBXPendingGuids.Add(FbxRequestGuid) before import")
 
 # =========================================================
 # T7: PT_Mesh skip path does not update ActorCache away from LS_FBX actor.

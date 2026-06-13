@@ -219,9 +219,9 @@ def main():
     tc = "[FBX][MANUAL_REPAIR]" in sub_cpp
     check(tc, "TC: [FBX][MANUAL_REPAIR] log tag exists", f"found={tc}")
 
-    # MESH_AUTH_WARN exists
-    td = "[MESH][AUTH_WARN]" in sub_cpp
-    check(td, "TD: [MESH][AUTH_WARN] log tag exists", f"found={td}")
+    # SCALE_INVARIANT diagnostic exists (replaces old AUTH_WARN)
+    td = "[FBX][SCALE_INVARIANT]" in imp
+    check(td, "TD: [FBX][SCALE_INVARIANT] diagnostic exists", f"found={td}")
 
     # VIS_WARN detects hidden_ed
     te = "hidden_ed" in imp
@@ -245,22 +245,22 @@ def main():
     check(ti, "TI: Zero-bounds repair (UpdateBounds + MarkRenderStateDirty on zero bounds)", f"zero_bounds_repair={ti}")
 
     # =========================================================
-    # Phase 10J.5D.6: Unit-scale guard diagnostics
+    # Phase 10J.5Q+ Temp import lifecycle diagnostics
     # =========================================================
 
-    # UNIT_FIX log tag exists
-    tj = "[FBX][UNIT_FIX]" in imp
-    check(tj, "TJ: [FBX][UNIT_FIX] log tag exists", f"found={tj}")
+    # TEMP_IMPORT log tag exists (replaces old UNIT_FIX)
+    tj = "[FBX][TEMP_IMPORT]" in imp
+    check(tj, "TJ: [FBX][TEMP_IMPORT] log tag exists", f"found={tj}")
 
-    # UNIT_OK log tag exists
-    tk = "[FBX][UNIT_OK]" in imp
-    check(tk, "TK: [FBX][UNIT_OK] log tag exists", f"found={tk}")
+    # TEMP_ASSIGN log tag exists (replaces old UNIT_OK)
+    tk = "[FBX][TEMP_ASSIGN]" in imp
+    check(tk, "TK: [FBX][TEMP_ASSIGN] log tag exists", f"found={tk}")
 
-    # UNIT_CHECK log tag exists
-    tl1 = "[FBX][UNIT_CHECK]" in imp
-    check(tl1, "TL1: [FBX][UNIT_CHECK] log tag exists", f"found={tl1}")
+    # TEMP_CLEANUP log tag exists (replaces old UNIT_CHECK)
+    tl1 = "[FBX][TEMP_CLEANUP]" in imp
+    check(tl1, "TL1: [FBX][TEMP_CLEANUP] log tag exists", f"found={tl1}")
 
-    # UNIT_WARN log tag exists
+    # UNIT_WARN log tag exists (still valid diagnostic)
     tl = "[FBX][UNIT_WARN]" in imp
     check(tl, "TL: [FBX][UNIT_WARN] log tag exists", f"found={tl}")
 
@@ -300,12 +300,28 @@ def main():
     tu = "IsValidFBXBoundsExtent" in imp
     check(tu, "TU: IsValidFBXBoundsExtent helper exists", f"found={tu}")
 
+    # TEMP_KEEP_PREVIOUS log tag exists
+    tv = "[FBX][TEMP_KEEP_PREVIOUS]" in imp
+    check(tv, "TV: [FBX][TEMP_KEEP_PREVIOUS] log tag exists", f"found={tv}")
+
+    # TEMP_DELETE_FAIL log tag exists
+    tw = "[FBX][TEMP_DELETE_FAIL]" in imp
+    check(tw, "TW: [FBX][TEMP_DELETE_FAIL] log tag exists", f"found={tw}")
+
+    # UNIT_INVALID log tag exists (reject invalid imports)
+    tx = "[FBX][UNIT_INVALID]" in imp
+    check(tx, "TX: [FBX][UNIT_INVALID] log tag exists", f"found={tx}")
+
+    # MAT_MESH_STABILITY log tag exists (material sync mesh safety)
+    ty = "[MAT][MESH_STABILITY]" in sub_cpp
+    check(ty, "TY: [MAT][MESH_STABILITY] log tag exists", f"found={ty}")
+
     # =========================================================
     # SUMMARY
     # =========================================================
     total = PASS + FAIL
     print(f"\n{'='*60}")
-    print(f"Phase 10J.5D.5+6 Intermittent Visibility Repair + Unit-Scale Guard Tests")
+    print(f"Phase 10J.5D.5+5Q Intermittent Visibility + Temp Import Lifecycle Tests")
     print(f"{'='*60}")
     print(f"Total: {total}  Passed: {PASS}  Failed: {FAIL}")
     if FAIL > 0:
