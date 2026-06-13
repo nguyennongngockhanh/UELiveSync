@@ -942,7 +942,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         )
                         sync._last_geometry_version[guid_hex] = auto_sync_hash
                         print(f"[FBX][AUTO_SYNC_BLOCK] guid={guid_hex[:8]} "
-                              f"autoSyncHash=0x{auto_sync_hash:x} reason=fbx_authoritative")
+                              f"autoSyncHash=0x{auto_sync_hash} reason=fbx_authoritative")
                 except Exception as _hash_exc:
                     print(f"[FBX][AUTO_SYNC_BLOCK] guid={guid_hex[:8]} "
                           f"failed_to_compute_hash: {_hash_exc}")

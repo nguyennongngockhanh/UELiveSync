@@ -56,6 +56,13 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Tracks/MovieSceneBoolTrack.h"
 #include "Sections/MovieSceneBoolSection.h"
 
+// Phase 10K.4: master material creation
+#include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialExpressionVectorParameter.h"
+#include "Materials/MaterialExpressionScalarParameter.h"
+#include "Materials/MaterialExpressionLinearInterpolate.h"
+#include "UObject/SavePackage.h"
+
 #endif
 
 #include "FBXImport/LiveSyncFBXImporter.h"
@@ -11923,14 +11930,12 @@ GetOrCreateGeneratedMID(
         return MID;
     }
 
-    // Load base material
-    static const FSoftObjectPath BaseMatPath(
-        TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-    UMaterialInterface* BaseMat = Cast<UMaterialInterface>(BaseMatPath.TryLoad());
+    // Phase 10K.4: try to use LiveSync master material
+    UMaterialInterface* BaseMat = GetOrCreateLiveSyncMasterMaterial();
     if (!BaseMat)
     {
         UE_LOG(LogLiveSync, Warning,
-            TEXT("[MATERIAL] Failed to load BasicShapeMaterial for generated MID"));
+            TEXT("[MATERIAL] Failed to get master material for generated MID"));
         return nullptr;
     }
 
@@ -11946,6 +11951,12 @@ GetOrCreateGeneratedMID(
     // Phase 10J.5L: name the MID clearly for UE material list visibility
     const FString GuidShort = Guid.ToString(EGuidFormats::Short);
     MID->Rename(*FString::Printf(TEXT("MID_UELiveSync_%s_%d"), *GuidShort, SlotIndex), this);
+
+    // Phase 10K.4: log parent material
+    FString ParentMatName = BaseMat ? BaseMat->GetPathName() : TEXT("null");
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MAT][GEN_PARENT] guid=%s slot=%d parent=%s"),
+        *Guid.ToString(EGuidFormats::Digits), SlotIndex, *ParentMatName);
 
     MID->SetVectorParameterValue(FName("Base Color"), Props.BaseColor);
     MID->SetVectorParameterValue(FName("BaseColor"), Props.BaseColor);
@@ -12308,11 +12319,23 @@ ApplyImportedTexturesToGeneratedMID(
 
     if (AppliedCount > 0)
     {
+        // Log parent material for texture param visibility assessment
+        FString ParentPath = TEXT("unknown");
+        if (MID && MID->Parent)
+        {
+            ParentPath = MID->Parent->GetPathName();
+            if (ParentPath.Contains(TEXT("BasicShapeMaterial")))
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MAT][TEX_WARN] guid=%s "
+                         "reason=parent_material_may_not_use_texture_params "
+                         "parent=%s"),
+                    *GuidStr, *ParentPath);
+            }
+        }
         UE_LOG(LogLiveSync, Log,
-            TEXT("[MAT][TEX_WARN] guid=%s "
-                 "reason=parent_material_may_not_use_texture_params "
-                 "parent=/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"),
-            *GuidStr);
+            TEXT("[MAT][TEX_PARENT] guid=%s parent=%s"),
+            *GuidStr, *ParentPath);
 
         TextureMaterialApplySucceeded++;
         return true;
@@ -12320,6 +12343,327 @@ ApplyImportedTexturesToGeneratedMID(
 
     return false;
 }
+
+
+// =========================================================
+// PHASE 10K.4 — GET OR CREATE LIVESYNC MASTER MATERIAL
+// =========================================================
+
+UMaterialInterface* UUELiveSyncSubsystem::
+GetOrCreateLiveSyncMasterMaterial()
+{
+    static const FSoftObjectPath MasterMatPath(
+        TEXT("/Game/UELiveSync/Materials/M_UELiveSync_Master.M_UELiveSync_Master"));
+
+    UMaterialInterface* Existing = Cast<UMaterialInterface>(MasterMatPath.TryLoad());
+    if (Existing)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MAT][MASTER] action=load_existing "
+                 "path=/Game/UELiveSync/Materials/M_UELiveSync_Master"));
+        return Existing;
+    }
+
+    MasterMaterialCreationAttempted++;
+
+#if WITH_EDITOR
+    UMaterial* NewMat = CreateLiveSyncMasterMaterialAsset();
+    if (NewMat)
+    {
+        MasterMaterialCreated++;
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MAT][MASTER] action=create "
+                 "path=/Game/UELiveSync/Materials/M_UELiveSync_Master"));
+        return NewMat;
+    }
+#endif
+
+    MasterMaterialFallback++;
+    UE_LOG(LogLiveSync, Warning,
+        TEXT("[MAT][MASTER_WARN] reason=master_material_missing "
+             "fallback=BasicShapeMaterial"));
+
+    static const FSoftObjectPath BaseMatPath(
+        TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+    return Cast<UMaterialInterface>(BaseMatPath.TryLoad());
+}
+
+
+#if WITH_EDITOR
+// =========================================================
+// PHASE 10K.4 — CREATE LIVESYNC MASTER MATERIAL ASSET
+// =========================================================
+
+static UMaterialExpression* CreateMasterExpression(
+    UMaterial* Material,
+    TSubclassOf<UMaterialExpression> Class,
+    int32 PosX,
+    int32 PosY,
+    const TCHAR* NodeComment)
+{
+    UMaterialExpression* Expr = NewObject<UMaterialExpression>(Material, Class, NAME_None, RF_Transactional);
+    if (Expr)
+    {
+        Expr->Material = Material;
+        Expr->MaterialExpressionEditorX = PosX;
+        Expr->MaterialExpressionEditorY = PosY;
+        if (NodeComment)
+        {
+            Expr->Desc = NodeComment;
+        }
+        Material->GetExpressionCollection().AddExpression(Expr);
+    }
+    return Expr;
+}
+
+static UMaterialExpressionTextureSampleParameter2D* CreateMasterTexParam(
+    UMaterial* Material,
+    const FName& ParamName,
+    int32 PosX,
+    int32& InOutPosY)
+{
+    UMaterialExpressionTextureSampleParameter2D* Expr =
+        Cast<UMaterialExpressionTextureSampleParameter2D>(
+            CreateMasterExpression(Material,
+                UMaterialExpressionTextureSampleParameter2D::StaticClass(),
+                PosX, InOutPosY, nullptr));
+    if (Expr)
+    {
+        Expr->ParameterName = ParamName;
+    }
+    InOutPosY += 220;
+    return Expr;
+}
+
+static UMaterialExpressionVectorParameter* CreateMasterVecParam(
+    UMaterial* Material,
+    const FName& ParamName,
+    const FLinearColor& DefaultValue,
+    int32 PosX,
+    int32& InOutPosY)
+{
+    UMaterialExpressionVectorParameter* Expr =
+        Cast<UMaterialExpressionVectorParameter>(
+            CreateMasterExpression(Material,
+                UMaterialExpressionVectorParameter::StaticClass(),
+                PosX, InOutPosY, nullptr));
+    if (Expr)
+    {
+        Expr->ParameterName = ParamName;
+        Expr->DefaultValue = DefaultValue;
+    }
+    InOutPosY += 220;
+    return Expr;
+}
+
+static UMaterialExpressionScalarParameter* CreateMasterScalarParam(
+    UMaterial* Material,
+    const FName& ParamName,
+    float DefaultValue,
+    int32 PosX,
+    int32& InOutPosY)
+{
+    UMaterialExpressionScalarParameter* Expr =
+        Cast<UMaterialExpressionScalarParameter>(
+            CreateMasterExpression(Material,
+                UMaterialExpressionScalarParameter::StaticClass(),
+                PosX, InOutPosY, nullptr));
+    if (Expr)
+    {
+        Expr->ParameterName = ParamName;
+        Expr->DefaultValue = DefaultValue;
+    }
+    InOutPosY += 220;
+    return Expr;
+}
+
+static UMaterialExpressionLinearInterpolate* CreateMasterLerp(
+    UMaterial* Material,
+    int32 PosX,
+    int32& InOutPosY)
+{
+    UMaterialExpressionLinearInterpolate* Expr =
+        Cast<UMaterialExpressionLinearInterpolate>(
+            CreateMasterExpression(Material,
+                UMaterialExpressionLinearInterpolate::StaticClass(),
+                PosX, InOutPosY, nullptr));
+    InOutPosY += 220;
+    return Expr;
+}
+
+UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
+{
+    const FString PackagePath = TEXT("/Game/UELiveSync/Materials/M_UELiveSync_Master");
+    UPackage* Package = CreatePackage(*PackagePath);
+    if (!Package)
+    {
+        UE_LOG(LogLiveSync, Warning, TEXT("[MAT][MASTER_WARN] reason=create_package_failed"));
+        return nullptr;
+    }
+
+    UMaterial* Material = NewObject<UMaterial>(
+        Package,
+        FName(TEXT("M_UELiveSync_Master")),
+        RF_Public | RF_Standalone | RF_MarkAsRootSet);
+    if (!Material)
+    {
+        UE_LOG(LogLiveSync, Warning, TEXT("[MAT][MASTER_WARN] reason=create_material_failed"));
+        return nullptr;
+    }
+
+    const int32 ParamX = -800;
+    const int32 LerpX = -300;
+    int32 Y = 0;
+
+    // =====================================================
+    // CHANNEL: BaseColor
+    // =====================================================
+    UMaterialExpressionVectorParameter* BaseColorParam = CreateMasterVecParam(
+        Material, FName(TEXT("BaseColor")),
+        FLinearColor(0.8f, 0.8f, 0.8f, 1.0f), ParamX, Y);
+
+    UMaterialExpressionTextureSampleParameter2D* BaseColorTex = CreateMasterTexParam(
+        Material, FName(TEXT("BaseColorTexture")), ParamX, Y);
+
+    UMaterialExpressionScalarParameter* UseBaseColor = CreateMasterScalarParam(
+        Material, FName(TEXT("UseBaseColorTexture")), 0.0f, ParamX, Y);
+
+    UMaterialExpressionLinearInterpolate* BaseLerp = CreateMasterLerp(Material, LerpX, Y);
+    if (BaseLerp && BaseColorParam && BaseColorTex && UseBaseColor)
+    {
+        BaseLerp->A.Expression = BaseColorParam;
+        BaseLerp->A.OutputIndex = 0;
+        BaseLerp->B.Expression = BaseColorTex;
+        BaseLerp->B.OutputIndex = 0;
+        BaseLerp->Alpha.Expression = UseBaseColor;
+        BaseLerp->Alpha.OutputIndex = 0;
+
+        {
+            FExpressionInput* Input = Material->GetExpressionInputForProperty(EMaterialProperty::MP_BaseColor);
+            if (Input)
+            {
+                Input->Expression = BaseLerp;
+                Input->OutputIndex = 0;
+            }
+        }
+    }
+
+    // =====================================================
+    // CHANNEL: Roughness
+    // =====================================================
+    UMaterialExpressionScalarParameter* RoughnessParam = CreateMasterScalarParam(
+        Material, FName(TEXT("Roughness")), 0.5f, ParamX, Y);
+
+    UMaterialExpressionTextureSampleParameter2D* RoughnessTex = CreateMasterTexParam(
+        Material, FName(TEXT("RoughnessTexture")), ParamX, Y);
+
+    UMaterialExpressionScalarParameter* UseRoughness = CreateMasterScalarParam(
+        Material, FName(TEXT("UseRoughnessTexture")), 0.0f, ParamX, Y);
+
+    UMaterialExpressionLinearInterpolate* RoughLerp = CreateMasterLerp(Material, LerpX, Y);
+    if (RoughLerp && RoughnessParam && RoughnessTex && UseRoughness)
+    {
+        RoughLerp->A.Expression = RoughnessParam;
+        RoughLerp->A.OutputIndex = 0;
+        RoughLerp->B.Expression = RoughnessTex;
+        RoughLerp->B.OutputIndex = 0;
+        RoughLerp->Alpha.Expression = UseRoughness;
+        RoughLerp->Alpha.OutputIndex = 0;
+
+        {
+            FExpressionInput* Input = Material->GetExpressionInputForProperty(EMaterialProperty::MP_Roughness);
+            if (Input)
+            {
+                Input->Expression = RoughLerp;
+                Input->OutputIndex = 0;
+            }
+        }
+    }
+
+    // =====================================================
+    // CHANNEL: Metallic
+    // =====================================================
+    UMaterialExpressionScalarParameter* MetallicParam = CreateMasterScalarParam(
+        Material, FName(TEXT("Metallic")), 0.0f, ParamX, Y);
+
+    UMaterialExpressionTextureSampleParameter2D* MetallicTex = CreateMasterTexParam(
+        Material, FName(TEXT("MetallicTexture")), ParamX, Y);
+
+    UMaterialExpressionScalarParameter* UseMetallic = CreateMasterScalarParam(
+        Material, FName(TEXT("UseMetallicTexture")), 0.0f, ParamX, Y);
+
+    UMaterialExpressionLinearInterpolate* MetalLerp = CreateMasterLerp(Material, LerpX, Y);
+    if (MetalLerp && MetallicParam && MetallicTex && UseMetallic)
+    {
+        MetalLerp->A.Expression = MetallicParam;
+        MetalLerp->A.OutputIndex = 0;
+        MetalLerp->B.Expression = MetallicTex;
+        MetalLerp->B.OutputIndex = 0;
+        MetalLerp->Alpha.Expression = UseMetallic;
+        MetalLerp->Alpha.OutputIndex = 0;
+
+        {
+            FExpressionInput* Input = Material->GetExpressionInputForProperty(EMaterialProperty::MP_Metallic);
+            if (Input)
+            {
+                Input->Expression = MetalLerp;
+                Input->OutputIndex = 0;
+            }
+        }
+    }
+
+    // =====================================================
+    // CHANNEL: Alpha (opaque default, parameter kept)
+    // =====================================================
+    CreateMasterScalarParam(Material, FName(TEXT("Alpha")), 1.0f, ParamX, Y);
+    CreateMasterTexParam(Material, FName(TEXT("AlphaTexture")), ParamX, Y);
+    CreateMasterScalarParam(Material, FName(TEXT("UseAlphaTexture")), 0.0f, ParamX, Y);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MAT][MASTER] deferred=Alpha reason=opaque_blend_mode "
+             "param_alpha_kept_for_future_use"));
+
+    // =====================================================
+    // CHANNEL: Normal (deferred)
+    // =====================================================
+    CreateMasterTexParam(Material, FName(TEXT("NormalTexture")), ParamX, Y);
+    CreateMasterScalarParam(Material, FName(TEXT("UseNormalTexture")), 0.0f, ParamX, Y);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MAT][MASTER] deferred=Normal reason=normal_transform_required "
+             "param_normal_kept_for_future_use"));
+
+    // =====================================================
+    // Material properties
+    // =====================================================
+    Material->BlendMode = EBlendMode::BLEND_Opaque;
+    Material->SetShadingModel(EMaterialShadingModel::MSM_DefaultLit);
+    Material->TwoSided = false;
+
+    // Compile material
+    Material->PostEditChange();
+    Material->MarkPackageDirty();
+
+    // Save the asset so it persists across restarts
+    FString FilePath = FPackageName::LongPackageNameToFilename(
+        PackagePath, FPackageName::GetAssetPackageExtension());
+    if (!FilePath.IsEmpty())
+    {
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Standalone;
+        SaveArgs.SaveFlags = SAVE_NoError;
+        UPackage::SavePackage(Package, nullptr, *FilePath, SaveArgs);
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MAT][MASTER] create_complete "
+             "path=/Game/UELiveSync/Materials/M_UELiveSync_Master "
+             "expressions=%d tex_params=BaseColorTexture,RoughnessTexture,MetallicTexture"),
+        Material->GetExpressions().Num());
+
+    return Material;
+}
+#endif
 
 
 // =========================================================

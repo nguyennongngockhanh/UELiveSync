@@ -772,6 +772,24 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  MasterMatAttempt:    %d"),
+        MasterMaterialCreationAttempted);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MasterMatCreated:    %d"),
+        MasterMaterialCreated);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MasterMatFallback:   %d"),
+        MasterMaterialFallback);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  MatAssignments:      %d"),
         MaterialAssignmentsSucceeded);
 
@@ -1538,6 +1556,10 @@ ConsoleReset()
     TextureMaterialApplySucceeded = 0;
     TextureMaterialApplySkipped = 0;
     TextureMaterialApplyFailed = 0;
+
+    MasterMaterialCreationAttempted = 0;
+    MasterMaterialCreated = 0;
+    MasterMaterialFallback = 0;
 
     PendingMeshReassembly.Empty();
     MeshChunksReceived = 0;

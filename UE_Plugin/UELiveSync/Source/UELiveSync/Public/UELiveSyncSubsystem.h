@@ -446,6 +446,21 @@ private:
         int32 SlotIndex,
         class UMaterialInstanceDynamic* MID);
 
+    /** Phase 10K.4: Get or create the LiveSync master material.
+     *  Tries to load /Game/UELiveSync/Materials/M_UELiveSync_Master.
+     *  If missing and WITH_EDITOR, creates programmatically.
+     *  Falls back to BasicShapeMaterial on failure.
+     */
+    UMaterialInterface* GetOrCreateLiveSyncMasterMaterial();
+
+#if WITH_EDITOR
+    /** Phase 10K.4: Create the LiveSync master material asset
+     *  programmatically with texture parameters, scalar toggles,
+     *  and fallback vector/scalar parameters. Editor-only.
+     */
+    UMaterial* CreateLiveSyncMasterMaterialAsset();
+#endif
+
     // =====================================================
     // MESH CHUNK REASSEMBLY (Phase 7C Stage 1B/1C)
     // =====================================================
@@ -829,6 +844,11 @@ private:
     int32 TextureMaterialApplySucceeded = 0;
     int32 TextureMaterialApplySkipped = 0;
     int32 TextureMaterialApplyFailed = 0;
+
+    // Phase 10K.4: master material counters
+    int32 MasterMaterialCreationAttempted = 0;
+    int32 MasterMaterialCreated = 0;
+    int32 MasterMaterialFallback = 0;
 
     // =====================================================
     // FBX AUTHORITY (Phase 10J.5E)
