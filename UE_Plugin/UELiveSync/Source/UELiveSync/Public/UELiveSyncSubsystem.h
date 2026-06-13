@@ -19,6 +19,7 @@
 
 class FSocket;
 class ULevelSequence;
+class UTexture2D;
 
 class FRunnableThread;
 
@@ -425,6 +426,16 @@ private:
         const FGuid& Guid,
         int32 SlotIndex) const;
 
+    /** Phase 10K.2: import textures from MTEX records.
+     *  Iterates TexMaps, checks cache/skip conditions, imports
+     *  UTexture2D under /Game/UELiveSync/Textures/, sets sRGB
+     *  policy per channel, populates TextureImportCache.
+     *  Does NOT apply textures to materials.
+     */
+    void ImportTexturesFromMtexRecs(
+        const FGuid& Guid,
+        const TArray<FMaterialTextureMapRef>& TexMaps);
+
     // =====================================================
     // MESH CHUNK REASSEMBLY (Phase 7C Stage 1B/1C)
     // =====================================================
@@ -792,6 +803,16 @@ private:
     int32 MtexRecordsParsed = 0;
     // Count of malformed MTEX blocks rejected
     int32 MtexMalformed = 0;
+
+    // Phase 10K.2: texture import counters
+    int32 TextureImportRequested = 0;
+    int32 TextureImportSkipped = 0;
+    int32 TextureCacheHit = 0;
+    int32 TextureResolveSkipped = 0;
+    int32 TextureImportFailed = 0;
+
+    // Path → imported texture cache (Phase 10K.2)
+    TMap<FString, TSoftObjectPtr<UTexture2D>> TextureImportCache;
 
     // =====================================================
     // FBX AUTHORITY (Phase 10J.5E)

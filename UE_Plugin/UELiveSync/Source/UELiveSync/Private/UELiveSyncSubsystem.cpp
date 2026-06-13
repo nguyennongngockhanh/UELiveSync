@@ -44,6 +44,9 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "LevelEditorViewport.h"
 #include "Camera/CameraActor.h"
 
+#include "Engine/Texture2D.h"
+#include "Misc/Paths.h"
+
 #include "LevelSequence.h"
 #include "MovieScene.h"
 #include "Tracks/MovieSceneCameraCutTrack.h"
@@ -78,6 +81,8 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Materials/MaterialInstanceDynamic.h"
 #include "ProceduralMeshComponent.h"
 #include "KismetProceduralMeshLibrary.h"
+
+#include "AssetToolsModule.h"
 
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
@@ -4156,6 +4161,14 @@ ProcessBinaryPacket(
                 MtexBlocksParsed++;
                 MtexRecordsParsed += TexMaps.Num();
             }
+
+#if WITH_EDITOR
+            // Phase 10K.2: import textures from discovered MTEX records
+            if (TexMaps.Num() > 0)
+            {
+                ImportTexturesFromMtexRecs(Guid, TexMaps);
+            }
+#endif
 
             // Apply generated material if we have basic properties
             for (const FMaterialSlotBasicProperties& BP : BasicProps)
@@ -12061,6 +12074,122 @@ ParseAndApplyGeneratedMaterial(
     }
 
     return false;
+}
+
+
+// =========================================================
+// PHASE 10K.2 — TEXTURE IMPORT FROM MTEX RECORDS
+// =========================================================
+
+void UUELiveSyncSubsystem::
+ImportTexturesFromMtexRecs(
+    const FGuid& Guid,
+    const TArray<FMaterialTextureMapRef>& TexMaps)
+{
+#if WITH_EDITOR
+    CHECK_GAME_THREAD();
+
+    IAssetTools& AssetTools = FAssetToolsModule::GetModule().Get();
+    const FString DestPath = TEXT("/Game/UELiveSync/Textures");
+    const FString GuidStr = Guid.ToString(EGuidFormats::Digits);
+
+    for (const FMaterialTextureMapRef& TexRef : TexMaps)
+    {
+        if (!TexRef.IsValid())
+        {
+            continue;
+        }
+
+        // Skip packed images — no file path to import
+        if (TexRef.Flags & MTEX_FLAG_IMAGE_PACKED)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=packed channel=%u"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel);
+            TextureImportSkipped++;
+            continue;
+        }
+
+        // Skip non-absolute or empty paths
+        if (!(TexRef.Flags & MTEX_FLAG_PATH_ABSOLUTE) || TexRef.Path.IsEmpty())
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=non_absolute_or_empty "
+                     "channel=%u path=%s"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel,
+                TexRef.Path.IsEmpty() ? TEXT("(empty)") : *TexRef.Path);
+            TextureImportSkipped++;
+            continue;
+        }
+
+        // Check file exists on disk
+        if (!FPaths::FileExists(TexRef.Path))
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=file_not_found "
+                     "channel=%u path=%s"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.Path);
+            TextureImportSkipped++;
+            continue;
+        }
+
+        // Check import cache
+        if (TextureImportCache.Contains(TexRef.Path))
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MTEX][TEX_CACHE_HIT] guid=%s slot=%d channel=%u path=%s"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.Path);
+            TextureCacheHit++;
+            TextureResolveSkipped++;
+            continue;
+        }
+
+        // Import texture
+        TextureImportRequested++;
+
+        TArray<FString> Files = { TexRef.Path };
+        TArray<UObject*> ImportedAssets = AssetTools.ImportAssets(Files, DestPath);
+
+        UTexture2D* Texture = nullptr;
+        if (ImportedAssets.Num() > 0)
+        {
+            Texture = Cast<UTexture2D>(ImportedAssets[0]);
+        }
+
+        if (Texture)
+        {
+            // Set sRGB per channel policy:
+            // BaseColor(1) → sRGB true; Roughness/Metallic/Alpha/Normal → sRGB false
+            const bool bSRGB = (TexRef.Channel == static_cast<uint8>(EMTEXChannel::BaseColor));
+            Texture->SRGB = bSRGB;
+            Texture->PostEditChange();
+
+            TextureImportCache.Add(TexRef.Path, Texture);
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MTEX][TEX_IMPORT] guid=%s slot=%d channel=%u "
+                     "path=%s sRGB=%d"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel,
+                *TexRef.Path, bSRGB ? 1 : 0);
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MTEX][TEX_FAIL] guid=%s slot=%d channel=%u "
+                     "reason=import_failed path=%s"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.Path);
+            TextureImportFailed++;
+            continue;
+        }
+
+        // Phase 10K.2: texture resolve (apply to material) is skipped
+        TextureResolveSkipped++;
+    }
+#else
+    // No-op in non-editor builds
+    (void)Guid;
+    (void)TexMaps;
+#endif
 }
 
 

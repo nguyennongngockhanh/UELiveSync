@@ -712,6 +712,42 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  TextureImportReq:    %d"),
+        TextureImportRequested);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TextureImportSkip:   %d"),
+        TextureImportSkipped);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TextureCacheHit:     %d"),
+        TextureCacheHit);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TextureResolveSkip:  %d"),
+        TextureResolveSkipped);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TextureImportFail:   %d"),
+        TextureImportFailed);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  TextureImportCache:  %d"),
+        TextureImportCache.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  MatAssignments:      %d"),
         MaterialAssignmentsSucceeded);
 
@@ -1467,6 +1503,12 @@ ConsoleReset()
     MtexBlocksParsed = 0;
     MtexRecordsParsed = 0;
     MtexMalformed = 0;
+    TextureImportRequested = 0;
+    TextureImportSkipped = 0;
+    TextureCacheHit = 0;
+    TextureResolveSkipped = 0;
+    TextureImportFailed = 0;
+    TextureImportCache.Empty();
 
     PendingMeshReassembly.Empty();
     MeshChunksReceived = 0;
