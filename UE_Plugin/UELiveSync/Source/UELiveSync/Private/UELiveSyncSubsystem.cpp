@@ -12147,6 +12147,31 @@ ImportTexturesFromMtexRecs(
             continue;
         }
 
+        // Phase 10K.5: validate supported texture extension
+        static const TArray<FString> SupportedExtensions = {
+            TEXT(".png"), TEXT(".jpg"), TEXT(".jpeg"),
+            TEXT(".tga"), TEXT(".bmp"),
+        };
+        const FString LowerPath = TexRef.Path.ToLower();
+        bool bSupportedExt = false;
+        for (const FString& Ext : SupportedExtensions)
+        {
+            if (LowerPath.EndsWith(Ext))
+            {
+                bSupportedExt = true;
+                break;
+            }
+        }
+        if (!bSupportedExt)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=unsupported_extension "
+                     "channel=%u path=%s"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.Path);
+            TextureImportSkipped++;
+            continue;
+        }
+
         // Check import cache
         if (TextureImportCache.Contains(TexRef.Path))
         {
@@ -12185,6 +12210,16 @@ ImportTexturesFromMtexRecs(
                      "path=%s sRGB=%d"),
                 *GuidStr, TexRef.SlotIndex, TexRef.Channel,
                 *TexRef.Path, bSRGB ? 1 : 0);
+
+            // Phase 10K.5: cache size diagnostic
+            const int32 CacheSize = TextureImportCache.Num();
+            if (CacheSize > 50)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MTEX][TEX_CACHE_WARN] size=%d exceeds_threshold=50 "
+                         "consider_resync_with_cache_reset"),
+                    CacheSize);
+            }
         }
         else
         {
@@ -12315,6 +12350,22 @@ ApplyImportedTexturesToGeneratedMID(
         UE_LOG(LogLiveSync, Log,
             TEXT("[MAT][TEX_PARAM] guid=%s slot=%d param=%s value=%s"),
             *GuidStr, SlotIndex, *ParamName, *TexRef.ImageName);
+
+        // Phase 10K.5: log deferred channel status for Alpha/Normal
+        if (static_cast<EMTEXChannel>(TexRef.Channel) == EMTEXChannel::Alpha)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MAT][TEX_WARN] guid=%s channel=Alpha "
+                     "reason=visual_deferred_blending_not_enabled_in_master"),
+                *GuidStr);
+        }
+        if (static_cast<EMTEXChannel>(TexRef.Channel) == EMTEXChannel::Normal)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MAT][TEX_WARN] guid=%s channel=Normal "
+                     "reason=visual_deferred_normal_transform_not_in_master"),
+                *GuidStr);
+        }
     }
 
     if (AppliedCount > 0)
