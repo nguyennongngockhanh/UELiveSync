@@ -688,6 +688,30 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  MaterialTexMapCache: %d"),
+        MaterialTextureMapCache.Num());
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MtexBlocksParsed:    %d"),
+        MtexBlocksParsed);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MtexRecordsParsed:   %d"),
+        MtexRecordsParsed);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MtexMalformed:       %d"),
+        MtexMalformed);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  MatAssignments:      %d"),
         MaterialAssignmentsSucceeded);
 
@@ -1439,6 +1463,10 @@ ConsoleReset()
     MaterialPathCache.Empty();
     MaterialDefsReceived = 0;
     MaterialAssignmentsSucceeded = 0;
+    MaterialTextureMapCache.Empty();
+    MtexBlocksParsed = 0;
+    MtexRecordsParsed = 0;
+    MtexMalformed = 0;
 
     PendingMeshReassembly.Empty();
     MeshChunksReceived = 0;

@@ -3999,6 +3999,164 @@ ProcessBinaryPacket(
                 }
             }
 
+            // Phase 10K.1: parse MTEX extension block (optional texture map references)
+            // Can appear after MATX or directly after identity block if MATX absent.
+            TArray<FMaterialTextureMapRef> TexMaps;
+            if (Ptr + (int32)sizeof(uint32) <= PacketEnd)
+            {
+                uint32 MtexMagic = 0;
+                FMemory::Memcpy(&MtexMagic, Ptr, sizeof(uint32));
+                if (MtexMagic == MTEX_MAGIC)
+                {
+                    int32 RemainingForMtex = PacketEnd - (Ptr + sizeof(uint32) + sizeof(uint8));
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MTEX][RECV] guid=%s hasMTEX=1 records=N remainingBytes=%d"),
+                        *Guid.ToString(EGuidFormats::Digits), RemainingForMtex);
+                    Ptr += sizeof(uint32);
+                    if (Ptr < PacketEnd)
+                    {
+                        uint8 MtexVersion = *Ptr; Ptr++;
+                        if (MtexVersion == MTEX_VERSION_CURRENT && Ptr < PacketEnd)
+                        {
+                            uint8 RecordCount = *Ptr; Ptr++;
+                            TexMaps.Reserve(RecordCount);
+                            for (uint8 ri = 0; ri < RecordCount; ri++)
+                            {
+                                if (Ptr + MTEX_RECORD_MIN_SIZE > PacketEnd)
+                                {
+                                    UE_LOG(LogLiveSync, Warning,
+                                        TEXT("[MTEX][MALFORMED] guid=%s reason=truncated_record "
+                                             "record=%u/%u remaining=%d"),
+                                        *Guid.ToString(EGuidFormats::Digits),
+                                        ri, RecordCount,
+                                        (int32)(PacketEnd - Ptr));
+                                    MtexMalformed++;
+                                    break;
+                                }
+
+                                FMaterialTextureMapRef TexRef;
+                                TexRef.SlotIndex = static_cast<int8>(*Ptr); Ptr += sizeof(uint8);
+                                TexRef.Channel = *Ptr; Ptr += sizeof(uint8);
+                                TexRef.Flags = *Ptr; Ptr += sizeof(uint8);
+
+                                uint16 PathLen = 0;
+                                FMemory::Memcpy(&PathLen, Ptr, sizeof(uint16)); Ptr += sizeof(uint16);
+
+                                // Clamp PathLen to safe bounds
+                                if (PathLen > MTEX_MAX_PATH_LEN)
+                                {
+                                    UE_LOG(LogLiveSync, Warning,
+                                        TEXT("[MTEX][MALFORMED] guid=%s reason=path_len=%u exceeds max=%d "
+                                             "record=%u/%u"),
+                                        *Guid.ToString(EGuidFormats::Digits),
+                                        PathLen, MTEX_MAX_PATH_LEN, ri, RecordCount);
+                                    MtexMalformed++;
+                                    PathLen = MTEX_MAX_PATH_LEN;
+                                }
+
+                                if (Ptr + PathLen > PacketEnd)
+                                {
+                                    UE_LOG(LogLiveSync, Warning,
+                                        TEXT("[MTEX][MALFORMED] guid=%s reason=path_exceeds_packet "
+                                             "record=%u/%u pathLen=%u remaining=%d"),
+                                        *Guid.ToString(EGuidFormats::Digits),
+                                        ri, RecordCount, PathLen,
+                                        (int32)(PacketEnd - Ptr));
+                                    MtexMalformed++;
+                                    break;
+                                }
+
+                                if (PathLen > 0)
+                                {
+                                    FUtf8String PathStr;
+                                    PathStr.Append(reinterpret_cast<const ANSICHAR*>(Ptr), PathLen);
+                                    TexRef.Path = UTF8_TO_TCHAR(PathStr.GetCharArray().GetData());
+                                    Ptr += PathLen;
+                                }
+
+                                if (Ptr >= PacketEnd)
+                                {
+                                    UE_LOG(LogLiveSync, Warning,
+                                        TEXT("[MTEX][MALFORMED] guid=%s reason=missing_imagename_len "
+                                             "record=%u/%u"),
+                                        *Guid.ToString(EGuidFormats::Digits), ri, RecordCount);
+                                    MtexMalformed++;
+                                    break;
+                                }
+
+                                uint8 NameLen = *Ptr; Ptr++;
+
+                                if (NameLen > MTEX_MAX_IMAGE_NAME_LEN)
+                                {
+                                    UE_LOG(LogLiveSync, Warning,
+                                        TEXT("[MTEX][MALFORMED] guid=%s reason=imagename_len=%u exceeds max=%d "
+                                             "record=%u/%u"),
+                                        *Guid.ToString(EGuidFormats::Digits),
+                                        NameLen, MTEX_MAX_IMAGE_NAME_LEN, ri, RecordCount);
+                                    MtexMalformed++;
+                                    NameLen = MTEX_MAX_IMAGE_NAME_LEN;
+                                }
+
+                                if (Ptr + NameLen > PacketEnd)
+                                {
+                                    UE_LOG(LogLiveSync, Warning,
+                                        TEXT("[MTEX][MALFORMED] guid=%s reason=imagename_exceeds_packet "
+                                             "record=%u/%u nameLen=%u remaining=%d"),
+                                        *Guid.ToString(EGuidFormats::Digits),
+                                        ri, RecordCount, NameLen,
+                                        (int32)(PacketEnd - Ptr));
+                                    MtexMalformed++;
+                                    break;
+                                }
+
+                                if (NameLen > 0)
+                                {
+                                    FUtf8String NameStr;
+                                    NameStr.Append(reinterpret_cast<const ANSICHAR*>(Ptr), NameLen);
+                                    TexRef.ImageName = UTF8_TO_TCHAR(NameStr.GetCharArray().GetData());
+                                    Ptr += NameLen;
+                                }
+
+                                TexMaps.Add(TexRef);
+
+                                // Phase 10K.1: MTEX parse trace
+                                const TCHAR* ChannelName = TEXT("Unknown");
+                                switch (TexRef.Channel)
+                                {
+                                    case 1: ChannelName = TEXT("BaseColor"); break;
+                                    case 2: ChannelName = TEXT("Roughness"); break;
+                                    case 3: ChannelName = TEXT("Metallic"); break;
+                                    case 4: ChannelName = TEXT("Alpha"); break;
+                                    case 5: ChannelName = TEXT("Normal"); break;
+                                }
+                                UE_LOG(LogLiveSync, Log,
+                                    TEXT("[MTEX][PARSE] guid=%s slot=%d channel=%s image=%s "
+                                         "path=%s flags=%u"),
+                                    *Guid.ToString(EGuidFormats::Digits),
+                                    TexRef.SlotIndex, ChannelName,
+                                    *TexRef.ImageName,
+                                    TexRef.Path.Len() > 0 ? *TexRef.Path : TEXT("(none)"),
+                                    TexRef.Flags);
+                            }
+                        }
+                        else if (MtexVersion != 0)
+                        {
+                            UE_LOG(LogLiveSync, Verbose,
+                                TEXT("[MTEX][SKIP] guid=%s version=%u unsupported"),
+                                *Guid.ToString(EGuidFormats::Digits), MtexVersion);
+                        }
+                    }
+                }
+            }
+
+            // Store MTEX in cache (Phase 10K.1: diagnostic only)
+            if (TexMaps.Num() > 0)
+            {
+                MaterialTextureMapCache.Add(Guid, TexMaps);
+                MtexBlocksParsed++;
+                MtexRecordsParsed += TexMaps.Num();
+            }
+
             // Apply generated material if we have basic properties
             for (const FMaterialSlotBasicProperties& BP : BasicProps)
             {
@@ -6605,6 +6763,8 @@ OnActorDestroyed(
 
         // Phase 10J.5A: Clean material metadata to prevent stale entries
         MaterialMetadata.Remove(Guid);
+        // Phase 10K.1: Clean texture map cache
+        MaterialTextureMapCache.Remove(Guid);
         if (GEnableVerboseSyncLogs)
         {
             UE_LOG(LogLiveSync, Log,
@@ -9446,6 +9606,8 @@ HandleDelete(
 
     // Phase 10J.5A: Clean material metadata to prevent stale entries
     MaterialMetadata.Remove(TargetGuid);
+    // Phase 10K.1: Clean texture map cache
+    MaterialTextureMapCache.Remove(TargetGuid);
     if (GEnableVerboseSyncLogs)
     {
         UE_LOG(LogLiveSync, Log,

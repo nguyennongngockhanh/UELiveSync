@@ -232,6 +232,71 @@ struct FMaterialSlotBasicProperties
 };
 
 // =========================================================
+// TEXTURE MAP IDENTITY EXTENSION (Phase 10K.1)
+// =========================================================
+// Optional MTEX extension block appended after MATX (or after
+// the old identity block if MATX is absent). Carries texture
+// map image paths per material slot for diagnostic/logging.
+// No texture importing or applying in this stage.
+// =========================================================
+
+static constexpr uint32
+    MTEX_MAGIC        = 0x4D544558;  // 'MTEX' LE
+static constexpr uint8
+    MTEX_VERSION_CURRENT = 1;
+static constexpr int32
+    MTEX_HEADER_SIZE  = 6;         // Magic(4) + Version(1) + RecordCount(1)
+
+// MTEX channel enum
+enum class EMTEXChannel : uint8
+{
+    BaseColor = 1,
+    Roughness = 2,
+    Metallic  = 3,
+    Alpha     = 4,
+    Normal    = 5
+};
+
+// MTEX flags
+static constexpr uint8
+    MTEX_FLAG_PATH_ABSOLUTE      = 0x01;
+static constexpr uint8
+    MTEX_FLAG_IMAGE_PACKED       = 0x02;
+static constexpr uint8
+    MTEX_FLAG_COLORSPACE_SRGB    = 0x04;
+static constexpr uint8
+    MTEX_FLAG_COLORSPACE_NONCOLOR = 0x08;
+
+// Size bounds
+static constexpr int32
+    MTEX_MAX_PATH_LEN = 2048;
+static constexpr int32
+    MTEX_MAX_IMAGE_NAME_LEN = 255;
+
+// Minimum per-record wire size: SlotIndex(1) + Channel(1) + Flags(1) + PathLen(2) + ImageNameLen(1) = 6
+// Plus minimal path(0) + name(0) = 0, so total 6 minimum.
+static constexpr int32
+    MTEX_RECORD_MIN_SIZE = 6;
+
+// Maximum per-record wire size: 6 + max_path(2048) + max_name(255) = 2309
+static constexpr int32
+    MTEX_RECORD_MAX_SIZE = 6 + MTEX_MAX_PATH_LEN + MTEX_MAX_IMAGE_NAME_LEN;
+
+struct FMaterialTextureMapRef
+{
+    int8    SlotIndex   = -1;
+    uint8   Channel     = 0;
+    uint8   Flags       = 0;
+    FString Path;
+    FString ImageName;
+
+    bool IsValid() const
+    {
+        return SlotIndex >= 0 && Channel >= 1 && Channel <= 5;
+    }
+};
+
+// =========================================================
 // MESH CHUNK CONSTANTS (Phase 7C)
 // =========================================================
 // PT_Mesh chunk header layout:

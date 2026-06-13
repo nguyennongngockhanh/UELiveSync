@@ -783,6 +783,8 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
         synced_count = 0
         # Phase 10J.5J: collect material data to send alongside FBX
         mat_payloads_to_send = []
+        # Phase 10K.1A: total texture map records sent (for user notice)
+        total_mtex_records = 0
 
         for obj in selected:
 
@@ -1013,12 +1015,31 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                                 p = network.get_material_basic_properties(slot.material)
                                 if p is not None:
                                     mat_props[slot_idx] = p
+                        # Phase 10K.1A: extract texture map references
+                        tex_maps = None
+                        try:
+                            tex_maps_dict = {}
+                            for slot_idx, slot in enumerate(obj.material_slots):
+                                if slot and slot.material:
+                                    maps = network.extract_texture_maps_for_slot(slot.material)
+                                    if maps:
+                                        tex_maps_dict[slot_idx] = maps
+                            if tex_maps_dict:
+                                tex_maps = tex_maps_dict
+                        except Exception:
+                            tex_maps = None
+
+                        if tex_maps:
+                            for slot_maps in tex_maps.values():
+                                total_mtex_records += len(slot_maps)
+
                         # Build material packet payload
                         try:
                             mat_payload = network.serialize_material_slots(
                                 guid_obj, 
                                 {i: (0, 0) for i in range(len(mat_props))},  # identity placeholder
-                                mat_props
+                                mat_props,
+                                tex_maps
                             )
                             mat_payloads_to_send.append(mat_payload)
                             # Log MATX send details
@@ -1066,6 +1087,21 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     packet_type=network.PT_Material,
                     version=network.LIVE_SYNC_VERSION_V5,
                 )
+
+        # Phase 10K.1A: user notice when texture maps are detected
+        if total_mtex_records > 0:
+            notice = (
+                f"MTEX: {total_mtex_records} texture map reference(s) sent. "
+                f"UE will log/cache them only; texture import/application "
+                f"comes in a later phase."
+            )
+            print(f"[MTEX][USER_NOTICE] records={total_mtex_records} "
+                  f"limitation=metadata_only")
+            network._append_blender_debug_log(
+                f"[MTEX][USER_NOTICE] records={total_mtex_records} "
+                f"limitation=metadata_only"
+            )
+            self.report({'INFO'}, notice)
 
         if synced_count > 0:
             self.report(

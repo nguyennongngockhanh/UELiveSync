@@ -54,6 +54,7 @@ try:
         get_mesh_identity_hash,
         get_material_identity_hash,
         get_material_basic_properties,
+        extract_texture_maps_for_slot,
         serialize_asset_identity,
         serialize_collection_identity,
         serialize_collection_membership,
@@ -1654,9 +1655,21 @@ def check_updates():
             except Exception:
                 mat_props = None
 
+            # Phase 10K.1: extract texture map references for each slot
+            tex_maps = None
+            try:
+                tex_maps = {}
+                for slot_index, slot in enumerate(obj.material_slots):
+                    if slot and slot.material:
+                        maps = extract_texture_maps_for_slot(slot.material)
+                        if maps:
+                            tex_maps[slot_index] = maps
+            except Exception:
+                tex_maps = None
+
             try:
                 material_payloads_to_send.append(
-                    serialize_material_slots(guid_obj, current_slots, mat_props)
+                    serialize_material_slots(guid_obj, current_slots, mat_props, tex_maps)
                 )
             except Exception as _send_exc:
                 if _verbose_logging:

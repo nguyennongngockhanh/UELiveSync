@@ -805,17 +805,172 @@ def get_material_basic_properties(material):
     return props
 
 
-def serialize_material_slots(guid_obj, slots, properties=None):
+# =========================================================
+# TEXTURE MAP IDENTITY EXTENSION (Phase 10K.1)
+# =========================================================
+
+# MTEX magic: 'MTEX' as little-endian uint32
+MTEX_MAGIC = 0x4D544558
+MTEX_VERSION = 1
+
+# Channel enum
+MTEX_CHANNEL_BASECOLOR = 1
+MTEX_CHANNEL_ROUGHNESS = 2
+MTEX_CHANNEL_METALLIC = 3
+MTEX_CHANNEL_ALPHA = 4
+MTEX_CHANNEL_NORMAL = 5
+
+# MTEX flags
+MTEX_FLAG_PATH_ABSOLUTE = 0x01
+MTEX_FLAG_IMAGE_PACKED = 0x02
+MTEX_FLAG_COLORSPACE_SRGB = 0x04
+MTEX_FLAG_COLORSPACE_NON_COLOR = 0x08
+
+# Clamp limits
+MTEX_MAX_PATH_LEN = 2048
+MTEX_MAX_IMAGE_NAME_LEN = 255
+
+
+def _get_image_colorspace_flag(image):
+    """Return MTEX color space flag for a Blender image."""
+    if image is None:
+        return 0
+    cs = getattr(image, "colorspace_settings", None)
+    if cs is None:
+        return 0
+    name = getattr(cs, "name", "")
+    if not name:
+        return 0
+    name_lower = name.lower()
+    if "non-color" in name_lower or "noncolor" in name_lower or "raw" in name_lower:
+        return MTEX_FLAG_COLORSPACE_NON_COLOR
+    if "srgb" in name_lower or "sRGB" in name:
+        return MTEX_FLAG_COLORSPACE_SRGB
+    return 0
+
+
+def extract_texture_maps_for_slot(material):
+    """Extract texture map references from a Blender material node tree.
+
+    Phase 10K.1: diagnostic-only. Supports direct links from Image Texture
+    nodes to Principled BSDF inputs. Does not traverse complex node graphs.
+
+    Supported channels:
+        BaseColor: Image Texture Color → Principled Base Color
+        Roughness: Image Texture Color/Non-Color → Principled Roughness
+        Metallic:  Image Texture Color/Non-Color → Principled Metallic
+        Alpha:     Image Texture Alpha → Principled Alpha
+        Normal:    Image Texture Color → Normal Map Color → Principled Normal
+
+    For each channel, only the first connected Image Texture is reported.
+    Procedural nodes are not evaluated.
+
+    Returns:
+        list of (channel, filepath, image_name, flags) or empty list
+    """
+    if material is None or not material.use_nodes:
+        return []
+    if not material.node_tree or not material.node_tree.nodes:
+        return []
+
+    # Build a map: socket → (channel, is_normal_map_chain)
+    # We detect direct Image Texture connections and Normal Map chains.
+    principled = None
+    for node in material.node_tree.nodes:
+        if getattr(node, "type", None) == "BSDF_PRINCIPLED":
+            principled = node
+            break
+
+    if principled is None:
+        return []
+
+    # Map Principled input names to MTEX channels
+    target_sockets = {}
+    for sock_name, channel in (("Base Color", MTEX_CHANNEL_BASECOLOR),
+                                ("Roughness", MTEX_CHANNEL_ROUGHNESS),
+                                ("Metallic", MTEX_CHANNEL_METALLIC),
+                                ("Alpha", MTEX_CHANNEL_ALPHA),
+                                ("Normal", MTEX_CHANNEL_NORMAL)):
+        sock = principled.inputs.get(sock_name)
+        if sock is not None and sock.is_linked:
+            target_sockets[sock_name] = channel
+
+    if not target_sockets:
+        return []
+
+    results = []
+
+    for sock_name, channel in target_sockets.items():
+        sock = principled.inputs.get(sock_name)
+        if sock is None or not sock.is_linked:
+            continue
+
+        from_node = sock.links[0].from_node
+
+        # Handle Normal Map node chain: Image Texture → Normal Map → Principled Normal
+        if channel == MTEX_CHANNEL_NORMAL and getattr(from_node, "type", None) == "NORMAL_MAP":
+            # Find the Color input of the Normal Map node
+            nm_color = from_node.inputs.get("Color")
+            if nm_color is not None and nm_color.is_linked:
+                from_node = nm_color.links[0].from_node
+
+        # Must be an Image Texture node
+        if getattr(from_node, "type", None) != "TEX_IMAGE":
+            continue
+
+        image = getattr(from_node, "image", None)
+        if image is None:
+            continue
+
+        filepath = getattr(image, "filepath", "") or ""
+        image_name = getattr(image, "name", "") or ""
+        is_packed = getattr(image, "packed_file", None) is not None
+
+        flags = 0
+        if filepath and not is_packed:
+            if filepath.startswith("/") or filepath.startswith("\\") or (len(filepath) > 1 and filepath[1] == ":"):
+                flags |= MTEX_FLAG_PATH_ABSOLUTE
+        if is_packed:
+            flags |= MTEX_FLAG_IMAGE_PACKED
+        cs_flag = _get_image_colorspace_flag(image)
+        if cs_flag:
+            flags |= cs_flag
+        elif channel in (MTEX_CHANNEL_ROUGHNESS, MTEX_CHANNEL_METALLIC, MTEX_CHANNEL_NORMAL):
+            flags |= MTEX_FLAG_COLORSPACE_NON_COLOR
+
+        # Clamp lengths
+        if len(filepath) > MTEX_MAX_PATH_LEN:
+            filepath = filepath[:MTEX_MAX_PATH_LEN]
+        if len(image_name) > MTEX_MAX_IMAGE_NAME_LEN:
+            image_name = image_name[:MTEX_MAX_IMAGE_NAME_LEN]
+
+        results.append((channel, filepath, image_name, flags))
+
+        _append_blender_debug_log(
+            f"[MTEX][EXTRACT] slot=NA channel={channel} "
+            f"image={image_name} path={filepath[:80] if filepath else '(none)'} "
+            f"packed={int(is_packed)} cs_flags={flags}"
+        )
+
+    return results
+
+
+def serialize_material_slots(guid_obj, slots, properties=None, texture_maps=None):
     """Serialize material slot data for one object into PT_Material wire format.
 
     Preserves old identity block exactly as before.
     Appends MATX extension block when properties dict is provided.
+    Appends MTEX extension block when texture_maps dict is provided,
+    after MATX (or after identity block if MATX absent).
 
     Args:
         guid_obj: uuid.UUID of the target object.
         slots: dict mapping slot_index -> (material_low, material_high)
         properties: optional dict mapping slot_index -> material property dict
                     (as returned by get_material_basic_properties)
+        texture_maps: optional dict mapping slot_index -> list of
+                      (channel, path, image_name, flags) tuples
+                      (as returned by extract_texture_maps_for_slot)
 
     Returns:
         bytes payload for one object in PT_Material batch.
@@ -861,6 +1016,48 @@ def serialize_material_slots(guid_obj, slots, properties=None):
                 payload.extend(struct.pack("<ff",
                     p.get("Roughness", 0.5),
                     p.get("Metallic", 0.0)))
+
+    # MTEX extension block (optional, after MATX or after identity if MATX absent)
+    if texture_maps is not None and texture_maps:
+        # Flatten all records from all slots
+        flat_records = []
+        for slot_index in sorted(texture_maps.keys()):
+            records = texture_maps[slot_index]
+            if not records:
+                continue
+            for rec in records:
+                channel, filepath, image_name, flags = rec
+                flat_records.append((slot_index, channel, filepath, image_name, flags))
+
+        if flat_records:
+            rec_count = len(flat_records)
+            payload.extend(struct.pack("<I", MTEX_MAGIC))
+            payload.extend(struct.pack("<B", MTEX_VERSION))
+            payload.extend(struct.pack("<B", rec_count))
+
+            for slot_index, channel, filepath, image_name, flags in flat_records:
+                # Clamp string lengths
+                path_bytes = filepath.encode("utf-8", errors="replace")
+                if len(path_bytes) > MTEX_MAX_PATH_LEN:
+                    path_bytes = path_bytes[:MTEX_MAX_PATH_LEN]
+                name_bytes = image_name.encode("utf-8", errors="replace")
+                if len(name_bytes) > MTEX_MAX_IMAGE_NAME_LEN:
+                    name_bytes = name_bytes[:MTEX_MAX_IMAGE_NAME_LEN]
+
+                path_len = len(path_bytes)
+                name_len = len(name_bytes)
+
+                payload.extend(struct.pack("<B", slot_index & 0xFF))
+                payload.extend(struct.pack("<B", channel & 0xFF))
+                payload.extend(struct.pack("<B", flags & 0xFF))
+                payload.extend(struct.pack("<H", path_len))
+                payload.extend(path_bytes)
+                payload.extend(struct.pack("<B", name_len))
+                payload.extend(name_bytes)
+
+            _append_blender_debug_log(
+                f"[MTEX][SEND] records={rec_count} bytes={len(payload)}"
+            )
 
     return bytes(payload)
 

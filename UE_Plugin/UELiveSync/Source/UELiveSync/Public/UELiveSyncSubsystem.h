@@ -780,6 +780,20 @@ private:
     int32 MaterialGeneratedApplied = 0;
 
     // =====================================================
+    // TEXTURE MAP METADATA CACHE (Phase 10K.1)
+    // =====================================================
+    // Per-GUID texture map references: GUID → array of FMaterialTextureMapRef.
+    // Phase 10K.1: diagnostic/logging only — no texture importing or applying.
+    TMap<FGuid, TArray<FMaterialTextureMapRef>> MaterialTextureMapCache;
+
+    // Count of MTEX packets parsed
+    int32 MtexBlocksParsed = 0;
+    // Count of MTEX records parsed
+    int32 MtexRecordsParsed = 0;
+    // Count of malformed MTEX blocks rejected
+    int32 MtexMalformed = 0;
+
+    // =====================================================
     // FBX AUTHORITY (Phase 10J.5E)
     // =====================================================
     // Per-GUID set of FBX-authoritative GUIDs. Once a GUID has
