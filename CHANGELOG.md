@@ -3,6 +3,10 @@
 ## [unreleased]
 
 ### Added
+- Added Blender 5.1+ slotted Action keyframe extraction (`_iter_action_fcurves_51`).
+- Added `action.is_action_layered` detection in `_extract_keyframes()`.
+- Added capability gating fallback when UE does not send `PT_CapabilityResponse`.
+- Added 81 tests for Blender 5.1 keyframe extraction (transform + visibility channels).
 - Added MTEX texture metadata sync for material slots.
 - Added UE-side texture import/cache from MTEX paths.
 - Added generated MID texture parameter application.

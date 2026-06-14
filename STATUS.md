@@ -64,7 +64,7 @@
 4. ~~**Phase 7C — Playback Sync (0x14)**~~ **IMPLEMENTED** ✅
 5. ~~**Phase 7D — Active Camera Sync (0x15)**~~ **IMPLEMENTED** ✅
 6. ~~**Phase 7E — Sequencer + Keyframe Replication**~~ **Stage 9C CLOSEOUT** ✅
-7. **Phase 7E Stage 10A — Visibility Keyframes** (Stages 10A.1–10A.2 complete) ✅
+7. **Phase 7E Stage 10A — Visibility Keyframes** (Stages 10A.1–10A.2, 10A.4 complete) ✅
 8. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
 9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. **COMPLETE** ✅
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
@@ -571,9 +571,9 @@ Camera transform, FOV, focal length, sensor size, focus distance, aperture, clip
 
 ---
 
-## Phase 7E — Sequencer + Keyframe Replication (Stage 10A.2 IMPLEMENTED)
+## Phase 7E — Sequencer + Keyframe Replication (Stage 10A.4 IMPLEMENTED)
 
-**Status**: Stage 10A.2 complete. Transform keyframe pipeline (Stages 1–9B) closeout complete. Visibility keyframe extraction (10A.1) and UE BoolTrack apply (10A.2) implemented. 612/612 tests passing.
+**Status**: Stage 10A.4 complete. Transform keyframe pipeline (Stages 1–9B) closeout complete. Visibility keyframe extraction (10A.1), UE BoolTrack apply (10A.2), and Blender 5.1+ slotted action extraction (10A.4) implemented. 693/693 tests passing.
 
 ### Stage 3 — Wire Format + Parser (VERIFIED)
 - `PT_SequencerOp = 0x18` in both Blender `network.py` and UE `SyncTypes.h`.
@@ -678,13 +678,24 @@ Phase 7E transform keyframe pipeline is **complete and verified**. All stages ar
 
 #### Stage 10A — Visibility BoolTrack Apply IMPLEMENTED
 
-Stage 10A is fully implemented in two sub-stages:
+Stage 10A is fully implemented in three sub-stages:
 - **10A.1**: Blender-side visibility keyframe extraction (channels 9=hide_viewport, 10=hide_render) — 67/67 PASS
 - **10A.2**: UE HandleKeyframe() channels 9–10 → Sequencer BoolTrack apply — 49/49 PASS
+- **10A.4**: Blender 5.1+ slotted Action keyframe extraction — 81/81 PASS
 
 Architecture document: `Docs/Architecture/56-phase7e-stage10a-visibility-keyframes-scope-lock.md`.
 
 Implementation commits: `185fb65`, `b39d914`.
+
+#### Stage 10A.4 — Blender 5.1+ Slotted Action Keyframe Extraction IMPLEMENTED
+
+Stage 10A.4 adds extraction support for Blender 5.1+ slotted/layered Actions (`action.is_action_layered=True`). In Blender 5.1+, the classic `action.fcurves` property is removed; FCurves live inside `action.layers[]` → `strips[]` → `channelbags[]` → `fcurves[]`, organized by slot handle. Key changes:
+
+- **`_iter_action_fcurves_51(action)`**: Iterates slotted Action structure, resolving the correct slot by `target_id_type` matching the object's `id_type`. Returns `(fcurve, slot_handle)` tuples.
+- **`_extract_keyframes()`**: Prefers the 5.1 slotted path when `action.is_action_layered` is True. Falls back to legacy `action.fcurves` for pre-5.1 compatibility.
+- **Capability gating fallback**: When UE does not send `PT_CapabilityResponse` (e.g. NullRHI mode), `is_keyframe_effective()` proceeds without remote capability confirmation, allowing keyframe extraction in unattended background mode.
+- **Runtime validation**: Blender extracts 12 keyframes (2 loc × 3 axes + 3 hide_viewport + 3 hide_render) → UE receives PT_Keyframe packet (type=0x17, seq=4, size=338) → HandleKeyframe safely skips in unattended mode (no LevelSequence).
+- **Tests**: 81/81 PASS covering: iteration, transform extraction, visibility extraction, mixed transform+visibility, unsupported channel skip, safe skip on non-slotted action, multiple objects, hashing, batching, visibility encoding, no-legacy-fcurves usage.
 
 **Rationale**:
 - **Lower risk** than interpolation/tangent mapping — bool tracks are simpler than tangent math.
@@ -751,6 +762,7 @@ All verified in regression run.
 | Phase 7D Stage 4 (viewport) | **81/81 PASS** | |
 | Phase 7E Stage 10A.1 visibility extraction | **67/67 PASS** | |
 | Phase 7E Stage 10A.2 visibility BoolTrack apply | **49/49 PASS** | |
+| Phase 7E Stage 10A.4 Blender 5.1 slotted extraction | **81/81 PASS** | |
 | Phase 7C Stage 1 (playback wire) | **42/42 PASS** | |
 | Phase 7C Stage 2 (detection) | **41/41 PASS** | |
 | Phase 7C Stage 3 (UE handler) | **53/53 PASS** | |
@@ -762,8 +774,8 @@ All verified in regression run.
 | Phase 6E delete validation | **320/320 PASS** | |
 | Phase 6D hierarchy | **119/119 PASS** | 7 skipped (no UE) |
 | Phase 6H semantic consistency | **10/11 PASS** | 1 skip (no UE) |
-| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49 = 612/612 PASS** | |
-| **Grand total (all standalone)** | **2301/2301 PASS** | 1689 (prev) + 612 (Phase 7E Stage 3–10A.2) |
+| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81 = 693/693 PASS** | |
+| **Grand total (all standalone)** | **2382/2382 PASS** | 1689 (prev) + 693 (Phase 7E Stage 3–10A.4) |
 
 **Notes**:
 - Phase 6B runtime audit: 90/102 PASS, 12 FAIL — pre-existing ConsoleReset checks against `.cpp` file; ConsoleReset code lives in `.inl` include. Not regressions.
@@ -912,6 +924,8 @@ All verified in regression run.
 - **Phase 7C Mesh Reconstruction Baseline** (2026-06-06): PT_Mesh runtime reconstruction now visible and correctly scaled/oriented in UE. ProcMesh replacement, root promotion, visibility restoration, 100× unit conversion, Y-axis local conversion, winding flip, and temporary UE-side normal/tangent generation are implemented and build-pass. Shading artifacts on smooth meshes are known and attributed to missing Blender loop attributes in the current V5 mesh payload (no real normals, UVs, tangents, or vertex colors). Full attribute sync deferred to a manual selected-mesh stage. **Partial pass, not final fidelity.**
 
 - **Blender sync.py first-tick fix**: Newly created meshes now transmit geometry on first evaluation (`prev_hash is None` triggers send). Previously, new objects were never sent because `prev_hash is not None` required a prior hash.
+
+- **Phase 7E Stage 10A.4 — Blender 5.1+ Slotted Action Keyframe Extraction** (2026-06-14): Added `_iter_action_fcurves_51()` helper for Blender 5.1+ slotted/layered Action FCurve access. `_extract_keyframes()` now checks `action.is_action_layered` and prefers the slotted path (`layers[] → strips[] → channelbags[] → fcurves[]`). Capability gating fallback allows extraction without `PT_CapabilityResponse` from UE. Runtime validation: Blender extracts 12 keyframes → UE receives PT_Keyframe (type=0x17, seq=4, size=338) → HandleKeyframe safely skips (no LevelSequence in unattended mode). Transform (0–8) and visibility (9–10) channels fully preserved. 81/81 tests PASS. **2382/2382 grand total.** ✅
 
 - **Phase 7E Stage 10A.1**: Visibility keyframe extraction implemented — `_KEYFRAME_CHANNEL_MAP` extended with `hide_viewport`→9 and `hide_render`→10 (array_index=-1 for Blender scalar properties). Visibility FCurves extracted through same `_extract_keyframes()` pipeline as transform. Polarity: 1.0=hidden, 0.0=visible (value-as-is from Blender). Existing hashing, batching, and serialization reused unchanged. 67/67 tests. **2252/2252 grand total.** ✅
 

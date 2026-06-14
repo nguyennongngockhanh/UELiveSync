@@ -79,6 +79,8 @@ ProcessQueuedPackets → InterpolateTransforms → ResolvePendingAttachments
 | PT_Transform | 0x01 | 81 bytes V5 | Per-frame transform update |
 | PT_Create | 0x03 | 81 bytes V5 | Object spawn |
 | PT_Delete | 0x04 | 16 bytes V3 | Legacy delete |
+| PT_Material | 0x05 | variable | Material identity + slot metadata |
+| PT_Mesh | 0x06 | variable | Procedural mesh chunk |
 | PT_Heartbeat | 0x07 | 0 bytes | Keep-alive (5s Blender → 15s timeout) |
 | PT_AssetDef | 0x08 | 33 bytes V5 | Asset identity |
 | PT_BeginSnapshot | 0x09 | 0 bytes | Snapshot start marker |
@@ -88,6 +90,13 @@ ProcessQueuedPackets → InterpolateTransforms → ResolvePendingAttachments
 | PT_Hierarchy | 0x0D | 44 bytes | Parent-child attachment |
 | PT_Delete_V5 | 0x0E | 28 bytes | Lifecycle delete |
 | PT_Collection | 0x0F | 30/46 bytes | Collection membership |
+| PT_CapabilityResponse | 0x12 | 1 byte | Capability negotiation response |
+| PT_Timeline | 0x13 | 36 bytes | Timeline state (frame range, FPS) |
+| PT_PlaybackState | 0x14 | 14 bytes | Playback state (play/pause/stop) |
+| PT_ActiveCamera | 0x15 | 28 bytes | Active camera GUID |
+| PT_FBXImportRequest | 0x16 | 680 bytes | FBX import request |
+| PT_Keyframe | 0x17 | 14 + N×25 bytes | Keyframe batch (transform ch 0–8, visibility ch 9–10) |
+| PT_SequencerOp | 0x18 | 16 + payload bytes | Sequencer operation (create sequence, add binding, etc.) |
 
 ## Key Registries/Maps (UE Side)
 
@@ -122,6 +131,53 @@ ProcessQueuedPackets → InterpolateTransforms → ResolvePendingAttachments
 8. **Packet header**: 24 bytes fixed, little-endian, magic `0x4C56534D`
 9. **Queues**: FLiveSyncQueue bounded 128 (drop-oldest)
 10. **No O(1) → O(n) regressions**: scene scan on mismatch/300 frames only
+
+## Keyframe Extraction Pipeline
+
+Keyframe extraction runs at the end of `check_updates()`, after transform/visibility/hierarchy detection, and is gated on `is_keyframe_effective()` (local pref enabled + remote capability confirmed or connected).
+
+### Blender FCurve Access (5.1+ Slotted Actions)
+
+In Blender 5.1+, the classic `action.fcurves` property is removed. FCurves live inside a slotted/layered Action structure:
+
+```
+Action (is_action_layered=True)
+├── slots[]                 (ActionSlot: identifier, handle, target_id_type)
+└── layers[]
+    └── strips[]            (ActionKeyframeStrip: type='KEYFRAME')
+        └── channelbags[]   (ActionChannelbag: slot_handle, fcurves)
+            └── fcurves[]   (FCurve: data_path, array_index, keyframe_points)
+```
+
+The `_iter_action_fcurves_51()` helper iterates this structure, resolving the correct slot by matching `target_id_type` against the object's `id_type`. The `_extract_keyframes()` function prefers this slotted path when `action.is_action_layered` is True; falls back to legacy `action.fcurves` for pre-5.1 Blender.
+
+### Channel Mapping
+
+| Channel | Property | Track Type |
+|---------|----------|------------|
+| 0 | location.x | UMovieScene3DTransformTrack (double) |
+| 1 | location.y | UMovieScene3DTransformTrack (double) |
+| 2 | location.z | UMovieScene3DTransformTrack (double) |
+| 3 | rotation_euler.x | UMovieScene3DTransformTrack (double) |
+| 4 | rotation_euler.y | UMovieScene3DTransformTrack (double) |
+| 5 | rotation_euler.z | UMovieScene3DTransformTrack (double) |
+| 6 | scale.x | UMovieScene3DTransformTrack (double) |
+| 7 | scale.y | UMovieScene3DTransformTrack (double) |
+| 8 | scale.z | UMovieScene3DTransformTrack (double) |
+| 9 | hide_viewport | UMovieSceneBoolTrack |
+| 10 | hide_render | UMovieSceneBoolTrack |
+
+### Duplicate Suppression
+
+FNV-1a 32-bit hash of all extracted keyframe entries (`_hash_keyframes()`) is stored per-action. If the hash matches the previous frame's hash, the packet is suppressed. Cache cleared on reconnect and stop-sync.
+
+### PT_Keyframe Wire Format
+
+- 14-byte header: Sequence(4) + Timestamp(8) + KeyCount(1) + Flags(1)
+- 25-byte entries: ObjectGUID(16) + Frame(4) + Value(4) + ChannelIndex(1)
+- Batch split at 255 entries per packet
+
+---
 
 ## Blender → UE Execution Chain (Per-Tick)
 

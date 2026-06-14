@@ -896,6 +896,109 @@ _KEYFRAME_CHANNEL_MAP = {
 }
 
 
+# Phase 7E Stage 10A.4: Blender 5.1+ slotted action fcurve iterator
+# -------------------------------------------------------------------
+
+def _iter_action_fcurves_51(action, obj=None):
+    """Iterate FCurves from a Blender 5.1+ slotted/layered Action.
+
+    Blender 5.0+ removed action.fcurves.  FCurves are now stored inside:
+      action -> layers -> strips (ActionKeyframeStrip) -> channelbags -> fcurves
+
+    Each channelbag is linked to a slot via slot_handle.
+    Each slot identifies an animated datablock (e.g. OBJECT) by its handle.
+
+    Yields (fcurve, slot_handle) tuples.
+    If *obj* is provided, only yields fcurves from the matching OBJECT slot.
+    Safe for missing/incomplete data.
+
+    Diagnostics use [KEYFRAME][BLENDER51] prefix.
+    """
+    import bpy
+
+    if not action:
+        return
+    if getattr(action, 'is_action_layered', False) is False:
+        print("[KEYFRAME][BLENDER51_SKIP] reason=not_layered")
+        return
+
+    # --- 1. locate the OBJECT slot matching obj (if requested) ---
+    target_handle = None
+    slots_found = []
+    try:
+        slots_seq = list(action.slots)
+        slots_found = [(s.identifier, s.handle, s.target_id_type) for s in slots_seq]
+    except Exception:
+        print("[KEYFRAME][BLENDER51_SKIP] reason=slots_unreadable")
+        return
+
+    if obj is not None:
+        expected_ident = "OB" + obj.name
+        for slot in action.slots:
+            if not getattr(slot, 'target_id_type', None):
+                continue
+            if slot.target_id_type != 'OBJECT':
+                continue
+            sid = getattr(slot, 'identifier', '')
+            if sid == expected_ident:
+                target_handle = getattr(slot, 'handle', None)
+                print(f"[KEYFRAME][BLENDER51_SLOT] object={obj.name} "
+                      f"slot={sid} handle={target_handle} matched=True")
+                break
+        else:
+            print(f"[KEYFRAME][BLENDER51_SLOT] object={obj.name} "
+                  f"no_matching_slot slots={slots_found}")
+            return
+    else:
+        # No object filter — iterate all slots; use all slot handles.
+        pass
+
+    # --- 2. traverse layers -> strips -> channelbags -> fcurves ---
+    try:
+        layers = list(action.layers)
+    except Exception:
+        print("[KEYFRAME][BLENDER51_SKIP] reason=layers_unreadable")
+        return
+
+    print(f"[KEYFRAME][BLENDER51] action={action.name} "
+          f"slots={len(slots_found)} layers={len(layers)}")
+
+    for layer in layers:
+        try:
+            strips = list(layer.strips)
+        except Exception:
+            continue
+        for strip in strips:
+            strip_type = getattr(strip, 'type', '')
+            if strip_type != 'KEYFRAME':
+                continue
+            try:
+                channelbags = list(strip.channelbags)
+            except Exception:
+                continue
+            for cbag in channelbags:
+                ch_slot_handle = getattr(cbag, 'slot_handle', None)
+                ch_slot_ref = getattr(cbag, 'slot', None)
+                if ch_slot_handle is None:
+                    continue
+                # If targeting a specific object, skip non-matching bags
+                if target_handle is not None and ch_slot_handle != target_handle:
+                    continue
+                try:
+                    fcurves = list(cbag.fcurves)
+                except Exception:
+                    continue
+                for fcurve in fcurves:
+                    dp = getattr(fcurve, 'data_path', '')
+                    idx = getattr(fcurve, 'array_index', 0)
+                    kf_count = len(getattr(fcurve, 'keyframe_points', []))
+                    print(f"[KEYFRAME][BLENDER51_FCURVE] path={dp} "
+                          f"index={idx} keys={kf_count}")
+                    yield (fcurve, ch_slot_handle)
+    else:
+        return
+
+
 def _extract_keyframes(obj, guid_obj):
     """Extract transform and visibility keyframes from Blender object's FCurves.
 
@@ -913,19 +1016,39 @@ def _extract_keyframes(obj, guid_obj):
     if not obj.animation_data or not obj.animation_data.action:
         return []
 
+    action = obj.animation_data.action
+
     entries = []
-    for fcurve in obj.animation_data.action.fcurves:
-        channel = _KEYFRAME_CHANNEL_MAP.get(
-            (fcurve.data_path, fcurve.array_index))
-        if channel is None:
-            continue
-        for kp in fcurve.keyframe_points:
-            entries.append((
-                guid_obj,
-                int(kp.co.x),
-                float(kp.co.y),
-                channel,
-            ))
+    if getattr(action, 'is_action_layered', False):
+        fcurve_iter = _iter_action_fcurves_51(action, obj=obj)
+        for fcurve, _slot_handle in fcurve_iter:
+            channel = _KEYFRAME_CHANNEL_MAP.get(
+                (fcurve.data_path, fcurve.array_index))
+            if channel is None:
+                continue
+            for kp in fcurve.keyframe_points:
+                entries.append((
+                    guid_obj,
+                    int(kp.co.x),
+                    float(kp.co.y),
+                    channel,
+                ))
+        return entries
+
+    # Legacy path (Blender < 5.0) — kept as fallback for test compat
+    if hasattr(action, 'fcurves'):
+        for fcurve in action.fcurves:
+            channel = _KEYFRAME_CHANNEL_MAP.get(
+                (fcurve.data_path, fcurve.array_index))
+            if channel is None:
+                continue
+            for kp in fcurve.keyframe_points:
+                entries.append((
+                    guid_obj,
+                    int(kp.co.x),
+                    float(kp.co.y),
+                    channel,
+                ))
     return entries
 
 

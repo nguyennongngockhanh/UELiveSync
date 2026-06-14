@@ -262,18 +262,49 @@ def set_keyframe_enabled(enabled):
     _keyframes_sent = 0
 
 
+# Phase 10A.4: flag to avoid repeating capability-wait diagnostics.
+_keyframe_cap_ready_logged = False
+
+
 def is_keyframe_effective():
-    global _client
+    global _client, _keyframe_cap_ready_logged
     if not _keyframe_enabled:
         return False
     if _client is None:
         return False
     if not getattr(_client, 'connected', False):
         return False
+
+    # Phase 10A.4: brief poll for capability response before giving up.
+    # This avoids silent keyframe suppression during the brief window
+    # between connection and capability handshake completion (~100-500ms).
     if not getattr(_client, '_capability_response_received', False):
-        return False
+        cap_polled = False
+        for _ in range(40):  # up to ~2 seconds (40 × 50ms)
+            import time
+            time.sleep(0.05)
+            if getattr(_client, '_capability_response_received', False):
+                cap_polled = True
+                break
+        if not cap_polled:
+            # UE may not send CapabilityResponse; proceed anyway if connected.
+            print("[KEYFRAME][NO_RESPONSE] capability_response not received "
+                  f"connected={getattr(_client, 'connected', False)} — "
+                  "proceeding without remote capability confirmation")
+        else:
+            print("[KEYFRAME][CAPABILITY_WAIT] capability_response_received after poll")
+
     remote = getattr(_client, '_remote_capabilities', 0)
-    return bool(remote & CAP_SUPPORTS_KEYFRAME_REPLICATION)
+    has_cap = bool(remote & CAP_SUPPORTS_KEYFRAME_REPLICATION)
+    # If we're connected but never got the capability response, UE may
+    # not implement CapabilityResponse — assume keyframes are supported.
+    if not _capability_response_received and _client and _client.connected:
+        has_cap = True
+    if not _keyframe_cap_ready_logged:
+        _keyframe_cap_ready_logged = True
+        print(f"[KEYFRAME][CAPABILITY_READY] remote_capabilities={remote} "
+              f"supports_keyframes={has_cap}")
+    return has_cap
 
 
 # Phase 7E Stage 7-8: keyframe sync state globals
