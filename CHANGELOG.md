@@ -7,6 +7,9 @@
 - Added `action.is_action_layered` detection in `_extract_keyframes()`.
 - Added capability gating fallback when UE does not send `PT_CapabilityResponse`.
 - Added 81 tests for Blender 5.1 keyframe extraction (transform + visibility channels).
+- Added wrapped SequencerOp send path for CREATE_SEQUENCE / ADD_POSSESSABLE runtime setup.
+- Added Stage 10A.5 active LevelSequence runtime helper (`tools/uelivesync_stage10a5_active_sequence.py`).
+- Added 2 tests for SequencerOp packet wrap and reserved type guard.
 - Added MTEX texture metadata sync for material slots.
 - Added UE-side texture import/cache from MTEX paths.
 - Added generated MID texture parameter application.
@@ -28,6 +31,16 @@
 - Fixed scale invariant regressions — actor/component scale preserved at 1.
 - Preserved mesh/scale invariants during material/texture sync.
 - Hardened unsupported/missing texture path handling.
+
+### Validated
+- Validated active LevelSequence runtime path with PT_Keyframe applied=11, miss=0, unsupp=0.
+- Validated visibility channels 9 and 10 apply through UE bool keyframe path.
+- Confirmed PT_Transform remains 0x01 and 0x02 remains reserved/invalid.
+
+### Known notes
+- Keyframe runtime requires `prefs.keyframe_sync=True`.
+- UE keyframe apply requires an active LevelSequence and binding.
+- `-NullRHI` should not be used for networking/runtime validation; use normal editor or `-RenderOffScreen`.
 
 ### Known limitations
 - Packed Blender images are not imported.

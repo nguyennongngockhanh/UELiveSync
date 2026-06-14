@@ -573,7 +573,7 @@ Camera transform, FOV, focal length, sensor size, focus distance, aperture, clip
 
 ## Phase 7E — Sequencer + Keyframe Replication (Stage 10A.4 IMPLEMENTED)
 
-**Status**: Stage 10A.4 complete. Transform keyframe pipeline (Stages 1–9B) closeout complete. Visibility keyframe extraction (10A.1), UE BoolTrack apply (10A.2), and Blender 5.1+ slotted action extraction (10A.4) implemented. 693/693 tests passing.
+**Status**: Stage 10A.5A complete. Transform keyframe pipeline (Stages 1–9B) closeout complete. Visibility keyframe extraction (10A.1), UE BoolTrack apply (10A.2), Blender 5.1+ slotted action extraction (10A.4), and active LevelSequence runtime validation (10A.5A) implemented. 695/695 tests passing.
 
 ### Stage 3 — Wire Format + Parser (VERIFIED)
 - `PT_SequencerOp = 0x18` in both Blender `network.py` and UE `SyncTypes.h`.
@@ -678,10 +678,11 @@ Phase 7E transform keyframe pipeline is **complete and verified**. All stages ar
 
 #### Stage 10A — Visibility BoolTrack Apply IMPLEMENTED
 
-Stage 10A is fully implemented in three sub-stages:
+Stage 10A is fully implemented in four sub-stages:
 - **10A.1**: Blender-side visibility keyframe extraction (channels 9=hide_viewport, 10=hide_render) — 67/67 PASS
 - **10A.2**: UE HandleKeyframe() channels 9–10 → Sequencer BoolTrack apply — 49/49 PASS
 - **10A.4**: Blender 5.1+ slotted Action keyframe extraction — 81/81 PASS
+- **10A.5A**: Active LevelSequence runtime validation + wrapped SequencerOp send path — 2/2 PASS
 
 Architecture document: `Docs/Architecture/56-phase7e-stage10a-visibility-keyframes-scope-lock.md`.
 
@@ -708,6 +709,25 @@ Stage 10A.4 adds extraction support for Blender 5.1+ slotted/layered Actions (`a
 - Camera property keys — requires new channel family and `UMovieSceneFloatTrack` writes.
 - Bézier handle support — requires tangent data extension.
 - Sequencer UI integration — belongs in Phase 7F.
+
+#### Stage 10A.5 / 10A.5A — Active LevelSequence Runtime Validation IMPLEMENTED
+
+Stage 10A.5 adds wrapped SequencerOp send path and active LevelSequence runtime validation.
+
+- **`send_sequencer_op()` wrapped payload**: Now wraps payload through LiveSync protocol header via `_build_packet()`, ensuring correct wire format for `PT_SequencerOp` packets.
+- **Active LevelSequence validation**: Runtime helper at `tools/uelivesync_stage10a5_active_sequence.py` validates the full Sequencer setup path on a running UE session.
+- **Correct packet ordering**:
+  1. `PT_SequencerOp CREATE_SEQUENCE` — creates transient LevelSequence
+  2. `PT_Create` — spawns actor
+  3. `PT_SequencerOp ADD_POSSESSABLE` — binds actor to sequence
+  4. `PT_Transform` — transform keyframes
+  5. `PT_Keyframe` — keyframe data (channels 0–10)
+- **Runtime result**: `applied=11 miss=0 unsupp=0` — all keyframes applied, no missing bindings, no unsupported channels.
+- **Visibility channels 9 and 10 applied** through UE bool track path (`UMovieSceneBoolTrack`).
+- **No crash** on full sequence setup + keyframe apply path.
+- **`0x02` reserved**: Remains reserved/invalid; canonical `PT_Transform` is `0x01`.
+- **NullRHI caveat**: `-NullRHI` suppresses Tick/networking in this workflow; use normal editor or `-RenderOffScreen`.
+- **Tests**: 2 new test files (67/67 PASS across 10A.1 + 10A.5A).
 
 ### Handler Status (Post-Stub-Restoration Audit)
 

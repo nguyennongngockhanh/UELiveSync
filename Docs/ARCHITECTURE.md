@@ -177,6 +177,38 @@ FNV-1a 32-bit hash of all extracted keyframe entries (`_hash_keyframes()`) is st
 - 25-byte entries: ObjectGUID(16) + Frame(4) + Value(4) + ChannelIndex(1)
 - Batch split at 255 entries per packet
 
+### Keyframe / Sequencer Runtime
+
+**Blender 5.1+ extraction**: Uses slotted/layered Action API (`action.is_action_layered=True`). Legacy `action.fcurves` no longer used/supported.
+
+**Channel mapping**:
+| Channel | Property | Track Type |
+|---------|----------|------------|
+| 0–2 | location.x/y/z | UMovieScene3DTransformTrack (double) |
+| 3–5 | rotation_euler.x/y/z | UMovieScene3DTransformTrack (double) |
+| 6–8 | scale.x/y/z | UMovieScene3DTransformTrack (double) |
+| 9 | hide_viewport | UMovieSceneBoolTrack |
+| 10 | hide_render | UMovieSceneBoolTrack |
+
+**PT_Keyframe remains unchanged** — wire format preserved. Channels 9–10 write to `UMovieSceneBoolTrack` / `UMovieSceneBoolSection` / `FMovieSceneBoolChannel`.
+
+**UE keyframe application prerequisites**:
+1. Active LiveSync LevelSequence (created via `PT_SequencerOp CREATE_SEQUENCE`).
+2. Actor binding in `LiveSyncGuidToSequencerBinding` (set via `PT_SequencerOp ADD_POSSESSABLE`).
+
+**Sequencer setup packet order**:
+1. `PT_SequencerOp CREATE_SEQUENCE` — creates transient `ULevelSequence`.
+2. `PT_Create` — spawns actor, populates ActorCache.
+3. `PT_SequencerOp ADD_POSSESSABLE` — binds actor via GUID. Must occur after actor creation/cache so `FindActorFast()` can resolve the GUID.
+4. `PT_Transform` — transform keyframes (channel 0–8).
+5. `PT_Keyframe` — keyframe data (channels 0–10).
+
+**Packet type constants**: `PT_Transform = 0x01` (canonical); `0x02` is reserved/invalid.
+
+**Runtime helper**: `tools/uelivesync_stage10a5_active_sequence.py` validates the active LevelSequence setup path.
+
+**NullRHI caveat**: `-NullRHI` suppresses Tick/networking in this workflow. Use normal editor or `-RenderOffScreen`.
+
 ---
 
 ## Blender → UE Execution Chain (Per-Tick)
