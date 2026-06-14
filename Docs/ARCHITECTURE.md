@@ -157,3 +157,58 @@ _known_guids = set(tracked_objects.keys())
 - `BUG_ENTRYPOINTS.md` — surgical debugging navigation
 - `PROJECT_INIT.md` — current state, protocol versions, console commands
 - `TASK_PROMPT_TEMPLATES.md` — copy-paste scoped task templates
+
+---
+
+## Texture Pipeline / MTEX
+
+### Overview
+
+MTEX is an optional texture metadata extension appended after MATX (material slot definition) in the material sync packet. It carries texture slot metadata only — no pixel data, no encoded images.
+
+### MTEX Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| slot | uint8 | Material slot index |
+| channel | uint8 | Texture channel (BaseColor=0, Roughness=1, Metallic=2, Alpha=3, Normal=4) |
+| flags | uint8 | Bitfield flags (reserved) |
+| path | string | Absolute filesystem path to source texture |
+| image_name | string | Blender image datablock name |
+
+### Blender Extraction
+
+- Intentionally conservative: only direct Image Texture → Principled BSDF links are extracted.
+- Simple Normal Map chain may be supported if implemented.
+- No procedural/complex graph traversal — materials using node groups, math, or mix nodes for texture inputs are not resolved.
+- Packed Blender images are explicitly not supported (no pixel data serialization).
+
+### UE Texture Import/Cache
+
+- Textures are imported from absolute filesystem paths only.
+- Packed images, missing files, relative paths, and unsupported extensions are skipped safely.
+- Imported texture assets are stored under `/Game/UELiveSync/Textures`.
+- Texture cache is keyed by source path; duplicate paths reuse cached imports.
+
+### UE Material Visual Path
+
+- Generated MID uses the custom master material at `/Game/UELiveSync/Materials/M_UELiveSync_Master`.
+- Master material exposes the following texture parameters:
+  - `BaseColorTexture`
+  - `RoughnessTexture`
+  - `MetallicTexture`
+  - `AlphaTexture`
+  - `NormalTexture`
+- Texture on/off toggles:
+  - `UseBaseColorTexture`
+  - `UseRoughnessTexture`
+  - `UseMetallicTexture`
+  - `UseAlphaTexture`
+  - `UseNormalTexture`
+
+### Limitations
+
+- Alpha visual support is limited/deferred if the master material uses an opaque blend mode.
+- Normal visual may be deferred or limited depending on the current master material graph implementation.
+- Packed Blender images are not imported (requires pixel data extraction, not in scope).
+- Complex node graphs (node groups, math-driven texture blending, procedural textures) are not traversed.

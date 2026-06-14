@@ -74,6 +74,7 @@
 14. **Phase 10J.5Q — FBX Unique Temp Import Path** — Unique temp StaticMesh per sync, validated assignment, previous cleanup. **COMPLETE** ✅
 15. **Phase 10J.6 — FBX Temp Asset Lifecycle Hardening** — Diagnostic markers for temp import lifecycle. Runtime smoke 6/6 PASS. **COMPLETE** ✅
 16. **Phase 10J.7 — FBX Test Debt Cleanup** — Tests updated for current architecture. 18/18 phase10j PASS. **COMPLETE** ✅
+17. **Phase 10K — Texture Pipeline** — MTEX metadata sync, UE texture import/cache, MID texture apply, master material, diagnostics. All 5 sub-phases complete. **COMPLETE** ✅
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
@@ -773,6 +774,62 @@ All verified in regression run.
 ---
 
 ## Phase 6I.1 Final Closeout Regression (archived above)
+
+## Phase 10K — Texture Pipeline (COMPLETE)
+
+**Status**: All 5 sub-phases (10K.1–10K.5) complete. Texture metadata sync, UE import/cache, generated MID texture parameter application, master material visual path, and diagnostics/hardening tests all passing. All Phase 10K tests PASS.
+
+### Phase 10K.1 — MTEX Texture Metadata Sync (COMPLETE)
+
+- MTEX is an optional metadata extension after MATX (material slot definition).
+- Texture metadata fields: slot, channel, flags, filesystem path, image name.
+- Channels: BaseColor, Roughness, Metallic, Alpha, Normal.
+- Manual Sync FBX command sends MTEX metadata with the material definition.
+- Blender extraction is intentionally conservative: direct Image Texture → Principled BSDF links only; no procedural/complex graph traversal.
+- Blender user notice documents the metadata-only limitation (packed images, complex graphs not supported).
+
+### Phase 10K.2 — UE Texture Import/Cache (COMPLETE)
+
+- UE imports texture assets from MTEX absolute filesystem paths on receipt.
+- Imported assets stored under `/Game/UELiveSync/Textures`.
+- Cache keyed by source path.
+- Packed/missing/relative/unsupported paths are skipped safely (no crash, no import).
+- Texture application was deferred at this phase (Phase 10K.3).
+
+### Phase 10K.3 — Generated MID Texture Parameter Application (COMPLETE)
+
+- Imported textures are applied to the generated MID texture parameters.
+- No MTEX wire format change — metadata-only extension of existing MATX path.
+- Material sync does not replace mesh — texture assignment is additive to existing material resolution.
+
+### Phase 10K.4 — Custom Master Material (COMPLETE)
+
+- Custom LiveSync master material created/loaded at `/Game/UELiveSync/Materials/M_UELiveSync_Master`.
+- BaseColor texture visual path runtime smoke PASS.
+- Roughness, Metallic texture parameter paths present.
+- Alpha/Normal visual support deferred/limited (see limitations below).
+- Texture parameter slots on master material:
+  - `BaseColorTexture`, `RoughnessTexture`, `MetallicTexture`, `AlphaTexture`, `NormalTexture`
+- Texture toggle parameters:
+  - `UseBaseColorTexture`, `UseRoughnessTexture`, `UseMetallicTexture`, `UseAlphaTexture`, `UseNormalTexture`
+
+### Phase 10K.5 — Diagnostics and Hardening Tests (COMPLETE)
+
+- Texture cache lifecycle diagnostics.
+- Unsupported extension skip tested.
+- Cache size warning tested.
+- Alpha/Normal deferred warnings documented.
+- All Phase 10K tests PASS.
+
+### Known Limitations
+
+- Packed Blender images are not imported (absolute filesystem paths only).
+- Complex material node graphs are not traversed.
+- Alpha visual may be limited/deferred if master material is opaque.
+- Normal visual may be deferred/limited depending on current master material graph.
+- No texture compression/format conversion — UE imports textures as-is from source paths.
+
+---
 
 ## Recent Changes
 

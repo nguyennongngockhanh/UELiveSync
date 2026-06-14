@@ -3,6 +3,11 @@
 ## [unreleased]
 
 ### Added
+- Added MTEX texture metadata sync for material slots.
+- Added UE-side texture import/cache from MTEX paths.
+- Added generated MID texture parameter application.
+- Added UELiveSync master material for texture rendering.
+- Added texture pipeline diagnostics and tests.
 - FBX temp asset lifecycle diagnostics: `[FBX][TEMP_IMPORT/ASSIGN/CLEANUP/KEEP_PREVIOUS/DELETE_FAIL/UNIT_INVALID/SCALE_INVARIANT]`.
 - FBX unit/scale invariant checks — invalid unit imports are rejected/preserved, actor and component scale stay at 1.
 
@@ -17,6 +22,13 @@
 - Fixed UE 5.7.4 FBX reimport meter-size regression — no longer uses reimport-over-existing path.
 - Fixed material sync losing generated MID after FBX mesh refresh.
 - Fixed scale invariant regressions — actor/component scale preserved at 1.
+- Preserved mesh/scale invariants during material/texture sync.
+- Hardened unsupported/missing texture path handling.
+
+### Known limitations
+- Packed Blender images are not imported.
+- Complex material node graphs are not traversed.
+- Alpha/Normal visual support remains limited/deferred.
 
 ## [0.2.4] - 2026-06-10
 
