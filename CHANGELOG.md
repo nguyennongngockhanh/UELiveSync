@@ -3,6 +3,8 @@
 ## [unreleased]
 
 ### Added
+- Stage 10A.7A log-based playback validator (`tools/uelivesync_10a7a_validation.py`).
+- Automated playback state validation for visibility channels 9/10 at frames 1/10/20.
 - Added Blender 5.1+ slotted Action keyframe extraction (`_iter_action_fcurves_51`).
 - Added `action.is_action_layered` detection in `_extract_keyframes()`.
 - Added capability gating fallback when UE does not send `PT_CapabilityResponse`.

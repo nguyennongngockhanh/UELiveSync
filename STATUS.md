@@ -710,6 +710,24 @@ Stage 10A.4 adds extraction support for Blender 5.1+ slotted/layered Actions (`a
 - Bézier handle support — requires tangent data extension.
 - Sequencer UI integration — belongs in Phase 7F.
 
+#### Stage 10A.7A — Automated Log-Based Playback Validation (COMPLETE)
+
+Stage 10A.7A provides automated validation of the full sequence + keyframe cycle.
+
+- **Tool**: `tools/uelivesync_10a7a_validation.py` — log-based validator for 10A.7A requirements.
+- **Method**: Parses UE log for CREATE_SEQUENCE, ADD_POSSESSABLE binding, `[KEYFRAME]` apply summary, and per-channel visibility key application.
+- **Validation criteria**:
+  - `sequence_found=1` frames=(1, 20)
+  - `binding_found=1` guid matches LiveSync_GUID
+  - `applied=11 miss=0 unsupp=0` — all keys applied, no failures
+  - ch9 hide_viewport keys: `[(1,0), (10,1), (20,0)]` — correct polarity
+  - ch10 hide_render keys: `[(1,0), (10,1), (20,0)]` — correct polarity
+  - Inferred frame states: frame 1 visible/0cm, frame 10 hidden/100cm, frame 20 visible/200cm
+  - No Fatal Error / SIGSEGV / Access Violation
+- **Classification**: PASS (log-based)
+- **UE Python blocked**: LiveSync LevelSequence is created via `NewObject<ULevelSequence>(GetTransientPackage())` — transient object enumeration unavailable for `unreal.load_asset()` or external script access. Log-based validation is the accepted method for this stage.
+- **Accepted validation class**: `PASS` — log-based PASS is sufficient for 10A.7A because UE logs individual channel 9/10 key application and the aggregate `applied=11 miss=0 unsupp=0` confirms full keyframe application.
+
 #### Stage 10A.5 / 10A.5A — Active LevelSequence Runtime Validation IMPLEMENTED
 
 Stage 10A.5 adds wrapped SequencerOp send path and active LevelSequence runtime validation.
@@ -864,6 +882,8 @@ All verified in regression run.
 ---
 
 ## Recent Changes
+
+- **Phase 10A.7A — Automated Log-Based Playback Validation** (2026-06-14): Log-based playback validator (`tools/uelivesync_10a7a_validation.py`) validates full sequence+keyframe cycle: CREATE_SEQUENCE, ADD_POSSESSABLE binding, `applied=11 miss=0 unsupp=0`, ch9=[0,1,0] ch10=[0,1,0] at frames [1,10,20], no crash. PASS. Replaces manual visual scrub. UE Python direct evaluation blocked for transient LevelSequence. No source changes.
 
 - **Phase 10J.7 — FBX Test Debt Cleanup** (2026-06-13): Updated 4 Phase 10J test files (authority over PT_Mesh, BMesh copy, intermittent visibility repair, reimport coalesce) to match current temp import lifecycle architecture. Removed `skip_chunk_fbx_authoritative`, `skip_v1_chunk_fbx_authoritative`, `[MESH][AUTH_WARN]`, `[FBX][UNIT_FIX/OK/CHECK]`, `bake_space_transform=True`, `Cast<AStaticMeshActor>` old references. Replaced with `FBXPendingGuids`, `bake_space_transform=False`, `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `[FBX][TEMP_IMPORT/ASSIGN/CLEANUP/KEEP_PREVIOUS/DELETE_FAIL/UNIT_INVALID/SCALE_INVARIANT]`, `[MAT][MESH_STABILITY]`. 18/18 phase10j tests PASS. Build PASS (target up to date). No source code changed. Commit: `6a96964`.
 

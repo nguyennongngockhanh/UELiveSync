@@ -207,6 +207,8 @@ FNV-1a 32-bit hash of all extracted keyframe entries (`_hash_keyframes()`) is st
 
 **Runtime helper**: `tools/uelivesync_stage10a5_active_sequence.py` validates the active LevelSequence setup path.
 
+**Playback validation (10A.7A)**: `tools/uelivesync_10a7a_validation.py` provides automated log-based playback state validation — verifies CREATE_SEQUENCE, ADD_POSSESSABLE binding, keyframe apply summary (`applied=N miss=0 unsupp=0`), per-channel visibility keys at frames 1/10/20, and no crash. Classifies PASS/FAIL. UE Python direct evaluation blocked for transient LevelSequence.
+
 **NullRHI caveat**: `-NullRHI` suppresses Tick/networking in this workflow. Use normal editor or `-RenderOffScreen`.
 
 ---
