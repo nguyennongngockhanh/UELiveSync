@@ -3296,6 +3296,48 @@ def send_snapshot(snapshot):
     )
 
 
+def send_sequencer_op(payload_bytes):
+    """Send a PT_SequencerOp packet with proper protocol header wrapping.
+
+    payload_bytes: already-serialized packet (FSequencerOpHeader + opcode payload).
+    Returns True on success, False on failure.
+    """
+
+    global _client
+    global _sequencer_op_sequence
+    global _sequencer_op_packets_sent
+
+    if _client is None:
+
+        return False
+
+    try:
+
+        # Build the protocol header wrapping the sequencer op payload
+        packet = _client._build_packet(
+            objects_data=[payload_bytes],
+            packet_type=PT_SequencerOp,
+            version=LIVE_SYNC_VERSION_V4,
+        )
+
+        _client._send_queue.put_nowait(packet)
+
+        _sequencer_op_sequence += 1
+        _sequencer_op_packets_sent += 1
+
+        print(
+            f"[SequencerOp] sent seq={_sequencer_op_sequence} "
+            f"payload_len={len(payload_bytes)} total={len(packet)}"
+        )
+
+        return True
+
+    except queue.Full:
+
+        print("[SequencerOp] ERROR: send queue full")
+        return False
+
+
 def get_queue_depth():
 
     global _client
