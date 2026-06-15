@@ -506,6 +506,10 @@ private:
     void HandleTimeline(
         const FTimelinePayload& Payload);
 
+    // Phase 7F Stage 1: Timeline state — applies frame range to LevelSequence
+    void HandleTimelineState(
+        const FTimelineStatePayload& Payload);
+
     // =====================================================
     // PLAYBACK STATE (Phase 7C)
     // =====================================================
@@ -952,6 +956,16 @@ private:
 
     // Timestamp of the last applied timeline packet
     double LastTimelineTimestamp = 0.0;
+
+    // =====================================================
+    // TIMELINE STATE (Phase 7F Stage 1)
+    // =====================================================
+
+    // Most recently received timeline state (frame range + FPS)
+    FTimelineStatePayload LastTimelineStatePayload;
+
+    // Whether a PT_TimelineState packet has been received at least once
+    bool bHasTimelineStatePayload = false;
 
     // =====================================================
     // CAPABILITY NEGOTIATION (Phase 9)

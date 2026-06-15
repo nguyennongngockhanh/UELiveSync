@@ -2985,7 +2985,7 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18 };
+            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19 };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
@@ -3792,6 +3792,48 @@ ProcessBinaryPacket(
 
         HandleTimeline(Payload);
         Stats.TimelinePacketsApplied.fetch_add(1, std::memory_order_relaxed);
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // TIMELINE STATE PACKET (Phase 7F Stage 1)
+    // =====================================================
+    // Wire format (20 bytes fixed):
+    //   FrameStart(4) + FrameEnd(4) + FrameCurrent(4) + FPSNum(4) + FPSDen(4)
+    //
+    // Unlike PT_Timeline (0x13), this packet applies the frame range
+    // directly to the LiveSync LevelSequence playback range.
+    // =====================================================
+
+    if (PacketType == 0x19)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessTimelineState);
+
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
+        if (ObjSize < sizeof(FTimelineStatePayload))
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[TIMELINE][MALFORMED] size %d < %d"),
+                ObjSize, sizeof(FTimelineStatePayload));
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        FTimelineStatePayload Payload;
+        Payload.FrameStart   = *reinterpret_cast<const int32*>(Ptr + 0);
+        Payload.FrameEnd     = *reinterpret_cast<const int32*>(Ptr + 4);
+        Payload.FrameCurrent = *reinterpret_cast<const int32*>(Ptr + 8);
+        Payload.FPSNum       = *reinterpret_cast<const int32*>(Ptr + 12);
+        Payload.FPSDen       = *reinterpret_cast<const int32*>(Ptr + 16);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[TIMELINE][RECV] frame_start=%d frame_end=%d frame_current=%d fps=%d/%d"),
+            Payload.FrameStart, Payload.FrameEnd, Payload.FrameCurrent,
+            Payload.FPSNum, Payload.FPSDen);
+
+        HandleTimelineState(Payload);
         Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
         return;
     }
@@ -12047,6 +12089,61 @@ void UUELiveSyncSubsystem::
 HandleTimeline(
     const FTimelinePayload& Payload)
 {
+}
+
+
+// =========================================================
+// HANDLE TIMELINE STATE (Phase 7F Stage 1)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleTimelineState(
+    const FTimelineStatePayload& Payload)
+{
+    // Store the latest state
+    LastTimelineStatePayload = Payload;
+    bHasTimelineStatePayload = true;
+
+    // Apply to LevelSequence playback range if it exists
+    ULevelSequence* Seq = LiveSyncSequence.Get();
+    if (!Seq)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[TIMELINE][SKIP] No LiveSync LevelSequence to apply"));
+        return;
+    }
+
+    UMovieScene* MovieScene = Seq->GetMovieScene();
+    if (!MovieScene)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[TIMELINE][SKIP] No MovieScene in LevelSequence"));
+        return;
+    }
+
+    // Apply frame range
+    MovieScene->SetPlaybackRange(
+        TRange<FFrameNumber>(
+            FFrameNumber(Payload.FrameStart),
+            FFrameNumber(Payload.FrameEnd)));
+
+    // Apply display rate if FPS is valid
+    if (Payload.FPSNum > 0 && Payload.FPSDen > 0)
+    {
+        FFrameRate DisplayRate(Payload.FPSNum, Payload.FPSDen);
+        MovieScene->SetDisplayRate(DisplayRate);
+    }
+
+    // Store the applied values
+    LiveSyncSequenceFrameStart = Payload.FrameStart;
+    LiveSyncSequenceFrameEnd   = Payload.FrameEnd;
+    LiveSyncSequenceFPSNum     = Payload.FPSNum;
+    LiveSyncSequenceFPSDen     = Payload.FPSDen;
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[TIMELINE][APPLY] range=[%d,%d] fps=%d/%d"),
+        Payload.FrameStart, Payload.FrameEnd,
+        Payload.FPSNum, Payload.FPSDen);
 }
 
 

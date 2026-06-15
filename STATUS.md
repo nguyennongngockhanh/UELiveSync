@@ -49,6 +49,7 @@
 - **Phase 7C** — Playback Sync (implemented) ✅
 - **Phase 7D** — Active Camera Sync (implemented) ✅
 - **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.2 UE BoolTrack apply done) ✅
+- **Phase 7F Stage 1** — Timeline State Packet (PT_TimelineState = 0x19, frame range + FPS apply to LevelSequence) ✅
 - **Phase 7C Stage 3A–5** — FBX Mesh Handoff Import + Importer Hardening + Asset Lifecycle Diagnostics + Scene Unit Conversion + Rename Asset Path Diagnostics (all stages complete) ✅
 - **Phase 10J.5O — FBX Unit Scale Policy** — Blender FBX export: `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `bake_space_transform=False`. UE import: `bConvertSceneUnit=true`. No actor/component scale compensation. ✅
 - **Phase 10J.5Q — FBX Unique Temp Import Path** — Each sync imports to a unique temp StaticMesh asset path. No reimport-over-existing. No package rename-over-existing. Direct validated assignment. Previous temp mesh cleanup after success. ✅
@@ -65,7 +66,8 @@
 5. ~~**Phase 7D — Active Camera Sync (0x15)**~~ **IMPLEMENTED** ✅
 6. ~~**Phase 7E — Sequencer + Keyframe Replication**~~ **Stage 9C CLOSEOUT** ✅
 7. **Phase 7E Stage 10A — Visibility Keyframes** (Stages 10A.1–10A.2, 10A.4 complete) ✅
-8. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
+8. **Phase 7F Stage 1 — Timeline State Packet** (PT_TimelineState = 0x19, frame range + FPS apply) ✅
+9. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
 9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. **COMPLETE** ✅
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
 11. ~~**Manual Selected-Object Full Mesh Attribute Sync**~~ — superseded by Stage 3A FBX handoff 🔒
@@ -75,6 +77,7 @@
 15. **Phase 10J.6 — FBX Temp Asset Lifecycle Hardening** — Diagnostic markers for temp import lifecycle. Runtime smoke 6/6 PASS. **COMPLETE** ✅
 16. **Phase 10J.7 — FBX Test Debt Cleanup** — Tests updated for current architecture. 18/18 phase10j PASS. **COMPLETE** ✅
 17. **Phase 10K — Texture Pipeline** — MTEX metadata sync, UE texture import/cache, MID texture apply, master material, diagnostics. All 5 sub-phases complete. **COMPLETE** ✅
+19. **Phase 7F Stage 1 — Timeline State Packet** — PT_TimelineState = 0x19, frame range + FPS apply to LevelSequence playback range, TCP injector validated, build PASS, runtime RECV + APPLY confirmed, keyframe regression (applied=11 miss=0 unsupp=0) clean, 96/96 tests PASS. **COMPLETE** ✅
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 

@@ -3,6 +3,16 @@
 ## [unreleased]
 
 ### Added
+- Phase 7F Stage 1: PT_TimelineState (0x19) packet — sends Blender frame range + FPS to UE.
+- PT_TimelineState applies frame range via `SetPlaybackRange` and display rate via `SetDisplayRate` on LiveSync LevelSequence.
+- `FTimelineStatePayload` (20 bytes: frame_start, frame_end, frame_current, fps_num, fps_den) in SyncTypes.h.
+- `HandleTimelineState()` in UELiveSyncSubsystem with [TIMELINE][RECV/APPLY/SKIP/MALFORMED] diagnostics.
+- Blender `serialize_timeline_state()` and `PT_TimelineState` send alongside PT_Timeline in timeline change path.
+- TCP injector for runtime validation: `tools/uelivesync_7f_timeline_state_client.py` (timeline-only and full 5-packet flow modes).
+- 21 new tests: wire format (7), reserved packet guard (7), UE apply (7).
+- 0x19 added to kValidTypes; 0x02 remains reserved/invalid.
+
+### Changed
 - Stage 10A.7A log-based playback validator (`tools/uelivesync_10a7a_validation.py`).
 - Automated playback state validation for visibility channels 9/10 at frames 1/10/20.
 - Added Blender 5.1+ slotted Action keyframe extraction (`_iter_action_fcurves_51`).
@@ -56,6 +66,9 @@
 - Stage 10D.1: All 75/75 regression tests pass (added 10D.1 with 9/9).
 - Stage 10C.1: Validated `unreal.load_asset()` returns binding_count=1 with TransformTrack + BoolTrack sections (PASS_BINDING_ONLY).
 - Stage 10C.1: All 66/66 regression tests pass (added 10C.1 with 7/7).
+- Phase 7F Stage 1: Runtime validated PT_TimelineState (0x19) — [TIMELINE][RECV] + [TIMELINE][APPLY] confirmed with frame range=[1,120] fps=24/1.
+- Phase 7F Stage 1: Full 5-packet keyframe regression clean (applied=11 miss=0 unsupp=0).
+- Phase 7F Stage 1: All 96/96 regression tests pass (21 new + 75 existing).
 
 ### Known notes
 - Keyframe runtime requires `prefs.keyframe_sync=True`.

@@ -97,6 +97,7 @@ ProcessQueuedPackets → InterpolateTransforms → ResolvePendingAttachments
 | PT_FBXImportRequest | 0x16 | 680 bytes | FBX import request |
 | PT_Keyframe | 0x17 | 14 + N×25 bytes | Keyframe batch (transform ch 0–8, visibility ch 9–10) |
 | PT_SequencerOp | 0x18 | 16 + payload bytes | Sequencer operation (create sequence, add binding, etc.) |
+| PT_TimelineState | 0x19 | 20 bytes | Timeline state (frame range, FPS, apply to LevelSequence) |
 
 ## Key Registries/Maps (UE Side)
 
@@ -216,6 +217,25 @@ FNV-1a 32-bit hash of all extracted keyframe entries (`_hash_keyframes()`) is st
 **Stage 10D.1 Sequencer Editor usability validation**: `LevelSequenceEditorBlueprintLibrary.open_level_sequence()` succeeds. Classification: PASS_EDITOR_DATA_ONLY — the asset is editor-usable with binding_count=1, Actor_0 display name, MovieScene3DTransformTrack + MovieSceneBoolTrack each with 1 section. Manual UI scrub not achievable via `-ExecutePythonScript` (requires interactive editor session). Tool: `tools/uelivesync_10d_editor_sequence_validation.py`. Test: `tests/phase7e_stage10d_editor_sequence_validation.py` (9/9 PASS).
 
 **NullRHI caveat**: `-NullRHI` suppresses Tick/networking in this workflow. Use normal editor or `-RenderOffScreen`.
+
+### Phase 7F Stage 1 — Timeline State Packet (PT_TimelineState = 0x19)
+
+PT_TimelineState (0x19) is distinct from PT_Timeline (0x13). PT_Timeline is storage-only; PT_TimelineState applies frame range and display rate to the LiveSync LevelSequence's playback range via `SetPlaybackRange` and `SetDisplayRate`.
+
+**Wire format** (20 bytes, packed):
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | frame_start | int32 | Playback range start |
+| 4 | frame_end | int32 | Playback range end |
+| 8 | frame_current | int32 | Current frame (informational) |
+| 12 | fps_num | int32 | FPS numerator |
+| 16 | fps_den | int32 | FPS denominator |
+
+**UE handler**: `HandleTimelineState()` stores payload in `LastTimelineStatePayload`, updates `LiveSyncSequenceFrameStart/End/FPSNum/FPSDen`, and applies to MovieScene. Skips silently if no LiveSync LevelSequence exists. No sequence number or staleness check (applies immediately on each state change).
+
+**Blender send**: `serialize_timeline_state()` uses `struct.pack("<iiiii", ...)`. Sent alongside existing PT_Timeline in the timeline state change branch of `sync.py`.
+
+**Diagnostic markers**: `[TIMELINE][RECV]`, `[TIMELINE][APPLY]`, `[TIMELINE][SKIP]`, `[TIMELINE][MALFORMED]`.
 
 ---
 

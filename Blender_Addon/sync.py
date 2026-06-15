@@ -97,6 +97,9 @@ try:
         serialize_active_camera,
         ACTIVE_CAMERA_PAYLOAD_SIZE,
         NULL_CAMERA_GUID,
+        PT_TimelineState,
+        serialize_timeline_state,
+        TIMELINE_STATE_PAYLOAD_SIZE,
         is_active_camera_effective,
         set_active_camera_enabled,
         _active_camera_enabled,
@@ -228,6 +231,9 @@ except ImportError:
         serialize_active_camera,
         ACTIVE_CAMERA_PAYLOAD_SIZE,
         NULL_CAMERA_GUID,
+        PT_TimelineState,
+        serialize_timeline_state,
+        TIMELINE_STATE_PAYLOAD_SIZE,
         is_active_camera_effective,
         set_active_camera_enabled,
         _active_camera_enabled,
@@ -2269,6 +2275,11 @@ def check_updates():
             _timeline_state_changes += 1
             _runtime_stats["timeline_packets_sent"] = _timeline_packets_sent
             _runtime_stats["timeline_state_changes"] = _timeline_state_changes
+
+            # Phase 7F Stage 1: Also send PT_TimelineState with frame range + FPS
+            # (applies to UE LevelSequence playback range)
+            tl_state_payload = serialize_timeline_state(fs, fe, fc, fps_num, fps_den)
+            send_objects([tl_state_payload], packet_type=PT_TimelineState, version=5)
 
         _last_timeline_state = current_tl
 

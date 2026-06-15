@@ -256,6 +256,9 @@ enum EPacketType : uint8
     // See Docs/Architecture/54-phase7e-sequencer-keyframe-scope-lock.md
     PT_Keyframe       = 0x17,  // Keyframe replication (fixed header + repeated entries)
 
+    // Phase 7F Stage 1: Timeline state (frame range + FPS, applies to LevelSequence)
+    PT_TimelineState  = 0x19,  // Timeline state from Blender (applied to Sequencer)
+
     // Phase 9: Capability negotiation (announce/response)
     // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md §9
     PT_CapabilityAnnounce  = 0x11,  // Bitmask from Blender to UE
@@ -607,6 +610,34 @@ struct FFBXImportRequestPayload
 static_assert(
     sizeof(FFBXImportRequestPayload) == 688,
     "FFBXImportRequestPayload must be exactly 688 bytes");
+
+
+// =========================================================
+// TIMELINE STATE PAYLOAD (Phase 7F Stage 1)
+// =========================================================
+
+// PT_TimelineState (0x19) fixed-size payload: 20 bytes
+// Wire format:
+//   [0-3]   frame_start  int32   — timeline start frame
+//   [4-7]   frame_end    int32   — timeline end frame
+//   [8-11]  frame_current int32  — current playhead position
+//   [12-15] fps_num      int32   — FPS numerator (e.g. 24)
+//   [16-19] fps_den      int32   — FPS denominator (e.g. 1)
+//
+// Unlike PT_Timeline (0x13) which is storage-only, PT_TimelineState
+// applies the frame range to the LiveSync LevelSequence.
+struct FTimelineStatePayload
+{
+    int32  FrameStart   = 0;
+    int32  FrameEnd     = 0;
+    int32  FrameCurrent = 0;
+    int32  FPSNum       = 0;
+    int32  FPSDen       = 0;
+};
+
+static_assert(
+    sizeof(FTimelineStatePayload) == 20,
+    "FTimelineStatePayload must be exactly 20 bytes");
 
 #pragma pack(pop)
 

@@ -346,6 +346,10 @@ PT_Keyframe = 0x17  # Keyframe replication (fixed header + repeated entries)
 # Wire format: fixed-size 16-byte common header + optional opcode payload.
 PT_SequencerOp = 0x18  # Sequencer operation (discrete event, NOT state stream)
 
+# Phase 7F Stage 1: Timeline state (PT_TimelineState = 0x19)
+# Applies frame range + FPS to LiveSync LevelSequence playback range.
+PT_TimelineState = 0x19  # Timeline state (applied to Sequencer, unlike PT_Timeline)
+
 # Sequencer opcodes (must match SyncTypes.h ESequencerOpcode)
 SEQUENCER_OP_CREATE_SEQUENCE   = 0  # Create/replace sequence with frame range + FPS
 SEQUENCER_OP_ADD_POSSESSABLE   = 1  # Add possessable binding to sequence
@@ -1147,6 +1151,30 @@ def serialize_timeline(frame_current, frame_start, frame_end,
         sequence & 0xFFFFFFFF,
         reserved, timestamp
     )
+
+# =========================================================
+# TIMELINE STATE SERIALIZATION (Phase 7F Stage 1)
+# =========================================================
+
+# PT_TimelineState (0x19) fixed-size payload: 20 bytes
+# Payload layout:
+#   [0-3]   frame_start  int32  — timeline start frame
+#   [4-7]   frame_end    int32  — timeline end frame
+#   [8-11]  frame_current int32 — current playhead position
+#   [12-15] fps_num      int32  — FPS numerator (e.g. 24)
+#   [16-19] fps_den      int32  — FPS denominator (e.g. 1)
+TIMELINE_STATE_PAYLOAD_SIZE = 20
+
+
+def serialize_timeline_state(frame_start, frame_end, frame_current,
+                              fps_num, fps_den):
+    """Serialize timeline state payload for PT_TimelineState (0x19)."""
+    return struct.pack(
+        "<iiiii",
+        frame_start, frame_end, frame_current,
+        fps_num, fps_den
+    )
+
 
 NULL_CAMERA_GUID = b'\x00' * 16
 
