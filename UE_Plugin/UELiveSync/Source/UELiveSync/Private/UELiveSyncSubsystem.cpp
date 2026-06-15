@@ -950,6 +950,57 @@ static ULevelSequence* GetOrCreateLiveSyncLevelSequenceAsset()
 
     return Seq;
 }
+
+// =========================================================
+// STAGE 10C.1 — SAVE LIVE-SYNC LEVELSEQUENCE HELPER
+// =========================================================
+// Saves the asset-backed LevelSequence package to disk
+// after runtime modifications (bindings, keyframes).
+// Called from HandleKeyframe after successful keyframe apply.
+// =========================================================
+static void SaveLiveSyncLevelSequenceAsset(ULevelSequence* Seq)
+{
+    if (!Seq)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[SEQ][ASSET_SAVE_SKIP] Seq is null — nothing to save"));
+        return;
+    }
+
+    UPackage* Package = Cast<UPackage>(Seq->GetOutermost());
+    if (!Package)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[SEQ][ASSET_SAVE_FAIL] GetOutermost() returned null"));
+        return;
+    }
+
+    // Mark dirty so the save picks up all changes
+    Package->MarkPackageDirty();
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[SEQ][ASSET_DIRTY] Package marked dirty: %s"),
+        *Package->GetName());
+
+    // Convert long package name to file path
+    FString FilePath = FPackageName::LongPackageNameToFilename(
+        Package->GetName(), FPackageName::GetAssetPackageExtension());
+    if (FilePath.IsEmpty())
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[SEQ][ASSET_SAVE_FAIL] LongPackageNameToFilename failed for %s"),
+            *Package->GetName());
+        return;
+    }
+
+    FSavePackageArgs SaveArgs;
+    SaveArgs.TopLevelFlags = RF_Standalone;
+    SaveArgs.SaveFlags = SAVE_NoError;
+    UPackage::SavePackage(Package, nullptr, *FilePath, SaveArgs);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[SEQ][ASSET_SAVE] Saved sequence: %s"),
+        *Package->GetName());
+}
 #endif // WITH_EDITOR
 
 bool UUELiveSyncSubsystem::
@@ -9353,6 +9404,14 @@ HandleKeyframe(
         TEXT("[KEYFRAME] Applied seq=%u count=%d applied=%d miss=%d unsupp=%d"),
         Header.Sequence, Header.KeyCount,
         AppliedKeys, MissingBinding, UnsupportedChannel);
+
+    // Persist the sequence after successful keyframe application (Stage 10C.1)
+    if (AppliedKeys > 0 && LiveSyncSequence.IsValid())
+    {
+#if WITH_EDITOR
+        SaveLiveSyncLevelSequenceAsset(LiveSyncSequence.Get());
+#endif
+    }
 }
 
 

@@ -760,13 +760,26 @@ Stage 10B replaces the transient `ULevelSequence` created via `NewObject(GetTran
 Stage 10B.3 verifies that the persisted LevelSequence asset can be loaded via `unreal.load_asset()` inside UE Python.
 
 - **Result**: `unreal.load_asset("/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime")` returns a valid `LevelSequence` object (PASS).
-- **Classification**: **PASS_LOAD_ONLY** — asset loads correctly; bindings/keyframe inspection limited because:
-  1. `SavePackage()` is called only at sequence creation, not after bindings/keyframes are applied (bindings exist only in memory during runtime).
-  2. UE Python API does not expose `MovieScene.get_playback_range()` or `MovieScene.get_tracks()`.
+- **Classification**: **PASS_LOAD_ONLY** (before Stage 10C.1) — asset loads correctly; bindings were not persisted because SavePackage was creation-only.
 - **Fix applied**: `NewObject` now uses `FName("LS_UELiveSync_Runtime")` instead of `NAME_None`, so the asset has a proper sub-object name and resolves cleanly via `FSoftObjectPath` and `unreal.load_asset()`.
 - **Tools**:
   - `tools/uelivesync_10b3_uepython_asset_load.py` — validator with `--check-result`, `--generate`, and orchestrator modes.
   - `tests/phase7e_stage10b3_uepython_asset_load.py` — 5/5 PASS (loads, no errors, class=LevelSequence, binding_count=0, classification).
+
+#### Stage 10C.1 — Persist Applied Sequencer Data (COMPLETE)
+
+Stage 10C.1 persists the asset-backed LevelSequence after runtime binding and keyframe application, upgrading UE Python inspection from PASS_LOAD_ONLY to PASS_BINDING_ONLY.
+
+- **C++ change**: Added `SaveLiveSyncLevelSequenceAsset()` static helper that saves the LiveSync LevelSequence package via `UPackage::SavePackage()`. Called from `HandleKeyframe()` after successful keyframe application (`AppliedKeys > 0`).
+- **New diagnostics**: `[SEQ][ASSET_DIRTY]`, `[SEQ][ASSET_SAVE]`, `[SEQ][ASSET_SAVE_FAIL]`, `[SEQ][ASSET_SAVE_SKIP]`.
+- **Runtime validation**:
+  - TCP injector: `AppliedKeys > 0` → `[SEQ][ASSET_DIRTY]` + `[SEQ][ASSET_SAVE]` confirmed in log.
+  - `[KEYFRAME] Applied seq=3 count=11 applied=11 miss=0 unsupp=0` still passes.
+  - UE Python reload shows **binding_count=1** with `MovieScene3DTransformTrack` and `MovieSceneBoolTrack` sections present.
+- **Classification**: **PASS_BINDING_ONLY** — bindings persist through save/load cycle; track types and sections detected via UE Python API. Keyframe channel data is stored in internal UE types (FMovieSceneFloatChannel, FMovieSceneBoolChannel) not exposed to Python. Deferred to future stage if needed.
+- **Tools**:
+  - `tools/uelivesync_10c_saved_sequence_inspection.py` — validates the UE Python inspection result (PASS_BINDING_ONLY).
+  - `tests/phase7e_stage10c_persist_applied_sequence.py` — 7/7 PASS (markers, function, call site, 0x02 invariant).
 - **Runtime result**: `applied=11 miss=0 unsupp=0` — same keyframe apply correctness as Stage 10A.5.
 - **Tests**:
   - `tools/uelivesync_10b_tcp_client.py` — TCP injector for standalone flow
@@ -829,6 +842,7 @@ All verified in regression run.
 | Phase 7E Stage 10A.5 SequencerOp wrap + reserved guard | **4/4 PASS** | |
 | Phase 7E Stage 10B.2 runtime asset sequence | **59/59 PASS** | 49+4+6 (log-check pass) |
 | Phase 7E Stage 10B.3 UE Python asset load | **5/5 PASS** | PASS_LOAD_ONLY |
+| Phase 7E Stage 10C.1 persist applied sequence | **7/7 PASS** | PASS_BINDING_ONLY |
 | Phase 7C Stage 1 (playback wire) | **42/42 PASS** | |
 | Phase 7C Stage 2 (detection) | **41/41 PASS** | |
 | Phase 7C Stage 3 (UE handler) | **53/53 PASS** | |
@@ -840,8 +854,8 @@ All verified in regression run.
 | Phase 6E delete validation | **320/320 PASS** | |
 | Phase 6D hierarchy | **119/119 PASS** | 7 skipped (no UE) |
 | Phase 6H semantic consistency | **10/11 PASS** | 1 skip (no UE) |
-| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81+4+59+5 = 761/761 PASS** | |
-| **Grand total (all standalone)** | **2450/2450 PASS** | 1689 (prev) + 761 (Phase 7E Stage 3–10B.3) |
+| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81+4+59+5+7 = 768/768 PASS** | |
+| **Grand total (all standalone)** | **2457/2457 PASS** | 1689 (prev) + 768 (Phase 7E Stage 3–10C.1) |
 
 **Notes**:
 - Phase 6B runtime audit: 90/102 PASS, 12 FAIL — pre-existing ConsoleReset checks against `.cpp` file; ConsoleReset code lives in `.inl` include. Not regressions.
@@ -910,6 +924,8 @@ All verified in regression run.
 ---
 
 ## Recent Changes
+
+- **Stage 10C.1 — Persist Applied Sequencer Data** (2026-06-15): Added `SaveLiveSyncLevelSequenceAsset()` to persist bindings and keyframes to disk after successful keyframe apply. Upgraded UE Python inspection from PASS_LOAD_ONLY to PASS_BINDING_ONLY (binding_count=1, TransformTrack + BoolTrack with sections). Added `[SEQ][ASSET_DIRTY/SAVE/SAVE_FAIL/SAVE_SKIP]` diagnostics. All 66/66 regression tests PASS (including new 10C.1: 7/7).
 
 - **Stage 10B.3 — UE Python Asset Load Verification** (2026-06-15): Verified `unreal.load_asset()` returns valid `LevelSequence` (PASS_LOAD_ONLY). Fixed `NewObject` NAME_None → named object for clean `FSoftObjectPath` resolution. Created `tools/uelivesync_10b3_uepython_asset_load.py` and `tests/phase7e_stage10b3_uepython_asset_load.py` (5/5 PASS). All 64/64 regression tests PASS.
 

@@ -18,6 +18,9 @@
 - Added `[SEQ][ASSET_LOAD / ASSET_CREATE / ASSET_READY / ASSET_FAIL]` diagnostic markers.
 - Stage 10B.3: UE Python asset load verification — `unreal.load_asset()` returns valid `LevelSequence` (PASS_LOAD_ONLY).
 - Fixed `NewObject` `NAME_None` → named `FName("LS_UELiveSync_Runtime")` for clean `FSoftObjectPath` resolution.
+- Stage 10C.1: Persist applied sequencer data — `SaveLiveSyncLevelSequenceAsset()` called after successful keyframe apply.
+- Upgraded UE Python inspection from PASS_LOAD_ONLY to PASS_BINDING_ONLY (binding_count=1, track types detected).
+- Added `[SEQ][ASSET_DIRTY / ASSET_SAVE / ASSET_SAVE_FAIL / ASSET_SAVE_SKIP]` diagnostic markers.
 - Added MTEX texture metadata sync for material slots.
 - Added UE-side texture import/cache from MTEX paths.
 - Added generated MID texture parameter application.
@@ -48,6 +51,8 @@
 - Stage 10B.2: All 59/59 regression tests pass (Stage 10A.2 + 10A.5A).
 - Stage 10B.3: Validated `unreal.load_asset()` returns non-null `LevelSequence` (PASS_LOAD_ONLY).
 - Stage 10B.3: All 64/64 regression tests pass (added 10B.3 with 5/5).
+- Stage 10C.1: Validated `unreal.load_asset()` returns binding_count=1 with TransformTrack + BoolTrack sections (PASS_BINDING_ONLY).
+- Stage 10C.1: All 66/66 regression tests pass (added 10C.1 with 7/7).
 
 ### Known notes
 - Keyframe runtime requires `prefs.keyframe_sync=True`.
