@@ -17,6 +17,7 @@
 - Added `UPackage::SavePackage()` in `GetOrCreateLiveSyncLevelSequenceAsset()` to persist asset to disk.
 - Added `[SEQ][ASSET_LOAD / ASSET_CREATE / ASSET_READY / ASSET_FAIL]` diagnostic markers.
 - Stage 10B.3: UE Python asset load verification — `unreal.load_asset()` returns valid `LevelSequence` (PASS_LOAD_ONLY).
+- Stage 10D.1: Sequencer Editor usability validation — `open_level_sequence()` success, binding/tracks/sections persist (PASS_EDITOR_DATA_ONLY).
 - Fixed `NewObject` `NAME_None` → named `FName("LS_UELiveSync_Runtime")` for clean `FSoftObjectPath` resolution.
 - Stage 10C.1: Persist applied sequencer data — `SaveLiveSyncLevelSequenceAsset()` called after successful keyframe apply.
 - Upgraded UE Python inspection from PASS_LOAD_ONLY to PASS_BINDING_ONLY (binding_count=1, track types detected).
@@ -51,6 +52,8 @@
 - Stage 10B.2: All 59/59 regression tests pass (Stage 10A.2 + 10A.5A).
 - Stage 10B.3: Validated `unreal.load_asset()` returns non-null `LevelSequence` (PASS_LOAD_ONLY).
 - Stage 10B.3: All 64/64 regression tests pass (added 10B.3 with 5/5).
+- Stage 10D.1: Validated Sequencer Editor usability — `open_level_sequence()` succeeds, binding + tracks + sections all persist (PASS_EDITOR_DATA_ONLY).
+- Stage 10D.1: All 75/75 regression tests pass (added 10D.1 with 9/9).
 - Stage 10C.1: Validated `unreal.load_asset()` returns binding_count=1 with TransformTrack + BoolTrack sections (PASS_BINDING_ONLY).
 - Stage 10C.1: All 66/66 regression tests pass (added 10C.1 with 7/7).
 

@@ -213,6 +213,8 @@ FNV-1a 32-bit hash of all extracted keyframe entries (`_hash_keyframes()`) is st
 
 **Stage 10C.1 Persist applied sequencer data**: Added `SaveLiveSyncLevelSequenceAsset()` called from `HandleKeyframe()` after `AppliedKeys > 0`. Upgrades UE Python inspection to PASS_BINDING_ONLY (binding_count=1, MovieScene3DTransformTrack + MovieSceneBoolTrack sections detected). Keyframe keys stored in internal UE channel types not exposed to Python API. Diagnostics: `[SEQ][ASSET_DIRTY]`, `[SEQ][ASSET_SAVE]`, `[SEQ][ASSET_SAVE_FAIL]`, `[SEQ][ASSET_SAVE_SKIP]`. Tool: `tools/uelivesync_10c_saved_sequence_inspection.py`. Test: `tests/phase7e_stage10c_persist_applied_sequence.py` (7/7 PASS).
 
+**Stage 10D.1 Sequencer Editor usability validation**: `LevelSequenceEditorBlueprintLibrary.open_level_sequence()` succeeds. Classification: PASS_EDITOR_DATA_ONLY — the asset is editor-usable with binding_count=1, Actor_0 display name, MovieScene3DTransformTrack + MovieSceneBoolTrack each with 1 section. Manual UI scrub not achievable via `-ExecutePythonScript` (requires interactive editor session). Tool: `tools/uelivesync_10d_editor_sequence_validation.py`. Test: `tests/phase7e_stage10d_editor_sequence_validation.py` (9/9 PASS).
+
 **NullRHI caveat**: `-NullRHI` suppresses Tick/networking in this workflow. Use normal editor or `-RenderOffScreen`.
 
 ---

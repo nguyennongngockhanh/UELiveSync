@@ -785,6 +785,24 @@ Stage 10C.1 persists the asset-backed LevelSequence after runtime binding and ke
   - `tools/uelivesync_10b_tcp_client.py` — TCP injector for standalone flow
   - `tools/uelivesync_10b_asset_sequence_validation.py` — validator (log-check + asset validation)
 
+#### Stage 10D.1 — Sequencer Editor Usability Validation (COMPLETE)
+
+Stage 10D.1 validates that the persisted LiveSync LevelSequence asset is usable in UE Sequencer Editor workflow.
+
+- **Result**: `unreal.load_asset()` returns valid `LevelSequence`. `LevelSequenceEditorBlueprintLibrary.open_level_sequence()` succeeds.
+- **Classification**: **PASS_EDITOR_DATA_ONLY** — asset is editor-usable with all persisted data. Manual UI scrub is not achievable via `-ExecutePythonScript` (requires interactive editor session).
+- **Inspection verified**:
+  - Asset loads as `LevelSequence` — PASS
+  - `open_level_sequence()` succeeds — PASS
+  - `MovieScene` playback range exists — PASS
+  - `binding_count=1` — binding persists after reload — PASS
+  - Binding display name: `Actor_0` — PASS
+  - `MovieScene3DTransformTrack` with 1 section — PASS
+  - `MovieSceneBoolTrack` with 1 section — PASS
+- **Tools**:
+  - `tools/uelivesync_10d_editor_sequence_validation.py` — validator (--check-result / --generate).
+  - `tests/phase7e_stage10d_editor_sequence_validation.py` — 9/9 PASS.
+
 ### Handler Status (Post-Stub-Restoration Audit)
 
 | Handler | Packet | Status | Notes |
@@ -843,6 +861,7 @@ All verified in regression run.
 | Phase 7E Stage 10B.2 runtime asset sequence | **59/59 PASS** | 49+4+6 (log-check pass) |
 | Phase 7E Stage 10B.3 UE Python asset load | **5/5 PASS** | PASS_LOAD_ONLY |
 | Phase 7E Stage 10C.1 persist applied sequence | **7/7 PASS** | PASS_BINDING_ONLY |
+| Phase 7E Stage 10D.1 editor usability | **9/9 PASS** | PASS_EDITOR_DATA_ONLY |
 | Phase 7C Stage 1 (playback wire) | **42/42 PASS** | |
 | Phase 7C Stage 2 (detection) | **41/41 PASS** | |
 | Phase 7C Stage 3 (UE handler) | **53/53 PASS** | |
@@ -854,8 +873,8 @@ All verified in regression run.
 | Phase 6E delete validation | **320/320 PASS** | |
 | Phase 6D hierarchy | **119/119 PASS** | 7 skipped (no UE) |
 | Phase 6H semantic consistency | **10/11 PASS** | 1 skip (no UE) |
-| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81+4+59+5+7 = 768/768 PASS** | |
-| **Grand total (all standalone)** | **2457/2457 PASS** | 1689 (prev) + 768 (Phase 7E Stage 3–10C.1) |
+| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81+4+59+5+7+9 = 777/777 PASS** | |
+| **Grand total (all standalone)** | **2466/2466 PASS** | 1689 (prev) + 777 (Phase 7E Stage 3–10D.1) |
 
 **Notes**:
 - Phase 6B runtime audit: 90/102 PASS, 12 FAIL — pre-existing ConsoleReset checks against `.cpp` file; ConsoleReset code lives in `.inl` include. Not regressions.
@@ -924,6 +943,8 @@ All verified in regression run.
 ---
 
 ## Recent Changes
+
+- **Stage 10D.1 — Sequencer Editor Usability Validation** (2026-06-15): Validated that the persisted LevelSequence asset is usable in Sequencer Editor workflow. `open_level_sequence()` succeeds. Inspection confirms binding_count=1, Actor_0 binding, MovieScene3DTransformTrack + MovieSceneBoolTrack with sections. Classification: PASS_EDITOR_DATA_ONLY (manual UI scrub not achievable via -ExecutePythonScript). All 75/75 regression tests PASS.
 
 - **Stage 10C.1 — Persist Applied Sequencer Data** (2026-06-15): Added `SaveLiveSyncLevelSequenceAsset()` to persist bindings and keyframes to disk after successful keyframe apply. Upgraded UE Python inspection from PASS_LOAD_ONLY to PASS_BINDING_ONLY (binding_count=1, TransformTrack + BoolTrack with sections). Added `[SEQ][ASSET_DIRTY/SAVE/SAVE_FAIL/SAVE_SKIP]` diagnostics. All 66/66 regression tests PASS (including new 10C.1: 7/7).
 
