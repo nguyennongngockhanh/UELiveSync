@@ -747,6 +747,18 @@ Stage 10A.5 adds wrapped SequencerOp send path and active LevelSequence runtime 
 - **NullRHI caveat**: `-NullRHI` suppresses Tick/networking in this workflow; use normal editor or `-RenderOffScreen`.
 - **Tests**: 2 new test files (67/67 PASS across 10A.1 + 10A.5A).
 
+#### Stage 10B.1 / 10B.2 — Asset-Backed LevelSequence (IMPLEMENTED)
+
+Stage 10B replaces the transient `ULevelSequence` created via `NewObject(GetTransientPackage())` with a real asset-backed sequence at `/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime`.
+
+- **10B.1**: `GetOrCreateLiveSyncLevelSequenceAsset()` — Static helper that creates or loads the asset-backed LevelSequence using `CreatePackage()` + `NewObject(RF_Public|RF_Standalone|RF_MarkAsRootSet)`. Persists to disk via `UPackage::SavePackage()` at creation time. Diagnostic markers: `[SEQ][ASSET_LOAD]`, `[SEQ][ASSET_CREATE]`, `[SEQ][ASSET_READY]`, `[SEQ][ASSET_FAIL]`.
+- **10B.2**: Runtime asset sequence validation — end-to-end test through the full active sequence flow using a standalone TCP injector (`tools/uelivesync_10b_tcp_client.py`). Validates log markers and asset file-on-disk persistence.
+- **Key difference from Stage 10A.5**: The sequence is asset-backed (not transient). The uasset file lives at `Content/UELiveSync/Sequences/LS_UELiveSync_Runtime.uasset` and is loadable via `unreal.load_asset()` in UE Python.
+- **Runtime result**: `applied=11 miss=0 unsupp=0` — same keyframe apply correctness as Stage 10A.5.
+- **Tests**:
+  - `tools/uelivesync_10b_tcp_client.py` — TCP injector for standalone flow
+  - `tools/uelivesync_10b_asset_sequence_validation.py` — validator (log-check + asset validation)
+
 ### Handler Status (Post-Stub-Restoration Audit)
 
 | Handler | Packet | Status | Notes |
@@ -801,6 +813,8 @@ All verified in regression run.
 | Phase 7E Stage 10A.1 visibility extraction | **67/67 PASS** | |
 | Phase 7E Stage 10A.2 visibility BoolTrack apply | **49/49 PASS** | |
 | Phase 7E Stage 10A.4 Blender 5.1 slotted extraction | **81/81 PASS** | |
+| Phase 7E Stage 10A.5 SequencerOp wrap + reserved guard | **4/4 PASS** | |
+| Phase 7E Stage 10B.2 runtime asset sequence | **59/59 PASS** | 49+4+6 (log-check pass) |
 | Phase 7C Stage 1 (playback wire) | **42/42 PASS** | |
 | Phase 7C Stage 2 (detection) | **41/41 PASS** | |
 | Phase 7C Stage 3 (UE handler) | **53/53 PASS** | |
@@ -812,8 +826,8 @@ All verified in regression run.
 | Phase 6E delete validation | **320/320 PASS** | |
 | Phase 6D hierarchy | **119/119 PASS** | 7 skipped (no UE) |
 | Phase 6H semantic consistency | **10/11 PASS** | 1 skip (no UE) |
-| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81 = 693/693 PASS** | |
-| **Grand total (all standalone)** | **2382/2382 PASS** | 1689 (prev) + 693 (Phase 7E Stage 3–10A.4) |
+| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81+4+59 = 756/756 PASS** | |
+| **Grand total (all standalone)** | **2445/2445 PASS** | 1689 (prev) + 756 (Phase 7E Stage 3–10B.2) |
 
 **Notes**:
 - Phase 6B runtime audit: 90/102 PASS, 12 FAIL — pre-existing ConsoleReset checks against `.cpp` file; ConsoleReset code lives in `.inl` include. Not regressions.
@@ -882,6 +896,8 @@ All verified in regression run.
 ---
 
 ## Recent Changes
+
+- **Stage 10B.2 — Runtime Asset Sequence Validation** (2026-06-15): Replaced transient LevelSequence with asset-backed sequence at `/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime`. Added `GetOrCreateLiveSyncLevelSequenceAsset()` with `UPackage::SavePackage()` for disk persistence. Added `[SEQ][ASSET_LOAD/ASSET_CREATE/ASSET_READY/ASSET_FAIL]` diagnostic markers. Runtime validation via standalone TCP injector (`tools/uelivesync_10b_tcp_client.py`) and validator (`tools/uelivesync_10b_asset_sequence_validation.py`). Validation result: `applied=11 miss=0 unsupp=0`, asset file persisted (4055 bytes). All 59/59 regression tests PASS.
 
 - **Phase 10A.7A — Automated Log-Based Playback Validation** (2026-06-14): Log-based playback validator (`tools/uelivesync_10a7a_validation.py`) validates full sequence+keyframe cycle: CREATE_SEQUENCE, ADD_POSSESSABLE binding, `applied=11 miss=0 unsupp=0`, ch9=[0,1,0] ch10=[0,1,0] at frames [1,10,20], no crash. PASS. Replaces manual visual scrub. UE Python direct evaluation blocked for transient LevelSequence. No source changes.
 

@@ -866,6 +866,85 @@ bool UUELiveSyncSubsystem::
 bool GEnableVerboseSyncLogs =
     false;
 
+// =========================================================
+// STAGE 10B.1 — ASSET-BACKED LEVELSEQUENCE HELPER
+// =========================================================
+// Returns the ULevelSequence at
+// /Game/UELiveSync/Sequences/LS_UELiveSync_Runtime,
+// creating it if missing.  Uses real package (not
+// GetTransientPackage) so the sequence survives across
+// editor sessions and can be inspected via UE Python.
+// =========================================================
+#if WITH_EDITOR
+static ULevelSequence* GetOrCreateLiveSyncLevelSequenceAsset()
+{
+    static const FString AssetPath
+        = TEXT("/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime");
+
+    // Attempt to load existing asset via SoftObjectPath
+    static const FSoftObjectPath SeqSoftPath(*AssetPath);
+    ULevelSequence* Existing = Cast<ULevelSequence>(SeqSoftPath.TryLoad());
+    if (Existing)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[SEQ][ASSET_LOAD] Loaded existing sequence: %s"),
+            *AssetPath);
+        return Existing;
+    }
+
+    // Asset missing — create it
+    const FString Dir = TEXT("/Game/UELiveSync/Sequences");
+    IFileManager::Get().MakeDirectory(*Dir, true);
+
+    UPackage* Package = CreatePackage(*AssetPath);
+    if (!Package)
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("[SEQ][ASSET_FAIL] Failed to create package for: %s"),
+            *AssetPath);
+        return nullptr;
+    }
+
+    ULevelSequence* Seq = NewObject<ULevelSequence>(
+        Package, NAME_None, RF_Public | RF_Standalone | RF_MarkAsRootSet);
+    if (!Seq)
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("[SEQ][ASSET_FAIL] Failed to create ULevelSequence: %s"),
+            *AssetPath);
+        return nullptr;
+    }
+
+    Seq->Initialize();
+
+    // Ensure package is dirty so it can be saved
+    Package->MarkPackageDirty();
+
+    // Save the asset to disk so it persists and is loadable
+    // via unreal.load_asset() in UE Python.
+    {
+        FString FilePath = FPackageName::LongPackageNameToFilename(
+            AssetPath, FPackageName::GetAssetPackageExtension());
+        if (!FilePath.IsEmpty())
+        {
+            FSavePackageArgs SaveArgs;
+            SaveArgs.TopLevelFlags = RF_Standalone;
+            SaveArgs.SaveFlags = SAVE_NoError;
+            UPackage::SavePackage(Package, nullptr, *FilePath, SaveArgs);
+        }
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[SEQ][ASSET_CREATE] Created new sequence asset: %s"),
+        *AssetPath);
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[SEQ][ASSET_READY] Sequence asset ready: %s (package: %s)"),
+        *AssetPath, *Package->GetName());
+
+    return Seq;
+}
+#endif // WITH_EDITOR
+
 bool UUELiveSyncSubsystem::
     bEnableDebugDraw =
         false;
@@ -8612,11 +8691,39 @@ UUELiveSyncSubsystem::FindPendingHierarchyAttachment(
 // not yet implemented (deferred to later stages).
 //
 // Ownership:
-//   - The ULevelSequence is transient (GetTransientPackage).
-//   - No package saving, no asset browser writes, no editor UI.
+//   - The ULevelSequence is asset-backed (Stage 10B.1).
+//   - Package: /Game/UELiveSync/Sequences/LS_UELiveSync_Runtime
 //   - CLEAR_SEQUENCE clears only subsystem-owned state.
 //   - Does NOT delete user assets or destroy actors.
 // =========================================================
+
+// =========================================================
+// STAGE 10B.1 — GetOrCreateLiveSyncLevelSequence
+// =========================================================
+ULevelSequence*
+UUELiveSyncSubsystem::GetOrCreateLiveSyncLevelSequence()
+{
+    if (LiveSyncSequence.IsValid())
+    {
+        return LiveSyncSequence.Get();
+    }
+
+#if WITH_EDITOR
+    ULevelSequence* AssetSeq = GetOrCreateLiveSyncLevelSequenceAsset();
+    if (!AssetSeq)
+    {
+        return nullptr;
+    }
+
+    LiveSyncSequence = AssetSeq;
+    bHasLiveSyncSequence = true;
+    return AssetSeq;
+#else
+    UE_LOG(LogLiveSync, Warning,
+        TEXT("[SEQ][ASSET_FAIL] WITH_EDITOR is disabled — cannot create asset"));
+    return nullptr;
+#endif
+}
 
 void UUELiveSyncSubsystem::HandleSequencerOp(
     const FSequencerOpHeader& Header,
@@ -8639,9 +8746,14 @@ void UUELiveSyncSubsystem::HandleSequencerOp(
         FSequencerOpCreateSequencePayload Payload;
         FMemory::Memcpy(&Payload, PayloadPtr, sizeof(Payload));
 
-        // Create transient ULevelSequence owned by the transient package
-        ULevelSequence* Seq = NewObject<ULevelSequence>(GetTransientPackage());
-        Seq->Initialize();
+        // Get or create the asset-backed sequence (Stage 10B.1)
+        ULevelSequence* Seq = GetOrCreateLiveSyncLevelSequence();
+        if (!Seq)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[SEQOP] CREATE_SEQUENCE: GetOrCreateLiveSyncLevelSequence() returned null"));
+            return;
+        }
 
         UMovieScene* MovieScene = Seq->GetMovieScene();
         if (!MovieScene)
@@ -8650,6 +8762,28 @@ void UUELiveSyncSubsystem::HandleSequencerOp(
                 TEXT("[SEQOP] CREATE_SEQUENCE: GetMovieScene() returned null"));
             return;
         }
+
+        // Reset/clear previous runtime data before applying new data
+        // Only clear tracks/possessables — do NOT delete user assets
+        const int32 OldTrackCount = MovieScene->GetTracks().Num();
+        const int32 OldPossessableCount = MovieScene->GetPossessableCount();
+
+        // Remove all tracks (clear runtime state, keep asset)
+        TArray<UMovieSceneTrack*> Tracks = MovieScene->GetTracks();
+        for (UMovieSceneTrack* Track : Tracks)
+        {
+            if (Track)
+            {
+                MovieScene->RemoveTrack(*Track);
+            }
+        }
+
+        LiveSyncGuidToSequencerBinding.Empty();
+        PendingSequencerBindings.Empty();
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[SEQ][RESET] Cleared %d tracks from sequence (possessable count: %d)"),
+            OldTrackCount, OldPossessableCount);
 
         // Set frame range and display rate from payload
         MovieScene->SetPlaybackRange(

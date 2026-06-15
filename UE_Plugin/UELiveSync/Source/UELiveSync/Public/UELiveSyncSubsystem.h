@@ -524,6 +524,12 @@ private:
     // SEQUENCER OP (Phase 7E)
     // =====================================================
 
+    // Get or create the asset-backed LevelSequence at
+    // /Game/UELiveSync/Sequences/LS_UELiveSync_Runtime.
+    // Returns nullptr on failure (parent dir missing, load error).
+    ULevelSequence*
+        GetOrCreateLiveSyncLevelSequence();
+
     void HandleSequencerOp(
         const FSequencerOpHeader& Header,
         const uint8* PayloadPtr,
@@ -1008,6 +1014,13 @@ private:
 
     // Timestamp of the last applied keyframe packet
     double LastKeyframeTimestamp = 0.0;
+
+    // Asset-backed LevelSequence path (Stage 10B.1)
+    static constexpr const char* LIVE_SYNC_SEQUENCE_ASSET_PATH
+        = "/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime";
+
+    // Path string used at runtime (computed once)
+    FString LiveSyncSequenceAssetPathStr;
 
     // Transient ULevelSequence owned by this subsystem
     TWeakObjectPtr<ULevelSequence> LiveSyncSequence;

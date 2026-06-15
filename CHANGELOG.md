@@ -12,6 +12,10 @@
 - Added wrapped SequencerOp send path for CREATE_SEQUENCE / ADD_POSSESSABLE runtime setup.
 - Added Stage 10A.5 active LevelSequence runtime helper (`tools/uelivesync_stage10a5_active_sequence.py`).
 - Added 2 tests for SequencerOp packet wrap and reserved type guard.
+- Stage 10B.1: Asset-backed LevelSequence at `/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime` via `GetOrCreateLiveSyncLevelSequenceAsset()`.
+- Stage 10B.2: Runtime asset sequence validation with TCP injector (`tools/uelivesync_10b_tcp_client.py`) and validator (`tools/uelivesync_10b_asset_sequence_validation.py`).
+- Added `UPackage::SavePackage()` in `GetOrCreateLiveSyncLevelSequenceAsset()` to persist asset to disk.
+- Added `[SEQ][ASSET_LOAD / ASSET_CREATE / ASSET_READY / ASSET_FAIL]` diagnostic markers.
 - Added MTEX texture metadata sync for material slots.
 - Added UE-side texture import/cache from MTEX paths.
 - Added generated MID texture parameter application.
@@ -38,6 +42,8 @@
 - Validated active LevelSequence runtime path with PT_Keyframe applied=11, miss=0, unsupp=0.
 - Validated visibility channels 9 and 10 apply through UE bool keyframe path.
 - Confirmed PT_Transform remains 0x01 and 0x02 remains reserved/invalid.
+- Stage 10B.2: Validated asset-backed LevelSequence persistence to disk (4055 bytes).
+- Stage 10B.2: All 59/59 regression tests pass (Stage 10A.2 + 10A.5A).
 
 ### Known notes
 - Keyframe runtime requires `prefs.keyframe_sync=True`.

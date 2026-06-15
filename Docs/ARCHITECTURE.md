@@ -197,7 +197,7 @@ FNV-1a 32-bit hash of all extracted keyframe entries (`_hash_keyframes()`) is st
 2. Actor binding in `LiveSyncGuidToSequencerBinding` (set via `PT_SequencerOp ADD_POSSESSABLE`).
 
 **Sequencer setup packet order**:
-1. `PT_SequencerOp CREATE_SEQUENCE` — creates transient `ULevelSequence`.
+1. `PT_SequencerOp CREATE_SEQUENCE` — creates asset-backed `ULevelSequence` at `/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime`.
 2. `PT_Create` — spawns actor, populates ActorCache.
 3. `PT_SequencerOp ADD_POSSESSABLE` — binds actor via GUID. Must occur after actor creation/cache so `FindActorFast()` can resolve the GUID.
 4. `PT_Transform` — transform keyframes (channel 0–8).
@@ -207,7 +207,7 @@ FNV-1a 32-bit hash of all extracted keyframe entries (`_hash_keyframes()`) is st
 
 **Runtime helper**: `tools/uelivesync_stage10a5_active_sequence.py` validates the active LevelSequence setup path.
 
-**Playback validation (10A.7A)**: `tools/uelivesync_10a7a_validation.py` provides automated log-based playback state validation — verifies CREATE_SEQUENCE, ADD_POSSESSABLE binding, keyframe apply summary (`applied=N miss=0 unsupp=0`), per-channel visibility keys at frames 1/10/20, and no crash. Classifies PASS/FAIL. UE Python direct evaluation blocked for transient LevelSequence.
+**Stage 10B.2 Asset-backed sequence validation**: `tools/uelivesync_10b_tcp_client.py` injects the full 5-packet sequence flow via standalone TCP. `tools/uelivesync_10b_asset_sequence_validation.py` validates log markers (`[SEQ][ASSET_CREATE/LOAD/READY]`, `[KEYFRAME]`) and asset file persistence on disk (`LS_UELiveSync_Runtime.uasset`). Supports three modes: full flow (default), `--check-log` (no TCP injection), and `--ue-python` (run inside UE).
 
 **NullRHI caveat**: `-NullRHI` suppresses Tick/networking in this workflow. Use normal editor or `-RenderOffScreen`.
 
