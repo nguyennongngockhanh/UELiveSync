@@ -529,6 +529,13 @@ private:
         const FActiveCameraPayload& Payload);
 
     // =====================================================
+    // CAMERA DEFINITION (Phase 7G Stage 3)
+    // =====================================================
+
+    void HandleCameraDef(
+        const FCameraDefPayload& Payload);
+
+    // =====================================================
     // SEQUENCER OP (Phase 7E)
     // =====================================================
 
@@ -1010,6 +1017,13 @@ private:
 
     // Timestamp of the last applied active camera packet
     double LastActiveCameraTimestamp = 0.0;
+
+    // =====================================================
+    // CAMERA DEF STATE (Phase 7G Stage 3)
+    // =====================================================
+
+    // Sequence number of the last applied camera def packet
+    uint32 LastCameraDefSequence = 0;
 
     // =====================================================
     // SEQUENCER OP STATE (Phase 7E)

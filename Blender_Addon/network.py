@@ -354,6 +354,13 @@ PT_TimelineState = 0x19  # Timeline state (applied to Sequencer, unlike PT_Timel
 # Sends play/pause/stop/scrub commands to UE Sequencer.
 PT_PlaybackTransport = 0x1A  # Playback transport (command + current frame)
 
+# Phase 7G Stage 3: Camera definition / parameter sync (PT_CameraDef = 0x1B)
+PT_CameraDef = 0x1B  # Camera parameters (focal, sensor, clip, ortho, flags)
+
+# Camera definition flags (bitfield)
+CAMERA_DEF_FLAG_IS_ORTHO       = 0x01  # Orthographic projection
+CAMERA_DEF_FLAG_HAS_CAMERA_DEF = 0x02  # Has camera definition data
+
 # Playback transport commands (must match SyncTypes.h EPlaybackTransportCommand)
 PLAYBACK_TRANSPORT_SET_FRAME = 0  # SetFrame/Scrub
 PLAYBACK_TRANSPORT_PLAY     = 1  # Play
@@ -473,9 +480,10 @@ CAP_SUPPORTS_TIMELINE_SYNC       = 0x10  # Bit 4: PT_Timeline (0x13) supported
 CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20  # Bit 5: PT_Keyframe (0x17) supported
 CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40  # Bit 6: PT_ActiveCamera (0x15) supported
 CAP_SUPPORTS_SEQUENCER_OPS       = 0x80  # Bit 7: PT_SequencerOp (0x18) supported
+CAP_SUPPORTS_CAMERA_DEF_SYNC     = 0x100 # Bit 8: PT_CameraDef (0x1B) supported
 
 # Local capabilities bitmask — sent to UE during capability announce.
-_local_capabilities = CAP_SUPPORTS_TIMELINE_SYNC | CAP_SUPPORTS_KEYFRAME_REPLICATION | CAP_SUPPORTS_ACTIVE_CAMERA_SYNC | CAP_SUPPORTS_SEQUENCER_OPS
+_local_capabilities = CAP_SUPPORTS_TIMELINE_SYNC | CAP_SUPPORTS_KEYFRAME_REPLICATION | CAP_SUPPORTS_ACTIVE_CAMERA_SYNC | CAP_SUPPORTS_SEQUENCER_OPS | CAP_SUPPORTS_CAMERA_DEF_SYNC
 
 # Remote capabilities received from UE via PT_CapabilityResponse.
 _remote_capabilities = 0
@@ -1134,6 +1142,58 @@ def serialize_playback_state(state, sequence_number, timestamp, loop_enabled=0):
 
 # Payload: guid(16) + sequence(4) + timestamp(8) = 28 bytes
 ACTIVE_CAMERA_PAYLOAD_SIZE = 28
+
+# =========================================================
+# CAMERA DEFINITION SERIALIZATION (Phase 7G Stage 3)
+# =========================================================
+
+# PT_CameraDef (0x1B) fixed-size payload: 44 bytes
+# Payload layout:
+#   [0-15]  guid          bytes   — 16-byte camera object GUID
+#   [16-19] focal_length  float LE — focal length in mm
+#   [20-23] sensor_width  float LE — sensor width in mm
+#   [24-27] sensor_height float LE — sensor height in mm
+#   [28-31] clip_start    float LE — near clip plane
+#   [32-35] clip_end      float LE — far clip plane
+#   [36-39] ortho_scale   float LE — orthographic scale
+#   [40]    flags         uint8    — bit 0=is_ortho, bit 1=has_camera_def
+#   [41-43] reserved      bytes    — zero padding
+CAMERA_DEF_PAYLOAD_SIZE = 44
+
+def serialize_camera_def(camera_guid, focal_length_mm=50.0,
+                          sensor_width_mm=36.0, sensor_height_mm=24.0,
+                          clip_start=0.1, clip_end=1000.0,
+                          ortho_scale=6.0, flags=0):
+    """Serialize camera definition into fixed-size 44-byte payload.
+
+    Args:
+        camera_guid: UUID object, or None for default (all-zero GUID).
+        focal_length_mm: Focal length in millimeters.
+        sensor_width_mm: Sensor width in millimeters.
+        sensor_height_mm: Sensor height in millimeters.
+        clip_start: Near clip plane distance.
+        clip_end: Far clip plane distance.
+        ortho_scale: Orthographic scale factor.
+        flags: Bitfield (bit 0=is_ortho, bit 1=has_camera_def).
+
+    Returns bytes of length CAMERA_DEF_PAYLOAD_SIZE.
+    """
+    if camera_guid is None:
+        guid_bytes = b'\x00' * 16
+    else:
+        guid_bytes = pack_ue_fguid(camera_guid)
+    return struct.pack(
+        "<16sffffffB3s",
+        guid_bytes,
+        focal_length_mm,
+        sensor_width_mm,
+        sensor_height_mm,
+        clip_start,
+        clip_end,
+        ortho_scale,
+        flags & 0xFF,
+        b'\x00\x00\x00'
+    )
 
 # =========================================================
 # TIMELINE SERIALIZATION (Phase 7B)

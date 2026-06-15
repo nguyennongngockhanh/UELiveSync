@@ -146,6 +146,12 @@ try:
         _keyframes_sent as _net_keyframes_sent,
         _animated_objects_scanned as _net_animated_objects_scanned,
         pack_ue_fguid,
+        PT_CameraDef,
+        serialize_camera_def,
+        CAMERA_DEF_PAYLOAD_SIZE,
+        CAMERA_DEF_FLAG_IS_ORTHO,
+        CAMERA_DEF_FLAG_HAS_CAMERA_DEF,
+        CAP_SUPPORTS_CAMERA_DEF_SYNC,
         _append_blender_debug_log,
     )
 except ImportError:
@@ -337,6 +343,7 @@ _last_active_camera_guid = None  # None=uninitialized, b''=reconnect, bytes=last
 _active_camera_sequence = 0
 _active_camera_packets_sent = 0
 _active_camera_state_changes = 0
+_camera_def_packets_sent = 0
 
 # Phase 7E: sequencer ops state (no detection yet — storage only)
 _sequencer_op_sequence = 0
@@ -1161,6 +1168,7 @@ def check_updates():
     global _active_camera_sequence
     global _active_camera_packets_sent
     global _active_camera_state_changes
+    global _camera_def_packets_sent
     global _sequencer_op_packets_sent
     global _sequencer_op_state_changes
     global _keyframe_sequence
@@ -2318,6 +2326,35 @@ def check_updates():
             _runtime_stats["active_camera_packets_sent"] = _active_camera_packets_sent
             _runtime_stats["active_camera_state_changes"] = _active_camera_state_changes
 
+            # Send CameraDef alongside PT_ActiveCamera when camera is valid
+            if camera_obj is not None and hasattr(camera_obj, 'data') and camera_obj.data is not None:
+                cam_data = camera_obj.data
+                focal = getattr(cam_data, 'lens', 50.0)
+                sensor_width = getattr(cam_data, 'sensor_width', 36.0)
+                sensor_height = getattr(cam_data, 'sensor_height', 24.0)
+                clip_start = getattr(cam_data, 'clip_start', 0.1)
+                clip_end = getattr(cam_data, 'clip_end', 1000.0)
+                is_ortho = getattr(cam_data, 'type', 'PERSP') == 'ORTHO'
+                ortho_scale = getattr(cam_data, 'ortho_scale', 6.0)
+                flags = 0
+                if is_ortho:
+                    flags |= CAMERA_DEF_FLAG_IS_ORTHO
+                flags |= CAMERA_DEF_FLAG_HAS_CAMERA_DEF
+                camdef_payload = serialize_camera_def(
+                    guid_obj,
+                    focal_length_mm=focal,
+                    sensor_width_mm=sensor_width,
+                    sensor_height_mm=sensor_height,
+                    clip_start=clip_start,
+                    clip_end=clip_end,
+                    ortho_scale=ortho_scale,
+                    flags=flags,
+                )
+                send_objects([camdef_payload], packet_type=PT_CameraDef, version=5)
+                _burst_packet_count += 1
+                _camera_def_packets_sent += 1
+                _runtime_stats["camera_def_packets_sent"] = _camera_def_packets_sent
+
         _last_active_camera_guid = guid_bytes
 
     # =====================================================
@@ -2653,6 +2690,7 @@ def start_sync():
     global _active_camera_sequence
     global _active_camera_packets_sent
     global _active_camera_state_changes
+    global _camera_def_packets_sent
 
     # Reset runtime state
     timer_running = False
@@ -2677,6 +2715,7 @@ def start_sync():
     _active_camera_sequence = 0
     _active_camera_packets_sent = 0
     _active_camera_state_changes = 0
+    _camera_def_packets_sent = 0
     _keyframe_sequence = 0
     _keyframe_packets_sent = 0
     _keyframes_sent = 0

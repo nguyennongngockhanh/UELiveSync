@@ -254,6 +254,43 @@ PT_TimelineState (0x19) is distinct from PT_Timeline (0x13). PT_Timeline is stor
 
 **Diagnostic markers**: `[TIMELINE][RECV]`, `[TIMELINE][APPLY]`, `[TIMELINE][SKIP]`, `[TIMELINE][MALFORMED]`.
 
+### Phase 7G Stage 3 — Camera Definition / Parameter Sync (PT_CameraDef = 0x1B)
+
+PT_CameraDef (0x1B) carries camera parameters (focal length, sensor dimensions, clip planes, ortho scale) from Blender to UE. Unlike PT_ActiveCamera (which only controls view target switching), PT_CameraDef applies actual camera parameters to the spawned `ACameraActor`.
+
+**Activation**: Requires the corresponding `ACameraActor` to be spawned first via `HandleActiveCamera()` (which is gated by `UE.LiveSync.ActiveCamera.ApplyToViewport=1`). The DEF packet resolves the actor via `FindActorFast()` using the same GUID. Stale DEF packets (received before ActiveCamera) are rejected.
+
+**Perspective mode** (CameraFlags & 0x01 == 0): `SetProjectionMode(Perspective)`. FOV computed as `2 * atan(sensor_width / (2 * focal_length))`. Aspect ratio from sensor dimensions.
+
+**Orthographic mode** (CameraFlags & 0x01 != 0): `SetProjectionMode(Orthographic)`. `OrthoWidth = OrthoScale`, clip planes set via `SetOrthoNearClipPlane` / `SetOrthoFarClipPlane`.
+
+**Clip planes**: `SetNearClipPlane` and `SetFarClipPlane` applied for both modes.
+
+**CVar**: `UE.LiveSync.ActiveCamera.ApplyToViewport` must be 1 — ActiveCamera spawn + viewport pilot + CameraDef apply all gated by this CVar.
+
+**Wire format** (64 bytes, packed):
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | CameraGUID | u8[16] | FGuid bytes (TimeLow/TimeMid/TimeHiVersion/ClockSeqHi/Node) |
+| 16 | FocalLengthMM | f32 | Focal length in millimeters |
+| 20 | SensorWidthMM | f32 | Sensor width in millimeters |
+| 24 | SensorHeightMM | f32 | Sensor height in millimeters |
+| 28 | ClipStart | f32 | Near clip plane |
+| 32 | ClipEnd | f32 | Far clip plane |
+| 36 | OrthoScale | f32 | Orthographic width |
+| 40 | CameraFlags | u8 | 0x01 = IS_ORTHO, 0x02 = HAS_CAMERA_DEF (0x02 reserved/invalid) |
+| 41-63 | Reserved | u8[23] | Zero |
+
+**Non-object packets**: obj_count = 0 for PT_CameraDef (V3+ validation). Byte 10 of header = 0x00.
+
+**Diagnostic markers**: `[CAMERA][DEF_RECV]`, `[CAMERA][DEF_APPLY]`, `[CAMERA][MALFORMED]`, `[CAMERA][DEF] Stale`.
+
+**Counters**: `CameraDefPacketsApplied`, `CameraDefPacketsStale`, `CameraDefPacketsMalformed`.
+
+**Limitations**: Camera transform is not synced (camera spawns at default position). Camera property keyframes are not extracted. Active camera → Sequencer camera cut binding is not automatic.
+
+**Known caveat**: On `-NullRHI`, clip plane and viewport pilot operations may be no-ops. `FieldOfView` still applies. `-NullRHI` testing not included in validation.
+
 ---
 
 ## Blender → UE Execution Chain (Per-Tick)

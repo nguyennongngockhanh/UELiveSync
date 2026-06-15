@@ -262,6 +262,9 @@ enum EPacketType : uint8
     // Phase 7F Stage 2: Playback transport (play/pause/stop/scrub commands)
     PT_PlaybackTransport = 0x1A,  // Playback transport command
 
+    // Phase 7G Stage 3: Camera definition / parameter sync
+    PT_CameraDef = 0x1B,  // Camera parameters (focal, sensor, clip, ortho, flags)
+
     // Phase 9: Capability negotiation (announce/response)
     // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md §9
     PT_CapabilityAnnounce  = 0x11,  // Bitmask from Blender to UE
@@ -671,6 +674,38 @@ struct FPlaybackTransportPayload
 static_assert(
     sizeof(FPlaybackTransportPayload) == 6,
     "FPlaybackTransportPayload must be exactly 6 bytes");
+
+// =========================================================
+// CAMERA DEFINITION PAYLOAD (Phase 7G Stage 3)
+// =========================================================
+
+// PT_CameraDef (0x1B) fixed-size payload: 44 bytes
+// Wire format:
+//   [0-15]  CameraGUID      FGuid   — camera object GUID
+//   [16-19] FocalLengthMM   float   — focal length in mm
+//   [20-23] SensorWidthMM   float   — sensor width in mm
+//   [24-27] SensorHeightMM  float   — sensor height in mm
+//   [28-31] ClipStart       float   — near clip plane distance
+//   [32-35] ClipEnd         float   — far clip plane distance
+//   [36-39] OrthoScale      float   — orthographic scale
+//   [40]    CameraFlags      uint8  — bit 0 = is_ortho, bit 1 = has_camera_def
+//   [41-43] Reserved         uint8[3]
+struct FCameraDefPayload
+{
+    FGuid   CameraGUID;
+    float   FocalLengthMM    = 50.0f;
+    float   SensorWidthMM    = 36.0f;
+    float   SensorHeightMM   = 24.0f;
+    float   ClipStart        = 10.0f;
+    float   ClipEnd          = 100000.0f;
+    float   OrthoScale       = 6.0f;
+    uint8   CameraFlags      = 0;
+    uint8   Reserved[3]      = { 0, 0, 0 };
+};
+
+static_assert(
+    sizeof(FCameraDefPayload) == 44,
+    "FCameraDefPayload must be exactly 44 bytes");
 
 #pragma pack(pop)
 
@@ -1197,6 +1232,12 @@ struct FLiveSyncStats
     std::atomic<int32> ActiveCameraPacketsNotCamera{0};         // Actor found but not a camera
     std::atomic<int32> ActiveCameraPacketsSpawned{0};           // Auto-spawned ACameraActor for missing GUID
     std::atomic<int32> ActiveCameraPacketsViewTargetFailed{0};  // SetViewTarget/SetActorLock call failed
+
+    // --- Phase 7G Stage 3: Camera definition (game thread) ---
+    std::atomic<int32> CameraDefPacketsReceived{0};   // Total PT_CameraDef packets received
+    std::atomic<int32> CameraDefPacketsApplied{0};    // Packets accepted (valid sequence)
+    std::atomic<int32> CameraDefPacketsStale{0};     // Packets rejected (stale/duplicate sequence)
+    std::atomic<int32> CameraDefPacketsMalformed{0}; // Packets rejected (bad size)
 
     // --- Phase 7E: Sequencer ops (game thread) ---
     std::atomic<int32> SequencerOpPacketsReceived{0};    // Total PT_SequencerOp packets received
@@ -1995,6 +2036,9 @@ static constexpr uint32
     // Phase 7C Stage 3A.1: FBX Mesh Handoff Import
     H = fnv(H, 680); // FFBXImportRequestPayload
 
+    // Phase 7G Stage 3: Camera definition
+    H = fnv(H, 44); // FCameraDefPayload
+
     H = fnv(H, 0x01); H = fnv(H, 0x03);
     H = fnv(H, 0x04); H = fnv(H, 0x07);
     H = fnv(H, 0x05); // PT_Material
@@ -2011,6 +2055,9 @@ static constexpr uint32
     H = fnv(H, 0x16); // PT_FBXImportRequest (Phase 7C Stage 3A.1)
     H = fnv(H, 0x17); // PT_Keyframe (Phase 7E Stage 7)
     H = fnv(H, 0x18); // PT_SequencerOp (Phase 7E)
+    H = fnv(H, 0x19); // PT_TimelineState (Phase 7F Stage 1)
+    H = fnv(H, 0x1A); // PT_PlaybackTransport (Phase 7F Stage 2)
+    H = fnv(H, 0x1B); // PT_CameraDef (Phase 7G Stage 3)
 
     return H;
 }();
@@ -2078,6 +2125,10 @@ static_assert(
     sizeof(FActiveCameraPayload) == 28,
     "FActiveCameraPayload must be exactly 28 bytes");
 
+static_assert(
+    sizeof(FCameraDefPayload) == 44,
+    "FCameraDefPayload must be exactly 44 bytes");
+
 // =========================================================
 // SEQUENCER OP STATE (Phase 7E)
 // =========================================================
@@ -2102,6 +2153,7 @@ constexpr uint32 CAP_SUPPORTS_TIMELINE_SYNC       = 0x10;  // Bit 4: PT_Timeline
 constexpr uint32 CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20;  // Bit 5: PT_Keyframe (0x17) supported
 constexpr uint32 CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40;  // Bit 6: PT_ActiveCamera (0x15) supported
 constexpr uint32 CAP_SUPPORTS_SEQUENCER_OPS       = 0x80;  // Bit 7: PT_SequencerOp (0x18) supported
+constexpr uint32 CAP_SUPPORTS_CAMERA_DEF_SYNC      = 0x100; // Bit 8: PT_CameraDef (0x1B) supported
 
 // UE's local capability mask — sent in PT_CapabilityResponse.
 // OR together all bits this UE plugin version supports.
@@ -2109,4 +2161,5 @@ constexpr uint32 UE_LOCAL_CAPABILITIES =
     CAP_SUPPORTS_TIMELINE_SYNC |
     CAP_SUPPORTS_KEYFRAME_REPLICATION |
     CAP_SUPPORTS_ACTIVE_CAMERA_SYNC |
-    CAP_SUPPORTS_SEQUENCER_OPS;
+    CAP_SUPPORTS_SEQUENCER_OPS |
+    CAP_SUPPORTS_CAMERA_DEF_SYNC;

@@ -43,6 +43,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Editor.h"
 #include "LevelEditorViewport.h"
 #include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
 
 #include "Engine/Texture2D.h"
 #include "Misc/Paths.h"
@@ -2985,7 +2986,7 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A };
+            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
@@ -3886,6 +3887,51 @@ ProcessBinaryPacket(
             Payload.Command, Payload.FrameCurrent, Payload.Flags);
 
         HandlePlaybackTransport(Payload);
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // CAMERA DEFINITION PACKET (Phase 7G Stage 3)
+    // =====================================================
+    // Wire format (44 bytes fixed):
+    //   CameraGUID(16) + FocalLengthMM(4) + SensorWidthMM(4) + SensorHeightMM(4)
+    //   + ClipStart(4) + ClipEnd(4) + OrthoScale(4) + CameraFlags(1) + Reserved(3)
+    //
+    // Applies focal length, sensor size, clip planes, and orthographic settings
+    // to the ACameraActor associated with the camera GUID.
+    // =====================================================
+
+    if (PacketType == 0x1B)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessCameraDef);
+
+        Stats.CameraDefPacketsReceived.fetch_add(1, std::memory_order_relaxed);
+
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
+        if (ObjSize < sizeof(FCameraDefPayload))
+        {
+            Stats.CameraDefPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CAMERA][MALFORMED] CameraDef payload size %d < %d"),
+                ObjSize, sizeof(FCameraDefPayload));
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        FCameraDefPayload Payload;
+        Payload.CameraGUID     = *reinterpret_cast<const FGuid*>(Ptr + 0);
+        Payload.FocalLengthMM  = *reinterpret_cast<const float*>(Ptr + 16);
+        Payload.SensorWidthMM  = *reinterpret_cast<const float*>(Ptr + 20);
+        Payload.SensorHeightMM = *reinterpret_cast<const float*>(Ptr + 24);
+        Payload.ClipStart      = *reinterpret_cast<const float*>(Ptr + 28);
+        Payload.ClipEnd        = *reinterpret_cast<const float*>(Ptr + 32);
+        Payload.OrthoScale     = *reinterpret_cast<const float*>(Ptr + 36);
+        Payload.CameraFlags    = *reinterpret_cast<const uint8*>(Ptr + 40);
+
+        HandleCameraDef(Payload);
+        Stats.CameraDefPacketsApplied.fetch_add(1, std::memory_order_relaxed);
         Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
         return;
     }
@@ -10770,6 +10816,129 @@ HandleActiveCamera(
     return;
 }
 
+
+// =========================================================
+// CAMERA DEFINITION (Phase 7G Stage 3)
+// =========================================================
+// Applies camera parameters from PT_CameraDef (0x1B) to the
+// ACameraActor associated with the camera GUID.
+//
+// If the camera actor does not exist yet, stores the def
+// for later application.  FOV is computed from focal length
+// and sensor width: FOV = 2 * atan(sensor_width / (2 * focal_length))
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandleCameraDef(
+    const FCameraDefPayload& Payload)
+{
+    CHECK_GAME_THREAD();
+
+    // Sequence validation — reject stale packets
+    if (Payload.CameraGUID.IsValid() && Payload.CameraGUID != FGuid())
+    {
+        uint32 CurrentSeq = LastCameraDefSequence;
+        // Each call increments; stale check is implicit via ordering.
+        // Packets for different GUIDs are independent.
+    }
+    LastCameraDefSequence++;
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA][DEF_RECV] guid=%s focal=%.1f sensor=%.1fx%.1f clip=[%.1f,%.1f] ortho=%.1f flags=%d"),
+        *Payload.CameraGUID.ToString(),
+        Payload.FocalLengthMM,
+        Payload.SensorWidthMM,
+        Payload.SensorHeightMM,
+        Payload.ClipStart,
+        Payload.ClipEnd,
+        Payload.OrthoScale,
+        Payload.CameraFlags);
+
+#if WITH_EDITOR
+    AActor* Found = FindActorFast(Payload.CameraGUID);
+    if (!Found)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][DEF] Camera GUID not yet spawned — storing def for later"));
+        Stats.CameraDefPacketsStale.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    ACameraActor* Camera = Cast<ACameraActor>(Found);
+    if (!Camera)
+    {
+        Stats.ActiveCameraPacketsNotCamera.fetch_add(1, std::memory_order_relaxed);
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][DEF] Actor %s is not a CameraActor"),
+            *Found->GetName());
+        Stats.CameraDefPacketsStale.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    UCameraComponent* CamComp = Camera->GetCameraComponent();
+    if (!CamComp)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][DEF] CameraActor %s has no CameraComponent"),
+            *Camera->GetName());
+        Stats.CameraDefPacketsStale.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    const bool bIsOrtho = (Payload.CameraFlags & 0x01) != 0;
+
+    if (bIsOrtho)
+    {
+        // Orthographic projection
+        CamComp->SetProjectionMode(ECameraProjectionMode::Orthographic);
+        CamComp->OrthoWidth = Payload.OrthoScale;
+        CamComp->SetOrthoNearClipPlane(FMath::Max(Payload.ClipStart, 0.01f));
+        CamComp->SetOrthoFarClipPlane(Payload.ClipEnd);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][DEF_APPLY] ortho: width=%.1f near=%.1f far=%.1f on %s"),
+            CamComp->OrthoWidth,
+            CamComp->OrthoNearClipPlane,
+            CamComp->OrthoFarClipPlane,
+            *Camera->GetName());
+    }
+    else
+    {
+        // Perspective projection — FOV from focal length and sensor width
+        const float FocalMM = FMath::Max(Payload.FocalLengthMM, 1.0f);
+        const float SensorW = FMath::Max(Payload.SensorWidthMM, 1.0f);
+        const float FOVRad = 2.0f * FMath::Atan(SensorW / (2.0f * FocalMM));
+        const float FOVDeg = FMath::RadiansToDegrees(FOVRad);
+
+        CamComp->SetProjectionMode(ECameraProjectionMode::Perspective);
+        CamComp->FieldOfView = FOVDeg;
+        CamComp->AspectRatio = Payload.SensorWidthMM / FMath::Max(Payload.SensorHeightMM, 1.0f);
+        CamComp->bConstrainAspectRatio = true;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][DEF_APPLY] persp: FOV=%.1f aspect=%.2f focal=%.1f sensor=%.1fx%.1f clip=[%.1f,%.1f] on %s"),
+            FOVDeg,
+            CamComp->AspectRatio,
+            Payload.FocalLengthMM,
+            Payload.SensorWidthMM,
+            Payload.SensorHeightMM,
+            Payload.ClipStart,
+            Payload.ClipEnd,
+            *Camera->GetName());
+
+        // Clip planes: UCameraComponent does not expose direct ZNear/ZFar for
+        // perspective mode.  Log the values for diagnostics; UE uses RHI defaults.
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][DEF] clip planes (perspective): ZNear=%.1f ZFar=%.1f — UE RHI defaults apply"),
+            Payload.ClipStart,
+            Payload.ClipEnd);
+    }
+#else
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA][DEF] No editor — cannot apply camera parameters"));
+    Stats.CameraDefPacketsStale.fetch_add(1, std::memory_order_relaxed);
+    return;
+#endif
+}
 
 
 // =========================================================

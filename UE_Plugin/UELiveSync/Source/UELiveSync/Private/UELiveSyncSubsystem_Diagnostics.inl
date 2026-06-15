@@ -1026,6 +1026,34 @@ ConsoleDumpState()
         Stats.ActiveCameraPacketsViewTargetFailed.load(std::memory_order_relaxed));
 
     // =====================================================
+    // CAMERA DEFINITION (Phase 7G Stage 3)
+    // =====================================================
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  CamDefRecv:           %d"),
+        Stats.CameraDefPacketsReceived.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  CamDefApplied:        %d"),
+        Stats.CameraDefPacketsApplied.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  CamDefStale:          %d"),
+        Stats.CameraDefPacketsStale.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  CamDefMalformed:      %d"),
+        Stats.CameraDefPacketsMalformed.load(std::memory_order_relaxed));
+
+    // =====================================================
     // SEQUENCER OP (Phase 7E)
     // =====================================================
 
@@ -1613,6 +1641,13 @@ ConsoleReset()
     LastActiveCameraTimestamp = 0.0;
     bHasActiveCamera = false;
     bHasEverReceivedActiveCamera = false;
+
+    // Camera definition (Phase 7G Stage 3)
+    Stats.CameraDefPacketsReceived.store(0, std::memory_order_relaxed);
+    Stats.CameraDefPacketsApplied.store(0, std::memory_order_relaxed);
+    Stats.CameraDefPacketsStale.store(0, std::memory_order_relaxed);
+    Stats.CameraDefPacketsMalformed.store(0, std::memory_order_relaxed);
+    LastCameraDefSequence = 0;
 
     // Sequencer op (Phase 7E)
     Stats.SequencerOpPacketsReceived.store(0, std::memory_order_relaxed);

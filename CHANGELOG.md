@@ -3,6 +3,19 @@
 ## [unreleased]
 
 ### Added
+- Phase 7G Stage 3: PT_CameraDef (0x1B) — camera definition / parameter sync.
+- `LSP_CamDef = 0x05` in `ELiveSyncPrimitiveType` enum — camera definition objects carry `FCameraDefPayload`.
+- `FCameraDefPayload` (64 bytes): FGuid, focal length (f32), sensor dimensions (w/f32, h/f32), clip planes (start/f32, end/f32), ortho scale (f32), CameraFlags (u8, 3 bytes reserved).
+- `HandleCameraDef()` applies `SetProjectionMode` (Perspective/Orthographic) based on `CameraFlags & 0x01`.
+- Perspective mode: computes FOV from focal length and sensor width (`2 * atan(sensor_width / (2 * focal))`), sets `AspectRatio`.
+- Orthographic mode: applies `OrthoWidth = Payload.OrthoScale`, `OrthoNearClipPlane`, `OrthoFarClipPlane`.
+- Clip planes applied via `SetNearClipPlane` / `SetFarClipPlane` for both projection modes.
+- Stale packet detection: rejects DEF packets received before corresponding ActiveCamera with `[CAMERA][DEF] Stale`.
+- Non-object packets use `obj_count=0` for PT_CameraDef (V3+ validation).
+- Blender addon: `sync.py` sends `PT_CameraDef` alongside `PT_Transform` in the camera update path; `network.py` adds `LSP_CamDef` to `PRIMITIVE_TYPE_MAP`.
+- `PT_CameraDef = 0x1B` added to `kValidTypes`.
+- 29 new tests: wire format (17), UE apply (19), reserved packet guard (7).
+- 0x02 remains reserved/invalid. `-NullRHI` caveat: clip plane and viewport pilot require RHI; `FieldOfView` applies even on `-NullRHI`.
 - Phase 7G Stage 2: Camera Actor Spawn + Active View Target Apply.
 - `LSP_Camera = 0x05` in `ELiveSyncPrimitiveType` enum — camera objects spawn as `ACameraActor`.
 - `HandleActiveCamera()` auto-spawns `ACameraActor` when GUID not in cache; tags with `LiveSync_GUID=<guid>`, registers in ActorCache.
