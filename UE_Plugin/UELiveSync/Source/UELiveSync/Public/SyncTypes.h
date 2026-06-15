@@ -288,6 +288,7 @@ enum ELiveSyncPrimitiveType : uint8
     LSP_Cylinder = 0x02,
     LSP_Plane    = 0x03,
     LSP_Empty    = 0x04,
+    LSP_Camera   = 0x05,
 };
 
 // =========================================================
@@ -1194,6 +1195,8 @@ struct FLiveSyncStats
     std::atomic<int32> ActiveCameraPacketsAppliedToViewport{0}; // Successful viewport SetViewTarget calls
     std::atomic<int32> ActiveCameraPacketsMissingGUID{0};       // GUID not found in ActorCache
     std::atomic<int32> ActiveCameraPacketsNotCamera{0};         // Actor found but not a camera
+    std::atomic<int32> ActiveCameraPacketsSpawned{0};           // Auto-spawned ACameraActor for missing GUID
+    std::atomic<int32> ActiveCameraPacketsViewTargetFailed{0};  // SetViewTarget/SetActorLock call failed
 
     // --- Phase 7E: Sequencer ops (game thread) ---
     std::atomic<int32> SequencerOpPacketsReceived{0};    // Total PT_SequencerOp packets received

@@ -223,6 +223,22 @@ FNV-1a 32-bit hash of all extracted keyframe entries (`_hash_keyframes()`) is st
 
 PT_TimelineState (0x19) is distinct from PT_Timeline (0x13). PT_Timeline is storage-only; PT_TimelineState applies frame range and display rate to the LiveSync LevelSequence's playback range via `SetPlaybackRange` and `SetDisplayRate`.
 
+### Phase 7G Stage 2 — Camera Actor Spawn + Active View Target Apply
+
+**LSP_Camera primitive type (0x05)**: Added to `ELiveSyncPrimitiveType` enum. When the Blender addon creates a camera object, UE spawns `ACameraActor` instead of `AActor`. Currently the Blender addon only sends `PT_Create` for MESH-type objects; camera auto-spawn is triggered by `HandleActiveCamera()` when the camera GUID is not found in ActorCache.
+
+**HandleActiveCamera() auto-spawn**: When CVar `UE.LiveSync.ActiveCamera.ApplyToViewport` is enabled, `HandleActiveCamera()` checks `FindActorFast()` for the camera GUID. If not found, it spawns an `ACameraActor` at a default location (0, -200, 100), tags it with `LiveSync_GUID=<guid>`, and registers it in ActorCache.
+
+**Viewport pilot via SetActorLock**: After finding/spawning the `ACameraActor`, the handler iterates over all `FLevelEditorViewportClient` viewports via `GEditor->GetLevelViewportClients()` and calls `SetActorLock(Camera)` on each. This enables the "pilot" (locked camera view) in editor viewports.
+
+**CVar gating**: `UE.LiveSync.ActiveCamera.ApplyToViewport` (default 0) — applies to all level editor viewport clients.
+
+**Diagnostics**: `[CAMERA][ACTIVE_RECV/SPAWN/SPAWN_FAIL/VIEW_TARGET/VIEW_TARGET_SKIP/VIEW_TARGET_FAIL]` at Log level.
+
+**Counters**: `ActiveCameraPacketsSpawned`, `ActiveCameraPacketsViewTargetFailed`, `ActiveCameraPacketsNotCamera`.
+
+**Limitations**: Camera transform is not synced (camera spawns at default position). Camera parameters (FOV, focal length, DOF) are not synced. Camera property keyframes are not extracted. Active camera → Sequencer camera cut binding is not automatic. All these require future packet type additions.
+
 **Wire format** (20 bytes, packed):
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|

@@ -3,6 +3,15 @@
 ## [unreleased]
 
 ### Added
+- Phase 7G Stage 2: Camera Actor Spawn + Active View Target Apply.
+- `LSP_Camera = 0x05` in `ELiveSyncPrimitiveType` enum — camera objects spawn as `ACameraActor`.
+- `HandleActiveCamera()` auto-spawns `ACameraActor` when GUID not in cache; tags with `LiveSync_GUID=<guid>`, registers in ActorCache.
+- `HandleActiveCamera()` applies `SetActorLock` on all `FLevelEditorViewportClient` viewports via `GEditor->GetLevelViewportClients()`.
+- CVar `UE.LiveSync.ActiveCamera.ApplyToViewport` (default 0) gates viewport pilot.
+- `[CAMERA][ACTIVE_RECV/SPAWN/SPAWN_FAIL/VIEW_TARGET/VIEW_TARGET_SKIP/VIEW_TARGET_FAIL]` diagnostics at Log level.
+- `ActiveCameraPacketsSpawned`, `ActiveCameraPacketsViewTargetFailed`, `ActiveCameraPacketsNotCamera` counters.
+- 30 new tests: camera actor spawn (10), active view target apply (11), reserved packet guard (9).
+- Changed `[CAMERA][ACTIVE_RECV]` and `[CAMERA] Stale packet` from Verbose to Log level for runtime observability.
 - Phase 7F Stage 2: PT_PlaybackTransport (0x1A) packet — sends playback transport commands (SetFrame, Play, Pause, Stop) from Blender to UE.
 - `EPlaybackTransportCommand` enum (SetFrame=0/Play=1/Pause=2/Stop=3) in SyncTypes.h.
 - `FPlaybackTransportPayload` packed struct (6 bytes: command+frame_current+flags) with static_assert.

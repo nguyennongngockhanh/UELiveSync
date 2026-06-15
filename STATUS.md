@@ -51,6 +51,8 @@
 - **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.2 UE BoolTrack apply done) ✅
 - **Phase 7F Stage 1** — Timeline State Packet (PT_TimelineState = 0x19, frame range + FPS apply to LevelSequence) ✅
 - **Phase 7F Stage 2** — Playback Transport Packet (PT_PlaybackTransport = 0x1A, SetFrame/Play/Pause/Stop commands) ✅
+- **Phase 7G Stage 1** — Camera Sync Audit / Scope Lock 🔍
+- **Phase 7G Stage 2** — Camera Actor Spawn + Active View Target Apply ✅
 - **Phase 7C Stage 3A–5** — FBX Mesh Handoff Import + Importer Hardening + Asset Lifecycle Diagnostics + Scene Unit Conversion + Rename Asset Path Diagnostics (all stages complete) ✅
 - **Phase 10J.5O — FBX Unit Scale Policy** — Blender FBX export: `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `bake_space_transform=False`. UE import: `bConvertSceneUnit=true`. No actor/component scale compensation. ✅
 - **Phase 10J.5Q — FBX Unique Temp Import Path** — Each sync imports to a unique temp StaticMesh asset path. No reimport-over-existing. No package rename-over-existing. Direct validated assignment. Previous temp mesh cleanup after success. ✅
@@ -69,7 +71,9 @@
 7. **Phase 7E Stage 10A — Visibility Keyframes** (Stages 10A.1–10A.2, 10A.4 complete) ✅
 8. **Phase 7F Stage 1 — Timeline State Packet** (PT_TimelineState = 0x19, frame range + FPS apply) ✅
 9. **Phase 7F Stage 2 — Playback Transport Packet** (PT_PlaybackTransport = 0x1A, SetFrame/Play/Pause/Stop) ✅
-10. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
+10. **Phase 7G Stage 1 — Camera Sync Audit** 🔍
+11. **Phase 7G Stage 2 — Camera Actor Spawn + Active View Target Apply** ✅
+12. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
 9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. **COMPLETE** ✅
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
 11. ~~**Manual Selected-Object Full Mesh Attribute Sync**~~ — superseded by Stage 3A FBX handoff 🔒
@@ -517,13 +521,14 @@ Adds `PT_PlaybackState = 0x14` packet type for synchronizing Blender playback st
 - ConsoleReset zeros all state + counters; ConsoleDumpState logs 10 lines.
 - **Validation**: 92/92 tests PASS.
 
-### Stage 4 — UE Viewport Apply (VERIFIED)
+### Stage 4 — UE Viewport Apply (Phase 7G Stage 2 Update)
 - CVar `UE.LiveSync.ActiveCamera.ApplyToViewport` (default OFF).
-- When ON: `FindActorFast()` GUID → `Cast<ACameraActor>()` → `SetViewTarget()` on all level editor viewport clients.
-- Null GUID: safe, no viewport change. Missing GUID → `MissingGUID++`, warning. Non-camera → `NotCamera++`, warning.
+- When ON: `FindActorFast()` GUID → auto-spawns `ACameraActor` if not found (`ActiveCameraPacketsSpawned++`) → `Cast<ACameraActor>()` → `SetActorLock()` on all `FLevelEditorViewportClient` viewports via `GEditor->GetLevelViewportClients()`.
+- Null GUID: safe, no viewport change. Missing GUID → auto-spawn. Non-camera → `NotCamera++`, skip.
 - `UnrealEd` dep added to `UELiveSync.Build.cs`; editor code guarded by `#if WITH_EDITOR`.
-- 3 counters: `ActiveCameraPacketsAppliedToViewport/MissingGUID/NotCamera`.
-- **Validation**: 81/81 tests PASS.
+- 6 counters: `ActiveCameraPacketsAppliedToViewport/Spawned/ViewTargetFailed/NotCamera/MissingGUID`.
+- Diagnostics: `[CAMERA][ACTIVE_RECV/SPAWN/SPAWN_FAIL/VIEW_TARGET/VIEW_TARGET_SKIP/VIEW_TARGET_FAIL]`.
+- **Validation**: 30/30 Phase 7G Stage 2 tests PASS.
 
 ### Key Decisions
 - **`bHasEverReceivedActiveCamera` vs `bHasActiveCamera`**: Separate stale-check gate from "currently has non-null camera". Null GUID keeps `bHasEverReceivedActiveCamera = true` to prevent duplicate null-GUID acceptance.
@@ -951,6 +956,8 @@ All verified in regression run.
 ## Recent Changes
 
 - **Phase 7F Stage 2 — PT_PlaybackTransport (0x1A)** (2026-06-15): Implemented playback transport packet with SetFrame/Play/Pause/Stop commands. 6-byte payload (command+frame_current+flags). `EPlaybackTransportCommand` and `FPlaybackTransportPayload` in SyncTypes.h. `HandlePlaybackTransport()` with `[PLAYBACK][RECV/APPLY/SKIP/MALFORMED]` diagnostics. SetFrame applies clamped frame to `LiveSyncSequenceFrameCurrent`. Play/Pause/Stop logged as PASS_TRANSPORT_STATE_ONLY. Blender `serialize_playback_transport()` and `send_playback_transport()` with obj_count=0 for V3+ validation compatibility. Blender fix: `send_playback_transport` now builds packet directly instead of calling nonexistent `build_packet`. 27/27 new tests PASS. Runtime validation: `[PLAYBACK][RECV]` + `[PLAYBACK][APPLY] SetFrame frame=48 (clamped=48)` confirmed. Keyframe regression clean (applied=11 miss=0 unsupp=0). Visibility channels 9/10 BoolTrack apply preserved. Rsync deploy + UBT build PASS. 96/96 regression tests PASS. ✅
+
+- **Phase 7G Stage 2 — Camera Actor Spawn + Active View Target Apply** (2026-06-15): Camera objects now spawn as `ACameraActor` (not `AActor`) via `LSP_Camera=0x05` primitive type. `HandleActiveCamera()` auto-spawns `ACameraActor` when GUID not found in cache, tags and caches it. CVar `UE.LiveSync.ActiveCamera.ApplyToViewport` gates viewport pilot (`SetActorLock` on all `FLevelEditorViewportClient` instances). `[CAMERA][ACTIVE_RECV/SPAWN/SPAWN_FAIL/VIEW_TARGET/VIEW_TARGET_SKIP/VIEW_TARGET_FAIL]` diagnostics at Log level. 3 new counters: `ActiveCameraPacketsSpawned`, `ActiveCameraPacketsViewTargetFailed`, `ActiveCameraPacketsNotCamera`. Updated `UELiveSyncSubsystem_Diagnostics.inl` for display/reset. 30/30 new tests PASS (spawn:10, view target:11, reserved guard:9). All Phase 7F (48/48) + Phase 7E baseline tests pass. Runtime validation: `[CAMERA][ACTIVE_RECV]`, `[CAMERA][SPAWN]`, `[CAMERA][VIEW_TARGET] SetActorLock on 4 viewport(s)` confirmed. Rsync deploy + UBT build PASS (1 pre-existing SetNum deprecation). ✅
 
 - **Stage 10D.1 — Sequencer Editor Usability Validation** (2026-06-15): Validated that the persisted LevelSequence asset is usable in Sequencer Editor workflow. `open_level_sequence()` succeeds. Inspection confirms binding_count=1, Actor_0 binding, MovieScene3DTransformTrack + MovieSceneBoolTrack with sections. Classification: PASS_EDITOR_DATA_ONLY (manual UI scrub not achievable via -ExecutePythonScript). All 75/75 regression tests PASS.
 

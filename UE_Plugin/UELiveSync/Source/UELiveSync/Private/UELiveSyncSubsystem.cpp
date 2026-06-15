@@ -808,8 +808,8 @@ static TAutoConsoleVariable<int32>
         0,
         TEXT("Apply active camera to editor viewport (1=on, 0=off). "
              "Default 0 — storage-only mode. When enabled, resolves the "
-             "camera GUID through ActorCache and calls SetViewTarget on "
-             "the active level editor viewport."),
+             "camera GUID through ActorCache and locks the viewport to "
+             "the camera actor via SetActorLock on all level editor viewports."),
         ECVF_Default
     );
 
@@ -3930,7 +3930,7 @@ ProcessBinaryPacket(
         if (bHasEverReceivedActiveCamera && Payload.Sequence <= LastActiveCameraSequence)
         {
             Stats.ActiveCameraPacketsStale.fetch_add(1, std::memory_order_relaxed);
-            UE_LOG(LogLiveSync, Verbose,
+            UE_LOG(LogLiveSync, Log,
                 TEXT("[CAMERA] Stale packet: seq %u <= %u"),
                 Payload.Sequence, LastActiveCameraSequence);
             Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
@@ -10664,8 +10664,8 @@ HandleActiveCamera(
     bHasActiveCamera = (Payload.CameraGUID != FGuid());
     bHasEverReceivedActiveCamera = true;
 
-    UE_LOG(LogLiveSync, Verbose,
-        TEXT("[CAMERA] Applied: guid=%s seq=%u ts=%.3f hasCamera=%d"),
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA][ACTIVE_RECV] guid=%s seq=%u ts=%.3f hasCamera=%d"),
         *Payload.CameraGUID.ToString(),
         Payload.Sequence, Payload.Timestamp,
         bHasActiveCamera ? 1 : 0);
@@ -10686,11 +10686,43 @@ HandleActiveCamera(
     AActor* Found = FindActorFast(Payload.CameraGUID);
     if (!Found)
     {
-        Stats.ActiveCameraPacketsMissingGUID.fetch_add(1, std::memory_order_relaxed);
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[CAMERA] GUID %s not found in ActorCache"),
+        // Auto-spawn ACameraActor for this camera GUID
+        UWorld* World = GetWorld();
+        if (!World)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CAMERA][SPAWN_FAIL] No world for camera GUID=%s"),
+                *Payload.CameraGUID.ToString());
+            return;
+        }
+
+        FTransform CamTransform(FTransform::Identity);
+        CamTransform.SetLocation(FVector(0.0f, -200.0f, 100.0f));
+
+        ACameraActor* NewCamera = World->SpawnActor<ACameraActor>(
+            ACameraActor::StaticClass(), CamTransform);
+        if (!NewCamera)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CAMERA][SPAWN_FAIL] Could not spawn ACameraActor for GUID=%s"),
+                *Payload.CameraGUID.ToString());
+            return;
+        }
+
+        // Tag and cache
+        FString TagString = FString::Printf(
+            TEXT("LiveSync_GUID=%s"),
+            *Payload.CameraGUID.ToString(EGuidFormats::Digits));
+        NewCamera->Tags.Add(FName(*TagString));
+        ActorCache.Add(Payload.CameraGUID, NewCamera);
+
+        Stats.ActiveCameraPacketsSpawned.fetch_add(1, std::memory_order_relaxed);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][SPAWN] Spawned ACameraActor for GUID=%s"),
             *Payload.CameraGUID.ToString());
-        return;
+
+        Found = NewCamera;
     }
 
     ACameraActor* Camera = Cast<ACameraActor>(Found);
@@ -10698,22 +10730,44 @@ HandleActiveCamera(
     {
         Stats.ActiveCameraPacketsNotCamera.fetch_add(1, std::memory_order_relaxed);
         UE_LOG(LogLiveSync, Warning,
-            TEXT("[CAMERA] Actor %s (%s) is not a CameraActor"),
+            TEXT("[CAMERA][VIEW_TARGET_SKIP] Actor %s (%s) is not a CameraActor"),
             *Found->GetName(), *Found->GetClass()->GetName());
         return;
     }
 
-        Stats.ActiveCameraPacketsAppliedToViewport.fetch_add(1, std::memory_order_relaxed);
+    // Lock the camera actor on all level editor viewport clients (pilot mode)
+    if (GEditor)
+    {
+        int32 AppliedCount = 0;
+        for (FLevelEditorViewportClient* LevelVC : GEditor->GetLevelViewportClients())
+        {
+            if (LevelVC)
+            {
+                LevelVC->SetActorLock(Camera);
+                AppliedCount++;
+            }
+        }
+
+        Stats.ActiveCameraPacketsAppliedToViewport.fetch_add(
+            AppliedCount, std::memory_order_relaxed);
+
         UE_LOG(LogLiveSync, Log,
-            TEXT("[CAMERA] Found CameraActor=%s — SetViewTarget deferred (UE5.7 API compatibility)"),
-            *Camera->GetName());
+            TEXT("[CAMERA][VIEW_TARGET] SetActorLock on %d viewport(s) for CameraActor=%s"),
+            AppliedCount, *Camera->GetName());
+    }
+    else
+    {
+        Stats.ActiveCameraPacketsViewTargetFailed.fetch_add(1, std::memory_order_relaxed);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][VIEW_TARGET_FAIL] GEditor is null — cannot lock viewport to camera"));
+    }
 #else
     UE_LOG(LogLiveSync, Log,
         TEXT("[CAMERA] No editor — SetViewTarget not supported"));
 #endif
-        Stats.ActiveCameraPacketsApplied.fetch_add(1, std::memory_order_relaxed);
-        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-        return;
+    Stats.ActiveCameraPacketsApplied.fetch_add(1, std::memory_order_relaxed);
+    Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+    return;
 }
 
 

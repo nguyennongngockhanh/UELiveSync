@@ -1013,6 +1013,18 @@ ConsoleDumpState()
         TEXT("  ActiveCamNotCam:      %d"),
         Stats.ActiveCameraPacketsNotCamera.load(std::memory_order_relaxed));
 
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  ActiveCamSpawned:     %d"),
+        Stats.ActiveCameraPacketsSpawned.load(std::memory_order_relaxed));
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  ActiveCamViewTgtFail: %d"),
+        Stats.ActiveCameraPacketsViewTargetFailed.load(std::memory_order_relaxed));
+
     // =====================================================
     // SEQUENCER OP (Phase 7E)
     // =====================================================
@@ -1594,6 +1606,8 @@ ConsoleReset()
     Stats.ActiveCameraPacketsAppliedToViewport.store(0, std::memory_order_relaxed);
     Stats.ActiveCameraPacketsMissingGUID.store(0, std::memory_order_relaxed);
     Stats.ActiveCameraPacketsNotCamera.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraPacketsSpawned.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraPacketsViewTargetFailed.store(0, std::memory_order_relaxed);
     LastActiveCameraGUID = FGuid();
     LastActiveCameraSequence = 0;
     LastActiveCameraTimestamp = 0.0;
