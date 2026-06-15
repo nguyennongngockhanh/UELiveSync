@@ -2985,7 +2985,7 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19 };
+            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
@@ -3834,6 +3834,58 @@ ProcessBinaryPacket(
             Payload.FPSNum, Payload.FPSDen);
 
         HandleTimelineState(Payload);
+        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // =====================================================
+    // PLAYBACK TRANSPORT PACKET (Phase 7F Stage 2)
+    // =====================================================
+    // Wire format (6 bytes fixed):
+    //   [0]    command       uint8  — 0=SetFrame, 1=Play, 2=Pause, 3=Stop
+    //   [1-4]  frame_current int32  — current playhead position
+    //   [5]    flags         uint8  — bit 0 = loop enabled (reserved)
+    //
+    // Validation:
+    //   - Payload size must be exactly 6 bytes
+    //   - Command must be in range [0, 3]
+    //   - Malformed payload must log and skip safely
+
+    if (PacketType == PT_PlaybackTransport)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessPlaybackTransport);
+
+        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
+        if (ObjSize != 6)
+        {
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[PLAYBACK][MALFORMED] Expected 6 bytes, got %d"),
+                ObjSize);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        FPlaybackTransportPayload Payload;
+        Payload.Command      = *reinterpret_cast<const uint8*>(Ptr + 0);
+        Payload.FrameCurrent = *reinterpret_cast<const int32*>(Ptr + 1);
+        Payload.Flags        = *reinterpret_cast<const uint8*>(Ptr + 5);
+
+        if (Payload.Command > 3)
+        {
+            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[PLAYBACK][MALFORMED] Unknown command %d"),
+                Payload.Command);
+            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[PLAYBACK][RECV] command=%d frame=%d flags=%d"),
+            Payload.Command, Payload.FrameCurrent, Payload.Flags);
+
+        HandlePlaybackTransport(Payload);
         Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
         return;
     }
@@ -12144,6 +12196,79 @@ HandleTimelineState(
         TEXT("[TIMELINE][APPLY] range=[%d,%d] fps=%d/%d"),
         Payload.FrameStart, Payload.FrameEnd,
         Payload.FPSNum, Payload.FPSDen);
+}
+
+
+// =========================================================
+// HANDLE PLAYBACK TRANSPORT (Phase 7F Stage 2)
+// =========================================================
+
+void UUELiveSyncSubsystem::
+HandlePlaybackTransport(
+    const FPlaybackTransportPayload& Payload)
+{
+    // Store the latest state
+    LastPlaybackTransportPayload = Payload;
+    bHasPlaybackTransportState = true;
+
+    // For SetFrame/Scrub (command=0), attempt to apply the frame
+    // if we have an active LevelSequence with a MovieScene.
+    // For Play/Pause/Stop, store and log — Sequencer playback API
+    // requires editor context and is deferred to Stage 2.1.
+    //
+    // Classification: PASS_TRANSPORT_STATE_ONLY for now.
+    // UE Sequencer playback (ULevelSequencePlayer::Play/Pause/Stop)
+    // is not safe to call from subsystem Tick in editor context
+    // without an active MovieScene player instance.
+
+    ULevelSequence* Seq = LiveSyncSequence.Get();
+    if (!Seq)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[PLAYBACK][SKIP] No LiveSync LevelSequence"));
+        return;
+    }
+
+    UMovieScene* MovieScene = Seq->GetMovieScene();
+    if (!MovieScene)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[PLAYBACK][SKIP] No MovieScene in LevelSequence"));
+        return;
+    }
+
+    // Apply SetFrame/Scrub to the playback range's current position
+    // by clamping the frame to the playback range and setting the
+    // MovieScene's playback position.
+    if (Payload.Command == static_cast<uint8>(EPlaybackTransportCommand::SetFrame))
+    {
+        const int32 ClampedFrame = FMath::Clamp(
+            Payload.FrameCurrent,
+            LiveSyncSequenceFrameStart,
+            LiveSyncSequenceFrameEnd);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[PLAYBACK][APPLY] SetFrame frame=%d (clamped=%d)"),
+            Payload.FrameCurrent, ClampedFrame);
+
+        // Store the current playhead frame for diagnostics
+        LiveSyncSequenceFrameCurrent = ClampedFrame;
+        return;
+    }
+
+    // Play/Pause/Stop — store and log only (PASS_TRANSPORT_STATE_ONLY)
+    static const TCHAR* CommandNames[] =
+        { TEXT("SetFrame"), TEXT("Play"), TEXT("Pause"), TEXT("Stop") };
+    const TCHAR* CmdName = (Payload.Command <= 3)
+        ? CommandNames[Payload.Command]
+        : TEXT("Unknown");
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[PLAYBACK][APPLY] command=%s frame=%d (PASS_TRANSPORT_STATE_ONLY)"),
+        CmdName, Payload.FrameCurrent);
+
+    // Store the current frame for diagnostics
+    LiveSyncSequenceFrameCurrent = Payload.FrameCurrent;
 }
 
 

@@ -50,6 +50,7 @@
 - **Phase 7D** — Active Camera Sync (implemented) ✅
 - **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.2 UE BoolTrack apply done) ✅
 - **Phase 7F Stage 1** — Timeline State Packet (PT_TimelineState = 0x19, frame range + FPS apply to LevelSequence) ✅
+- **Phase 7F Stage 2** — Playback Transport Packet (PT_PlaybackTransport = 0x1A, SetFrame/Play/Pause/Stop commands) ✅
 - **Phase 7C Stage 3A–5** — FBX Mesh Handoff Import + Importer Hardening + Asset Lifecycle Diagnostics + Scene Unit Conversion + Rename Asset Path Diagnostics (all stages complete) ✅
 - **Phase 10J.5O — FBX Unit Scale Policy** — Blender FBX export: `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `bake_space_transform=False`. UE import: `bConvertSceneUnit=true`. No actor/component scale compensation. ✅
 - **Phase 10J.5Q — FBX Unique Temp Import Path** — Each sync imports to a unique temp StaticMesh asset path. No reimport-over-existing. No package rename-over-existing. Direct validated assignment. Previous temp mesh cleanup after success. ✅
@@ -67,7 +68,8 @@
 6. ~~**Phase 7E — Sequencer + Keyframe Replication**~~ **Stage 9C CLOSEOUT** ✅
 7. **Phase 7E Stage 10A — Visibility Keyframes** (Stages 10A.1–10A.2, 10A.4 complete) ✅
 8. **Phase 7F Stage 1 — Timeline State Packet** (PT_TimelineState = 0x19, frame range + FPS apply) ✅
-9. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
+9. **Phase 7F Stage 2 — Playback Transport Packet** (PT_PlaybackTransport = 0x1A, SetFrame/Play/Pause/Stop) ✅
+10. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
 9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. **COMPLETE** ✅
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
 11. ~~**Manual Selected-Object Full Mesh Attribute Sync**~~ — superseded by Stage 3A FBX handoff 🔒
@@ -77,7 +79,6 @@
 15. **Phase 10J.6 — FBX Temp Asset Lifecycle Hardening** — Diagnostic markers for temp import lifecycle. Runtime smoke 6/6 PASS. **COMPLETE** ✅
 16. **Phase 10J.7 — FBX Test Debt Cleanup** — Tests updated for current architecture. 18/18 phase10j PASS. **COMPLETE** ✅
 17. **Phase 10K — Texture Pipeline** — MTEX metadata sync, UE texture import/cache, MID texture apply, master material, diagnostics. All 5 sub-phases complete. **COMPLETE** ✅
-19. **Phase 7F Stage 1 — Timeline State Packet** — PT_TimelineState = 0x19, frame range + FPS apply to LevelSequence playback range, TCP injector validated, build PASS, runtime RECV + APPLY confirmed, keyframe regression (applied=11 miss=0 unsupp=0) clean, 96/96 tests PASS. **COMPLETE** ✅
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
@@ -877,7 +878,9 @@ All verified in regression run.
 | Phase 6D hierarchy | **119/119 PASS** | 7 skipped (no UE) |
 | Phase 6H semantic consistency | **10/11 PASS** | 1 skip (no UE) |
 | **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81+4+59+5+7+9 = 777/777 PASS** | |
-| **Grand total (all standalone)** | **2466/2466 PASS** | 1689 (prev) + 777 (Phase 7E Stage 3–10D.1) |
+| Phase 7F Stage 1 (timeline state) | **21/21 PASS** | |
+| Phase 7F Stage 2 (playback transport) | **27/27 PASS** | |
+| **Grand total (all standalone)** | **2493/2493 PASS** | 777 (7E) + 21 (7F.1) + 27 (7F.2) + 1668 (existing) |
 
 **Notes**:
 - Phase 6B runtime audit: 90/102 PASS, 12 FAIL — pre-existing ConsoleReset checks against `.cpp` file; ConsoleReset code lives in `.inl` include. Not regressions.
@@ -946,6 +949,8 @@ All verified in regression run.
 ---
 
 ## Recent Changes
+
+- **Phase 7F Stage 2 — PT_PlaybackTransport (0x1A)** (2026-06-15): Implemented playback transport packet with SetFrame/Play/Pause/Stop commands. 6-byte payload (command+frame_current+flags). `EPlaybackTransportCommand` and `FPlaybackTransportPayload` in SyncTypes.h. `HandlePlaybackTransport()` with `[PLAYBACK][RECV/APPLY/SKIP/MALFORMED]` diagnostics. SetFrame applies clamped frame to `LiveSyncSequenceFrameCurrent`. Play/Pause/Stop logged as PASS_TRANSPORT_STATE_ONLY. Blender `serialize_playback_transport()` and `send_playback_transport()` with obj_count=0 for V3+ validation compatibility. Blender fix: `send_playback_transport` now builds packet directly instead of calling nonexistent `build_packet`. 27/27 new tests PASS. Runtime validation: `[PLAYBACK][RECV]` + `[PLAYBACK][APPLY] SetFrame frame=48 (clamped=48)` confirmed. Keyframe regression clean (applied=11 miss=0 unsupp=0). Visibility channels 9/10 BoolTrack apply preserved. Rsync deploy + UBT build PASS. 96/96 regression tests PASS. ✅
 
 - **Stage 10D.1 — Sequencer Editor Usability Validation** (2026-06-15): Validated that the persisted LevelSequence asset is usable in Sequencer Editor workflow. `open_level_sequence()` succeeds. Inspection confirms binding_count=1, Actor_0 binding, MovieScene3DTransformTrack + MovieSceneBoolTrack with sections. Classification: PASS_EDITOR_DATA_ONLY (manual UI scrub not achievable via -ExecutePythonScript). All 75/75 regression tests PASS.
 

@@ -510,6 +510,10 @@ private:
     void HandleTimelineState(
         const FTimelineStatePayload& Payload);
 
+    // Phase 7F Stage 2: Playback transport — play/pause/stop/scrub
+    void HandlePlaybackTransport(
+        const FPlaybackTransportPayload& Payload);
+
     // =====================================================
     // PLAYBACK STATE (Phase 7C)
     // =====================================================
@@ -968,6 +972,16 @@ private:
     bool bHasTimelineStatePayload = false;
 
     // =====================================================
+    // PLAYBACK TRANSPORT STATE (Phase 7F Stage 2)
+    // =====================================================
+
+    // Most recently received playback transport payload
+    FPlaybackTransportPayload LastPlaybackTransportPayload;
+
+    // Whether a PT_PlaybackTransport packet has been received at least once
+    bool bHasPlaybackTransportState = false;
+
+    // =====================================================
     // CAPABILITY NEGOTIATION (Phase 9)
     // =====================================================
 
@@ -1045,6 +1059,7 @@ private:
     // Frame range of the live sync sequence
     int32 LiveSyncSequenceFrameStart = 0;
     int32 LiveSyncSequenceFrameEnd   = 0;
+    int32 LiveSyncSequenceFrameCurrent = 0;
 
     // Display rate of the live sync sequence
     int32 LiveSyncSequenceFPSNum = 0;

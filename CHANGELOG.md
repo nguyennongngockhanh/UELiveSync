@@ -3,6 +3,16 @@
 ## [unreleased]
 
 ### Added
+- Phase 7F Stage 2: PT_PlaybackTransport (0x1A) packet — sends playback transport commands (SetFrame, Play, Pause, Stop) from Blender to UE.
+- `EPlaybackTransportCommand` enum (SetFrame=0/Play=1/Pause=2/Stop=3) in SyncTypes.h.
+- `FPlaybackTransportPayload` packed struct (6 bytes: command+frame_current+flags) with static_assert.
+- `HandlePlaybackTransport()` in UELiveSyncSubsystem with [PLAYBACK][RECV/APPLY/SKIP/MALFORMED] diagnostics.
+- `LastPlaybackTransportPayload` + `bHasPlaybackTransportState` + `LiveSyncSequenceFrameCurrent` storage members.
+- SetFrame applies clamped frame to LiveSyncSequenceFrameCurrent; Play/Pause/Stop logged as PASS_TRANSPORT_STATE_ONLY.
+- Blender `serialize_playback_transport()` and `send_playback_transport()` with obj_count=0 for V3+ validation.
+- TCP injector: `tools/uelivesync_7f_playback_transport_client.py` (transport-only and full 5-packet flow modes).
+- 27 new tests: wire format (11), UE apply (9), reserved packet guard (7).
+- 0x1A added to kValidTypes; 0x02 remains reserved/invalid.
 - Phase 7F Stage 1: PT_TimelineState (0x19) packet — sends Blender frame range + FPS to UE.
 - PT_TimelineState applies frame range via `SetPlaybackRange` and display rate via `SetDisplayRate` on LiveSync LevelSequence.
 - `FTimelineStatePayload` (20 bytes: frame_start, frame_end, frame_current, fps_num, fps_den) in SyncTypes.h.
@@ -55,6 +65,10 @@
 - Hardened unsupported/missing texture path handling.
 
 ### Validated
+- Phase 7F Stage 2: Runtime validated PT_PlaybackTransport (0x1A) — [PLAYBACK][RECV] + [PLAYBACK][APPLY] confirmed with SetFrame frame=48 (clamped=48).
+- Phase 7F Stage 2: Full 5-packet keyframe regression clean (applied=11 miss=0 unsupp=0).
+- Phase 7F Stage 2: Visibility keyframes on channels 9/10 applied through UE BoolTrack path.
+- Phase 7F Stage 2: All 96/96 regression tests pass (27 new + 69 existing).
 - Validated active LevelSequence runtime path with PT_Keyframe applied=11, miss=0, unsupp=0.
 - Validated visibility channels 9 and 10 apply through UE bool keyframe path.
 - Confirmed PT_Transform remains 0x01 and 0x02 remains reserved/invalid.

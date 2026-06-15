@@ -98,6 +98,7 @@ ProcessQueuedPackets → InterpolateTransforms → ResolvePendingAttachments
 | PT_Keyframe | 0x17 | 14 + N×25 bytes | Keyframe batch (transform ch 0–8, visibility ch 9–10) |
 | PT_SequencerOp | 0x18 | 16 + payload bytes | Sequencer operation (create sequence, add binding, etc.) |
 | PT_TimelineState | 0x19 | 20 bytes | Timeline state (frame range, FPS, apply to LevelSequence) |
+| PT_PlaybackTransport | 0x1A | 6 bytes | Playback transport command: SetFrame=0/Play=1/Pause=2/Stop=3 |
 
 ## Key Registries/Maps (UE Side)
 

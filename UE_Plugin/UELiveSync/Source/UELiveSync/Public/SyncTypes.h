@@ -259,6 +259,9 @@ enum EPacketType : uint8
     // Phase 7F Stage 1: Timeline state (frame range + FPS, applies to LevelSequence)
     PT_TimelineState  = 0x19,  // Timeline state from Blender (applied to Sequencer)
 
+    // Phase 7F Stage 2: Playback transport (play/pause/stop/scrub commands)
+    PT_PlaybackTransport = 0x1A,  // Playback transport command
+
     // Phase 9: Capability negotiation (announce/response)
     // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md §9
     PT_CapabilityAnnounce  = 0x11,  // Bitmask from Blender to UE
@@ -638,6 +641,35 @@ struct FTimelineStatePayload
 static_assert(
     sizeof(FTimelineStatePayload) == 20,
     "FTimelineStatePayload must be exactly 20 bytes");
+
+// =========================================================
+// PLAYBACK TRANSPORT PAYLOAD (Phase 7F Stage 2)
+// =========================================================
+
+// Command enum for PT_PlaybackTransport (0x1A)
+enum class EPlaybackTransportCommand : uint8
+{
+    SetFrame = 0,  // SetFrame/Scrub
+    Play     = 1,  // Play
+    Pause    = 2,  // Pause
+    Stop     = 3,  // Stop
+};
+
+// PT_PlaybackTransport (0x1A) fixed-size payload: 6 bytes
+// Wire format:
+//   [0]    command       uint8  — 0=SetFrame, 1=Play, 2=Pause, 3=Stop
+//   [1-4]  frame_current int32  — current playhead position
+//   [5]    flags         uint8  — bit 0 = loop enabled (reserved)
+struct FPlaybackTransportPayload
+{
+    uint8 Command      = 0;
+    int32 FrameCurrent = 0;
+    uint8 Flags        = 0;
+};
+
+static_assert(
+    sizeof(FPlaybackTransportPayload) == 6,
+    "FPlaybackTransportPayload must be exactly 6 bytes");
 
 #pragma pack(pop)
 

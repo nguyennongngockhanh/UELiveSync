@@ -350,6 +350,16 @@ PT_SequencerOp = 0x18  # Sequencer operation (discrete event, NOT state stream)
 # Applies frame range + FPS to LiveSync LevelSequence playback range.
 PT_TimelineState = 0x19  # Timeline state (applied to Sequencer, unlike PT_Timeline)
 
+# Phase 7F Stage 2: Playback transport (PT_PlaybackTransport = 0x1A)
+# Sends play/pause/stop/scrub commands to UE Sequencer.
+PT_PlaybackTransport = 0x1A  # Playback transport (command + current frame)
+
+# Playback transport commands (must match SyncTypes.h EPlaybackTransportCommand)
+PLAYBACK_TRANSPORT_SET_FRAME = 0  # SetFrame/Scrub
+PLAYBACK_TRANSPORT_PLAY     = 1  # Play
+PLAYBACK_TRANSPORT_PAUSE    = 2  # Pause
+PLAYBACK_TRANSPORT_STOP     = 3  # Stop
+
 # Sequencer opcodes (must match SyncTypes.h ESequencerOpcode)
 SEQUENCER_OP_CREATE_SEQUENCE   = 0  # Create/replace sequence with frame range + FPS
 SEQUENCER_OP_ADD_POSSESSABLE   = 1  # Add possessable binding to sequence
@@ -1174,6 +1184,42 @@ def serialize_timeline_state(frame_start, frame_end, frame_current,
         frame_start, frame_end, frame_current,
         fps_num, fps_den
     )
+
+
+# =========================================================
+# PLAYBACK TRANSPORT SERIALIZATION (Phase 7F Stage 2)
+# =========================================================
+
+# PT_PlaybackTransport (0x1A) fixed-size payload: 6 bytes
+# Payload layout:
+#   [0]    command       uint8   — 0=SetFrame, 1=Play, 2=Pause, 3=Stop
+#   [1-4]  frame_current int32  — current playhead position
+#   [5]    flags         uint8   — bit 0 = loop enabled (reserved)
+PLAYBACK_TRANSPORT_PAYLOAD_SIZE = 6
+
+
+def serialize_playback_transport(command, frame_current, flags=0):
+    """Serialize playback transport payload for PT_PlaybackTransport (0x1A)."""
+    return struct.pack(
+        "<BiB",
+        command & 0xFF,
+        frame_current,
+        flags & 0xFF
+    )
+
+
+def send_playback_transport(conn, command, frame_current, flags=0):
+    """Build and send a PT_PlaybackTransport packet (obj_count=0 for non-object payload)."""
+    import struct as _struct
+    global _sequence_id
+    _sequence_id += 1
+    payload = serialize_playback_transport(command, frame_current, flags)
+    header = _struct.pack('<I H B B Q I I',
+                          LIVE_SYNC_MAGIC, LIVE_SYNC_VERSION_V4,
+                          PT_PlaybackTransport, 0,
+                          _sequence_id,
+                          24 + len(payload), 0)
+    conn.sendall(header + payload)
 
 
 NULL_CAMERA_GUID = b'\x00' * 16
