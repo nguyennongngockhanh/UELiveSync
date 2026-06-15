@@ -209,6 +209,8 @@ FNV-1a 32-bit hash of all extracted keyframe entries (`_hash_keyframes()`) is st
 
 **Stage 10B.2 Asset-backed sequence validation**: `tools/uelivesync_10b_tcp_client.py` injects the full 5-packet sequence flow via standalone TCP. `tools/uelivesync_10b_asset_sequence_validation.py` validates log markers (`[SEQ][ASSET_CREATE/LOAD/READY]`, `[KEYFRAME]`) and asset file persistence on disk (`LS_UELiveSync_Runtime.uasset`). Supports three modes: full flow (default), `--check-log` (no TCP injection), and `--ue-python` (run inside UE).
 
+**Stage 10B.3 UE Python load asset verification**: `unreal.load_asset("/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime")` returns a valid `LevelSequence`. Classification PASS_LOAD_ONLY — asset loads, but bindings/keyframes are not persisted to disk because `SavePackage()` is only called at sequence creation, not after runtime modifications. Tool: `tools/uelivesync_10b3_uepython_asset_load.py`. Note: `NewObject` must use a named `FName` (not `NAME_None`) for clean asset resolution.
+
 **NullRHI caveat**: `-NullRHI` suppresses Tick/networking in this workflow. Use normal editor or `-RenderOffScreen`.
 
 ---

@@ -754,6 +754,19 @@ Stage 10B replaces the transient `ULevelSequence` created via `NewObject(GetTran
 - **10B.1**: `GetOrCreateLiveSyncLevelSequenceAsset()` — Static helper that creates or loads the asset-backed LevelSequence using `CreatePackage()` + `NewObject(RF_Public|RF_Standalone|RF_MarkAsRootSet)`. Persists to disk via `UPackage::SavePackage()` at creation time. Diagnostic markers: `[SEQ][ASSET_LOAD]`, `[SEQ][ASSET_CREATE]`, `[SEQ][ASSET_READY]`, `[SEQ][ASSET_FAIL]`.
 - **10B.2**: Runtime asset sequence validation — end-to-end test through the full active sequence flow using a standalone TCP injector (`tools/uelivesync_10b_tcp_client.py`). Validates log markers and asset file-on-disk persistence.
 - **Key difference from Stage 10A.5**: The sequence is asset-backed (not transient). The uasset file lives at `Content/UELiveSync/Sequences/LS_UELiveSync_Runtime.uasset` and is loadable via `unreal.load_asset()` in UE Python.
+
+#### Stage 10B.3 — UE Python Asset Load Verification (COMPLETE)
+
+Stage 10B.3 verifies that the persisted LevelSequence asset can be loaded via `unreal.load_asset()` inside UE Python.
+
+- **Result**: `unreal.load_asset("/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime")` returns a valid `LevelSequence` object (PASS).
+- **Classification**: **PASS_LOAD_ONLY** — asset loads correctly; bindings/keyframe inspection limited because:
+  1. `SavePackage()` is called only at sequence creation, not after bindings/keyframes are applied (bindings exist only in memory during runtime).
+  2. UE Python API does not expose `MovieScene.get_playback_range()` or `MovieScene.get_tracks()`.
+- **Fix applied**: `NewObject` now uses `FName("LS_UELiveSync_Runtime")` instead of `NAME_None`, so the asset has a proper sub-object name and resolves cleanly via `FSoftObjectPath` and `unreal.load_asset()`.
+- **Tools**:
+  - `tools/uelivesync_10b3_uepython_asset_load.py` — validator with `--check-result`, `--generate`, and orchestrator modes.
+  - `tests/phase7e_stage10b3_uepython_asset_load.py` — 5/5 PASS (loads, no errors, class=LevelSequence, binding_count=0, classification).
 - **Runtime result**: `applied=11 miss=0 unsupp=0` — same keyframe apply correctness as Stage 10A.5.
 - **Tests**:
   - `tools/uelivesync_10b_tcp_client.py` — TCP injector for standalone flow
@@ -815,6 +828,7 @@ All verified in regression run.
 | Phase 7E Stage 10A.4 Blender 5.1 slotted extraction | **81/81 PASS** | |
 | Phase 7E Stage 10A.5 SequencerOp wrap + reserved guard | **4/4 PASS** | |
 | Phase 7E Stage 10B.2 runtime asset sequence | **59/59 PASS** | 49+4+6 (log-check pass) |
+| Phase 7E Stage 10B.3 UE Python asset load | **5/5 PASS** | PASS_LOAD_ONLY |
 | Phase 7C Stage 1 (playback wire) | **42/42 PASS** | |
 | Phase 7C Stage 2 (detection) | **41/41 PASS** | |
 | Phase 7C Stage 3 (UE handler) | **53/53 PASS** | |
@@ -826,8 +840,8 @@ All verified in regression run.
 | Phase 6E delete validation | **320/320 PASS** | |
 | Phase 6D hierarchy | **119/119 PASS** | 7 skipped (no UE) |
 | Phase 6H semantic consistency | **10/11 PASS** | 1 skip (no UE) |
-| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81+4+59 = 756/756 PASS** | |
-| **Grand total (all standalone)** | **2445/2445 PASS** | 1689 (prev) + 756 (Phase 7E Stage 3–10B.2) |
+| **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81+4+59+5 = 761/761 PASS** | |
+| **Grand total (all standalone)** | **2450/2450 PASS** | 1689 (prev) + 761 (Phase 7E Stage 3–10B.3) |
 
 **Notes**:
 - Phase 6B runtime audit: 90/102 PASS, 12 FAIL — pre-existing ConsoleReset checks against `.cpp` file; ConsoleReset code lives in `.inl` include. Not regressions.
@@ -896,6 +910,8 @@ All verified in regression run.
 ---
 
 ## Recent Changes
+
+- **Stage 10B.3 — UE Python Asset Load Verification** (2026-06-15): Verified `unreal.load_asset()` returns valid `LevelSequence` (PASS_LOAD_ONLY). Fixed `NewObject` NAME_None → named object for clean `FSoftObjectPath` resolution. Created `tools/uelivesync_10b3_uepython_asset_load.py` and `tests/phase7e_stage10b3_uepython_asset_load.py` (5/5 PASS). All 64/64 regression tests PASS.
 
 - **Stage 10B.2 — Runtime Asset Sequence Validation** (2026-06-15): Replaced transient LevelSequence with asset-backed sequence at `/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime`. Added `GetOrCreateLiveSyncLevelSequenceAsset()` with `UPackage::SavePackage()` for disk persistence. Added `[SEQ][ASSET_LOAD/ASSET_CREATE/ASSET_READY/ASSET_FAIL]` diagnostic markers. Runtime validation via standalone TCP injector (`tools/uelivesync_10b_tcp_client.py`) and validator (`tools/uelivesync_10b_asset_sequence_validation.py`). Validation result: `applied=11 miss=0 unsupp=0`, asset file persisted (4055 bytes). All 59/59 regression tests PASS.
 

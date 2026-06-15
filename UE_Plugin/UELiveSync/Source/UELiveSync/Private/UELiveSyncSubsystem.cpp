@@ -880,9 +880,14 @@ static ULevelSequence* GetOrCreateLiveSyncLevelSequenceAsset()
 {
     static const FString AssetPath
         = TEXT("/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime");
+    static const FName AssetObjName = FName(TEXT("LS_UELiveSync_Runtime"));
+    static const FString AssetFullPath
+        = AssetPath + TEXT(".") + AssetObjName.ToString();
 
-    // Attempt to load existing asset via SoftObjectPath
-    static const FSoftObjectPath SeqSoftPath(*AssetPath);
+    // Attempt to load existing asset via SoftObjectPath.
+    // Use full path (package.object) so FSoftObjectPath resolves
+    // directly to the LevelSequence, not the UPackage.
+    static const FSoftObjectPath SeqSoftPath(*AssetFullPath);
     ULevelSequence* Existing = Cast<ULevelSequence>(SeqSoftPath.TryLoad());
     if (Existing)
     {
@@ -905,8 +910,10 @@ static ULevelSequence* GetOrCreateLiveSyncLevelSequenceAsset()
         return nullptr;
     }
 
+    // Use a fixed object name matching the package short name so
+    // FSoftObjectPath and unreal.load_asset() can resolve cleanly.
     ULevelSequence* Seq = NewObject<ULevelSequence>(
-        Package, NAME_None, RF_Public | RF_Standalone | RF_MarkAsRootSet);
+        Package, AssetObjName, RF_Public | RF_Standalone | RF_MarkAsRootSet);
     if (!Seq)
     {
         UE_LOG(LogLiveSync, Error,

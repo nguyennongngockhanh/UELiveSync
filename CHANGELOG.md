@@ -16,6 +16,8 @@
 - Stage 10B.2: Runtime asset sequence validation with TCP injector (`tools/uelivesync_10b_tcp_client.py`) and validator (`tools/uelivesync_10b_asset_sequence_validation.py`).
 - Added `UPackage::SavePackage()` in `GetOrCreateLiveSyncLevelSequenceAsset()` to persist asset to disk.
 - Added `[SEQ][ASSET_LOAD / ASSET_CREATE / ASSET_READY / ASSET_FAIL]` diagnostic markers.
+- Stage 10B.3: UE Python asset load verification — `unreal.load_asset()` returns valid `LevelSequence` (PASS_LOAD_ONLY).
+- Fixed `NewObject` `NAME_None` → named `FName("LS_UELiveSync_Runtime")` for clean `FSoftObjectPath` resolution.
 - Added MTEX texture metadata sync for material slots.
 - Added UE-side texture import/cache from MTEX paths.
 - Added generated MID texture parameter application.
@@ -44,6 +46,8 @@
 - Confirmed PT_Transform remains 0x01 and 0x02 remains reserved/invalid.
 - Stage 10B.2: Validated asset-backed LevelSequence persistence to disk (4055 bytes).
 - Stage 10B.2: All 59/59 regression tests pass (Stage 10A.2 + 10A.5A).
+- Stage 10B.3: Validated `unreal.load_asset()` returns non-null `LevelSequence` (PASS_LOAD_ONLY).
+- Stage 10B.3: All 64/64 regression tests pass (added 10B.3 with 5/5).
 
 ### Known notes
 - Keyframe runtime requires `prefs.keyframe_sync=True`.
