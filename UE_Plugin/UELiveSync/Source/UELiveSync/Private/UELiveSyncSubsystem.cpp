@@ -10769,6 +10769,164 @@ AbortSnapshot()
 // viewport. Missing or non-camera GUIDs are logged and counted.
 // =========================================================
 
+// =============================================================
+// PHASE 7G STAGE 5: Ensure camera possessable binding and
+// CameraCutTrack section in the persistent LevelSequence.
+// =============================================================
+void UUELiveSyncSubsystem::EnsureCameraSequencerBinding(
+    ACameraActor* Camera,
+    const FGuid& CameraGUID)
+{
+    CHECK_GAME_THREAD();
+
+    if (!Camera || !CameraGUID.IsValid())
+    {
+        Stats.ActiveCameraCutSkipped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // Get or create the persistent LevelSequence
+    ULevelSequence* Seq = GetOrCreateLiveSyncLevelSequence();
+    if (!Seq)
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[CAMERA][SEQ_BIND_SKIP] No LevelSequence for camera %s"),
+            *CameraGUID.ToString());
+        Stats.ActiveCameraCutSkipped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    UMovieScene* MovieScene = Seq->GetMovieScene();
+    if (!MovieScene)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][SEQ_BIND_SKIP] GetMovieScene() null for camera %s"),
+            *CameraGUID.ToString());
+        Stats.ActiveCameraCutSkipped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // Step 1: Ensure possessable binding exists
+    FGuid* ExistingBinding = LiveSyncGuidToSequencerBinding.Find(CameraGUID);
+    FGuid BindingGuid;
+    bool bBindingCreated = false;
+
+    if (ExistingBinding)
+    {
+        BindingGuid = *ExistingBinding;
+        Stats.ActiveCameraBindingExists.fetch_add(1, std::memory_order_relaxed);
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[CAMERA][SEQ_BIND_SKIP] Camera %s already bound to %s"),
+            *CameraGUID.ToString(), *BindingGuid.ToString());
+    }
+    else
+    {
+        // Add possessable to MovieScene
+        BindingGuid = MovieScene->AddPossessable(
+            Camera->GetName(),
+            Camera->GetClass());
+
+        if (!BindingGuid.IsValid())
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[CAMERA][SEQ_BIND] AddPossessable failed for camera %s"),
+                *CameraGUID.ToString());
+            Stats.ActiveCameraCutSkipped.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Bind possessable to the camera actor
+        Seq->BindPossessableObject(
+            BindingGuid,
+            *Camera,
+            Camera->GetWorld());
+
+        // Store mapping
+        LiveSyncGuidToSequencerBinding.Add(CameraGUID, BindingGuid);
+
+        bBindingCreated = true;
+        Stats.ActiveCameraBindingCreated.fetch_add(1, std::memory_order_relaxed);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][SEQ_BIND] guid=%s camera=%s binding=%s"),
+            *CameraGUID.ToString(),
+            *Camera->GetName(),
+            *BindingGuid.ToString());
+    }
+
+    // Step 2: Ensure CameraCutTrack and section
+    UMovieSceneCameraCutTrack* CameraCutTrack = Cast<UMovieSceneCameraCutTrack>(
+        MovieScene->GetCameraCutTrack());
+
+    bool bTrackCreated = false;
+    if (!CameraCutTrack)
+    {
+        CameraCutTrack = Cast<UMovieSceneCameraCutTrack>(
+            MovieScene->AddCameraCutTrack(UMovieSceneCameraCutTrack::StaticClass()));
+        bTrackCreated = true;
+    }
+
+    if (!CameraCutTrack)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][CUT_SKIP] Failed to get/create CameraCutTrack for camera %s"),
+            *CameraGUID.ToString());
+        Stats.ActiveCameraCutSkipped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    if (bTrackCreated)
+    {
+        Stats.ActiveCameraCutTrackCreated.fetch_add(1, std::memory_order_relaxed);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][CUT_TRACK] Created CameraCutTrack for camera %s binding=%s"),
+            *CameraGUID.ToString(), *BindingGuid.ToString());
+    }
+
+    // Step 3: Create camera cut section targeting this binding
+    FMovieSceneObjectBindingID BindingID(
+        (UE::MovieScene::FRelativeObjectBindingID(BindingGuid)));
+
+    // Use current start frame or 0 if range not set
+    int32 StartFrame = FMath::Max(0, LiveSyncSequenceFrameStart);
+    int32 EndFrame = FMath::Max(StartFrame + 1, LiveSyncSequenceFrameEnd);
+
+    UMovieSceneCameraCutSection* CutSection = CameraCutTrack->AddNewCameraCut(
+        BindingID, FFrameNumber(StartFrame));
+
+    if (!CutSection)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][CUT_SKIP] AddNewCameraCut failed for camera %s"),
+            *CameraGUID.ToString());
+        Stats.ActiveCameraCutSkipped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    CutSection->SetRange(
+        TRange<FFrameNumber>(
+            FFrameNumber(StartFrame),
+            FFrameNumber(EndFrame)));
+
+    Stats.ActiveCameraCutApplied.fetch_add(1, std::memory_order_relaxed);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA][CUT_APPLY] guid=%s binding=%s range=%d-%d"),
+        *CameraGUID.ToString(),
+        *BindingGuid.ToString(),
+        StartFrame,
+        EndFrame);
+
+    // Step 4: Save the sequence
+#if WITH_EDITOR
+    SaveLiveSyncLevelSequenceAsset(Seq);
+    Stats.ActiveCameraSeqSaved.fetch_add(1, std::memory_order_relaxed);
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA][CUT_SAVE] Sequence saved for camera %s"),
+        *CameraGUID.ToString());
+#endif
+}
+
 void UUELiveSyncSubsystem::
 HandleActiveCamera(
     const FActiveCameraPayload& Payload)
@@ -10787,6 +10945,77 @@ HandleActiveCamera(
         Payload.Sequence, Payload.Timestamp,
         bHasActiveCamera ? 1 : 0);
 
+    // Phase 7G Stage 5: Sequencer binding is independent of viewport CVar.
+    // Resolve camera actor first (find or auto-spawn), then ensure binding.
+    ACameraActor* ResolvedCamera = nullptr;
+
+    if (Payload.CameraGUID != FGuid())
+    {
+#if WITH_EDITOR
+        AActor* Found = FindActorFast(Payload.CameraGUID);
+        if (!Found)
+        {
+            // Auto-spawn ACameraActor for this camera GUID
+            UWorld* World = GetWorld();
+            if (World)
+            {
+                FTransform CamTransform(FTransform::Identity);
+                CamTransform.SetLocation(FVector(0.0f, -200.0f, 100.0f));
+
+                ACameraActor* NewCamera = World->SpawnActor<ACameraActor>(
+                    ACameraActor::StaticClass(), CamTransform);
+                if (NewCamera)
+                {
+                    FString TagString = FString::Printf(
+                        TEXT("LiveSync_GUID=%s"),
+                        *Payload.CameraGUID.ToString(EGuidFormats::Digits));
+                    NewCamera->Tags.Add(FName(*TagString));
+                    ActorCache.Add(Payload.CameraGUID, NewCamera);
+
+                    Stats.ActiveCameraPacketsSpawned.fetch_add(1, std::memory_order_relaxed);
+
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[CAMERA][SPAWN] Spawned ACameraActor for GUID=%s"),
+                        *Payload.CameraGUID.ToString());
+
+                    Found = NewCamera;
+                }
+                else
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[CAMERA][SPAWN_FAIL] Could not spawn ACameraActor for GUID=%s"),
+                        *Payload.CameraGUID.ToString());
+                }
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[CAMERA][SPAWN_FAIL] No world for camera GUID=%s"),
+                    *Payload.CameraGUID.ToString());
+            }
+        }
+
+        if (Found)
+        {
+            ResolvedCamera = Cast<ACameraActor>(Found);
+            if (!ResolvedCamera)
+            {
+                Stats.ActiveCameraPacketsNotCamera.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[CAMERA][VIEW_TARGET_SKIP] Actor %s (%s) is not a CameraActor"),
+                    *Found->GetName(), *Found->GetClass()->GetName());
+            }
+        }
+#endif
+    }
+
+    // Sequencer binding (always, independent of viewport CVar)
+    if (ResolvedCamera)
+    {
+        EnsureCameraSequencerBinding(ResolvedCamera, Payload.CameraGUID);
+    }
+
+    // Viewport lock is gated by ApplyToViewport CVar
     if (!CVarLiveSyncActiveCameraApplyToViewport.GetValueOnGameThread())
     {
         return;
@@ -10799,59 +11028,13 @@ HandleActiveCamera(
         return;
     }
 
-#if WITH_EDITOR
-    AActor* Found = FindActorFast(Payload.CameraGUID);
-    if (!Found)
+    if (!ResolvedCamera)
     {
-        // Auto-spawn ACameraActor for this camera GUID
-        UWorld* World = GetWorld();
-        if (!World)
-        {
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[CAMERA][SPAWN_FAIL] No world for camera GUID=%s"),
-                *Payload.CameraGUID.ToString());
-            return;
-        }
-
-        FTransform CamTransform(FTransform::Identity);
-        CamTransform.SetLocation(FVector(0.0f, -200.0f, 100.0f));
-
-        ACameraActor* NewCamera = World->SpawnActor<ACameraActor>(
-            ACameraActor::StaticClass(), CamTransform);
-        if (!NewCamera)
-        {
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[CAMERA][SPAWN_FAIL] Could not spawn ACameraActor for GUID=%s"),
-                *Payload.CameraGUID.ToString());
-            return;
-        }
-
-        // Tag and cache
-        FString TagString = FString::Printf(
-            TEXT("LiveSync_GUID=%s"),
-            *Payload.CameraGUID.ToString(EGuidFormats::Digits));
-        NewCamera->Tags.Add(FName(*TagString));
-        ActorCache.Add(Payload.CameraGUID, NewCamera);
-
-        Stats.ActiveCameraPacketsSpawned.fetch_add(1, std::memory_order_relaxed);
-
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[CAMERA][SPAWN] Spawned ACameraActor for GUID=%s"),
-            *Payload.CameraGUID.ToString());
-
-        Found = NewCamera;
-    }
-
-    ACameraActor* Camera = Cast<ACameraActor>(Found);
-    if (!Camera)
-    {
-        Stats.ActiveCameraPacketsNotCamera.fetch_add(1, std::memory_order_relaxed);
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[CAMERA][VIEW_TARGET_SKIP] Actor %s (%s) is not a CameraActor"),
-            *Found->GetName(), *Found->GetClass()->GetName());
+        // Camera was not resolved (already logged above)
         return;
     }
 
+#if WITH_EDITOR
     // Lock the camera actor on all level editor viewport clients (pilot mode)
     if (GEditor)
     {
@@ -10860,7 +11043,7 @@ HandleActiveCamera(
         {
             if (LevelVC)
             {
-                LevelVC->SetActorLock(Camera);
+                LevelVC->SetActorLock(ResolvedCamera);
                 AppliedCount++;
             }
         }
@@ -10870,7 +11053,7 @@ HandleActiveCamera(
 
         UE_LOG(LogLiveSync, Log,
             TEXT("[CAMERA][VIEW_TARGET] SetActorLock on %d viewport(s) for CameraActor=%s"),
-            AppliedCount, *Camera->GetName());
+            AppliedCount, *ResolvedCamera->GetName());
     }
     else
     {

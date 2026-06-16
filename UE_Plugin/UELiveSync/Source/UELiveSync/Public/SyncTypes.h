@@ -1252,6 +1252,14 @@ struct FLiveSyncStats
     std::atomic<int32> SequencerCameraCutsMissingBinding{0};// ADD_CAMERA_CUT with no binding found
     std::atomic<int32> SequencerCameraCutsMalformedRange{0};// ADD_CAMERA_CUT with invalid frame range
 
+    // --- Phase 7G Stage 5: Active camera → Sequencer binding ---
+    std::atomic<int32> ActiveCameraBindingCreated{0};       // Camera possessable binding created via auto-bind
+    std::atomic<int32> ActiveCameraBindingExists{0};        // Camera already has binding — skip
+    std::atomic<int32> ActiveCameraCutTrackCreated{0};      // CameraCutTrack created (first time)
+    std::atomic<int32> ActiveCameraCutApplied{0};           // Camera cut section added/updated
+    std::atomic<int32> ActiveCameraCutSkipped{0};           // Camera cut skipped (no binding, no sequence, etc.)
+    std::atomic<int32> ActiveCameraSeqSaved{0};             // Sequence saved after camera cut binding update
+
     // --- Phase 7E Stage 7: Keyframe replication (game thread) ---
     std::atomic<int32> KeyframePacketsReceived{0};     // Total PT_Keyframe packets received
     std::atomic<int32> KeyframePacketsApplied{0};      // Packets accepted (valid size, count, sequence)
@@ -2154,6 +2162,7 @@ constexpr uint32 CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20;  // Bit 5: PT_Keyfram
 constexpr uint32 CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40;  // Bit 6: PT_ActiveCamera (0x15) supported
 constexpr uint32 CAP_SUPPORTS_SEQUENCER_OPS       = 0x80;  // Bit 7: PT_SequencerOp (0x18) supported
 constexpr uint32 CAP_SUPPORTS_CAMERA_DEF_SYNC      = 0x100; // Bit 8: PT_CameraDef (0x1B) supported
+constexpr uint32 CAP_SUPPORTS_CAMERA_SEQ_BIND       = 0x200; // Bit 9: Camera → Sequencer binding (Phase 7G.5)
 
 // UE's local capability mask — sent in PT_CapabilityResponse.
 // OR together all bits this UE plugin version supports.
@@ -2162,4 +2171,5 @@ constexpr uint32 UE_LOCAL_CAPABILITIES =
     CAP_SUPPORTS_KEYFRAME_REPLICATION |
     CAP_SUPPORTS_ACTIVE_CAMERA_SYNC |
     CAP_SUPPORTS_SEQUENCER_OPS |
-    CAP_SUPPORTS_CAMERA_DEF_SYNC;
+    CAP_SUPPORTS_CAMERA_DEF_SYNC |
+    CAP_SUPPORTS_CAMERA_SEQ_BIND;

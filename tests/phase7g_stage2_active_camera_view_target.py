@@ -63,10 +63,10 @@ def test_view_target_markers_exist():
 def test_set_actor_lock_called():
     content = read_cpp()
     idx = content.rfind("HandleActiveCamera")
-    region = content[idx: idx + 4000]
+    region = content[idx: idx + 6000]
     assert "SetActorLock" in region, \
         "SetActorLock not referenced in HandleActiveCamera"
-    assert "LevelVC->SetActorLock" in region or "SetActorLock(Camera)" in region, \
+    assert "LevelVC->SetActorLock" in region or "SetActorLock(Camera)" in region or "SetActorLock(ResolvedCamera)" in region, \
         "SetActorLock(Camera) call not found"
     print("  PASS: SetActorLock called on viewport clients")
     return True
@@ -91,7 +91,7 @@ def test_editor_h_included():
 def test_get_level_viewport_clients_called():
     content = read_cpp()
     idx = content.rfind("HandleActiveCamera")
-    region = content[idx: idx + 4000]
+    region = content[idx: idx + 7000]
     assert "GetLevelViewportClients" in region, \
         "GetLevelViewportClients not called in HandleActiveCamera"
     print("  PASS: GEditor->GetLevelViewportClients() called")
@@ -101,7 +101,7 @@ def test_get_level_viewport_clients_called():
 def test_apply_count_incremented():
     content = read_cpp()
     idx = content.rfind("HandleActiveCamera")
-    region = content[idx: idx + 4000]
+    region = content[idx: idx + 7000]
     assert "ActiveCameraPacketsAppliedToViewport" in region, \
         "ActiveCameraPacketsAppliedToViewport not referenced"
     print("  PASS: ActiveCameraPacketsAppliedToViewport counter incremented")
@@ -111,7 +111,7 @@ def test_apply_count_incremented():
 def test_not_camera_skip():
     content = read_cpp()
     idx = content.rfind("HandleActiveCamera")
-    region = content[idx: idx + 4000]
+    region = content[idx: idx + 7000]
     assert "ActiveCameraPacketsNotCamera" in region, \
         "ActiveCameraPacketsNotCamera not referenced"
     assert "[CAMERA][VIEW_TARGET_SKIP]" in region, \
@@ -123,7 +123,7 @@ def test_not_camera_skip():
 def test_view_target_fail_counter():
     content = read_cpp()
     idx = content.rfind("HandleActiveCamera")
-    region = content[idx: idx + 4000]
+    region = content[idx: idx + 7000]
     assert "ActiveCameraPacketsViewTargetFailed" in region, \
         "ActiveCameraPacketsViewTargetFailed not in HandleActiveCamera"
     print("  PASS: View target fail counter incremented on GEditor null")

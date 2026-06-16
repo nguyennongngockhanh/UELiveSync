@@ -332,6 +332,47 @@ PT_CameraDef (0x1B) carries camera parameters (focal length, sensor dimensions, 
 
 **Limitations**: Camera rotation in Blender is Z-forward (up=Z). UE camera is Y-forward (up=Z). The Y-axis flip convention handles translation; rotation requires explicit conversion.
 
+### Phase 7G Stage 5 — Camera Sequencer Binding + CameraCutTrack Integration
+
+**Objective**: Sync the LiveSync active camera to the LevelSequence as a possessable binding with a CameraCutTrack, enabling Sequencer-driven camera cuts.
+
+**Validation Classification**: `PASS_CAMERA_SEQ_BIND_APPLY`
+
+**Runtime Markers**:
+- `[CAMERA][SEQ_BIND]` — Found or created possessable binding for camera
+- `[CAMERA][SEQ_BIND_SKIP]` — Camera already bound (ExistingBinding reuse)
+- `[CAMERA][CUT_TRACK]` — CameraCutTrack created on sequence
+- `[CAMERA][CUT_APPLY]` — CameraCutSection added with range (0, 1)
+- `[CAMERA][CUT_SKIP]` — CameraCutSection already exists
+- `[CAMERA][CUT_SAVE]` — Sequence saved via SaveLiveSyncLevelSequenceAsset
+
+**Capability Flag**: `CAP_SUPPORTS_CAMERA_SEQ_BIND = 0x200` (bit 9)
+
+**Changes**:
+
+- **SyncTypes.h**: Added 6 counters (`ActiveCameraBindingCreated`, `ActiveCameraBindingExists`, `ActiveCameraCutTrackCreated`, `ActiveCameraCutApplied`, `ActiveCameraCutSkipped`, `ActiveCameraSeqSaved`) and capability bit `0x200` included in `UE_LOCAL_CAPABILITIES`.
+- **UELiveSyncSubsystem.h**: Declared `EnsureCameraSequencerBinding(ACameraActor*, const FGuid&)` — returns `bool`.
+- **UELiveSyncSubsystem.cpp**: Implemented `EnsureCameraSequencerBinding` — gets/creates asset-backed LevelSequence, adds possessable binding via `LiveSyncGuidToSequencerBinding`, creates `UMovieSceneCameraCutTrack` via `AddNewCameraCut` with section range `[0, 1]`, saves sequence. Restructured `HandleActiveCamera` to resolve the camera actor before the CVar gate and call `EnsureCameraSequencerBinding` unconditionally.
+- **Diagnostics.inl**: Added logging + reset for all 6 new counters.
+
+**Wire Format**: No new packet type. Uses existing `PT_ActiveCamera` (0x15) path — binding/track creation is triggered as a side-effect of `HandleActiveCamera()`.
+
+**Architecture Flow**:
+
+1. Blender sends `PT_ActiveCamera` with GUID.
+2. UE `HandleActiveCamera` resolves camera (FindActorFast / auto-spawn / Cast).
+3. `EnsureCameraSequencerBinding` called unconditionally:
+   a. Gets asset-backed LevelSequence via `GetOrCreateLiveSyncLevelSequenceAsset()`.
+   b. Looks up or creates possessable binding via `LiveSyncGuidToSequencerBinding`.
+   c. Finds or creates `UMovieSceneCameraCutTrack` via `AddNewCameraCut`.
+   d. Sets CameraCutSection range `[0, 1]` and sets camera binding ID.
+   e. Saves sequence via `SaveLiveSyncLevelSequenceAsset()`.
+4. CVar `UE.LiveSync.ActiveCamera.ApplyToViewport` gates `SetActorLock` (viewport lock only).
+
+**Editor vs Game Mode**: In editor mode, `StopNetworkThread` on disconnect drains queued packets before the next tick, so the active camera packet can be lost if the connection closes too quickly. Workaround: keep the connection alive ~1.5s after sending ACTIVE_CAMERA. Game mode ticks continuously (~0.7s heartbeat), so packets are processed within one tick of arrival.
+
+**Counters**: 6 new counters — `ActiveCameraBindingCreated`, `ActiveCameraBindingExists`, `ActiveCameraCutTrackCreated`, `ActiveCameraCutApplied`, `ActiveCameraCutSkipped`, `ActiveCameraSeqSaved`.
+
 ---
 
 ## Blender → UE Execution Chain (Per-Tick)

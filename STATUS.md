@@ -55,6 +55,7 @@
 - **Phase 7G Stage 2** — Camera Actor Spawn + Active View Target Apply ✅
 - **Phase 7G Stage 3** — Camera Definition / Parameter Sync (PT_CameraDef = 0x1B) ✅ `PASS_CAMERADEF_APPLY`
 - **Phase 7G Stage 4** — Camera Transform Sync (CREATE + TRANSFORM + ACTIVE_CAMERA) ✅ `PASS_CAMERA_TRANSFORM_APPLY`
+- **Phase 7G Stage 5** — Camera Sequencer Binding + CameraCutTrack Integration ✅ `PASS_CAMERA_SEQ_BIND_APPLY`
 - **Phase 7C Stage 3A–5** — FBX Mesh Handoff Import + Importer Hardening + Asset Lifecycle Diagnostics + Scene Unit Conversion + Rename Asset Path Diagnostics (all stages complete) ✅
 - **Phase 10J.5O — FBX Unit Scale Policy** — Blender FBX export: `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `bake_space_transform=False`. UE import: `bConvertSceneUnit=true`. No actor/component scale compensation. ✅
 - **Phase 10J.5Q — FBX Unique Temp Import Path** — Each sync imports to a unique temp StaticMesh asset path. No reimport-over-existing. No package rename-over-existing. Direct validated assignment. Previous temp mesh cleanup after success. ✅
@@ -75,7 +76,10 @@
 9. **Phase 7F Stage 2 — Playback Transport Packet** (PT_PlaybackTransport = 0x1A, SetFrame/Play/Pause/Stop) ✅
 10. **Phase 7G Stage 1 — Camera Sync Audit** 🔍
 11. **Phase 7G Stage 2 — Camera Actor Spawn + Active View Target Apply** ✅
-12. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
+12. **Phase 7G Stage 3 — Camera Definition / Parameter Sync** ✅
+13. **Phase 7G Stage 4 — Camera Transform Sync** ✅
+14. **Phase 7G Stage 5 — Camera Sequencer Binding + CameraCutTrack** ✅ `PASS_CAMERA_SEQ_BIND_APPLY`
+15. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
 9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. **COMPLETE** ✅
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
 11. ~~**Manual Selected-Object Full Mesh Attribute Sync**~~ — superseded by Stage 3A FBX handoff 🔒

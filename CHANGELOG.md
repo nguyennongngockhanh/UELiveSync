@@ -5,6 +5,14 @@
 ### Added
 - Phase 7G Stage 4: Camera Transform Sync — validates CREATE + TRANSFORM + ACTIVE_CAMERA pipeline.
 - Injector modes: `--create-transform-active` (one connection, 0.2s inter-packet sleeps), `--cameradef-only` (fresh connection, GUID from log), `--full-separated` (combined lifecycle with 3s pause).
+- Phase 7G Stage 5: Camera Sequencer Binding + CameraCutTrack Integration.
+- `EnsureCameraSequencerBinding()` helper in HandleActiveCamera — creates possessable binding + CameraCutTrack + CameraCutSection in asset-backed LevelSequence.
+- 6 new counters: `ActiveCameraBindingCreated/Exists`, `ActiveCameraCutTrackCreated/Applied/Skipped`, `ActiveCameraSeqSaved`.
+- Diagnostic markers: `[CAMERA][SEQ_BIND]`, `[CAMERA][SEQ_BIND_SKIP]`, `[CAMERA][CUT_TRACK]`, `[CAMERA][CUT_APPLY]`, `[CAMERA][CUT_SKIP]`, `[CAMERA][CUT_SAVE]`.
+- `CAP_SUPPORTS_CAMERA_SEQ_BIND = 0x200` capability bit.
+- HandleActiveCamera restructured: camera resolution unblocked before CVar gate; EnsureCameraSequencerBinding called unconditionally.
+- 34 new source tests for helper, markers, counters, capability bit, HandleActiveCamera integration.
+- Runtime validation: all 4 markers confirmed (SEQ_BIND, CUT_TRACK, CUT_APPLY, CUT_SAVE). 235/235 tests passing.
 - Injector timing fix: switched from fresh-socket-per-packet to one-connection with 0.2s sleeps to avoid SeenThisTick dedup skipping TRANSFORM after CREATE in same UE tick. Fresh sockets cause UE `StopNetworkThread` exit, preventing subsequent connections.
 - Injector lifecycle race documented: combined CREATE+TRANSFORM+ACTIVE+CAMERA_DEF on one connection can drop CAMERA_DEF due to socket close / queue timing; validated via separated modes.
 - Runtime markers: `[CAMERA][CREATE]`, `[CAMERA][TRANSFORM_APPLY]`, `[CAMERA][TRANSFORM_CONVERGED]`, `[CAMERA][ACTIVE_RECV]`, `[CAMERA][VIEW_TARGET]` (VIEW_TARGET_FAIL in `-game` mode — GEditor null).

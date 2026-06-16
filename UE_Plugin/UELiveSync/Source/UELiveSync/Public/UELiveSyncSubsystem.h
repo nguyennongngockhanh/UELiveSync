@@ -528,6 +528,14 @@ private:
     void HandleActiveCamera(
         const FActiveCameraPayload& Payload);
 
+    // Ensure the ACameraActor has a possessable binding in the
+    // persistent LevelSequence and a CameraCutTrack section.
+    // Called from HandleActiveCamera after camera actor is resolved.
+    // Safe no-op if LevelSequence is not available.
+    void EnsureCameraSequencerBinding(
+        class ACameraActor* Camera,
+        const FGuid& CameraGUID);
+
     // =====================================================
     // CAMERA DEFINITION (Phase 7G Stage 3)
     // =====================================================

@@ -1172,6 +1172,38 @@ ConsoleDumpState()
         TEXT("    CutsMalformedRng: %d"),
         Stats.SequencerCameraCutsMalformedRange.load(std::memory_order_relaxed));
 
+    // Phase 7G Stage 5: Active camera → Sequencer binding
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    CamBindCreated:    %d"),
+        Stats.ActiveCameraBindingCreated.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    CamBindExists:     %d"),
+        Stats.ActiveCameraBindingExists.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    CamCutTrkCreated:  %d"),
+        Stats.ActiveCameraCutTrackCreated.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    CamCutApplied:     %d"),
+        Stats.ActiveCameraCutApplied.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    CamCutSkipped:     %d"),
+        Stats.ActiveCameraCutSkipped.load(std::memory_order_relaxed));
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("    CamSeqSaved:       %d"),
+        Stats.ActiveCameraSeqSaved.load(std::memory_order_relaxed));
+
     // Keyframe replication (Phase 7E Stage 7)
     UE_LOG(
         LogLiveSync,
@@ -1661,6 +1693,12 @@ ConsoleReset()
     Stats.SequencerCameraCutsAdded.store(0, std::memory_order_relaxed);
     Stats.SequencerCameraCutsMissingBinding.store(0, std::memory_order_relaxed);
     Stats.SequencerCameraCutsMalformedRange.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraBindingCreated.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraBindingExists.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraCutTrackCreated.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraCutApplied.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraCutSkipped.store(0, std::memory_order_relaxed);
+    Stats.ActiveCameraSeqSaved.store(0, std::memory_order_relaxed);
     LastSequencerOpOpcode = 0;
     LastSequencerOpFlags = 0;
     LastSequencerOpSequence = 0;
