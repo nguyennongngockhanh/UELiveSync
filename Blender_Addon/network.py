@@ -3297,6 +3297,10 @@ _discovery_running = False
 _discovery_total_candidates = 0
 _discovery_completed_candidates = 0
 
+# Configured host/port (used by discover_servers and apply_discovery_result)
+_host = "127.0.0.1"
+_port = DISCOVERY_DEFAULT_PORT
+
 
 def discover_servers(candidates=None, port=DISCOVERY_DEFAULT_PORT, timeout=DISCOVERY_DEFAULT_TIMEOUT):
     """Probe candidate hosts by TCP connect.
@@ -3384,6 +3388,35 @@ def get_discovery_progress():
     """Returns (completed, total) for current/previous scan."""
     with _discovery_lock:
         return _discovery_completed_candidates, _discovery_total_candidates
+
+
+def get_best_discovery_result():
+    """Returns the first successful discovery result, or None."""
+    results = get_discovery_results()
+    for r in results:
+        if r["success"]:
+            return dict(r)
+    return None
+
+
+def apply_discovery_result(index=0):
+    """Apply a discovery result to _host and _port globals.
+
+    Args:
+        index: Index into the successful results list (default 0).
+               If index is out of range, does nothing and returns False.
+
+    Returns:
+        True if applied, False if no result at that index.
+    """
+    global _host, _port
+    results = [r for r in get_discovery_results() if r["success"]]
+    if index < 0 or index >= len(results):
+        return False
+    result = results[index]
+    _host = result["host"]
+    _port = result["port"]
+    return True
 
 
 # =========================================================

@@ -449,6 +449,132 @@ class UELIVESYNC_OT_discover_server(
 
 
 # =========================================================
+# DISCOVERY AUTO-FILL OPERATORS (Phase 9 Stage 3C)
+# =========================================================
+
+class UELIVESYNC_OT_use_discovered_server(
+    bpy.types.Operator
+):
+    bl_idname = \
+        "uelivesync.use_discovered_server"
+
+    bl_label = "Use Discovered Server"
+
+    bl_description = \
+        "Apply the first discovered server host:port " \
+        "to the sync connection"
+
+    def execute(self, context):
+
+        if network.apply_discovery_result():
+            host = network._host
+            port = network._port
+            print(
+                f"[DISCOVERY][APPLY] host={host} port={port}"
+            )
+            self.report(
+                {'INFO'},
+                f"Applied discovered server {host}:{port}"
+            )
+        else:
+            print("[DISCOVERY][APPLY] no successful discovery result")
+            self.report(
+                {'WARNING'},
+                "No successful discovery result to apply"
+            )
+
+        return {'FINISHED'}
+
+
+class UELIVESYNC_OT_discover_and_connect(
+    bpy.types.Operator
+):
+    bl_idname = \
+        "uelivesync.discover_and_connect"
+
+    bl_label = "Discover & Connect"
+
+    bl_description = \
+        "Scan for a running UE LiveSync server and " \
+        "connect to the first one found"
+
+    def execute(self, context):
+
+        import traceback as _tb
+
+        # Phase 9 Stage 3C: discover + apply + connect
+        print("[DISCOVERY][CONNECT] starting discovery")
+        results = network.discover_servers()
+
+        best = network.get_best_discovery_result()
+
+        if best is None:
+            print("[DISCOVERY][CONNECT] no server found")
+            self.report(
+                {'WARNING'},
+                "No LiveSync server discovered"
+            )
+            return {'CANCELLED'}
+
+        host = best["host"]
+        port = best["port"]
+
+        print(
+            f"[DISCOVERY][CONNECT] best result: "
+            f"{host}:{port}"
+        )
+
+        # Apply to globals
+        network.apply_discovery_result()
+        print(
+            f"[DISCOVERY][APPLY] host={network._host} "
+            f"port={network._port}"
+        )
+
+        # Disconnect existing if any
+        if network.is_connected():
+            print("[DISCOVERY][CONNECT] disconnecting existing")
+            sync.stop_sync()
+
+        # Connect
+        try:
+            network.connect(host, port)
+        except Exception:
+            err = _tb.format_exc()
+            print(
+                "[DISCOVERY][CONNECT] connect failed:\n"
+                f"{err}"
+            )
+            self.report(
+                {'ERROR'},
+                f"Connect to {host}:{port} failed"
+            )
+            return {'CANCELLED'}
+
+        if network.is_connected():
+            print(
+                f"[DISCOVERY][CONNECT] connected to "
+                f"{host}:{port}"
+            )
+            self.report(
+                {'INFO'},
+                f"Connected to discovered server "
+                f"{host}:{port}"
+            )
+        else:
+            print(
+                "[DISCOVERY][CONNECT] connect returned "
+                "without error but not connected"
+            )
+            self.report(
+                {'WARNING'},
+                f"Could not connect to {host}:{port}"
+            )
+
+        return {'FINISHED'}
+
+
+# =========================================================
 # MANUAL MESH SYNC OPERATOR (Phase 7C Stage 2B.3)
 # =========================================================
 
@@ -1199,6 +1325,11 @@ class UELIVESYNC_PT_panel(
             "uelivesync.stop"
         )
 
+        row.operator(
+            "uelivesync.discover_and_connect",
+            icon='VIEWZOOM',
+        )
+
         layout.separator()
 
         # Connection status
@@ -1352,6 +1483,16 @@ class UELIVESYNC_PT_panel(
             icon='VIEWZOOM',
         )
 
+        # Show "Use Discovered Server" only if results exist
+        if any(
+            r["success"]
+            for r in network.get_discovery_results()
+        ):
+            layout.operator(
+                "uelivesync.use_discovered_server",
+                icon='IMPORT',
+            )
+
         layout.operator(
             "uelivesync.rebind_all",
             icon='UV_SYNC_SELECT',
@@ -1389,6 +1530,8 @@ classes = (
     UELIVESYNC_OT_rebind_all,
     UELIVESYNC_OT_dump_diagnostics,
     UELIVESYNC_OT_discover_server,
+    UELIVESYNC_OT_use_discovered_server,
+    UELIVESYNC_OT_discover_and_connect,
     UELIVESYNC_OT_sync_selected_mesh_to_ue,
     UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx,
     UELIVESYNC_PT_panel,

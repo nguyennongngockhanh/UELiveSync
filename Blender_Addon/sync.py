@@ -2635,6 +2635,12 @@ def dump_diagnostics():
     print(f"    Serialization fails: {s['serialization_failures']}")
 
     print(f"  [Discovery]")
+    print(
+        f"    Configured host:   {network._host}"
+    )
+    print(
+        f"    Configured port:   {network._port}"
+    )
     discovery_results = network.get_discovery_results()
     if discovery_results:
         for r in discovery_results:

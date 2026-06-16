@@ -534,8 +534,7 @@ Stage 1 scope:
 - Stage 2E Complete (2026-06-01): Blender parses PT_CapabilityResponse (0x12), stores UE caps. `is_compression_effective()` = local AND remote AND pref. `is_backpressure_effective()` = remote AND pref. Serialization and interval functions use effective gates. Cap state in runtime stats. Capability state reset on reconnect.
 - Stage 2F Complete (2026-06-01): 37/37 compatibility matrix tests pass in `tests/phase9_stage2f_compat_matrix.py`. 11 scenarios covering all Blender/UE capability combinations, timeout, reconnect, malformed, partial caps.
 - Stage 3B Complete (2026-06-01): TCP discovery scan + UI picker. 20/20 tests. Fixed missing `LIVE_SYNC_PROTOCOL_VERSION = 5`.
-- Stage 3C (UDP beacon) because
-  capability flags affect what auto-discovery should report
+- Stage 3C (Discovery Auto-fill / Connect UX) Complete (2026-06-16): `get_best_discovery_result()` / `apply_discovery_result()` helpers, "Use Discovered Server" + "Discover & Connect" operators. 38 tests. `PASS_DISCOVERY_CONNECT_UX`. Original Stage 3C (UDP beacon) deferred as optional.
 - Stage 4 (presets) after Stage 1 (UI) and Stage 2 (capabilities)
 - Stage 5 (crash recovery) after Stage 2 (session GUID)
 - Stage 6 (diagnostics export) independent — can be done anytime

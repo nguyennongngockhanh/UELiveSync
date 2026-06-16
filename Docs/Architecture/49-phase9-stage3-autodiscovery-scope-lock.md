@@ -210,7 +210,19 @@ Stage 3E Complete (2026-06-01):
 - All 238/238 tests PASS
 - Stage 3 closed
 
-UDP beacon (Stage 3C) deferred as optional. Localhost + LAN TCP scan are
+Stage 3C is COMPLETE (2026-06-16):
+1. `get_best_discovery_result()` returns first successful discovery result (or None)
+2. `apply_discovery_result(index=0)` sets `_host` and `_port` globals from discovery results
+3. `_host` and `_port` globals added to module level (fixes `NameError` in `discover_servers()`)
+4. "Use Discovered Server" (`uelivesync.use_discovered_server`) applies the first successful result
+5. "Discover & Connect" (`uelivesync.discover_and_connect`) runs scan + auto-apply + connect in one click
+6. Both buttons added to addon panel (Discover & Connect in primary row, Use Discovered Server conditionally below discovery scan)
+7. Diagnostics output shows configured host/port
+8. `tests/phase9_stage3c_discovery_connect_ux.py` — 38/38 PASS, `PASS_DISCOVERY_CONNECT_UX`
+9. Tag: `phase9-stage3c-connect-ux-stable`
+
+No UDP broadcast, no LAN subnet scanning, no BackpressureACK (0x10). Original
+Stage 3C (UDP beacon) remains deferred as optional. Localhost + LAN TCP scan are
 sufficient for current use cases. UDP beacon can be implemented if
 cross-subnet discovery is needed in the future.
 

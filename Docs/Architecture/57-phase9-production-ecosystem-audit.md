@@ -56,6 +56,7 @@ Source audit reveals many were never implemented.
 | Stage 1 (various) | COMPLETE | **NOT IMPLEMENTED** | No backpressure ACK, no adaptive throttle, no mesh compression, no dirty-flag interest management (same as Phase 8 audit) |
 | Stage 3A | COMPLETE | **NOT IMPLEMENTED** (original) → **IMPLEMENTED** (Stage 3B) | TCP discovery scan — `discover_servers()` implemented in `network.py`. Probes 127.0.0.1, localhost, configured host via TCP connect. Diagnostics markers: [DISCOVERY][START/PROBE/FOUND/MISS/DONE]. No UDP broadcast. |
 | Stage 3B | COMPLETE | **REWRITTEN** for actual implementation | Discovery scan tests — rewritten to test `discover_servers()` with dummy TCP listener validation (46 tests) |
+| Stage 3C | COMPLETE | **IMPLEMENTED** (Discovery Auto-fill / Connect UX) | `get_best_discovery_result()` / `apply_discovery_result()` helpers. "Use Discovered Server" and "Discover & Connect" operators. [DISCOVERY][APPLY/CONNECT] markers. 38 tests PASS with dummy TCP listener. `PASS_DISCOVERY_CONNECT_UX` |
 | Stage 5B | COMPLETE | **NOT IMPLEMENTED** | Session change test file `phase9_stage5b_session_change.py` does NOT exist on disk |
 | Stage 5C | COMPLETE | **NOT IMPLEMENTED** | State cleanup test file `phase9_stage5c_state_cleanup.py` does NOT exist on disk |
 | Stage 5D | COMPLETE | **NOT IMPLEMENTED** | Reconnect UI test file `phase9_stage5d_reconnect_ui.py` does NOT exist on disk |
@@ -86,7 +87,7 @@ Source audit reveals many were never implemented.
 | Effective gating | 4 gates (timeline, keyframe, active_camera, sequencer_ops) | N/A | **IMPLEMENTED** |
 | Reconnect / backoff | `_reconnect_internal()` 0.5-10s exp backoff, 30s timeout | StopNetworkThread/StartNetworkThread | **IMPLEMENTED** |
 | Diagnostics console | `dump_diagnostics()` 8 sections | DumpStateToConsole, [DIAG] markers | **IMPLEMENTED** |
-| Discovery scan | NOT IMPLEMENTED | **IMPLEMENTED** (Stage 3B) | `discover_servers()` TCP connect probe. 46 tests PASS with dummy listener. `PASS_DISCOVERY_LOCALHOST_SCAN` |
+| Discovery scan | NOT IMPLEMENTED | **IMPLEMENTED** (Stage 3B + Stage 3C) | `discover_servers()` TCP connect probe (46 tests). `get_best_discovery_result()` / `apply_discovery_result()` auto-fill helpers. "Use Discovered Server"/"Discover & Connect" operators (38 tests). `PASS_DISCOVERY_LOCALHOST_SCAN` + `PASS_DISCOVERY_CONNECT_UX` |
 | Support bundle export | NOT IMPLEMENTED | NOT IMPLEMENTED | **ABSENT** |
 | BackpressureACK (0x10) | NOT IMPLEMENTED | NOT IMPLEMENTED (not in kValidTypes) | **ABSENT** |
 | Adaptive throttle | NOT IMPLEMENTED | NOT IMPLEMENTED | **ABSENT** |
@@ -107,10 +108,11 @@ Source audit reveals many were never implemented.
 |-----------|-------|--------|
 | `phase9_stage2f_compat_matrix.py` | 62 | ✅ ALL PASS |
 | `phase9_stage3b_discovery_scan.py` | 46 | ✅ ALL PASS (dummy TCP listener) `PASS_DISCOVERY_LOCALHOST_SCAN` |
+| `phase9_stage3c_discovery_connect_ux.py` | 38 | ✅ ALL PASS (dummy TCP listener) `PASS_DISCOVERY_CONNECT_UX` |
 | `phase9_stage5e_stale_session_cleanup.py` | 22 | ✅ ALL PASS |
 | `phase9_stage6b_diagnostics_export.py` | 32 | ✅ ALL PASS |
 | `phase9_production_ecosystem_audit.py` | 71 | ✅ ALL PASS |
-| **Total** | **209** | **✅ ALL PASS** |
+| **Total** | **247** | **✅ ALL PASS** |
 
 ## Runtime Classification
 

@@ -1,7 +1,7 @@
 # UELiveSync — Current State Roadmap
 
 **Canonical reference.** Supersedes stale scope-lock assumptions from earlier phase docs.
-Last updated: 2026-06-16 (Stage 3B discovery scan implemented). Tag: `current-state-roadmap-stable`.
+Last updated: 2026-06-16 (Stage 3B discovery scan + Stage 3C auto-fill/connect UX implemented). Tag: `current-state-roadmap-stable`.
 
 ---
 
@@ -26,6 +26,7 @@ Last updated: 2026-06-16 (Stage 3B discovery scan implemented). Tag: `current-st
 | `e2e-runtime-validation-audit-stable` | E2E Runtime Validation Suite Audit | `PASS_E2E_AUDIT_ONLY` |
 | `phase9-audit-stable` | Phase 9 Production Ecosystem Audit | `PASS_PHASE9_AUDIT_ONLY` |
 | `phase9-stage3b-discovery-stable` | Phase 9 Stage 3B — Discovery Scan | `PASS_DISCOVERY_LOCALHOST_SCAN` |
+| `phase9-stage3c-connect-ux-stable` | Phase 9 Stage 3C — Discovery Auto-fill / Connect UX | `PASS_DISCOVERY_CONNECT_UX` |
 | `current-state-roadmap-stable` | This document — Current State Roadmap | — |
 
 ---
@@ -48,7 +49,7 @@ Last updated: 2026-06-16 (Stage 3B discovery scan implemented). Tag: `current-st
 | 7F | Timeline State (0x19) + Playback Transport (0x1A) | CORE-COMPLETE | — |
 | 7G | Camera Actor Spawn, CameraDef (0x1B), Camera Transform, Camera Sequencer Binding + CameraCutTrack | CORE-COMPLETE | — |
 | 8 | High Performance Streaming | DESIGN ONLY — AUDITED | `PASS_PHASE8_AUDIT_ONLY` |
-| 9 | Production Ecosystem (Capability, Discovery, Reconnect, Diagnostics) | CORE-COMPLETE (Stage 3B implemented) | `PASS_PHASE9_AUDIT_ONLY` / `PASS_DISCOVERY_LOCALHOST_SCAN` |
+| 9 | Production Ecosystem (Capability, Discovery, Reconnect, Diagnostics) | CORE-COMPLETE (Stage 3B + Stage 3C implemented) | `PASS_PHASE9_AUDIT_ONLY` / `PASS_DISCOVERY_LOCALHOST_SCAN` / `PASS_DISCOVERY_CONNECT_UX` |
 | 10I–10K | FBX unit scale, temp import, texture pipeline | COMPLETE | — |
 | E2E | Runtime Validation Suite | AUDITED | `PASS_E2E_AUDIT_ONLY` |
 
@@ -118,6 +119,7 @@ Last updated: 2026-06-16 (Stage 3B discovery scan implemented). Tag: `current-st
 - Diagnostics console dump (DumpStateToConsole / dump_diagnostics)
 - Burst packet counting (Blender) + queue depth/drop diagnostics (UE) + static packet rate limiter (UE)
 - Discovery scan (Phase 9 Stage 3B) — `discover_servers()` probes default candidates (127.0.0.1, localhost, configured host) via TCP connect on port 57000. Returns structured results. Button in addon panel.
+- Discovery auto-fill / connect UX (Phase 9 Stage 3C) — `get_best_discovery_result()` / `apply_discovery_result()` helpers. "Use Discovered Server" and "Discover & Connect" operators in addon panel. `DISCOVERY][APPLY/CONNECT]` diagnostics markers. 38 tests PASS with dummy TCP listener. `PASS_DISCOVERY_CONNECT_UX`.
 
 ### NOT Implemented (Designed / Documented but Never Coded)
 - **Backpressure ACK** (Phase 8, packet type 0x10) — no PT_BackpressureACK, no ack-based flow control, no retransmit.
@@ -140,6 +142,7 @@ Last updated: 2026-06-16 (Stage 3B discovery scan implemented). Tag: `current-st
 | `PASS_PHASE8_AUDIT_ONLY` | Phase 8 was audited against scope-lock doc; only minimal code exists. No runtime validation. | Phase 8 audit |
 | `PASS_PHASE9_AUDIT_ONLY` | Phase 9 was audited against source; capability announce/response exist. Stage 3B discovery scan added separately. No live UE E2E. | Phase 9 audit |
 | `PASS_DISCOVERY_LOCALHOST_SCAN` | Discovery scan probes default hosts (127.0.0.1, localhost, configured host). Validated with dummy TCP listener. | Phase 9 Stage 3B |
+| `PASS_DISCOVERY_CONNECT_UX` | Discovery auto-fill and connect UX: apply_discovery_result(), get_best_discovery_result(), "Use Discovered Server"/"Discover & Connect" operators. Validated with dummy TCP listener. | Phase 9 Stage 3C |
 | `PASS_E2E_AUDIT_ONLY` | E2E runtime validation suite was audited; orchestration plan exists, injectors exist, but full Blender→UE E2E requires manually running Blender + UE. | E2E suite |
 | `PASS_CAMERA_TRANSFORM_APPLY` | Camera transform sync (CREATE + TRANSFORM + ACTIVE_CAMERA) validated at runtime on UE 5.7.4. | Phase 7G Stage 4 |
 | `PASS_CAMERADEF_APPLY` | Camera definition/parameter sync (0x1B) validated at runtime. | Phase 7G Stage 3 |
@@ -155,6 +158,7 @@ Last updated: 2026-06-16 (Stage 3B discovery scan implemented). Tag: `current-st
 | Suite | Tests | Result |
 |-------|-------|--------|
 | Phase 9 Stage 3B Discovery Scan | 46 | ✅ PASS (dummy TCP listener) |
+| Phase 9 Stage 3C Discovery Connect UX | 38 | ✅ PASS (dummy TCP listener) |
 | Phase 9 Production Ecosystem Audit | 71 | ✅ PASS |
 | Phase 8 Performance Streaming Audit | 37 | ✅ PASS |
 | E2E Runtime Validation Suite Audit | 27 | ✅ PASS |
@@ -206,15 +210,18 @@ Last updated: 2026-06-16 (Stage 3B discovery scan implemented). Tag: `current-st
 
 ### Short-term (Standalone, No UE Build Required)
 1. ~~**Phase 9 Stage 3B — Discovery Scan.**~~ **IMPLEMENTED** ✅ `PASS_DISCOVERY_LOCALHOST_SCAN` (TCP connect probe; no UDP broadcast)
-2. **Proactive Scene Health.** Recurring scene scan to detect divergent GUID states.
-3. **Test-only gap coverage.** Create test for `phase5d_reconnect_ui.py` content assertions.
-4. **Phase 8 BackpressureACK (0x10).** Implement ack-based flow control with retransmit for high-throughput scenes.
+2. ~~**Phase 9 Stage 3C — Discovery Auto-fill / Connect UX.**~~ **IMPLEMENTED** ✅ `PASS_DISCOVERY_CONNECT_UX` (apply_discovery_result, "Use Discovered Server"/"Discover & Connect" operators, 38 tests)
+
+### Short-term (Standalone, No UE Build Required)
+3. **Proactive Scene Health.** Recurring scene scan to detect divergent GUID states.
+4. **Test-only gap coverage.** Create test for `phase5d_reconnect_ui.py` content assertions.
+5. **Phase 8 BackpressureACK (0x10).** Implement ack-based flow control with retransmit for high-throughput scenes.
 
 ### Medium-term (May Require UE Build)
-5. **Camera property keyframe extraction.** Extract FCurves for focal length, aperture, focus distance, sensor size, DOF → new property track types.
-6. **Procedural mesh full attribute sync.** Extend PT_Mesh V5 payload with normals, UVs, tangents, vertex colors.
-7. **UE→Blender reverse sync.** Active camera, timeline, or playback state from UE back to Blender.
+6. **Camera property keyframe extraction.** Extract FCurves for focal length, aperture, focus distance, sensor size, DOF → new property track types.
+7. **Procedural mesh full attribute sync.** Extend PT_Mesh V5 payload with normals, UVs, tangents, vertex colors.
+8. **UE→Blender reverse sync.** Active camera, timeline, or playback state from UE back to Blender.
 
 ### Long-term
-8. **Multi-client / interest management.** Per-client subscription filtering (dirty-flag approach from Phase 8 design).
-9. **LevelSequence asset streaming.** Load/save LevelSequence assets to disk with full keyframe data for persistent playback.
+9. **Multi-client / interest management.** Per-client subscription filtering (dirty-flag approach from Phase 8 design).
+10. **LevelSequence asset streaming.** Load/save LevelSequence assets to disk with full keyframe data for persistent playback.
