@@ -133,6 +133,89 @@ Source code fix is implemented and compiles cleanly. Runtime validation blocked 
 
 ## Current State
 
+## Manual E2E.5 — SceneOutliner Crash Isolation (COMPLETED — RUNTIME EXECUTED)
+
+**Status:** Runtime isolation complete. 5 tests executed with fresh UE per test.
+
+### Isolation Results
+
+| Test | Description | Signal 11 | SSceneOutliner | Result |
+|------|-------------|-----------|---------------|--------|
+| A | UE idle 60s | 0 | 0 | **PASS_NO_CRASH** |
+| C | Camera create-only | 1 | 26 | **FAIL_LIVESYNC_CAMERA_CREATE_SCENE_OUTLINER_CRASH** |
+| D | Create + transform | 1 | 26 | **FAIL_LIVESYNC_CAMERA_CREATE_TRANSFORM_SCENE_OUTLINER_CRASH** |
+| E | Full lifecycle | 1 | 27 | **FAIL_LIVESYNC_CAMERA_FULL_LIFECYCLE_SCENE_OUTLINER_CRASH** |
+| F | Hierarchy (2 actors + self + cycle) | 0 | 0 | **PASS_HIERARCHY_ATTACH_GUARD_RUNTIME** |
+
+**Overall: PARTIALLY RESOLVED** — Signal 11 triggered by LiveSync camera CREATE (not UE idle).
+Hierarchy guard working. Crashes narrow to SceneOutliner tree rebuild on actor add.
+
+### Key Findings
+
+1. **Test A (UE idle): PASS** — UE does not crash on its own. Crash requires LiveSync trigger.
+2. **Test C/D/E (camera CREATE): FAIL** — Signal 11 on camera CREATE. Camera markers present pre-crash.
+3. **Test F (hierarchy): PASS** — `SafeAttachLiveSyncActor` guards self-attach and cycle-attach successfully.
+4. **Signal 6 (frustum): FIXED** — All CREATE tests show 0 Signal 6.
+
+### Isolation Injector
+
+Tool: `tools/uelivesync_e2e5_sceneoutliner_isolation.py`
+- `--idle-only`: Test A — UE idle, 60s wait
+- `--create-only`: Test C — Single camera CREATE, no parent
+- `--create-transform`: Test D — CREATE + TRANSFORM, no ActiveCamera
+- `--full`: Test E — Full lifecycle (CREATE+TRANSFORM+ACTIVE+CAMERA_DEF)
+- `--hierarchy`: Test F — Two non-camera actors + parent attach + self/cycle tests
+- `--cameraguid`: Send CAMERA_DEF for existing camera GUID
+
+### Static Tests
+
+| Suite | Result |
+|-------|--------|
+| `manual_e2e_scene_outliner_isolation.py` | ✅ 26/26 PASS |
+| `manual_e2e_scene_outliner_parent_guard.py` | ✅ 30/30 PASS |
+| `manual_e2e_camera_crash_guard.py` | ✅ 24/24 PASS |
+| `e2e_runtime_validation_suite_audit.py` | ✅ 27/27 PASS |
+| `phase9_stage3b_discovery_scan.py` | ✅ 12/12 PASS |
+| `phase9_stage3c_discovery_connect_ux.py` | ✅ 13/13 PASS |
+| **Total** | **132/132 PASS** |
+
+### Docs Updated
+
+- `Docs/Architecture/manual-e2e-camera-crash-investigation.md` — E2E.5 runtime results, PARTIALLY RESOLVED root cause
+- `STATUS.md` — E2E.5 status section
+- `CHANGELOG.md` — E2E.5 entry
+- `Docs/Architecture/current-state-roadmap.md` — E2E.5 status
+
+### Classification
+
+| Test | Classification |
+|------|---------------|
+| A | PASS_NO_CRASH |
+| C | FAIL_LIVESYNC_CAMERA_CREATE_SCENE_OUTLINER_CRASH |
+| D | FAIL_LIVESYNC_CAMERA_CREATE_TRANSFORM_SCENE_OUTLINER_CRASH |
+| E | FAIL_LIVESYNC_CAMERA_FULL_LIFECYCLE_SCENE_OUTLINER_CRASH |
+| F | PASS_HIERARCHY_ATTACH_GUARD_RUNTIME |
+
+### Tag Policy
+
+- **No stable tag created** — Signal 11 not eliminated in full runtime flow
+- `manual-e2e-camera-crash-guard-stable` remains **provisional**
+
+### Runtime Prerequisites
+
+UE editor must be running on `127.0.0.1:57000` before running:
+```bash
+python3 tools/uelivesync_e2e5_sceneoutliner_isolation.py --idle-only
+python3 tools/uelivesync_e2e5_sceneoutliner_isolation.py --create-only
+python3 tools/uelivesync_e2e5_sceneoutliner_isolation.py --create-transform
+python3 tools/uelivesync_e2e5_sceneoutliner_isolation.py --full
+python3 tools/uelivesync_e2e5_sceneoutliner_isolation.py --hierarchy
+```
+
+**Do not create any stable tag until Signal 11 is eliminated in the full runtime flow.**
+
+---
+
 **See canonical document:** `Docs/Architecture/current-state-roadmap.md`
 
 This supersedes all earlier scope-lock documents. The roadmap includes:

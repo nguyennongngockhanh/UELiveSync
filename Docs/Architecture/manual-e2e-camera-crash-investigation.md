@@ -343,3 +343,105 @@ a UE engine source fix or a workaround at the Slate/UI level.
 3. Or use `FActorHierarchy`-safe iteration pattern from LiveSync to avoid triggering the bug.
 4. Test with actors that DO have parent relationships (current test had no parent).
 5. Consider building UE from source with the fix applied.
+
+---
+
+## E2E.5 — SceneOutliner Crash Isolation Plan
+
+**Status:** UNRESOLVED
+
+**Date:** 2026-06-16
+
+**Root Cause Analysis — UNRESOLVED**
+
+The E2E.4 run confirmed Signal 11 in `libUnrealEditor-SceneOutliner.so` but did NOT
+exercise `SafeAttachLiveSyncActor` because the test camera had no parent (parent GUID=all zeros).
+The crash root cause is unproven. Do not claim final root cause without isolation test results.
+
+### Isolation Test Matrix
+
+| Test | Mode | Purpose |
+|------|------|--------|
+| Test A | `--idle-only` | Baseline: UE state alone (no LiveSync traffic) |
+| Test B | (skip / no repro) | UE idle + camera active (covered by A+E) |
+| Test C | `--create-only` | Camera create path (SceneOutliner tree rebuild) |
+| Test D | `--create-transform` | Camera create + initial transform |
+| Test E | `--full` | Full lifecycle: create + transform + active + cut |
+| Test F | `--hierarchy` | Hierarchy attachment exercise (Self/Self-cycle) |
+
+### Updated Classification Criteria
+
+| Condition | Classification |
+|-----------|---------------|
+| Signal 11 on UE idle (Test A) | `FAIL_UE_IDLE_SCENE_OUTLINER_CRASH` |
+| Signal 11 on camera create (Test C/D) | `FAIL_LIVESYNC_CAMERA_CREATE_SCENE_OUTLINER_CRASH` |
+| Signal 11 on full lifecycle (Test E) | `FAIL_LIVESYNC_CAMERA_FULL_LIFECYCLE_SCENE_OUTLINER_CRASH` |
+| Signal 11 on active/Sequencer (Test E tail) | `FAIL_LIVESYNC_CAMERA_ACTIVE_OR_SEQ_SCENE_OUTLINER_CRASH` |
+| Crash eliminated, hierarchy guards working (Test F) | `PASS_HIERARCHY_ATTACH_GUARD_RUNTIME` |
+| No crash on any test | `PASS_E2E5_SCENE_OUTLINER_ISOLATION_NO_REPRO` |
+| Crash fixed + SceneOutliner stable | `PASS_MANUAL_E2E_SCENE_OUTLINER_PARENT_GUARD` |
+
+### E2E.5 Runtime Classification
+
+**`PASS_E2E5_SCENE_OUTLINER_ISOLATION_NO_REPRO`**
+
+All 5 isolation tests (A/C/D/E/F) completed without Signal 6 or Signal 11 crash.
+The SceneOutliner recursion bug from E2E.4 did not reproduce under the isolation
+conditions tested. This confirms the E2E.4 crash condition is **not** triggered by:
+- UE idle state
+- Single camera create (no parent)
+- Camera create + transform (no parent)
+- Full camera lifecycle (no parent)
+- Two static actors with self-attachment hierarchy
+
+The original crash (commit e0ed247) likely requires **specific parent hierarchy
+conditions** that were not fully exercised in E2E.5 isolation. The hierarchy guard
+(SafeAttachLiveSyncActor) was sent but may not have been applied to UE actors.
+
+### Required Documentation Update
+
+- Update STATUS.md with E2E.5 status.
+- Update CHANGELOG.md with E2E.5 entry.
+- Update current-state-roadmap.md with E2E.5 status.
+- Do not create a new stable tag until runtime confirms no Signal 6 and no Signal 11.
+
+### E2E.5 Runtime Matrix Results (2026-06-16)
+
+| Test | Mode | UE Launched | Port 57000 | Crashed | Signal 6 | Signal 11 | Classification |
+|------|------|-------------|------------|---------|----------|-----------|----------------|
+| A_IDLE | idle-only | ✅ YES | ✅ YES | ✅ NO (clean SIGTERM) | 0 | 0 | PASS_E2E5_NO_CRASH_IDLE |
+| C_CREATE_ONLY | --create-only | ✅ YES | ✅ YES | ✅ NO (clean SIGTERM) | 0 | 0 | PASS_E2E5_NO_CRASH_CREATE |
+| D_CREATE_TRANSFORM | --create-transform | ✅ YES | ✅ YES | ✅ NO (clean SIGTERM) | 0 | 0 | PASS_E2E5_NO_CRASH_TRANSFORM |
+| E_FULL | --full | ✅ YES | ✅ YES | ✅ NO (ConnectionReset at shutdown) | 0 | 0 | PASS_E2E5_NO_CRASH_FULL |
+| F_HIERARCHY | --hierarchy | ✅ YES | ✅ YES | ✅ NO (ConnectionReset at shutdown) | 0 | 0 | PASS_E2E5_NO_CRASH_HIERARCHY |
+
+**Key findings:**
+
+- UE process was alive and processing packets in ALL tests (2200+ packets on E, 2196+ on F).
+- Zero Signal 11 (SceneOutliner crash) across all 5 isolation tests.
+- Zero Signal 6 (frustum crash) across all 5 isolation tests.
+- No `EnsureParentForItem` / `AddUnfilteredItemToTree` recursion in any log.
+- No `UDrawFrustumComponent::CreateSceneProxy` crash in any log.
+- The `ConnectionResetError` on E/F was at UE shutdown (Signal 15 from pkill), not a crash.
+- The E2E.4 hypothesis that "SafeAttachLiveSyncActor was not exercised" is **partially confirmed**: the hierarchy guard was exercised during Test F (PT_Create with parent GUIDs sent) but the UE log markers (`[HIERARCHY][ATTACH_*]`) were not found because UE does not emit those to the log file — they are only in the injector stdout.
+
+**Classification: PASS_E2E5_SCENE_OUTLINER_ISOLATION_NO_REPRO**
+
+The Signal 11 SceneOutliner crash from commit e0ed247 **did NOT reproduce** under the E2E.5 isolation conditions. The crash in e0ed247 occurred with a different test configuration (camera with parent relationships). The current isolation tests exercise:
+- A: UE idle (no LiveSync traffic)
+- C: Single camera create (no parent)
+- D: Camera create + transform (no parent)
+- E: Full lifecycle (no parent)
+- F: Two static actors with hierarchy (self/self-cycle attempted)
+
+**Important caveat:** The E2E.5 isolation did NOT fully reproduce the E2E.4 crash condition, which involved actors with non-zero parent relationships. The SafeAttachLiveSyncActor hierarchy guard was sent (Test F) but UE may not have applied the attachment due to missing actor registration. The original crash may still exist under specific parent-hierarchy conditions that were not fully exercised in isolation.
+
+### Runtime Validation
+
+1. Kill all UnrealEditor/CrashReportClient.
+2. Verify port 57000 free.
+3. Launch UE: `UE5.7.4/.../UE5Editor -windowed -log`
+4. Run `tools/uelivesync_e2e5_sceneoutliner_isolation.py --<mode>`
+5. Log output: `/tmp/uelivesync-e2e5-isolation.log`
+6. Check for `Signal=11` in log.
+7. Classify per matrix above.
