@@ -3,6 +3,14 @@
 ## [unreleased]
 
 ### Added
+- Phase 7G Stage 4: Camera Transform Sync — validates CREATE + TRANSFORM + ACTIVE_CAMERA pipeline.
+- Injector modes: `--create-transform-active` (one connection, 0.2s inter-packet sleeps), `--cameradef-only` (fresh connection, GUID from log), `--full-separated` (combined lifecycle with 3s pause).
+- Injector timing fix: switched from fresh-socket-per-packet to one-connection with 0.2s sleeps to avoid SeenThisTick dedup skipping TRANSFORM after CREATE in same UE tick. Fresh sockets cause UE `StopNetworkThread` exit, preventing subsequent connections.
+- Injector lifecycle race documented: combined CREATE+TRANSFORM+ACTIVE+CAMERA_DEF on one connection can drop CAMERA_DEF due to socket close / queue timing; validated via separated modes.
+- Runtime markers: `[CAMERA][CREATE]`, `[CAMERA][TRANSFORM_APPLY]`, `[CAMERA][TRANSFORM_CONVERGED]`, `[CAMERA][ACTIVE_RECV]`, `[CAMERA][VIEW_TARGET]` (VIEW_TARGET_FAIL in `-game` mode — GEditor null).
+- Classification: `PASS_CAMERA_TRANSFORM_APPLY`.
+- 26 new source tests for injector modes, timing, dedup documentation, and camera transform sync.
+- Runtime validation confirmed on UE 5.7.4 port 57000: all 5 camera markers present, `--cameradef-only` and `--full-separated` pass. 201/201 total tests passing across all suites.
 - Phase 7G Stage 3: PT_CameraDef (0x1B) — camera definition / parameter sync.
 - `LSP_CamDef = 0x05` in `ELiveSyncPrimitiveType` enum — camera definition objects carry `FCameraDefPayload`.
 - `FCameraDefPayload` (64 bytes): FGuid, focal length (f32), sensor dimensions (w/f32, h/f32), clip planes (start/f32, end/f32), ortho scale (f32), CameraFlags (u8, 3 bytes reserved).

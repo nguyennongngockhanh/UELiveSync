@@ -315,11 +315,12 @@ _animated_objects_scanned = 0
 
 
 # Primitive type constants (1 byte, appended to CREATE packets only)
-PRIMITIVE_CUBE = 0x00
-PRIMITIVE_SPHERE = 0x01
+PRIMITIVE_CUBE     = 0x00
+PRIMITIVE_SPHERE   = 0x01
 PRIMITIVE_CYLINDER = 0x02
-PRIMITIVE_PLANE = 0x03
-PRIMITIVE_EMPTY = 0x04
+PRIMITIVE_PLANE    = 0x03
+PRIMITIVE_EMPTY    = 0x04
+PRIMITIVE_CAMERA   = 0x05
 
 # Packet type constants (beyond V3 base)
 PT_BeginSnapshot = 0x09

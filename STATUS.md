@@ -54,6 +54,7 @@
 - **Phase 7G Stage 1** — Camera Sync Audit / Scope Lock 🔍
 - **Phase 7G Stage 2** — Camera Actor Spawn + Active View Target Apply ✅
 - **Phase 7G Stage 3** — Camera Definition / Parameter Sync (PT_CameraDef = 0x1B) ✅ `PASS_CAMERADEF_APPLY`
+- **Phase 7G Stage 4** — Camera Transform Sync (CREATE + TRANSFORM + ACTIVE_CAMERA) ✅ `PASS_CAMERA_TRANSFORM_APPLY`
 - **Phase 7C Stage 3A–5** — FBX Mesh Handoff Import + Importer Hardening + Asset Lifecycle Diagnostics + Scene Unit Conversion + Rename Asset Path Diagnostics (all stages complete) ✅
 - **Phase 10J.5O — FBX Unit Scale Policy** — Blender FBX export: `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `bake_space_transform=False`. UE import: `bConvertSceneUnit=true`. No actor/component scale compensation. ✅
 - **Phase 10J.5Q — FBX Unique Temp Import Path** — Each sync imports to a unique temp StaticMesh asset path. No reimport-over-existing. No package rename-over-existing. Direct validated assignment. Previous temp mesh cleanup after success. ✅
@@ -886,7 +887,9 @@ All verified in regression run.
 | **Phase 7E standalone** | **81+50+72+79+54+97+63+67+49+81+4+59+5+7+9 = 777/777 PASS** | |
 | Phase 7F Stage 1 (timeline state) | **21/21 PASS** | |
 | Phase 7F Stage 2 (playback transport) | **27/27 PASS** | |
-| **Grand total (all standalone)** | **2493/2493 PASS** | 777 (7E) + 21 (7F.1) + 27 (7F.2) + 1668 (existing) |
+| Phase 7G Stage 3 (CameraDef wire + UE apply) | **61/61 PASS** | |
+| Phase 7G Stage 4 (camera transform sync) | **26/26 PASS** | +3 injector timing tests |
+| **Grand total (all standalone)** | **2584/2584 PASS** | 777 (7E) + 21 (7F.1) + 27 (7F.2) + 61 (7G.3) + 26 (7G.4) + 1668 (existing) |
 
 **Notes**:
 - Phase 6B runtime audit: 90/102 PASS, 12 FAIL — pre-existing ConsoleReset checks against `.cpp` file; ConsoleReset code lives in `.inl` include. Not regressions.
@@ -959,6 +962,8 @@ All verified in regression run.
 - **Phase 7F Stage 2 — PT_PlaybackTransport (0x1A)** (2026-06-15): Implemented playback transport packet with SetFrame/Play/Pause/Stop commands. 6-byte payload (command+frame_current+flags). `EPlaybackTransportCommand` and `FPlaybackTransportPayload` in SyncTypes.h. `HandlePlaybackTransport()` with `[PLAYBACK][RECV/APPLY/SKIP/MALFORMED]` diagnostics. SetFrame applies clamped frame to `LiveSyncSequenceFrameCurrent`. Play/Pause/Stop logged as PASS_TRANSPORT_STATE_ONLY. Blender `serialize_playback_transport()` and `send_playback_transport()` with obj_count=0 for V3+ validation compatibility. Blender fix: `send_playback_transport` now builds packet directly instead of calling nonexistent `build_packet`. 27/27 new tests PASS. Runtime validation: `[PLAYBACK][RECV]` + `[PLAYBACK][APPLY] SetFrame frame=48 (clamped=48)` confirmed. Keyframe regression clean (applied=11 miss=0 unsupp=0). Visibility channels 9/10 BoolTrack apply preserved. Rsync deploy + UBT build PASS. 96/96 regression tests PASS. ✅
 
 - **Phase 7G Stage 2 — Camera Actor Spawn + Active View Target Apply** (2026-06-15): Camera objects now spawn as `ACameraActor` (not `AActor`) via `LSP_Camera=0x05` primitive type. `HandleActiveCamera()` auto-spawns `ACameraActor` when GUID not found in cache, tags and caches it. CVar `UE.LiveSync.ActiveCamera.ApplyToViewport` gates viewport pilot (`SetActorLock` on all `FLevelEditorViewportClient` instances). `[CAMERA][ACTIVE_RECV/SPAWN/SPAWN_FAIL/VIEW_TARGET/VIEW_TARGET_SKIP/VIEW_TARGET_FAIL]` diagnostics at Log level. 3 new counters: `ActiveCameraPacketsSpawned`, `ActiveCameraPacketsViewTargetFailed`, `ActiveCameraPacketsNotCamera`. Updated `UELiveSyncSubsystem_Diagnostics.inl` for display/reset. 30/30 new tests PASS (spawn:10, view target:11, reserved guard:9). All Phase 7F (48/48) + Phase 7E baseline tests pass. Runtime validation: `[CAMERA][ACTIVE_RECV]`, `[CAMERA][SPAWN]`, `[CAMERA][VIEW_TARGET] SetActorLock on 4 viewport(s)` confirmed. Rsync deploy + UBT build PASS (1 pre-existing SetNum deprecation). ✅
+
+- **Phase 7G Stage 4 — Camera Transform Sync (CREATE + TRANSFORM + ACTIVE_CAMERA)** (2026-06-16): Validates liveSync camera transform sync via `PT_Create` (LSP_Camera=0x05) + `PT_Transform` (0x01) + `PT_ActiveCamera` (0x15). Injector updated with new modes: `--create-transform-active` (3-packet burst on one connection with 0.2s inter-packet sleeps), `--cameradef-only` (fresh connection, camera GUID from log), `--full-separated` (combined lifecycle). Injector timing fix: switched from fresh-socket-per-packet to one-connection with 0.2s sleeps to avoid `SeenThisTick` dedup skipping TRANSFORM after CREATE in the same UE tick. Injector lifecycle race documented. Runtime markers: `[CAMERA][CREATE]`, `[CAMERA][TRANSFORM_APPLY]`, `[CAMERA][TRANSFORM_CONVERGED]`, `[CAMERA][ACTIVE_RECV]`, `[CAMERA][VIEW_TARGET]` (VIEW_TARGET_FAIL in `-game` mode — GEditor null). Classification: `PASS_CAMERA_TRANSFORM_APPLY`. 26 new source tests PASS. All Phase 7F (48/48) + Phase 7E baseline (49/49) + Phase 7G Stage 2 (21/21) + Stage 3 (61/61) + Stage 4 (26/26) tests pass. Runtime validation confirmed on port 57000 with 5/5 camera markers. ✅
 
 - **Stage 10D.1 — Sequencer Editor Usability Validation** (2026-06-15): Validated that the persisted LevelSequence asset is usable in Sequencer Editor workflow. `open_level_sequence()` succeeds. Inspection confirms binding_count=1, Actor_0 binding, MovieScene3DTransformTrack + MovieSceneBoolTrack with sections. Classification: PASS_EDITOR_DATA_ONLY (manual UI scrub not achievable via -ExecutePythonScript). All 75/75 regression tests PASS.
 

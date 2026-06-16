@@ -40,6 +40,7 @@ try:
         PRIMITIVE_CYLINDER,
         PRIMITIVE_PLANE,
         PRIMITIVE_EMPTY,
+        PRIMITIVE_CAMERA,
         PT_BeginSnapshot,
         PT_EndSnapshot,
         PT_AssetDef,
@@ -182,6 +183,7 @@ except ImportError:
         PRIMITIVE_CYLINDER,
         PRIMITIVE_PLANE,
         PRIMITIVE_EMPTY,
+        PRIMITIVE_CAMERA,
         PT_BeginSnapshot,
         PT_EndSnapshot,
         PT_AssetDef,
@@ -694,10 +696,21 @@ _PRIMITIVE_MAP = {
     'CYLINDER': PRIMITIVE_CYLINDER,
     'PLANE': PRIMITIVE_PLANE,
     'EMPTY': PRIMITIVE_EMPTY,
+    'CAMERA': PRIMITIVE_CAMERA,
 }
 
 
-def _get_primitive_type():
+def _get_primitive_type(obj=None):
+    """Return primitive type for a given Blender object.
+
+    Cameras are detected by their Blender type ('CAMERA') and always
+    use PRIMITIVE_CAMERA so UE can spawn an ACameraActor.
+
+    For non-camera objects the user-pref default is used.
+    """
+
+    if obj is not None and hasattr(obj, 'type') and obj.type == 'CAMERA':
+        return PRIMITIVE_CAMERA
 
     prim_str = _get_threshold(
         "default_primitive",
@@ -1287,7 +1300,7 @@ def check_updates():
                     transform,
                     timestamp,
                     parent_guid_obj,
-                    primitive_type=_get_primitive_type(),
+                    primitive_type=_get_primitive_type(obj),
                 )
 
             except Exception as e:
@@ -1536,7 +1549,7 @@ def check_updates():
                     transform,
                     timestamp,
                     parent_guid_obj,
-                    primitive_type=_get_primitive_type(),
+                    primitive_type=_get_primitive_type(obj),
                 )
 
             except Exception as e:
@@ -2491,7 +2504,7 @@ def rebind_all():
                 timestamp,
                 parent_guid_obj,
                 primitive_type=(
-                    _get_primitive_type()
+                    _get_primitive_type(obj)
                 ),
             )
 

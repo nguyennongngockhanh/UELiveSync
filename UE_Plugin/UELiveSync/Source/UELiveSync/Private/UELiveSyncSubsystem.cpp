@@ -6229,6 +6229,14 @@ InterpolateTransforms(
             bRotationConverged &&
             bScaleConverged)
         {
+            // Stage 7G.4: camera diagnostic marker for converged state
+            if (Actor->IsA(ACameraActor::StaticClass()))
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[CAMERA][TRANSFORM_CONVERGED] guid=%s actor=%s"),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    *Actor->GetName());
+            }
             UE_LOG(LogLiveSync, Log,
                 TEXT("END   transform apply guid=%s (converged)"),
                 *Guid.ToString(EGuidFormats::Digits));
@@ -6506,6 +6514,14 @@ InterpolateTransforms(
                 if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
                 {
                     Actor->SetActorTransform(RootDirectXForm);
+                    // Stage 7G.4: camera diagnostic marker
+                    if (Actor->IsA(ACameraActor::StaticClass()))
+                    {
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[CAMERA][TRANSFORM_APPLY] guid=%s actor=%s"),
+                            *Guid.ToString(EGuidFormats::Digits),
+                            *Actor->GetName());
+                    }
                     // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
                     if (FBXAuthoritativeGuids.Contains(Guid))
                     {
@@ -7792,18 +7808,42 @@ HandleCreateObject(
     uint64 SpawnBeginCycles =
         FPlatformTime::Cycles64();
 
-    AActor* NewActor =
+    AActor* NewActor = nullptr;
 
-        World->SpawnActor<AActor>(
+    // =====================================================
+    // Camera spawn path (LSP_Camera = 0x05)
+    // =====================================================
 
-            AActor::StaticClass(),
+    if (PrimitiveType == LSP_Camera)
+    {
+        NewActor =
 
-            FTransform(
-                Rotation,
-                Location,
-                Scale),
+            World->SpawnActor<ACameraActor>(
 
-            SpawnParams);
+                ACameraActor::StaticClass(),
+
+                FTransform(
+                    Rotation,
+                    Location,
+                    Scale),
+
+                SpawnParams);
+    }
+    else
+    {
+        NewActor =
+
+            World->SpawnActor<AActor>(
+
+                AActor::StaticClass(),
+
+                FTransform(
+                    Rotation,
+                    Location,
+                    Scale),
+
+                SpawnParams);
+    }
 
     double SpawnMs =
         FPlatformTime::
@@ -7998,8 +8038,11 @@ HandleCreateObject(
     // =====================================================
     // Validate primitive type
     // =====================================================
+    // Stage 7G.4: LSP_Camera (0x05) is now a valid type.
+    // Unknown types > LSP_Camera still default to Cube.
+    // =====================================================
 
-    if (PrimitiveType > LSP_Empty)
+    if (PrimitiveType > LSP_Camera)
     {
         UE_LOG(
             LogLiveSync,
@@ -8029,97 +8072,125 @@ HandleCreateObject(
         return;
     }
 
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT("BEGIN TRACE: HandleCreateObject::RegisterComponent guid=%s"),
-        *Guid.ToString(
-            EGuidFormats::Digits));
+    // =====================================================
+    // Root component setup by primitive type
+    // =====================================================
 
-    UStaticMeshComponent* MeshComp =
-        NewObject<UStaticMeshComponent>(
-            NewActor);
+    UStaticMesh* ResolvedMesh = nullptr;
 
-    if (!MeshComp)
+    if (PrimitiveType == LSP_Camera)
     {
-        UE_LOG(LogLiveSync, Error,
-            TEXT("[CREATE][DIAG] NewObject<UStaticMeshComponent> FAILED guid=%s — aborting"),
-            *Guid.ToString(EGuidFormats::Digits));
-        return;
-    }
-
-    MeshComp->SetMobility(
-        EComponentMobility::Movable);
-
-    MeshComp->SetVisibility(
-        true, true);
-
-    UStaticMesh* PrimitiveMesh =
-        GetPrimitiveMesh(PrimitiveType);
-
-    if (PrimitiveMesh)
-    {
-        MeshComp->SetStaticMesh(
-            PrimitiveMesh);
-
-        if (GEnableVerboseSyncLogs)
+        // Camera: ACameraActor already has a UCameraComponent.
+        // Use it as root component. The camera's own properties
+        // (FOV, clip planes, sensor size) are set separately
+        // via PT_CameraDef packets.
+        ACameraActor* CamActor = Cast<ACameraActor>(NewActor);
+        if (CamActor && CamActor->GetCameraComponent())
         {
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[CREATE][DIAG] PRIMITIVE guid=%s type=0x%02X mesh=%s"),
-                *Guid.ToString(EGuidFormats::Digits),
-                PrimitiveType,
-                *PrimitiveMesh->GetName());
+            CamActor->GetCameraComponent()->SetMobility(
+                EComponentMobility::Movable);
+            CamActor->SetRootComponent(
+                CamActor->GetCameraComponent());
+            CamActor->GetCameraComponent()->RegisterComponent();
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][CREATE] Spawned ACameraActor guid=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
         }
     }
     else
     {
-        if (GEnableVerboseSyncLogs)
-        {
-            UE_LOG(LogLiveSync, Error,
-                TEXT("[CREATE][DIAG] PRIMITIVE RESOLVE FAILED guid=%s type=0x%02X — no mesh assigned, actor will be invisible!"),
-                *Guid.ToString(EGuidFormats::Digits),
-                PrimitiveType);
-        }
-    }
-
-    MeshComp->SetCollisionEnabled(
-        ECollisionEnabled::NoCollision);
-
-    NewActor->SetRootComponent(
-        MeshComp);
-
-    uint64 RegisterBeginCycles =
-        FPlatformTime::Cycles64();
-
-    MeshComp->RegisterComponent();
-
-    double RegisterMs =
-        FPlatformTime::
-        ToMilliseconds64(
-            FPlatformTime::Cycles64() -
-            RegisterBeginCycles);
-
-    if (RegisterMs > 50.0 && GEnableVerboseSyncLogs)
-    {
         UE_LOG(
             LogLiveSync,
-            Warning,
-            TEXT("[CREATE][DIAG] STALL: RegisterComponent took %.1fms "
-                 "for GUID=%s"),
-            RegisterMs,
+            Log,
+            TEXT("BEGIN TRACE: HandleCreateObject::RegisterComponent guid=%s"),
             *Guid.ToString(
                 EGuidFormats::Digits));
-    }
 
-    if (GEnableVerboseSyncLogs)
-    {
-        UE_LOG(
-            LogLiveSync,
-            Warning,
-            TEXT("[CREATE][DIAG] REGISTER COMPLETE guid=%s mesh=%s regMs=%.1f"),
-            *Guid.ToString(EGuidFormats::Digits),
-            PrimitiveMesh ? *PrimitiveMesh->GetName() : TEXT("NULL"),
-            RegisterMs);
+        UStaticMeshComponent* MeshComp =
+            NewObject<UStaticMeshComponent>(
+                NewActor);
+
+        if (!MeshComp)
+        {
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[CREATE][DIAG] NewObject<UStaticMeshComponent> FAILED guid=%s — aborting"),
+                *Guid.ToString(EGuidFormats::Digits));
+            return;
+        }
+
+        MeshComp->SetMobility(
+            EComponentMobility::Movable);
+
+        MeshComp->SetVisibility(
+            true, true);
+
+        ResolvedMesh = GetPrimitiveMesh(PrimitiveType);
+
+        if (ResolvedMesh)
+        {
+            MeshComp->SetStaticMesh(
+                ResolvedMesh);
+
+            if (GEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[CREATE][DIAG] PRIMITIVE guid=%s type=0x%02X mesh=%s"),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    PrimitiveType,
+                    *ResolvedMesh->GetName());
+            }
+        }
+        else
+        {
+            if (GEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Error,
+                    TEXT("[CREATE][DIAG] PRIMITIVE RESOLVE FAILED guid=%s type=0x%02X — no mesh assigned, actor will be invisible!"),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    PrimitiveType);
+            }
+        }
+
+        MeshComp->SetCollisionEnabled(
+            ECollisionEnabled::NoCollision);
+
+        NewActor->SetRootComponent(
+            MeshComp);
+
+        uint64 RegisterBeginCycles =
+            FPlatformTime::Cycles64();
+
+        MeshComp->RegisterComponent();
+
+        double RegisterMs =
+            FPlatformTime::
+            ToMilliseconds64(
+                FPlatformTime::Cycles64() -
+                RegisterBeginCycles);
+
+        if (RegisterMs > 50.0 && GEnableVerboseSyncLogs)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("[CREATE][DIAG] STALL: RegisterComponent took %.1fms "
+                     "for guid=%s"),
+                RegisterMs,
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+        }
+
+        if (GEnableVerboseSyncLogs)
+        {
+            UE_LOG(
+                LogLiveSync,
+                Warning,
+                TEXT("[CREATE][DIAG] REGISTER COMPLETE guid=%s mesh=%s regMs=%.1f"),
+                *Guid.ToString(EGuidFormats::Digits),
+                ResolvedMesh ? *ResolvedMesh->GetName() : TEXT("NULL"),
+                RegisterMs);
+        }
     }
 
     // NOTE: State initialization is handled by the caller

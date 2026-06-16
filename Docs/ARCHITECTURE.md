@@ -293,6 +293,47 @@ PT_CameraDef (0x1B) carries camera parameters (focal length, sensor dimensions, 
 
 ---
 
+### Phase 7G Stage 4 — Camera Transform Sync (PT_Create + PT_Transform + PT_ActiveCamera)
+
+**Objective**: Validate liveSync camera transform sync via CREATE + TRANSFORM + ACTIVE_CAMERA pipeline.
+
+**Validation Classification**: `PASS_CAMERA_TRANSFORM_APPLY`
+
+**Runtime Markers**:
+- `[CAMERA][CREATE]` — Camera actor spawned
+- `[CAMERA][TRANSFORM_APPLY]` — Transform interpolation active
+- `[CAMERA][TRANSFORM_CONVERGED]` — Interpolation complete
+- `[CAMERA][ACTIVE_RECV]` — ActiveCamera packet received
+- `[CAMERA][VIEW_TARGET]` — View target locked
+
+**Changes**:
+
+- **Blender**: `PRIMITIVE_CAMERA = 0x05` added to `network.py`. `_get_primitive_type(obj)` detects `obj.type == 'CAMERA'` and returns `PRIMITIVE_CAMERA`.
+- **UE**: `HandleCreateObject` spawns `ACameraActor` when `PrimitiveType == LSP_Camera` (0x05). Root component set to `UCameraComponent`. Primitive type validation updated to allow `LSP_Camera`.
+- **Transform**: `InterpolateTransforms` works on all actors in `ActorCache` — no special handling needed for `ACameraActor`.
+- **Active Camera**: `HandleActiveCamera()` auto-spawns `ACameraActor` when GUID not in cache, tags and caches it, applies `SetActorLock` on viewport clients.
+- **Diagnostics**: `[CAMERA][CREATE]`, `[CAMERA][TRANSFORM_APPLY]`, `[CAMERA][TRANSFORM_CONVERGED]`, `[CAMERA][ACTIVE_RECV]`, `[CAMERA][VIEW_TARGET]` log markers.
+
+**Wire Format**: No new packet type. Camera uses `PT_Create` with `PrimitiveType=0x05`, then `PT_Transform` (0x01) for position/rotation updates.
+
+**Actor Spawn Path**:
+
+1. Blender sends `PT_Create` with `PrimitiveType=0x05` and GUID.
+2. UE spawns `ACameraActor` (not `AActor` + `UStaticMeshComponent`).
+3. `UCameraComponent` set as root component.
+4. `PT_Transform` packets update position/rotation via `InterpolateTransforms`.
+5. `PT_ActiveCamera` (0x15) makes this the active viewport camera.
+
+**Injector Timing**: Uses one TCP connection with 0.2s sleeps between CREATE, TRANSFORM, and ACTIVE_CAMERA packets. Fresh sockets per packet are unreliable — UE's network thread calls `StopNetworkThread` on disconnect, preventing subsequent connections from being accepted. One connection keeps the network thread alive across all sends while ensuring packets arrive in separate ticks.
+
+**Injector Lifecycle Note**: The combined CREATE+TRANSFORM+ACTIVE+CAMERA_DEF on one connection can race with socket close / queue timing, potentially dropping CAMERA_DEF. Validation uses separated modes: `--create-transform-active` for Stage 7G.4 markers, `--cameradef-only` for Stage 7G.3 CameraDef markers, `--full-separated` for combined lifecycle testing.
+
+**`-game` Limitation**: In `-game` mode, `GEditor` is null, so `[CAMERA][VIEW_TARGET]` emits `[CAMERA][VIEW_TARGET_FAIL]` instead of locking the viewport. Transform apply (TRANSFORM_APPLY, TRANSFORM_CONVERGED) and active camera receive (ACTIVE_RECV) work correctly in `-game` mode.
+
+**Limitations**: Camera rotation in Blender is Z-forward (up=Z). UE camera is Y-forward (up=Z). The Y-axis flip convention handles translation; rotation requires explicit conversion.
+
+---
+
 ## Blender → UE Execution Chain (Per-Tick)
 
 ```
