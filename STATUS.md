@@ -72,36 +72,20 @@
   - New 71-invariant source-text audit test file
   - 209 tests all PASS; representative regressions all PASS (E2E, Phase 8, Phase 7, FBX)
   - Audit doc at `Docs/Architecture/57-phase9-production-ecosystem-audit.md`
+- **Current State Roadmap** — Canonical consolidation document that supersedes stale scope-lock assumptions. Includes phase status table, stable tags table, packet registry truth table, implemented vs not implemented table, validation classifications, known limitations, and recommended next work options. 🔗 `Docs/Architecture/current-state-roadmap.md` ✅
 
-## Current Roadmap
+## Current State
 
-1. ~~**Phase 6I.1 — Transport Hardening**~~ **COMPLETE** ✅
-2. ~~**Phase 7A — Scope Lock / Identity Hygiene**~~ **COMPLETE** ✅
-3. ~~**Phase 7B — Timeline Sync (0x13)**~~ **IMPLEMENTED** ✅
-4. ~~**Phase 7C — Playback Sync (0x14)**~~ **IMPLEMENTED** ✅
-5. ~~**Phase 7D — Active Camera Sync (0x15)**~~ **IMPLEMENTED** ✅
-6. ~~**Phase 7E — Sequencer + Keyframe Replication**~~ **CORE-COMPLETE** ✅
-7. ~~**Phase 7E Stage 10A — Visibility Keyframes**~~ **CORE-COMPLETE** ✅
-8. ~~**Phase 7F Stage 1 — Timeline State Packet**~~ **CORE-COMPLETE** ✅
-9. ~~**Phase 7F Stage 2 — Playback Transport Packet**~~ **CORE-COMPLETE** ✅
-10. ~~**Phase 7G Stage 1 — Camera Sync Audit**~~ **CORE-COMPLETE** ✅
-11. ~~**Phase 7G Stage 2 — Camera Actor Spawn + Active View Target Apply**~~ **CORE-COMPLETE** ✅
-12. ~~**Phase 7G Stage 3 — Camera Definition / Parameter Sync**~~ **CORE-COMPLETE** ✅
-13. ~~**Phase 7G Stage 4 — Camera Transform Sync**~~ **CORE-COMPLETE** ✅
-14. ~~**Phase 7G Stage 5 — Camera Sequencer Binding + CameraCutTrack**~~ **CORE-COMPLETE** ✅
-15. ~~**Phase 7 — Animation & Sequencer Sync**~~ **CORE-COMPLETE** ✅
-16. ~~**FBX Handoff Pipeline Audit**~~ **COMPLETE** ✅
-15. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
-9. **Phase 8 — High Performance Streaming** — Closeout audit: scope-lock doc overstates implementation (only burst counting + queue diagnostics exist; backpressure ACK, compression, throttle, interest management never coded). **DESIGN ONLY, MINIMAL CODE** `PASS_PHASE8_AUDIT_ONLY` ✅
-10. **E2E Runtime Validation Suite** — Orchestration plan and audit of all 11 existing standalone TCP injectors. Validator tool chains timeline, playback, camera lifecycle, sequencer/keyframe, queue diagnostics, and malformed packet checks in sequence. **PLANNED, TOOL CREATED** `PASS_E2E_AUDIT_ONLY`
-10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
-11. ~~**Manual Selected-Object Full Mesh Attribute Sync**~~ — superseded by Stage 3A FBX handoff 🔒
-12. ~~**Phase 7C Stage 3A–5 — FBX Mesh Handoff Import**~~ **COMPLETE** ✅
-13. **Phase 10J.5O — FBX Unit Scale Policy** — Blender FBX export with `FBX_SCALE_UNITS`, UE import with `bConvertSceneUnit=true`, no scale compensation. **COMPLETE** ✅
-14. **Phase 10J.5Q — FBX Unique Temp Import Path** — Unique temp StaticMesh per sync, validated assignment, previous cleanup. **COMPLETE** ✅
-15. **Phase 10J.6 — FBX Temp Asset Lifecycle Hardening** — Diagnostic markers for temp import lifecycle. Runtime smoke 6/6 PASS. **COMPLETE** ✅
-16. **Phase 10J.7 — FBX Test Debt Cleanup** — Tests updated for current architecture. 18/18 phase10j PASS. **COMPLETE** ✅
-17. **Phase 10K — Texture Pipeline** — MTEX metadata sync, UE texture import/cache, MID texture apply, master material, diagnostics. All 5 sub-phases complete. **COMPLETE** ✅
+**See canonical document:** `Docs/Architecture/current-state-roadmap.md`
+
+This supersedes all earlier scope-lock documents. The roadmap includes:
+- Phase status table with all completed / audited phases
+- Stable tags table (17 tags)
+- Complete packet registry truth table (24 entries, 0x01–0x1B)
+- Implemented vs NOT implemented table
+- Validation classifications (8 classifications)
+- Known limitations (11 items)
+- Recommended next work options
 
 ## Phase 6I.1 — Transport Hardening (COMPLETE)
 
