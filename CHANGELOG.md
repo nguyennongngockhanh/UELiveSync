@@ -8,6 +8,7 @@
 - Phase 7G Stage 5: Camera Sequencer Binding + CameraCutTrack Integration.
 - `EnsureCameraSequencerBinding()` helper in HandleActiveCamera — creates possessable binding + CameraCutTrack + CameraCutSection in asset-backed LevelSequence.
 - 6 new counters: `ActiveCameraBindingCreated/Exists`, `ActiveCameraCutTrackCreated/Applied/Skipped`, `ActiveCameraSeqSaved`.
+- FBX Handoff Pipeline Audit: Full pipeline audit completed. `Docs/Architecture/fbx-handoff-pipeline-audit.md`. `tests/phase_fbx_handoff_pipeline_audit.py` (52/52 PASS). All 20/21 existing FBX test suites PASS. Unit conversion, scale invariant, material slot preservation, and GUID-based asset reuse all verified. Phase 7 regression 710/710 PASS.
 - Diagnostic markers: `[CAMERA][SEQ_BIND]`, `[CAMERA][SEQ_BIND_SKIP]`, `[CAMERA][CUT_TRACK]`, `[CAMERA][CUT_APPLY]`, `[CAMERA][CUT_SKIP]`, `[CAMERA][CUT_SAVE]`.
 - `CAP_SUPPORTS_CAMERA_SEQ_BIND = 0x200` capability bit.
 - HandleActiveCamera restructured: camera resolution unblocked before CVar gate; EnsureCameraSequencerBinding called unconditionally.

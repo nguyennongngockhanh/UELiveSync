@@ -62,6 +62,7 @@
 - **Phase 10J.5Q — FBX Unique Temp Import Path** — Each sync imports to a unique temp StaticMesh asset path. No reimport-over-existing. No package rename-over-existing. Direct validated assignment. Previous temp mesh cleanup after success. ✅
 - **Phase 10J.6 — FBX Temp Asset Lifecycle Hardening** — `[FBX][TEMP_IMPORT/ASSIGN/CLEANUP/KEEP_PREVIOUS/DELETE_FAIL/UNIT_INVALID/SCALE_INVARIANT]` diagnostics. Runtime smoke 6/6 PASS. ✅
 - **Phase 10J.7 — FBX Test Debt Cleanup** — 4 test files updated for temp import lifecycle architecture. 18/18 phase10j tests PASS. Build PASS (target up to date). ✅
+- **FBX Handoff Pipeline Audit** — Pipeline audit complete. All 52 audit checks PASS. 20/21 existing FBX test suites PASS (523/535). One stale test file (stage3a1) has 12 old expectations to be updated. Unit conversion verified: `global_scale=1.0`, `FBX_SCALE_UNITS`, `bConvertSceneUnit=true`, scale invariant = (1,1,1). Audit doc at `Docs/Architecture/fbx-handoff-pipeline-audit.md`. Tag: `fbx-handoff-audit-stable`. ✅
 - **Phase 8** — High Performance Streaming (diagnostics + benchmark complete) ✅
 
 ## Current Roadmap
@@ -81,6 +82,7 @@
 13. ~~**Phase 7G Stage 4 — Camera Transform Sync**~~ **CORE-COMPLETE** ✅
 14. ~~**Phase 7G Stage 5 — Camera Sequencer Binding + CameraCutTrack**~~ **CORE-COMPLETE** ✅
 15. ~~**Phase 7 — Animation & Sequencer Sync**~~ **CORE-COMPLETE** ✅
+16. ~~**FBX Handoff Pipeline Audit**~~ **COMPLETE** ✅
 15. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
 9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. **COMPLETE** ✅
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
@@ -992,6 +994,8 @@ All verified in regression run.
 - **Phase 10J.5Q — FBX Unique Temp Import Path** (2026-06-13): Replaced FBX reimport-over-existing StaticMesh with unique temp StaticMesh asset per sync. Each sync: exports FBX → imports to unique temp path → validates imported mesh → assigns to SMC → cleans up previous temp mesh. No package rename-over-existing. No UE reimport-over-existing path. Fixed manual meter-size regression from reimport path. Commit: `01e8ddf`.
 
 - **Phase 10J.5O — FBX Unit Scale Policy** (2026-06-13): Established unit conversion policy: Blender FBX export with `global_scale=1.0`, `apply_scale_options='FBX_SCALE_UNITS'`, `bake_space_transform=False`. UE FBX import with `bConvertSceneUnit=true`. No actor or component scale compensation. Invalid unit imports are rejected/preserved rather than compensated. Scale invariant diagnostics added. Commits: `3339aec`, `01e8ddf`.
+
+- **FBX Handoff Pipeline Audit** (2026-06-16): Comprehensive pipeline audit completed. All 52 audit checks PASS. Full pipeline verified: Blender export (`global_scale=1.0`, `FBX_SCALE_UNITS`, `bake_space_transform=False`), FBX cache path (`~/.cache/uelivesync/fbx/<guid>/`), PT_FBXImportRequest (0x16) wire format (688-byte struct), UE FBX importer (`bConvertSceneUnit=true`, `UFbxFactory`, `UAssetImportTask`), scale invariant enforcement (actor scale always (1,1,1)), material slot preservation (override restore + safety fallback), GUID-based asset reuse (`FBXAuthoritativeGuids` + `FBXPendingGuids`), semantic skip (`GSemanticSignatureCache`), temp import lifecycle (`[FBX][TEMP_IMPORT/ASSIGN/CLEANUP]`), path security validation. 20/21 existing FBX test suites PASS (523/535); one stale file (stage3a1) has 12 old architecture expectations. Phase 7 regression PASS (710/710). Audit doc at `Docs/Architecture/fbx-handoff-pipeline-audit.md`. Tag: `fbx-handoff-audit-stable`. ✅
 
 - **Phase 10D — Runtime Gap Closure** (2026-06-10): All Phase 10D runtime gaps closed and validated.
   - **StopNetworkThread sequencer state reset** (commit `1ef954a`): Resets `bHasSequencerOpState`, `LastSequencerOpSequence`, `bHasLiveSyncSequence`, `LiveSyncSequence`, `LiveSyncGuidToSequencerBinding`, `PendingSequencerBindings` on disconnect, preventing stale SEQOP rejection after reconnect.
