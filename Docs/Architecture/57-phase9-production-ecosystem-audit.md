@@ -54,8 +54,8 @@ Source audit reveals many were never implemented.
 | Stage | Claimed | Actual | Analysis |
 |-------|---------|--------|----------|
 | Stage 1 (various) | COMPLETE | **NOT IMPLEMENTED** | No backpressure ACK, no adaptive throttle, no mesh compression, no dirty-flag interest management (same as Phase 8 audit) |
-| Stage 3A | COMPLETE | **NOT IMPLEMENTED** | TCP discovery scan — zero code. No `discover_ues()`, no `get_discovery_results()`, no `_build_scan_targets()`, no UDP discovery socket |
-| Stage 3B | COMPLETE | **NOT IMPLEMENTED** | Discovery scan tests — rewritten to audit absence (22 tests) |
+| Stage 3A | COMPLETE | **NOT IMPLEMENTED** (original) → **IMPLEMENTED** (Stage 3B) | TCP discovery scan — `discover_servers()` implemented in `network.py`. Probes 127.0.0.1, localhost, configured host via TCP connect. Diagnostics markers: [DISCOVERY][START/PROBE/FOUND/MISS/DONE]. No UDP broadcast. |
+| Stage 3B | COMPLETE | **REWRITTEN** for actual implementation | Discovery scan tests — rewritten to test `discover_servers()` with dummy TCP listener validation (46 tests) |
 | Stage 5B | COMPLETE | **NOT IMPLEMENTED** | Session change test file `phase9_stage5b_session_change.py` does NOT exist on disk |
 | Stage 5C | COMPLETE | **NOT IMPLEMENTED** | State cleanup test file `phase9_stage5c_state_cleanup.py` does NOT exist on disk |
 | Stage 5D | COMPLETE | **NOT IMPLEMENTED** | Reconnect UI test file `phase9_stage5d_reconnect_ui.py` does NOT exist on disk |
@@ -67,7 +67,7 @@ Source audit reveals many were never implemented.
 
 1. **Stage 2F test file** (`phase9_stage2f_compat_matrix.py`): Referenced nonexistent constants (`CAP_SUPPORTS_BACKPRESSURE_ACK`, `CAP_SUPPORTS_MESH_COMPRESSION`, `CAP_SUPPORTS_SESSION_GUID`, `CAP_SUPPORTS_DIRTY_ITERATION`) and nonexistent functions (`is_compression_effective`, `is_backpressure_effective`, `get_suggested_interval`). Would crash on import. **Fixed** — rewritten against actual API.
 
-2. **Stage 3B test file** (`phase9_stage3b_discovery_scan.py`): Referenced `discover_ues()`, `get_discovery_results()`, `is_discovery_in_progress()`, `_build_scan_targets()` — none exist. Would crash on import. **Fixed** — rewritten to audit absence.
+2. **Stage 3B test file** (`phase9_stage3b_discovery_scan.py`): Originally referenced nonexistent `discover_ues()`, etc. **Rewritten** — first to audit absence (22 tests), later to test actual `discover_servers()` implementation with dummy TCP listener (46 tests).
 
 3. **Stage 5B/5C/5D test files**: Referenced in scope-lock doc and in `phase9_stage5e_stale_session_cleanup.py` but do NOT exist on disk. Stage 5E test **fixed** — removed false PASS references, documented as scope-lock doc mismatch.
 
@@ -86,7 +86,7 @@ Source audit reveals many were never implemented.
 | Effective gating | 4 gates (timeline, keyframe, active_camera, sequencer_ops) | N/A | **IMPLEMENTED** |
 | Reconnect / backoff | `_reconnect_internal()` 0.5-10s exp backoff, 30s timeout | StopNetworkThread/StartNetworkThread | **IMPLEMENTED** |
 | Diagnostics console | `dump_diagnostics()` 8 sections | DumpStateToConsole, [DIAG] markers | **IMPLEMENTED** |
-| Discovery scan | NOT IMPLEMENTED | NOT IMPLEMENTED | **ABSENT** |
+| Discovery scan | NOT IMPLEMENTED | **IMPLEMENTED** (Stage 3B) | `discover_servers()` TCP connect probe. 46 tests PASS with dummy listener. `PASS_DISCOVERY_LOCALHOST_SCAN` |
 | Support bundle export | NOT IMPLEMENTED | NOT IMPLEMENTED | **ABSENT** |
 | BackpressureACK (0x10) | NOT IMPLEMENTED | NOT IMPLEMENTED (not in kValidTypes) | **ABSENT** |
 | Adaptive throttle | NOT IMPLEMENTED | NOT IMPLEMENTED | **ABSENT** |
@@ -106,7 +106,7 @@ Source audit reveals many were never implemented.
 | Test File | Tests | Status |
 |-----------|-------|--------|
 | `phase9_stage2f_compat_matrix.py` | 62 | ✅ ALL PASS |
-| `phase9_stage3b_discovery_scan.py` | 22 | ✅ ALL PASS |
+| `phase9_stage3b_discovery_scan.py` | 46 | ✅ ALL PASS (dummy TCP listener) `PASS_DISCOVERY_LOCALHOST_SCAN` |
 | `phase9_stage5e_stale_session_cleanup.py` | 22 | ✅ ALL PASS |
 | `phase9_stage6b_diagnostics_export.py` | 32 | ✅ ALL PASS |
 | `phase9_production_ecosystem_audit.py` | 71 | ✅ ALL PASS |

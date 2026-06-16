@@ -2634,6 +2634,16 @@ def dump_diagnostics():
     print(f"    Has critical error:  {s['has_critical_error']}")
     print(f"    Serialization fails: {s['serialization_failures']}")
 
+    print(f"  [Discovery]")
+    discovery_results = network.get_discovery_results()
+    if discovery_results:
+        for r in discovery_results:
+            status = "FOUND" if r["success"] else "MISS"
+            err = f" ({r['error']})" if r["error"] else ""
+            print(f"    {r['host']}:{r['port']} — {status}{err}")
+    else:
+        print(f"    No discovery scan performed yet")
+
     print(f"  [Runtime Config]")
     for key, val in _runtime_config.items():
         print(f"    {key}: {val}")

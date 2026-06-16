@@ -3284,6 +3284,109 @@ class LiveSyncClient:
 
 
 # =========================================================
+# PHASE 9 STAGE 3B — DISCOVERY SCAN
+# =========================================================
+
+DISCOVERY_DEFAULT_PORT = 57000
+DISCOVERY_DEFAULT_TIMEOUT = 1.0
+DISCOVERY_DEFAULT_CANDIDATES = ["127.0.0.1", "localhost"]
+
+_discovery_results = []
+_discovery_lock = threading.Lock()
+_discovery_running = False
+_discovery_total_candidates = 0
+_discovery_completed_candidates = 0
+
+
+def discover_servers(candidates=None, port=DISCOVERY_DEFAULT_PORT, timeout=DISCOVERY_DEFAULT_TIMEOUT):
+    """Probe candidate hosts by TCP connect.
+
+    Synchronous — blocks for up to len(candidates) * timeout seconds.
+    Candidates default: [127.0.0.1, localhost] + configured host if present.
+
+    Returns list of dicts:
+        {host, port, success(bool), error(str or None)}
+    """
+    global _discovery_results, _discovery_running, _discovery_total_candidates, _discovery_completed_candidates
+
+    if candidates is None:
+        candidates = list(DISCOVERY_DEFAULT_CANDIDATES)
+        global _host
+        if _host and _host not in candidates:
+            candidates.append(_host)
+
+    with _discovery_lock:
+        _discovery_results = []
+        _discovery_running = True
+        _discovery_total_candidates = len(candidates)
+        _discovery_completed_candidates = 0
+
+    print(
+        f"[DISCOVERY][START] probing {len(candidates)} candidate(s): {candidates}"
+    )
+
+    results = []
+    for host in candidates:
+        result = {"host": host, "port": port, "success": False, "error": None}
+        print(f"[DISCOVERY][PROBE] {host}:{port} (timeout={timeout}s)")
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect((host, port))
+            sock.close()
+            result["success"] = True
+            print(f"[DISCOVERY][FOUND] {host}:{port}")
+        except socket.timeout:
+            result["error"] = "timeout"
+            print(f"[DISCOVERY][MISS] {host}:{port} (timeout)")
+        except ConnectionRefusedError:
+            result["error"] = "connection refused"
+            print(f"[DISCOVERY][MISS] {host}:{port} (refused)")
+        except OSError as e:
+            result["error"] = str(e)
+            print(f"[DISCOVERY][MISS] {host}:{port} ({e})")
+        except Exception as e:
+            result["error"] = str(e)
+            print(f"[DISCOVERY][MISS] {host}:{port} ({e})")
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        results.append(result)
+        with _discovery_lock:
+            _discovery_completed_candidates += 1
+
+    with _discovery_lock:
+        _discovery_results = list(results)
+        _discovery_running = False
+
+    found = sum(1 for r in results if r["success"])
+    print(
+        f"[DISCOVERY][DONE] found {found}/{len(results)}"
+    )
+    return results
+
+
+def get_discovery_results():
+    """Returns last discovery scan results (thread-safe)."""
+    with _discovery_lock:
+        return list(_discovery_results)
+
+
+def is_discovery_in_progress():
+    """Returns True if an async discovery scan is in progress."""
+    with _discovery_lock:
+        return _discovery_running
+
+
+def get_discovery_progress():
+    """Returns (completed, total) for current/previous scan."""
+    with _discovery_lock:
+        return _discovery_completed_candidates, _discovery_total_candidates
+
+
+# =========================================================
 # GLOBAL CLIENT
 # =========================================================
 

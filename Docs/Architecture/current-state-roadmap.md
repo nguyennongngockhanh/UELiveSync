@@ -1,7 +1,7 @@
 # UELiveSync — Current State Roadmap
 
 **Canonical reference.** Supersedes stale scope-lock assumptions from earlier phase docs.
-Last updated: 2026-06-16. Tag: `current-state-roadmap-stable`.
+Last updated: 2026-06-16 (Stage 3B discovery scan implemented). Tag: `current-state-roadmap-stable`.
 
 ---
 
@@ -25,6 +25,7 @@ Last updated: 2026-06-16. Tag: `current-state-roadmap-stable`.
 | `phase8-audit-stable` | Phase 8 High Performance Streaming Audit | `PASS_PHASE8_AUDIT_ONLY` |
 | `e2e-runtime-validation-audit-stable` | E2E Runtime Validation Suite Audit | `PASS_E2E_AUDIT_ONLY` |
 | `phase9-audit-stable` | Phase 9 Production Ecosystem Audit | `PASS_PHASE9_AUDIT_ONLY` |
+| `phase9-stage3b-discovery-stable` | Phase 9 Stage 3B — Discovery Scan | `PASS_DISCOVERY_LOCALHOST_SCAN` |
 | `current-state-roadmap-stable` | This document — Current State Roadmap | — |
 
 ---
@@ -47,7 +48,7 @@ Last updated: 2026-06-16. Tag: `current-state-roadmap-stable`.
 | 7F | Timeline State (0x19) + Playback Transport (0x1A) | CORE-COMPLETE | — |
 | 7G | Camera Actor Spawn, CameraDef (0x1B), Camera Transform, Camera Sequencer Binding + CameraCutTrack | CORE-COMPLETE | — |
 | 8 | High Performance Streaming | DESIGN ONLY — AUDITED | `PASS_PHASE8_AUDIT_ONLY` |
-| 9 | Production Ecosystem (Capability, Discovery, Reconnect, Diagnostics) | AUDITED | `PASS_PHASE9_AUDIT_ONLY` |
+| 9 | Production Ecosystem (Capability, Discovery, Reconnect, Diagnostics) | CORE-COMPLETE (Stage 3B implemented) | `PASS_PHASE9_AUDIT_ONLY` / `PASS_DISCOVERY_LOCALHOST_SCAN` |
 | 10I–10K | FBX unit scale, temp import, texture pipeline | COMPLETE | — |
 | E2E | Runtime Validation Suite | AUDITED | `PASS_E2E_AUDIT_ONLY` |
 
@@ -116,9 +117,9 @@ Last updated: 2026-06-16. Tag: `current-state-roadmap-stable`.
 - Reconnect with exponential backoff (0.5–10s) and idle probe
 - Diagnostics console dump (DumpStateToConsole / dump_diagnostics)
 - Burst packet counting (Blender) + queue depth/drop diagnostics (UE) + static packet rate limiter (UE)
+- Discovery scan (Phase 9 Stage 3B) — `discover_servers()` probes default candidates (127.0.0.1, localhost, configured host) via TCP connect on port 57000. Returns structured results. Button in addon panel.
 
 ### NOT Implemented (Designed / Documented but Never Coded)
-- **Discovery scan** (Phase 9 Stage 3B) — no UDP broadcast, no port scan, no auto-connect. Blender must know the UE host:port.
 - **Backpressure ACK** (Phase 8, packet type 0x10) — no PT_BackpressureACK, no ack-based flow control, no retransmit.
 - **Adaptive throttle** (Phase 8) — no dynamic send interval based on queue depth / round-trip time.
 - **Mesh compression (zlib)** (Phase 8) — PT_Mesh payloads are not compressed.
@@ -137,7 +138,8 @@ Last updated: 2026-06-16. Tag: `current-state-roadmap-stable`.
 | Classification | Meaning | Used By |
 |----------------|---------|---------|
 | `PASS_PHASE8_AUDIT_ONLY` | Phase 8 was audited against scope-lock doc; only minimal code exists. No runtime validation. | Phase 8 audit |
-| `PASS_PHASE9_AUDIT_ONLY` | Phase 9 was audited against source; capability announce/response exist, discovery scan does not. No live UE E2E. | Phase 9 audit |
+| `PASS_PHASE9_AUDIT_ONLY` | Phase 9 was audited against source; capability announce/response exist. Stage 3B discovery scan added separately. No live UE E2E. | Phase 9 audit |
+| `PASS_DISCOVERY_LOCALHOST_SCAN` | Discovery scan probes default hosts (127.0.0.1, localhost, configured host). Validated with dummy TCP listener. | Phase 9 Stage 3B |
 | `PASS_E2E_AUDIT_ONLY` | E2E runtime validation suite was audited; orchestration plan exists, injectors exist, but full Blender→UE E2E requires manually running Blender + UE. | E2E suite |
 | `PASS_CAMERA_TRANSFORM_APPLY` | Camera transform sync (CREATE + TRANSFORM + ACTIVE_CAMERA) validated at runtime on UE 5.7.4. | Phase 7G Stage 4 |
 | `PASS_CAMERADEF_APPLY` | Camera definition/parameter sync (0x1B) validated at runtime. | Phase 7G Stage 3 |
@@ -152,6 +154,7 @@ Last updated: 2026-06-16. Tag: `current-state-roadmap-stable`.
 
 | Suite | Tests | Result |
 |-------|-------|--------|
+| Phase 9 Stage 3B Discovery Scan | 46 | ✅ PASS (dummy TCP listener) |
 | Phase 9 Production Ecosystem Audit | 71 | ✅ PASS |
 | Phase 8 Performance Streaming Audit | 37 | ✅ PASS |
 | E2E Runtime Validation Suite Audit | 27 | ✅ PASS |
@@ -175,7 +178,7 @@ Last updated: 2026-06-16. Tag: `current-state-roadmap-stable`.
 
 1. **Camera property keyframes not implemented.** FCurves for focal length, aperture, focus distance, sensor size, DOF are silently skipped in `_extract_keyframes()`.
 
-2. **Discovery scan not implemented.** No UDP broadcast, no port scan, no auto-connect. Blender must know the UE host:port. No "Available UE Instances" list in Blender UI.
+2. **Discovery scan is TCP-connect-probe only.** `discover_servers()` probes default candidates (127.0.0.1, localhost, configured host) via TCP connect on port 57000. No UDP broadcast, no port scan, no LAN subnet auto-discovery. "Available UE Instances" list is not populated from network broadcast.
 
 3. **Backpressure/adaptive throttle/compression not implemented.** Phase 8 scope-lock stages (BackpressureACK 0x10, adaptive send interval, zlib mesh compression, dirty-flag interest management, section builder optimization) were designed but never coded.
 
@@ -202,7 +205,7 @@ Last updated: 2026-06-16. Tag: `current-state-roadmap-stable`.
 > These are options only — no commitment to any particular direction.
 
 ### Short-term (Standalone, No UE Build Required)
-1. **Phase 9 Stage 3B — Discovery Scan Implementation.** Add UDP broadcast discovery or configurable UE instance list to Blender UI.
+1. ~~**Phase 9 Stage 3B — Discovery Scan.**~~ **IMPLEMENTED** ✅ `PASS_DISCOVERY_LOCALHOST_SCAN` (TCP connect probe; no UDP broadcast)
 2. **Proactive Scene Health.** Recurring scene scan to detect divergent GUID states.
 3. **Test-only gap coverage.** Create test for `phase5d_reconnect_ui.py` content assertions.
 4. **Phase 8 BackpressureACK (0x10).** Implement ack-based flow control with retransmit for high-throughput scenes.

@@ -402,6 +402,53 @@ class UELIVESYNC_OT_dump_diagnostics(
 
 
 # =========================================================
+# DISCOVERY SCAN OPERATOR (Phase 9 Stage 3B)
+# =========================================================
+
+class UELIVESYNC_OT_discover_server(
+    bpy.types.Operator
+):
+    bl_idname = \
+        "uelivesync.discover_server"
+
+    bl_label = "Discover LiveSync Server"
+
+    bl_description = \
+        "Probe default hosts and configured host for " \
+        "a running UE LiveSync listener on port 57000"
+
+    def execute(self, context):
+
+        results = network.discover_servers()
+
+        found = [
+            r for r in results
+            if r["success"]
+        ]
+
+        if found:
+            hosts = ", ".join(
+                f"{r['host']}:{r['port']}"
+                for r in found
+            )
+            self.report(
+                {'INFO'},
+                f"Found {len(found)} server(s): {hosts}"
+            )
+        else:
+            errors = ", ".join(
+                f"{r['host']}:{r['port']} ({r['error']})"
+                for r in results
+            )
+            self.report(
+                {'WARNING'},
+                f"No server found: {errors}"
+            )
+
+        return {'FINISHED'}
+
+
+# =========================================================
 # MANUAL MESH SYNC OPERATOR (Phase 7C Stage 2B.3)
 # =========================================================
 
@@ -1301,6 +1348,11 @@ class UELIVESYNC_PT_panel(
         )
 
         layout.operator(
+            "uelivesync.discover_server",
+            icon='VIEWZOOM',
+        )
+
+        layout.operator(
             "uelivesync.rebind_all",
             icon='UV_SYNC_SELECT',
         )
@@ -1336,6 +1388,7 @@ classes = (
     UELIVESYNC_OT_stop,
     UELIVESYNC_OT_rebind_all,
     UELIVESYNC_OT_dump_diagnostics,
+    UELIVESYNC_OT_discover_server,
     UELIVESYNC_OT_sync_selected_mesh_to_ue,
     UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx,
     UELIVESYNC_PT_panel,
