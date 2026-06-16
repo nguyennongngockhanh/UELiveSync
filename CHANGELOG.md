@@ -3,6 +3,7 @@
 ## [unreleased]
 
 ### Added
+- Phase 8 Closeout Audit: Comprehensive source audit comparing scope-lock design doc against actual code. Key finding: 7 of 10 stages claimed as COMPLETE were never implemented (backpressure ACK 0x10, adaptive throttling, mesh compression zlib, section builder optimization, MaterialGroups removal, dirty-flag interest management). What exists: burst packet counting (Blender), queue depth/drop diagnostics (UE), static packet rate limiter (UE). New audit test: `tests/phase8_performance_streaming_audit.py` (37/37 PASS). Audit doc: `Docs/Architecture/phase8-performance-streaming-audit.md`. Classification: `PASS_PHASE8_AUDIT_ONLY`. Tag: `phase8-audit-stable`.
 - Phase 7G Stage 4: Camera Transform Sync — validates CREATE + TRANSFORM + ACTIVE_CAMERA pipeline.
 - Injector modes: `--create-transform-active` (one connection, 0.2s inter-packet sleeps), `--cameradef-only` (fresh connection, GUID from log), `--full-separated` (combined lifecycle with 3s pause).
 - Phase 7G Stage 5: Camera Sequencer Binding + CameraCutTrack Integration.

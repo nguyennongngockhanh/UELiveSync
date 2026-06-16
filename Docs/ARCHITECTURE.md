@@ -464,3 +464,7 @@ MTEX is an optional texture metadata extension appended after MATX (material slo
 - Normal visual may be deferred or limited depending on the current master material graph implementation.
 - Packed Blender images are not imported (requires pixel data extraction, not in scope).
 - Complex node graphs (node groups, math-driven texture blending, procedural textures) are not traversed.
+
+## Architecture Documents
+
+- `Docs/Architecture/phase8-performance-streaming-audit.md` — Phase 8 closeout audit: scope-lock design vs. codebase reality. Only burst packet counting, queue diagnostics, and static rate limiter exist. Backpressure ACK (0x10), adaptive throttling, mesh compression, section optimization, and interest management were designed but never implemented. Classification: `PASS_PHASE8_AUDIT_ONLY`.

@@ -63,7 +63,7 @@
 - **Phase 10J.6 — FBX Temp Asset Lifecycle Hardening** — `[FBX][TEMP_IMPORT/ASSIGN/CLEANUP/KEEP_PREVIOUS/DELETE_FAIL/UNIT_INVALID/SCALE_INVARIANT]` diagnostics. Runtime smoke 6/6 PASS. ✅
 - **Phase 10J.7 — FBX Test Debt Cleanup** — 4 test files updated for temp import lifecycle architecture. 18/18 phase10j tests PASS. Build PASS (target up to date). ✅
 - **FBX Handoff Pipeline Audit + Test Hygiene** — Pipeline audit complete. All 52 audit checks PASS. Stale `phase7c_stage3a1_fbx_import_request.py` expectations updated to 10J.6 temp lifecycle architecture. All 21/21 FBX test suites PASS (535/535). Unit conversion verified: `global_scale=1.0`, `FBX_SCALE_UNITS`, `bConvertSceneUnit=true`, scale invariant = (1,1,1). Audit doc at `Docs/Architecture/fbx-handoff-pipeline-audit.md`. Tag: `fbx-handoff-audit-stable`. ✅
-- **Phase 8** — High Performance Streaming (diagnostics + benchmark complete) ✅
+- **Phase 8** — High Performance Streaming (design + minimal code, closed out via audit) ✅ `PASS_PHASE8_AUDIT_ONLY`
 
 ## Current Roadmap
 
@@ -84,7 +84,7 @@
 15. ~~**Phase 7 — Animation & Sequencer Sync**~~ **CORE-COMPLETE** ✅
 16. ~~**FBX Handoff Pipeline Audit**~~ **COMPLETE** ✅
 15. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
-9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. **COMPLETE** ✅
+9. **Phase 8 — High Performance Streaming** — Closeout audit: scope-lock doc overstates implementation (only burst counting + queue diagnostics exist; backpressure ACK, compression, throttle, interest management never coded). **DESIGN ONLY, MINIMAL CODE** `PASS_PHASE8_AUDIT_ONLY`
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
 11. ~~**Manual Selected-Object Full Mesh Attribute Sync**~~ — superseded by Stage 3A FBX handoff 🔒
 12. ~~**Phase 7C Stage 3A–5 — FBX Mesh Handoff Import**~~ **COMPLETE** ✅
@@ -1025,6 +1025,8 @@ All verified in regression run.
 - **Phase 8 Stage 2 — Large Scene Benchmark** (2026-06-09): Runtime benchmark PASS — measured Blender burst packet count, queue depth, and dropped packets for 50/100/250/500 simultaneous objects. Results: burst_packet_count_peak constant at 3 (create) and 1 (move) regardless of count. Queue depth always 0, no drops, no UE overflow. Per-type batching confirmed efficient. **Conclusion: No coalescing needed. Streaming pipeline solid for 1–500 objects.** Evidence: `.opencode/evidence/phase8_stage2_large_scene_load/`
 
 - **Phase 8 Stage 1 — Blender Burst Packet Diagnostics** (2026-06-09): Added `_runtime_stats["burst_packet_count"]` (per-tick) and `burst_packet_count_peak` (monotonic max) to Blender `check_updates()`. Counts `send_objects()` calls per tick. Python-only instrumentation — no UE changes, no wire format, no network.py changes. Includes 20 increment sites. Peak = max burst per tick across `_runtime_stats` lifecycle. Commit: `5f27c23`. Tests: `phase8_burst_packet_diagnostics.py` 10/10 PASS, `phase7c_stage3a1_fbx_import_request.py` 85/85 PASS, `py_compile sync.py` PASS.
+
+- **Phase 8 Closeout Audit** (2026-06-16): Comprehensive source audit comparing scope-lock document claims against actual code. **Key finding**: Scope-lock doc at `Docs/Architecture/46-phase8-high-performance-streaming-scope-lock.md` marks 10 of 13 stages as COMPLETE, but only burst counting (Blender), queue diagnostics (UE), and packet rate limiter (UE) are implemented. Backpressure ACK (0x10), adaptive throttling, mesh compression (zlib), section optimization, MaterialGroups removal, and dirty-flag interest management were **never coded**. Packet registry verified: `0x10` NOT in `kValidTypes`, `0x02` remains reserved/invalid. Large scene benchmark confirmed pipeline handles 500 objects without optimization. New audit tests: `tests/phase8_performance_streaming_audit.py` 37/37 PASS. Audit doc: `Docs/Architecture/phase8-performance-streaming-audit.md`. Classification: `PASS_PHASE8_AUDIT_ONLY`. Phase 7 representative tests pass. FBX tests pass. Commit: (audit commit). Tag: `phase8-audit-stable`. ✅
 
 - **Phase 7C Stage 5 — FBX Rename Asset Path Diagnostics** (2026-06-09): Added diagnostic warning when FBX import targets a new asset path while a LiveSync actor already exists for the same GUID (indicates the Blender object was renamed). When `MeshActor && !bReplacingExistingAsset`, logs: `[FBX] Possible rename/new asset path detected for GUID %s: importing to new asset path %s. Previous imported asset may remain orphaned.` Diagnostic only — no asset deletion, no migration, no naming policy change, no new counters. Commit: `0a55aa5`. Tests: `phase7c_stage3a1_fbx_import_request.py` 85/85 PASS (was 75, +10 T14 tests). Build: PASS (pre-existing SetNum deprecation).
   - Runtime validation (PASS): UE5.7.4 desktop/GPU session, Blender 5.1.2 Flatpak. First sync: created new asset + spawned actor. Re-sync (no rename): replaced existing asset, no warning. Rename to Stage5B: rename warning logged, new asset path used, same actor updated. No duplicate LS_FBX, no "Already registered". Evidence: `.opencode/evidence/phase7c_stage5_fbx_rename_asset_path/`
