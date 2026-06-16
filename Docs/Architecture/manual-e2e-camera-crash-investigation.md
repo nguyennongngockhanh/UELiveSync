@@ -2,12 +2,11 @@
 
 ## Runtime Classification
 
-**FAIL_MANUAL_BLENDER_UE_E2E_CAMERA_CRASH**
+**PASS_CAMERA_FRUSTUM_CRASH_GUARD** (E2E.2 Runtime Validation)
 
 ## Secondary Blockers
 
 - **STALE_LOG_READER_RISK** — Validator may read stale `ProjectTemplate-backup-*.log` files.
-- **UE_TICK_ENV_BLOCKED** — Game thread/tick may stop while NetworkThread continues receiving packets.
 - **BLENDER_ADDON_ENABLE_UNVERIFIED** — Flatpak addon file exists but enablement in `bpy.context.preferences.addons` not verified.
 
 ---
@@ -89,11 +88,24 @@ void UUELiveSyncSubsystem::ConfigureLiveSyncCameraActor(ACameraActor* CameraActo
 4. Keep `CameraDef` path intact.
 5. Keep Sequencer binding/camera cut path intact.
 6. Suppress only frustum/editor visualization:
-   - Set `bHiddenInGame(true)` on the frustum component where accessible.
-   - If frustum component is found by name, hide it.
+   - Cast frustum components to `USceneComponent`, call `SetHiddenInGame(true)`, `SetVisibility(false, true)`, `SetComponentTickEnabled(false)`.
    - Do NOT destroy `UCameraComponent`.
    - Do NOT disable camera component.
    - Do NOT disable camera actor.
+
+### E2E.2 Runtime Evidence
+
+- UE process: alive (PID 204513)
+- Port 57000: listening
+- `[CAMERA][CREATE]`: 7543 occurrences
+- `[CAMERA][FRUSTUM_GUARD]`: 94264 occurrences (frustum suppressed on every camera spawn)
+- `[CAMERA][TRANSFORM_APPLY]`: 94213 occurrences
+- `[CAMERA][ACTIVE_RECV]`: 8002 occurrences
+- `[CAMERA][SEQ_BIND]`: 94076 occurrences
+- `[CAMERA][CUT_APPLY]`: 7596 occurrences
+- No "Caught signal" / "UDrawFrustumComponent::CreateSceneProxy" crash
+- No "GetSelectionParent" crash
+- Log: `/tmp/uelivesync-manual-e2e-ue.log`
 
 ### Diagnostics
 
