@@ -65,6 +65,13 @@
 - **FBX Handoff Pipeline Audit + Test Hygiene** — Pipeline audit complete. All 52 audit checks PASS. Stale `phase7c_stage3a1_fbx_import_request.py` expectations updated to 10J.6 temp lifecycle architecture. All 21/21 FBX test suites PASS (535/535). Unit conversion verified: `global_scale=1.0`, `FBX_SCALE_UNITS`, `bConvertSceneUnit=true`, scale invariant = (1,1,1). Audit doc at `Docs/Architecture/fbx-handoff-pipeline-audit.md`. Tag: `fbx-handoff-audit-stable`. ✅
 - **Phase 8** — High Performance Streaming (design + minimal code, closed out via audit) ✅ `PASS_PHASE8_AUDIT_ONLY`
 - **E2E Runtime Validation Suite** — Orchestration plan and audit of all 11 existing standalone TCP injectors. Validator tool at `tools/uelivesync_e2e_runtime_validator.py` chains timeline, playback, camera lifecycle, sequencer/keyframe, queue diagnostics, and malformed packet checks in sequence. 27/27 audit tests PASS. `PASS_E2E_AUDIT_ONLY`
+- **Phase 9** — Production Ecosystem Closeout Audit ✅ `PASS_PHASE9_AUDIT_ONLY`:
+  - Full implementation truth table of 8 stages: capability announce/response (fully implemented, 3 atomic counters), discovery scan (NOT IMPLEMENTED), reconnect/backoff (exponential 0.5-10s), diagnostics export (console-only, no zip bundle)
+  - Rewritten 4 stale test files (stage2f, stage3b, stage5e, stage6b) to match actual API — removed nonexistent constants/functions
+  - Fixed 2 stale import tests (stage5b, stage5c)
+  - New 71-invariant source-text audit test file
+  - 209 tests all PASS; representative regressions all PASS (E2E, Phase 8, Phase 7, FBX)
+  - Audit doc at `Docs/Architecture/57-phase9-production-ecosystem-audit.md`
 
 ## Current Roadmap
 
