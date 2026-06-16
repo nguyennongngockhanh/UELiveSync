@@ -44,6 +44,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "LevelEditorViewport.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Components/SceneComponent.h"
 
 #include "Engine/Texture2D.h"
 #include "Misc/Paths.h"
@@ -8093,6 +8094,9 @@ HandleCreateObject(
                 CamActor->GetCameraComponent());
             CamActor->GetCameraComponent()->RegisterComponent();
 
+            // Manual E2E.1: Suppress frustum renderer for LiveSync cameras
+            ConfigureLiveSyncCameraActor(CamActor);
+
             UE_LOG(LogLiveSync, Log,
                 TEXT("[CAMERA][CREATE] Spawned ACameraActor guid=%s"),
                 *Guid.ToString(EGuidFormats::Digits));
@@ -10768,6 +10772,66 @@ AbortSnapshot()
 // Null GUID (all-zero) clears stored state without touching the
 // viewport. Missing or non-camera GUIDs are logged and counted.
 // =========================================================
+// MANUAL E2E.1: Camera frustum guard
+// =========================================================
+// Suppress frustum/editor-visualization on LiveSync-spawned
+// ACameraActor to avoid editor selection-parent crash during
+// frustum render proxy creation.  UCameraComponent stays fully
+// enabled and usable.
+void UUELiveSyncSubsystem::
+ConfigureLiveSyncCameraActor(ACameraActor* CameraActor)
+{
+    if (!CameraActor)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][FRUSTUM_GUARD_FAIL] null CameraActor"));
+        return;
+    }
+
+    // Iterate all components looking for a frustum-draw component.
+    // Use name-based detection to avoid adding Engine includes
+    // that may vary across UE versions.
+    TArray<UActorComponent*> Comps;
+    CameraActor->GetComponents(Comps);
+
+    bool bGuarded = false;
+    for (UActorComponent* Comp : Comps)
+    {
+        if (!Comp)
+            continue;
+        const FString CompClass = Comp->GetClass()->GetName();
+        // Match UDrawFrustumComponent or any component whose name
+        // contains "Frustum" — covers editor frustum viz classes.
+        if (CompClass.Contains(TEXT("Frustum")))
+        {
+            // Cast to USceneComponent before calling visibility APIs;
+            // UActorComponent does not expose SetHiddenInGame / SetVisibility.
+            if (USceneComponent* SceneComp = Cast<USceneComponent>(Comp))
+            {
+                SceneComp->SetHiddenInGame(true);
+                SceneComp->SetVisibility(false, true);
+                SceneComp->SetComponentTickEnabled(false);
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[CAMERA][FRUSTUM_GUARD] Suppressed frustum component %s on %s"),
+                    *CompClass, *CameraActor->GetName());
+                bGuarded = true;
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[CAMERA][FRUSTUM_GUARD_FAIL] Frustum-like component is not a USceneComponent class=%s actor=%s"),
+                    *CompClass, *CameraActor->GetName());
+            }
+        }
+    }
+
+    if (!bGuarded)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][FRUSTUM_GUARD_SKIP] No frustum component found on %s"),
+            *CameraActor->GetName());
+    }
+}
 
 // =============================================================
 // PHASE 7G STAGE 5: Ensure camera possessable binding and
@@ -10971,6 +11035,9 @@ HandleActiveCamera(
                         *Payload.CameraGUID.ToString(EGuidFormats::Digits));
                     NewCamera->Tags.Add(FName(*TagString));
                     ActorCache.Add(Payload.CameraGUID, NewCamera);
+
+                    // Manual E2E.1: Suppress frustum renderer for LiveSync cameras
+                    ConfigureLiveSyncCameraActor(NewCamera);
 
                     Stats.ActiveCameraPacketsSpawned.fetch_add(1, std::memory_order_relaxed);
 

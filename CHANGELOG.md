@@ -2,6 +2,9 @@
 
 ## [unreleased]
 
+### Fixed
+- **Manual E2E.1 — Camera frustum crash guard**: Added `ConfigureLiveSyncCameraActor()` helper that suppresses frustum/editor-visualization components on LiveSync-spawned `ACameraActor` without disabling `UCameraComponent` or the camera actor. Called from both `HandleCreateObject()` camera spawn path and `HandleActiveCamera()` auto-spawn path. Prevents SIG 6 crash in `AActor::GetSelectionParent()` → `UDrawFrustumComponent::CreateSceneProxy()`. Diagnostics: `[CAMERA][FRUSTUM_GUARD]`, `[CAMERA][FRUSTUM_GUARD_SKIP]`, `[CAMERA][FRUSTUM_GUARD_FAIL]`. No protocol change. 0x02 remains reserved/invalid. 0x10 remains unused. 20/20 static tests PASS. Build: clean.
+
 ### Added
 - Phase 9 Stage 3B — Discovery Scan: `discover_servers()` in `Blender_Addon/network.py` probes default candidates (127.0.0.1, localhost, configured host) via TCP connect on port 57000. Synchronous with bounded timeout (default 1.0s per candidate). Returns structured list `{host, port, success, error}`. Diagnostics markers: `[DISCOVERY][START/PROBE/FOUND/MISS/DONE]`. UI button "Discover LiveSync Server" in addon panel. Discovery diagnostics in `dump_diagnostics()`. No UE C++ change required. 46/46 tests PASS. Validated with dummy TCP listener. Classification: `PASS_DISCOVERY_LOCALHOST_SCAN`.
 - Current State Roadmap: Canonical consolidation document at `Docs/Architecture/current-state-roadmap.md`. Supersedes stale scope-lock assumptions. Includes phase status table (17 phases), stable tags table (17 tags), complete packet registry truth table (24 entries 0x01–0x1B with 0x02 reserved and 0x10 unused), implemented vs NOT implemented table, validation classifications (8), known limitations (11), and recommended next work options. Source-text audit: `tests/current_state_roadmap_audit.py` (54/54 PASS). Tag: `current-state-roadmap-stable`.

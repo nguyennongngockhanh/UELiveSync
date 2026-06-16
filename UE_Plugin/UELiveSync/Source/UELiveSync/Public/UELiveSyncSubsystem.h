@@ -537,6 +537,16 @@ private:
         const FGuid& CameraGUID);
 
     // =====================================================
+    // CAMERA FRUSTUM GUARD (Manual E2E.1)
+    // =====================================================
+    // Suppress frustum/editor visualization components on
+    // LiveSync-spawned cameras without disabling UCameraComponent
+    // or the camera actor itself.  Call after actor creation
+    // (HandleCreateObject or HandleActiveCamera auto-spawn).
+    void ConfigureLiveSyncCameraActor(
+        class ACameraActor* CameraActor);
+
+    // =====================================================
     // CAMERA DEFINITION (Phase 7G Stage 3)
     // =====================================================
 

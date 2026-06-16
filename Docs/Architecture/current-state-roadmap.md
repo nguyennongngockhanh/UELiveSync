@@ -211,6 +211,7 @@ Last updated: 2026-06-16 (Stage 3B discovery scan + Stage 3C auto-fill/connect U
 ### Short-term (Standalone, No UE Build Required)
 1. ~~**Phase 9 Stage 3B — Discovery Scan.**~~ **IMPLEMENTED** ✅ `PASS_DISCOVERY_LOCALHOST_SCAN` (TCP connect probe; no UDP broadcast)
 2. ~~**Phase 9 Stage 3C — Discovery Auto-fill / Connect UX.**~~ **IMPLEMENTED** ✅ `PASS_DISCOVERY_CONNECT_UX` (apply_discovery_result, "Use Discovered Server"/"Discover & Connect" operators, 38 tests)
+3. **Manual E2E.1 — Camera Frustum Crash Guard.** `PASS_CAMERA_FRUSTUM_GUARD_CODE_ONLY`. Helper `ConfigureLiveSyncCameraActor()` suppresses frustum renderer on LiveSync cameras. Build: clean. Static tests: 20/20 PASS. Runtime: blocked by UE tick/focus environment + log hygiene issues (STALE_LOG_READER_RISK, BLENDER_ADDON_ENABLE_UNVERIFIED). Docs: `manual-e2e-camera-crash-investigation.md`, `manual-e2e-log-hygiene.md`.
 
 ### Short-term (Standalone, No UE Build Required)
 3. **Proactive Scene Health.** Recurring scene scan to detect divergent GUID states.

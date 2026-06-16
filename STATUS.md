@@ -2,6 +2,31 @@
 
 **Version** 0.1.0 — Two-component real-time sync system (Blender ↔ UE5).
 
+## Manual E2E.1 — Camera Frustum Crash Guard (Current Phase)
+
+| Item | Status |
+|------|--------|
+| Investigation doc | ✅ `Docs/Architecture/manual-e2e-camera-crash-investigation.md` |
+| Log hygiene doc | ✅ `Docs/Architecture/manual-e2e-log-hygiene.md` |
+| ConfigureLiveSyncCameraActor helper | ✅ implemented + declaration |
+| HandleCreateObject camera path guarded | ✅ |
+| HandleActiveCamera auto-spawn guarded | ✅ |
+| Build | ✅ Clean compile |
+| Static tests (manual_e2e_camera_crash_guard.py) | ✅ 20/20 PASS |
+| Runtime crash validation | ⏳ Pending (see blockers below) |
+
+### Blockers (Secondary)
+
+- **STALE_LOG_READER_RISK** — Validator may read stale `ProjectTemplate-backup-*.log` files.
+- **UE_TICK_ENV_BLOCKED** — Game thread/tick may stop while NetworkThread continues.
+- **BLENDER_ADDON_ENABLE_UNVERIFIED** — Flatpak addon file exists but enablement not verified.
+
+### Classification
+
+**PASS_CAMERA_FRUSTUM_GUARD_CODE_ONLY + ENV_RUNTIME_TICK_BLOCKED**
+
+Source code fix is implemented and compiles cleanly. Runtime validation blocked by UE editor tick/focus environment limitations and log hygiene issues documented above.
+
 ## Components
 
 | Side | Language | Role |
