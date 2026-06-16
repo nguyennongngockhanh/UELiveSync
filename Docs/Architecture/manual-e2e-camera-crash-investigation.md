@@ -185,3 +185,70 @@ Called from:
 | Crash fixed + camera lifecycle validates | `PASS_CAMERA_FRUSTUM_CRASH_GUARD` |
 | Source/build passes, runtime blocked by tick/focus/log | `PASS_CAMERA_FRUSTUM_GUARD_CODE_ONLY + ENV_RUNTIME_TICK_BLOCKED` |
 | Crash remains | `FAIL_CAMERA_FRUSTUM_CRASH_GUARD` |
+
+---
+
+## Manual E2E.3 — SceneOutliner Parent Recursion Crash
+
+### Runtime Classification
+
+**FAIL_MANUAL_E2E_SCENE_OUTLINER_PARENT_RECURSION**
+
+### Crash Evidence
+
+```
+Caught signal 11 Segmentation fault
+
+Stack:
+- FActorTreeItem::UpdateDisplayStringInternal()
+- FActorTreeItem::FActorTreeItem()
+- SSceneOutliner::CreateItemFor<FActorTreeItem, AActor*>()
+- FActorHierarchy::CreateItemForActor()
+- FActorHierarchy::FindOrCreateParentItem()
+- SSceneOutliner::EnsureParentForItem()
+- SSceneOutliner::AddUnfilteredItemToTree()
+- SSceneOutliner::EnsureParentForItem()
+- SSceneOutliner::AddUnfilteredItemToTree()
+- repeated many times
+```
+
+### Interpretation
+
+The frustum crash (E2E.2) appears fixed. This is a **new, separate crash** in the UE Scene Outliner's actor hierarchy tree building.
+
+Likely root cause: LiveSync-created actor attachment hierarchy contains:
+- A cycle in the attach-parent chain (Actor A → Actor B → Actor A)
+- A stale/invalid parent pointer
+- Self-parenting (Actor attached to itself)
+- Repeated/duplicate attach calls creating corrupted parent chain
+- Parent actor pending kill / invalid during attach
+
+The SceneOutliner walks the parent chain of each actor to build the tree. A cycle or invalid pointer causes infinite recursion → stack overflow → SIG 11.
+
+### Classification
+
+| Condition | Classification |
+|-----------|---------------|
+| Crash fixed + SceneOutliner stable | `PASS_MANUAL_E2E_SCENE_OUTLINER_PARENT_GUARD` |
+| Source/build passes, runtime cannot reproduce | `PASS_SCENE_OUTLINER_PARENT_GUARD_CODE_ONLY` |
+| Crash persists | `FAIL_MANUAL_E2E_SCENE_OUTLINER_PARENT_GUARD` |
+
+### Tag Policy
+
+- Do not create a new stable tag until runtime confirms no Signal 6 and no Signal 11.
+- Existing tag `manual-e2e-camera-crash-guard-stable` is **provisional/superseded** by E2E.3.
+- Do not delete remote tag without explicit approval. Create a follow-up docs note that it was superseded by E2E.3.
+- If local-only and not pushed, consider deleting/replacing only after asking.
+
+### E2E.3 Tasks
+
+1. Document this crash (this file).
+2. Audit actor attachment / hierarchy code in `UELiveSyncSubsystem.cpp`.
+3. Identify all LiveSync attachment paths (normal, camera, deferred, reparent, stale cleanup).
+4. Add `WouldCreateAttachmentCycle(AActor*, AActor*)` actor-pointer-level guard.
+5. Add `SafeAttachLiveSyncActor(AActor*, AActor*, FGuid, FGuid)` wrapper.
+6. Replace direct `AttachToActor` calls with guard.
+7. Camera-specific rule: never attach camera to itself or to any actor whose parent chain includes the camera.
+8. Add static tests in `tests/manual_e2e_scene_outliner_parent_guard.py`.
+9. Build and runtime revalidation.
+10. Commit: `fix(hierarchy): guard LiveSync actor attachment cycles`.

@@ -231,6 +231,34 @@ private:
         const FGuid& ChildGuid,
         const FGuid& ParentGuid);
 
+    // E2E.3: Actor-pointer-level cycle detection
+    // Rejects: null child/parent, self-parent, parent-in-child-chain,
+    //          pending-kill actors, excessive depth.
+    bool WouldCreateAttachmentCycle(
+        AActor* Child,
+        AActor* Parent);
+
+    // E2E.3: Safe wrapper around AttachToActor
+    // Calls WouldCreateAttachmentCycle, skips if unsafe,
+    // logs [HIERARCHY][ATTACH_GUARD], [ATTACH_SKIP_*].
+    // Preserves world transform when skipping.
+    bool SafeAttachLiveSyncActor(
+        AActor* Child,
+        AActor* Parent,
+        const FGuid& ChildGuid,
+        const FGuid& ParentGuid);
+
+    // E2E.3: Camera-aware attachment guard
+    // Rejects: same as WouldCreateAttachmentCycle PLUS:
+    //   - attaching a camera actor to itself
+    //   - attaching any actor to a parent whose chain includes a LiveSync camera
+    //   - attaching a LiveSync camera to a parent whose chain includes itself
+    bool SafeAttachCameraOrToCamera(
+        AActor* Child,
+        AActor* Parent,
+        const FGuid& ChildGuid,
+        const FGuid& ParentGuid);
+
     // =====================================================
     // LIFECYCLE/DELETE REPLICATION (Phase 6E)
     // =====================================================

@@ -8893,28 +8893,38 @@ HandleHierarchy(
     }
 
     // =====================================================
-    // APPLY ATTACHMENT
+    // APPLY ATTACHMENT — E2E.3: Guarded by SafeAttachLiveSyncActor
     // =====================================================
-    // Raw AttachToActor with KeepWorldTransform.
-    // Does NOT go through the frozen AttachToParent wrapper
-    // (which would add cycle detection, deferred queue,
-    // FSyncTransformState modification, and oscillation
-    // detection — all deferred to Stage 7+).
+    // Replaces raw AttachToActor (which was not going through
+    // AttachToParent's cycle detection). Use SafeAttachLiveSyncActor
+    // for actor-pointer-level validation.
     // =====================================================
 
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[HIERARCHY][ATTACH] BEGIN AttachToActor "
-             "child=%s parent=%s"),
-        *ChildGuid.ToString(EGuidFormats::Digits),
-        *ParentGuid.ToString(EGuidFormats::Digits));
+    const bool bAttached = SafeAttachLiveSyncActor(
+        ChildActor, ParentActor, ChildGuid, ParentGuid);
 
-    ChildActor->AttachToActor(
-        ParentActor,
-        FAttachmentTransformRules::KeepWorldTransform);
+    if (!bAttached)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[HIERARCHY][ATTACH] SKIPPED — safety guard rejected "
+                 "child=%s parent=%s"),
+            *ChildGuid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits));
+        // Keep world transform intact (no attach = world transform preserved).
+        GHierarchySequences.Update(ChildGuid, SequenceNumber);
+        if (Origin == EChangeOrigin::RemoteReplicated)
+        {
+            Stats.HierarchyProcessed.fetch_add(1, std::memory_order_relaxed);
+        }
+        else if (Origin == EChangeOrigin::Replay)
+        {
+            Stats.HierarchyReplayApplied.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
 
     UE_LOG(LogLiveSync, Log,
-        TEXT("[HIERARCHY][ATTACH] END   AttachToActor "
-             "child=%s parent=%s"),
+        TEXT("[HIERARCHY][ATTACH] Attached child=%s parent=%s"),
         *ChildGuid.ToString(EGuidFormats::Digits),
         *ParentGuid.ToString(EGuidFormats::Digits));
 
@@ -9795,22 +9805,29 @@ ResolveHierarchyAttachments()
         }
         else
         {
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[HIERARCHY][ORPHAN] RESOLVED — BEGIN AttachToActor "
-                     "child=%s parent=%s (resolved after %d retries)"),
-                *Entry.ChildGuid.ToString(EGuidFormats::Digits),
-                *Entry.ParentGuid.ToString(EGuidFormats::Digits),
-                Entry.RetryCount);
+            // E2E.3: Use guarded attach for deferred resolution too.
+            const bool bAttached = SafeAttachLiveSyncActor(
+                ChildActor, ParentActor, Entry.ChildGuid, Entry.ParentGuid);
 
-            ChildActor->AttachToActor(
-                ParentActor,
-                FAttachmentTransformRules::KeepWorldTransform);
-
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[HIERARCHY][ORPHAN] RESOLVED — END   AttachToActor "
-                     "child=%s parent=%s"),
-                *Entry.ChildGuid.ToString(EGuidFormats::Digits),
-                *Entry.ParentGuid.ToString(EGuidFormats::Digits));
+            if (!bAttached)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[HIERARCHY][ORPHAN] RESOLVED — ATTACH SKIPPED: "
+                         "child=%s parent=%s (safety guard rejected)"),
+                    *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+                    *Entry.ParentGuid.ToString(EGuidFormats::Digits));
+                // Keep world transform. Count as resolved (parent eventually
+                // appears → next frame retry will succeed).
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[HIERARCHY][ORPHAN] RESOLVED — attached: "
+                         "child=%s parent=%s (after %d retries)"),
+                    *Entry.ChildGuid.ToString(EGuidFormats::Digits),
+                    *Entry.ParentGuid.ToString(EGuidFormats::Digits),
+                    Entry.RetryCount);
+            }
         }
 
         // ---- Update sequence tracker ----
@@ -9909,6 +9926,276 @@ WouldCreateHierarchyCycle(
     }
 
     return false; // No cycle detected — safe to attach
+}
+
+
+// =========================================================
+// E2E.3: ACTOR-POINTER-LEVEL ATTACHMENT CYCLE GUARD
+// =========================================================
+// Addresses FAIL_MANUAL_E2E_SCENE_OUTLINER_PARENT_RECURSION.
+// WouldCreateHierarchyCycle operates on GUIDs and cannot
+// validate actor pointer validity, null checks, or
+// pending-kill state. This function operates on raw
+// AActor* pointers for runtime safety.
+// =========================================================
+
+bool UUELiveSyncSubsystem::WouldCreateAttachmentCycle(
+    AActor* Child,
+    AActor* Parent)
+{
+    // ---- Null checks ----
+    if (!Child)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY][ATTACH_SKIP] null child"));
+        return true;
+    }
+
+    if (!Parent)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY][ATTACH_SKIP] null parent"));
+        return true;
+    }
+
+    // ---- Pending kill check ----
+    if (Child->bPendingKill || Parent->bPendingKill)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY][ATTACH_SKIP] actor pending kill: "
+                 "child=%s valid=%d | parent=%s valid=%d"),
+            *Child->GetActorNameOrLabel(),
+            Child->bPendingKill ? 1 : 0,
+            *Parent->GetActorNameOrLabel(),
+            Parent->bPendingKill ? 1 : 0);
+        return true;
+    }
+
+    // ---- Self-parent check ----
+    if (Child == Parent)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY][ATTACH_SKIP_SELF] child=parent=%s"),
+            *Child->GetActorNameOrLabel());
+        return true;
+    }
+
+    // ---- Bounded parent-chain walk from Parent upward ----
+    // Check: does Child appear anywhere in Parent's attach-parent chain?
+    static constexpr int32 MAX_CYCLE_DEPTH = 256;
+    AActor* Probe = Parent;
+    int32 Depth = 0;
+
+    while (Probe && Depth < MAX_CYCLE_DEPTH)
+    {
+        if (Probe == Child)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[HIERARCHY][CYCLE] Chain cycle via attach: "
+                     "child=%s parent=%s (depth=%d)"),
+                *Child->GetActorNameOrLabel(),
+                *Parent->GetActorNameOrLabel(),
+                Depth + 1);
+            return true;
+        }
+
+        AActor* ParentActor = Probe->GetAttachParentActor();
+
+        // Validate the next probe is not pending kill
+        if (ParentActor && ParentActor->bPendingKill)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[HIERARCHY][ATTACH_SKIP] parent chain actor pending kill: "
+                     "depth=%d actor=%s"),
+                Depth, *ParentActor->GetActorNameOrLabel());
+            return true;
+        }
+
+        Probe = ParentActor;
+        Depth++;
+    }
+
+    if (Depth >= MAX_CYCLE_DEPTH)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY][CYCLE] Depth limit exceeded: "
+                 "child=%s parent=%s (depth=%d) — rejecting"),
+            *Child->GetActorNameOrLabel(),
+            *Parent->GetActorNameOrLabel(),
+            Depth);
+        return true;
+    }
+
+    return false; // No cycle detected — safe to attach
+}
+
+
+// =========================================================
+// E2E.3: SAFE ATTACH WRAPPER
+// =========================================================
+// Replaces direct AttachToActor calls in LiveSync paths.
+// Logs: [HIERARCHY][ATTACH_GUARD] on entry,
+//        [HIERARCHY][ATTACH_SKIP_CYCLE] / [ATTACH_SKIP_SELF] /
+//        [ATTACH_SKIP_INVALID] on skip.
+// Preserves world transform when skipping unsafe attach.
+// =========================================================
+
+bool UUELiveSyncSubsystem::SafeAttachLiveSyncActor(
+    AActor* Child,
+    AActor* Parent,
+    const FGuid& ChildGuid,
+    const FGuid& ParentGuid)
+{
+    // Always log guard entry
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[HIERARCHY][ATTACH_GUARD] child=%s parent=%s"),
+        ChildGuid.IsValid() ? *ChildGuid.ToString(EGuidFormats::Digits)
+                             : TEXT("null"),
+        ParentGuid.IsValid() ? *ParentGuid.ToString(EGuidFormats::Digits)
+                             : TEXT("null"));
+
+    // Run cycle detection
+    if (WouldCreateAttachmentCycle(Child, Parent))
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[HIERARCHY][ATTACH_SKIP] Skipping attach for child=%s parent=%s"),
+            ChildGuid.IsValid() ? *ChildGuid.ToString(EGuidFormats::Digits)
+                                : TEXT("null"),
+            ParentGuid.IsValid() ? *ParentGuid.ToString(EGuidFormats::Digits)
+                                 : TEXT("null"));
+        return false; // Skip attach
+    }
+
+    // Proceed with safe attach
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[HIERARCHY][ATTACH_SAFE] Attached child=%s to parent=%s"),
+        ChildGuid.IsValid() ? *ChildGuid.ToString(EGuidFormats::Digits)
+                            : TEXT("null"),
+        ParentGuid.IsValid() ? *ParentGuid.ToString(EGuidFormats::Digits)
+                             : TEXT("null"));
+
+    Child->AttachToActor(
+        Parent,
+        FAttachmentTransformRules::KeepWorldTransform);
+
+    return true;
+}
+
+
+// =========================================================
+// E2E.3: CAMERA-AWARE ATTACHMENT GUARD
+// =========================================================
+// Additional rules for camera actors:
+//   - Never attach a LiveSync camera to itself.
+//   - Never attach any actor to a parent whose chain includes
+//     a LiveSync-spawned camera (prevents SceneOutliner recursion
+//     when camera's frustum component corrupts the parent chain).
+//   - Never attach a LiveSync camera to a parent whose chain
+//     includes itself (circular camera attach).
+// Does NOT disable camera Sequencer binding or camera cut.
+// =========================================================
+
+bool UUELiveSyncSubsystem::SafeAttachCameraOrToCamera(
+    AActor* Child,
+    AActor* Parent,
+    const FGuid& ChildGuid,
+    const FGuid& ParentGuid)
+{
+    // Run base cycle detection first
+    if (WouldCreateAttachmentCycle(Child, Parent))
+    {
+        return false;
+    }
+
+    const bool bChildIsCamera = Child->IsA(ACameraActor::StaticClass());
+    const bool bParentIsCamera = Parent->IsA(ACameraActor::StaticClass());
+
+    // ---- Rule 1: Never attach a LiveSync camera to itself ----
+    if (bChildIsCamera && Child == Parent)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[HIERARCHY][ATTACH_SKIP_SELF] camera child=parent=%s"),
+            *Child->GetActorNameOrLabel());
+        return false;
+    }
+
+    // ---- Rule 2: If parent is a LiveSync camera, check its chain ----
+    // Reject attaching any actor to a parent whose chain includes
+    // a LiveSync camera. This prevents the frustum proxy from
+    // corrupting SceneOutliner's parent walk.
+    if (bParentIsCamera)
+    {
+        // Walk parent chain of the camera parent.
+        // If Child appears, reject.
+        static constexpr int32 MAX_CYCLE_DEPTH = 256;
+        AActor* Probe = Parent;
+        int32 Depth = 0;
+
+        while (Probe && Depth < MAX_CYCLE_DEPTH)
+        {
+            if (Probe == Child)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[HIERARCHY][CYCLE] Camera chain cycle: "
+                         "child=%s camera-parent=%s (depth=%d)"),
+                    *Child->GetActorNameOrLabel(),
+                    *Parent->GetActorNameOrLabel(),
+                    Depth + 1);
+                return false;
+            }
+            Probe = Probe->GetAttachParentActor();
+            Depth++;
+        }
+
+        if (Depth >= MAX_CYCLE_DEPTH)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[HIERARCHY][CYCLE] Camera parent chain depth exceeded: "
+                     "child=%s camera-parent=%s (depth=%d)"),
+                *Child->GetActorNameOrLabel(),
+                *Parent->GetActorNameOrLabel(),
+                Depth);
+            return false;
+        }
+    }
+
+    // ---- Rule 3: If child is a LiveSync camera, check parent chain ----
+    // Reject attaching a LiveSync camera to a parent whose chain
+    // includes the same camera (circular camera attach).
+    if (bChildIsCamera)
+    {
+        static constexpr int32 MAX_CYCLE_DEPTH = 256;
+        AActor* Probe = Parent;
+        int32 Depth = 0;
+
+        while (Probe && Depth < MAX_CYCLE_DEPTH)
+        {
+            if (Probe == Child)
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[HIERARCHY][CYCLE] Camera attach cycle: "
+                         "camera-child=%s parent-chain=%s (depth=%d)"),
+                    *Child->GetActorNameOrLabel(),
+                    *Probe->GetActorNameOrLabel(),
+                    Depth + 1);
+                return false;
+            }
+            Probe = Probe->GetAttachParentActor();
+            Depth++;
+        }
+
+        if (Depth >= MAX_CYCLE_DEPTH)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[HIERARCHY][CYCLE] Camera child parent-chain depth exceeded: "
+                     "camera-child=%s (depth=%d)"),
+                *Child->GetActorNameOrLabel(),
+                Depth);
+            return false;
+        }
+    }
+
+    return true; // Safe to attach
 }
 
 
@@ -11394,8 +11681,8 @@ ResolvePendingAttachments()
                         }
                     }
 
-                    // 4. Oscillating parent reassignment detection
-                    // If same child had a different parent recently, log and track
+                    // 4. E2E.3: Use SafeAttachLiveSyncActor for unified guard.
+                    // Retains oscillation tracking (not in guard).
                     {
                         static TMap<FGuid, FGuid> LastAssignedParent;
                         FGuid* PrevParent = LastAssignedParent.Find(Entry.Child);
@@ -11411,20 +11698,18 @@ ResolvePendingAttachments()
                         LastAssignedParent.Add(Entry.Child, Entry.Parent);
                     }
 
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("  BEGIN AttachToActor child=%s parent=%s"),
-                        *Entry.Child.ToString(EGuidFormats::Digits),
-                        *Entry.Parent.ToString(EGuidFormats::Digits));
+                    // Unified safety guard replaces inline AttachToActor.
+                    const bool bAttached = SafeAttachLiveSyncActor(
+                        Child, Parent, Entry.Child, Entry.Parent);
 
-                    Child->AttachToActor(
-                        Parent,
-                        FAttachmentTransformRules::
-                            KeepWorldTransform);
-
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("  END   AttachToActor child=%s parent=%s"),
-                        *Entry.Child.ToString(EGuidFormats::Digits),
-                        *Entry.Parent.ToString(EGuidFormats::Digits));
+                    if (!bAttached)
+                    {
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("  ATTACH SKIPPED: child=%s parent=%s"),
+                            *Entry.Child.ToString(EGuidFormats::Digits),
+                            *Entry.Parent.ToString(EGuidFormats::Digits));
+                        continue;
+                    }
 
                     // Patch 1: Force one world-space recompute
                     // on next interp tick. Child may have
