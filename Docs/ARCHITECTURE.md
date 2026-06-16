@@ -468,3 +468,4 @@ MTEX is an optional texture metadata extension appended after MATX (material slo
 ## Architecture Documents
 
 - `Docs/Architecture/phase8-performance-streaming-audit.md` — Phase 8 closeout audit: scope-lock design vs. codebase reality. Only burst packet counting, queue diagnostics, and static rate limiter exist. Backpressure ACK (0x10), adaptive throttling, mesh compression, section optimization, and interest management were designed but never implemented. Classification: `PASS_PHASE8_AUDIT_ONLY`.
+- `Docs/Architecture/e2e-runtime-validation-suite.md` — E2E runtime validation orchestration plan. Audits all 11 standalone TCP injectors and provides a 7-phase sequenced validator at `tools/uelivesync_e2e_runtime_validator.py`. Includes manual Blender operator and UE Python reflection steps. Classification: `PASS_E2E_AUDIT_ONLY`.

@@ -3,6 +3,7 @@
 ## [unreleased]
 
 ### Added
+- E2E Runtime Validation Suite: Audited all 11 standalone TCP injector/validator tools. Created orchestration plan doc at `Docs/Architecture/e2e-runtime-validation-suite.md`. Created `tools/uelivesync_e2e_runtime_validator.py` — subprocess-based orchestrator chaining timeline, playback, camera lifecycle, camera def, sequencer/keyframe, queue diagnostics, and malformed packet checks. New audit test: `tests/e2e_runtime_validation_suite_audit.py` (27/27 PASS). Classification: `PASS_E2E_AUDIT_ONLY`.
 - Phase 8 Closeout Audit: Comprehensive source audit comparing scope-lock design doc against actual code. Key finding: 7 of 10 stages claimed as COMPLETE were never implemented (backpressure ACK 0x10, adaptive throttling, mesh compression zlib, section builder optimization, MaterialGroups removal, dirty-flag interest management). What exists: burst packet counting (Blender), queue depth/drop diagnostics (UE), static packet rate limiter (UE). New audit test: `tests/phase8_performance_streaming_audit.py` (37/37 PASS). Audit doc: `Docs/Architecture/phase8-performance-streaming-audit.md`. Classification: `PASS_PHASE8_AUDIT_ONLY`. Tag: `phase8-audit-stable`.
 - Phase 7G Stage 4: Camera Transform Sync — validates CREATE + TRANSFORM + ACTIVE_CAMERA pipeline.
 - Injector modes: `--create-transform-active` (one connection, 0.2s inter-packet sleeps), `--cameradef-only` (fresh connection, GUID from log), `--full-separated` (combined lifecycle with 3s pause).
