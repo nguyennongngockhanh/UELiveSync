@@ -24,6 +24,7 @@ Last updated: 2026-06-16 (Stage 3B discovery scan + Stage 3C auto-fill/connect U
 | `fbx-test-hygiene-stable` | FBX Test Debt Cleanup | COMPLETE |
 | `phase8-audit-stable` | Phase 8 High Performance Streaming Audit | `PASS_PHASE8_AUDIT_ONLY` |
 | `e2e-runtime-validation-audit-stable` | E2E Runtime Validation Suite Audit | `PASS_E2E_AUDIT_ONLY` |
+| `manual-e2e-camera-crash-guard-stable` | Manual E2E.1 — Camera Frustum Crash Guard | `PASS_CAMERA_FRUSTUM_CRASH_GUARD` — **PROVISIONAL** (Signal 6 fixed, Signal 11 not resolved) |
 | `phase9-audit-stable` | Phase 9 Production Ecosystem Audit | `PASS_PHASE9_AUDIT_ONLY` |
 | `phase9-stage3b-discovery-stable` | Phase 9 Stage 3B — Discovery Scan | `PASS_DISCOVERY_LOCALHOST_SCAN` |
 | `phase9-stage3c-connect-ux-stable` | Phase 9 Stage 3C — Discovery Auto-fill / Connect UX | `PASS_DISCOVERY_CONNECT_UX` |
@@ -212,6 +213,7 @@ Last updated: 2026-06-16 (Stage 3B discovery scan + Stage 3C auto-fill/connect U
 1. ~~**Phase 9 Stage 3B — Discovery Scan.**~~ **IMPLEMENTED** ✅ `PASS_DISCOVERY_LOCALHOST_SCAN` (TCP connect probe; no UDP broadcast)
 2. ~~**Phase 9 Stage 3C — Discovery Auto-fill / Connect UX.**~~ **IMPLEMENTED** ✅ `PASS_DISCOVERY_CONNECT_UX` (apply_discovery_result, "Use Discovered Server"/"Discover & Connect" operators, 38 tests)
 3. **Manual E2E.1 — Camera Frustum Crash Guard.** `PASS_CAMERA_FRUSTUM_CRASH_GUARD`. Helper `ConfigureLiveSyncCameraActor()` suppresses frustum renderer on LiveSync cameras. Build: clean. Static tests: 24/24 PASS. Runtime: UE 5.7.4 validated — no crash, all 6 required markers present. Blockers: STALE_LOG_READER_RISK, BLENDER_ADDON_ENABLE_UNVERIFIED. Docs: `manual-e2e-camera-crash-investigation.md`, `manual-e2e-log-hygiene.md`.
+4. **Manual E2E.4 — Signal 6 + Signal 11 Runtime Revalidation.** Signal 6: FIXED (`[CAMERA][FRUSTUM_GUARD]` present, camera lifecycle successful). Signal 11: CONFIRMED — `CommonUnixCrashHandler: Signal=11` in `libUnrealEditor-SceneOutliner.so` (UE engine bug, not LiveSync). Crash: `SSceneOutliner::EnsureParentForItem` ↔ `AddUnfilteredItemToTree` infinite loop. Hierarchy guard not exercised (test camera had no parent). 106/106 static tests PASS. Classification: `FAIL_MANUAL_E2E_SCENE_OUTLINER_PARENT_GUARD`. Tag `manual-e2e-camera-crash-guard-stable` remains **provisional**. Docs: `manual-e2e-camera-crash-investigation.md` (E2E.4 section).
 
 ### Short-term (Standalone, No UE Build Required)
 3. **Proactive Scene Health.** Recurring scene scan to detect divergent GUID states.

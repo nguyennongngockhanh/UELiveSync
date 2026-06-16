@@ -252,3 +252,94 @@ The SceneOutliner walks the parent chain of each actor to build the tree. A cycl
 8. Add static tests in `tests/manual_e2e_scene_outliner_parent_guard.py`.
 9. Build and runtime revalidation.
 10. Commit: `fix(hierarchy): guard LiveSync actor attachment cycles`.
+
+### E2E.4 — Signal 6 + Signal 11 Runtime Revalidation (COMPLETED)
+
+**Date:** 2026-06-16
+**Commit:** e0ed247
+**UE Binary:** 5.7.7.4 (Shipping)
+**Log:** `/tmp/uelivesync-manual-e2e-ue.log` (66673 lines)
+
+#### Signal 6 (UDrawFrustumComponent::CreateSceneProxy / GetSelectionParent)
+
+| Check | Result |
+|-------|--------|
+| `[CAMERA][FRUSTUM_GUARD]` present | ✅ YES (1 hit) |
+| `[CAMERA][CREATE]` | ✅ YES (1 hit) |
+| `[CAMERA][TRANSFORM_CONVERGED]` | ✅ YES (1 hit) |
+| Signal 6 crash | ✅ NONE — frustum guard working |
+
+#### Signal 11 (SceneOutliner recursion)
+
+| Check | Result |
+|-------|--------|
+| `CommonUnixCrashHandler: Signal=11` | ❌ YES — crash confirmed |
+| `SSceneOutliner::EnsureParentForItem` | ❌ YES — 26 alternating pairs in stack |
+| `SSceneOutliner::AddUnfilteredItemToTree` | ❌ YES — 26 alternating pairs in stack |
+| Crash location | `libUnrealEditor-SceneOutliner.so` (UE engine code) |
+| Crash allocator | `mi_find_page` → `mi_heap_malloc_zero` (mimalloc) |
+
+#### Root Cause Analysis
+
+The crash is **NOT** in LiveSync code. It is in UE's own `FActorHierarchy::FindOrCreateParentItem()`
+which infinite-loops between `EnsureParentForItem` and `AddUnfilteredItemToTree`
+when the Slate SceneOutliner tries to rebuild the actor tree.
+
+**Key finding:** The LiveSync hierarchy guard (`SafeAttachLiveSyncActor`) was **not exercised**
+during this test run because the test camera had **no parent** (parent GUID = all zeros).
+`AttachToParent` completed with `actualParent=None` — no unsafe attachment was attempted.
+
+The crash occurs when the UE engine's SceneOutliner plugin encounters a cycle in the
+actor parent chain during its internal tree rebuild. This is a **UE engine bug**
+that cannot be fixed from the LiveSync plugin side.
+
+#### Hierarchy Guard Markers
+
+| Marker | Count | Notes |
+|--------|-------|-------|
+| `[HIERARCHY][ATTACH_GUARD]` | 0 | Not exercised (no parent sent) |
+| `[HIERARCHY][ATTACH_SKIP_CYCLE]` | 0 | Not exercised |
+| `[HIERARCHY][ATTACH_SKIP_INVALID]` | 0 | Not exercised |
+
+#### UE Process Status
+
+| Check | Result |
+|-------|--------|
+| Process alive after test | ❌ DEAD — crashed with Signal 11 |
+| CrashReporter spawned | ✅ Yes |
+| Port 57000 listening | ✅ Yes (pre-crash) |
+
+#### Static Tests
+
+| Test Suite | Result |
+|------------|--------|
+| `manual_e2e_scene_outliner_parent_guard.py` | 30/30 PASS |
+| `manual_e2e_camera_crash_guard.py` | 24/24 PASS |
+| `e2e_runtime_validation_suite_audit.py` | 27/27 PASS |
+| `phase9_stage3b_discovery_scan.py` | 12/12 PASS |
+| `phase9_stage3c_discovery_connect_ux.py` | 13/13 PASS |
+| **Total** | **106/106 PASS** |
+
+#### Classification
+
+**`FAIL_MANUAL_E2E_SCENE_OUTLINER_PARENT_GUARD`**
+
+Signal 11 crash confirmed. Crash is in UE engine code (`libUnrealEditor-SceneOutliner.so`),
+not LiveSync code. The SceneOutliner recursion bug is a UE engine-level issue that requires
+a UE engine source fix or a workaround at the Slate/UI level.
+
+**Signal 6 (frustum): FIXED** — frustum guard working.
+**Signal 11 (SceneOutliner): NOT FIXED** — UE engine bug, outside LiveSync scope.
+
+#### Tag Policy
+
+- Do **not** create `manual-e2e-signal6-signal11-stable` tag.
+- `manual-e2e-camera-crash-guard-stable` remains **provisional** (Signal 6 fixed, Signal 11 not validated).
+
+#### Required Follow-up
+
+1. Report SceneOutliner recursion bug to Epic Games (UE5.7 source).
+2. Consider Slate-level workaround: add cycle detection in `SSceneOutliner` before tree rebuild.
+3. Or use `FActorHierarchy`-safe iteration pattern from LiveSync to avoid triggering the bug.
+4. Test with actors that DO have parent relationships (current test had no parent).
+5. Consider building UE from source with the fix applied.

@@ -26,6 +26,30 @@
 
 Source code fix is implemented and compiles cleanly. Runtime validation blocked by UE editor tick/focus environment limitations and log hygiene issues documented above.
 
+## Manual E2E.4 — Signal 6 + Signal 11 Runtime Revalidation (COMPLETED)
+
+| Item | Status |
+|------|--------|
+| Signal 6 (frustum crash) | ✅ FIXED — `[CAMERA][FRUSTUM_GUARD]` present, camera lifecycle successful |
+| Signal 11 (SceneOutliner crash) | ❌ CONFIRMED — `CommonUnixCrashHandler: Signal=11` in `libUnrealEditor-SceneOutliner.so` |
+| Crash stack | `SSceneOutliner::EnsureParentForItem` ↔ `AddUnfilteredItemToTree` (26 pairs, infinite loop) |
+| Root cause | UE engine bug (not LiveSync code) |
+| Hierarchy guard exercised | ❌ Not exercised (test camera had no parent) |
+| Static tests | ✅ 106/106 PASS (5 suites) |
+| UE process | ❌ DEAD — CrashReportClient spawned |
+| Classification | `FAIL_MANUAL_E2E_SCENE_OUTLINER_PARENT_GUARD` |
+
+### Tag Status
+
+- `manual-e2e-camera-crash-guard-stable` — **PROVISIONAL** (Signal 6 fixed, Signal 11 not validated)
+- Do **not** create `manual-e2e-signal6-signal11-stable` until Signal 11 is resolved.
+
+### Required Follow-up
+
+1. Report SceneOutliner recursion bug to Epic Games (UE5.7).
+2. Consider Slate-level cycle detection workaround.
+3. Test with parented actors to exercise hierarchy guard code paths.
+
 ## Components
 
 | Side | Language | Role |
