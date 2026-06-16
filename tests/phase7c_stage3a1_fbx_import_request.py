@@ -598,29 +598,29 @@ else:
 
 
 # =============================================================
-# T12: Stage 4A — FBX Asset Lifecycle Diagnostics
+# T12: Stage 4A — FBX Temp Import Lifecycle Diagnostics (10J.6)
 # =============================================================
 
-banner("T12 — Stage 4A: Asset lifecycle diagnostics")
+banner("T12 — Stage 4A: FBX temp import lifecycle diagnostics")
 
 if os.path.isfile(ue_importer_cpp_path):
     with open(ue_importer_cpp_path, "r") as f:
         importer_text = f.read()
 
-    # T12.1: bReplacingExistingAsset variable exists
-    test("T12.1: bReplacingExistingAsset check exists",
-          "bReplacingExistingAsset" in importer_text,
-          "bReplacingExistingAsset not found in LiveSyncFBXImporter.cpp")
+    # T12.1: TEMP_IMPORT marker present (replaced old [FBX] Created new imported asset)
+    test("T12.1: [FBX][TEMP_IMPORT] log marker present",
+          "[FBX][TEMP_IMPORT]" in importer_text,
+          "TEMP_IMPORT log marker missing from LiveSyncFBXImporter.cpp")
 
-    # T12.2: Log marker for replaced existing asset
-    test("T12.2: [FBX] Replaced existing imported asset log marker",
-          "[FBX] Replaced existing imported asset" in importer_text,
-          "Log marker missing for replaced existing asset")
+    # T12.2: TEMP_ASSIGN marker present (replaced old [FBX] Replaced existing imported asset)
+    test("T12.2: [FBX][TEMP_ASSIGN] log marker present",
+          "[FBX][TEMP_ASSIGN]" in importer_text,
+          "TEMP_ASSIGN log marker missing from LiveSyncFBXImporter.cpp")
 
-    # T12.3: Log marker for created new asset
-    test("T12.3: [FBX] Created new imported asset log marker",
-          "[FBX] Created new imported asset" in importer_text,
-          "Log marker missing for created new asset")
+    # T12.3: TEMP_CLEANUP marker present (temp mesh cleanup lifecycle)
+    test("T12.3: [FBX][TEMP_CLEANUP] log marker present",
+          "[FBX][TEMP_CLEANUP]" in importer_text,
+          "TEMP_CLEANUP log marker missing from LiveSyncFBXImporter.cpp")
 
     # T12.4: Existing /Game/UELiveSync/Imported destination unchanged
     test("T12.4: /Game/UELiveSync/Imported destination unchanged",
@@ -632,29 +632,33 @@ if os.path.isfile(ue_importer_cpp_path):
           "[FBX] Imported StaticMesh" in importer_text,
           "Import success log marker missing")
 
-    # T12.6–9: No asset deletion APIs added
-    test("T12.6: No DeleteObject API added",
-          "DeleteObject" not in importer_text,
-          "DeleteObject should not appear in LiveSyncFBXImporter.cpp")
+    # T12.6: DeleteObject used for temp cleanup (intentional in 10J.6)
+    # Temp mesh cleanup deletes rejected pending meshes via ObjectTools::DeleteObjects
+    test("T12.6: DeleteObject present for temp cleanup lifecycle",
+          "DeleteObject" in importer_text,
+          "DeleteObject expected for temp cleanup in LiveSyncFBXImporter.cpp")
 
+    # T12.7: No DeletePackage API added
     test("T12.7: No DeletePackage API added",
           "DeletePackage" not in importer_text,
           "DeletePackage should not appear in LiveSyncFBXImporter.cpp")
 
-    test("T12.8: No ObjectTools::DeleteObjects added",
-          "ObjectTools::DeleteObjects" not in importer_text,
-          "ObjectTools::DeleteObjects should not appear")
+    # T12.8: ObjectTools::DeleteObjects used for temp cleanup (intentional in 10J.6)
+    test("T12.8: ObjectTools::DeleteObjects present for temp cleanup",
+          "ObjectTools::DeleteObjects" in importer_text,
+          "ObjectTools::DeleteObjects expected for temp cleanup in LiveSyncFBXImporter.cpp")
 
+    # T12.9: No CollectGarbage added
     test("T12.9: No CollectGarbage added",
           "CollectGarbage" not in importer_text,
           "CollectGarbage should not appear in LiveSyncFBXImporter.cpp")
 
-    # T12.10: No new counter FBXImportReplacedExisting
+    # T12.10: No FBXImportReplacedExisting counter
     test("T12.10: No FBXImportReplacedExisting counter added",
           "FBXImportReplacedExisting" not in importer_text,
-          "FBXImportReplacedExisting counter should not be added in Stage 4A")
+          "FBXImportReplacedExisting counter should not be added")
 
-    # T12.11: SyncTypes.h unchanged (no FBXImportReplacedExisting there either)
+    # T12.11: SyncTypes.h has no FBXImportReplacedExisting
     if os.path.isfile(sync_types_h_path):
         with open(sync_types_h_path, "r") as f:
             types_text = f.read()
@@ -662,11 +666,11 @@ if os.path.isfile(ue_importer_cpp_path):
               "FBXImportReplacedExisting" not in types_text,
               "FBXImportReplacedExisting should not appear in SyncTypes.h")
     else:
-        test("T12.11: SyncTypes.h found",
+        test("T12.12: SyncTypes.h found",
               False,
               f"not found at {sync_types_h_path}")
 else:
-    test("T12.12: LiveSyncFBXImporter.cpp found",
+    test("T12.13: LiveSyncFBXImporter.cpp found",
           False,
           f"not found at {ue_importer_cpp_path}")
 
@@ -737,60 +741,63 @@ else:
 
 
 # =============================================================
-# T14: Stage 5 — Rename/new asset path diagnostic warning
+# T14: Stage 5 — Unique temp import path diagnostics (10J.5Q/10J.6)
 # =============================================================
 
-banner("T14 — Stage 5: Rename/new asset path diagnostic")
+banner("T14 — Stage 5: Unique temp import path diagnostics")
 
 if os.path.isfile(ue_importer_cpp_path):
     with open(ue_importer_cpp_path, "r") as f:
         importer_text = f.read()
 
-    # T14.1: Log marker for rename/new asset path detection
-    test("T14.1: Possible rename/new asset path detected log marker",
-          "Possible rename/new asset path detected" in importer_text,
-          "Rename diagnostic log marker not found")
+    # T14.1: FIRST_IMPORT marker present (replaces old rename detection)
+    test("T14.1: [FBX][FIRST_IMPORT] log marker present",
+          "[FBX][FIRST_IMPORT]" in importer_text,
+          "FIRST_IMPORT log marker missing from LiveSyncFBXImporter.cpp")
 
-    # T14.2: Condition uses MeshActor && !bReplacingExistingAsset
-    test("T14.2: Condition MeshActor && !bReplacingExistingAsset present",
-          "MeshActor && !bReplacingExistingAsset" in importer_text,
-          "Rename detection condition not found")
+    # T14.2: COALESCE skip/reimport decision logic present
+    test("T14.2: [FBX][COALESCE] skip/reimport decision present",
+          "[FBX][COALESCE]" in importer_text,
+          "COALESCE decision logic missing from LiveSyncFBXImporter.cpp")
 
-    # T14.3: Log mentions orphaned
-    test("T14.3: Orphaned warning present",
-          "orphaned" in importer_text,
-          "Orphaned not mentioned in log")
+    # T14.3: TEMP_CLEANUP lifecycle present (replaces orphaned warning)
+    test("T14.3: [FBX][TEMP_CLEANUP] lifecycle present",
+          "[FBX][TEMP_CLEANUP]" in importer_text,
+          "TEMP_CLEANUP lifecycle missing from LiveSyncFBXImporter.cpp")
 
-    # T14.4: Existing lifecycle marker: Created new
-    test("T14.4: Created new imported asset marker unchanged",
-          "[FBX] Created new imported asset" in importer_text,
-          "Created new asset marker missing")
+    # T14.4: Updated StaticMeshActor marker present (replaces old Created new asset)
+    test("T14.4: [FBX] Updated StaticMeshActor log marker present",
+          "[FBX] Updated StaticMeshActor" in importer_text,
+          "Updated StaticMeshActor marker missing from LiveSyncFBXImporter.cpp")
 
-    # T14.5: Existing lifecycle marker: Replaced existing
-    test("T14.5: Replaced existing imported asset marker unchanged",
-          "[FBX] Replaced existing imported asset" in importer_text,
-          "Replaced existing asset marker missing")
+    # T14.5: Spawned StaticMeshActor marker present (replaces old Replaced existing)
+    test("T14.5: [FBX] Spawned StaticMeshActor log marker present",
+          "[FBX] Spawned StaticMeshActor" in importer_text,
+          "Spawned StaticMeshActor marker missing from LiveSyncFBXImporter.cpp")
 
-    # T14.6–9: No asset deletion APIs added
-    test("T14.6: No DeleteObject API added",
-          "DeleteObject" not in importer_text.split(
-              "FLiveSyncFBXImporter::HandleImport")[1],
-          "DeleteObject found in LiveSyncFBXImporter.cpp")
+    # T14.6: DeleteObject used for temp cleanup (intentional in 10J.6)
+    text_after_handle = importer_text.split(
+        "FLiveSyncFBXImporter::HandleImport")[1] if len(
+            importer_text.split(
+                "FLiveSyncFBXImporter::HandleImport")) > 1 else importer_text
+    test("T14.6: DeleteObject present for temp cleanup lifecycle",
+          "DeleteObject" in text_after_handle,
+          "DeleteObject expected for temp cleanup in HandleImport")
 
+    # T14.7: No DeletePackage API added
     test("T14.7: No DeletePackage API added",
-          "DeletePackage" not in importer_text.split(
-              "FLiveSyncFBXImporter::HandleImport")[1],
-          "DeletePackage found in LiveSyncFBXImporter.cpp")
+          "DeletePackage" not in text_after_handle,
+          "DeletePackage should not appear in LiveSyncFBXImporter.cpp")
 
-    test("T14.8: No ObjectTools::DeleteObjects added",
-          "ObjectTools::DeleteObjects" not in importer_text.split(
-              "FLiveSyncFBXImporter::HandleImport")[1],
-          "ObjectTools::DeleteObjects found in LiveSyncFBXImporter.cpp")
+    # T14.8: ObjectTools::DeleteObjects used for temp cleanup (intentional in 10J.6)
+    test("T14.8: ObjectTools::DeleteObjects present for temp cleanup",
+          "ObjectTools::DeleteObjects" in text_after_handle,
+          "ObjectTools::DeleteObjects expected for temp cleanup in HandleImport")
 
+    # T14.9: No CollectGarbage added
     test("T14.9: No CollectGarbage added",
-          "CollectGarbage" not in importer_text.split(
-              "FLiveSyncFBXImporter::HandleImport")[1],
-          "CollectGarbage found in LiveSyncFBXImporter.cpp")
+          "CollectGarbage" not in text_after_handle,
+          "CollectGarbage should not appear in LiveSyncFBXImporter.cpp")
 
     # T14.10: No FBXImportReplacedExisting counter
     test("T14.10: No FBXImportReplacedExisting counter",
