@@ -48,10 +48,11 @@
 - **Phase 7B** — Timeline Sync (implemented) ✅
 - **Phase 7C** — Playback Sync (implemented) ✅
 - **Phase 7D** — Active Camera Sync (implemented) ✅
-- **Phase 7E** — Sequencer + Keyframe Replication (Stage 10A.2 UE BoolTrack apply done) ✅
+- **Phase 7E** — Sequencer + Keyframe Replication (Stages 10A-10D complete, core-complete) ✅
 - **Phase 7F Stage 1** — Timeline State Packet (PT_TimelineState = 0x19, frame range + FPS apply to LevelSequence) ✅
 - **Phase 7F Stage 2** — Playback Transport Packet (PT_PlaybackTransport = 0x1A, SetFrame/Play/Pause/Stop commands) ✅
-- **Phase 7G Stage 1** — Camera Sync Audit / Scope Lock 🔍
+- **Phase 7F** — Core-complete ✅
+- **Phase 7G Stage 1** — Camera Sync Audit / Scope Lock (complete, all 5 stages delivered) ✅
 - **Phase 7G Stage 2** — Camera Actor Spawn + Active View Target Apply ✅
 - **Phase 7G Stage 3** — Camera Definition / Parameter Sync (PT_CameraDef = 0x1B) ✅ `PASS_CAMERADEF_APPLY`
 - **Phase 7G Stage 4** — Camera Transform Sync (CREATE + TRANSFORM + ACTIVE_CAMERA) ✅ `PASS_CAMERA_TRANSFORM_APPLY`
@@ -70,15 +71,16 @@
 3. ~~**Phase 7B — Timeline Sync (0x13)**~~ **IMPLEMENTED** ✅
 4. ~~**Phase 7C — Playback Sync (0x14)**~~ **IMPLEMENTED** ✅
 5. ~~**Phase 7D — Active Camera Sync (0x15)**~~ **IMPLEMENTED** ✅
-6. ~~**Phase 7E — Sequencer + Keyframe Replication**~~ **Stage 9C CLOSEOUT** ✅
-7. **Phase 7E Stage 10A — Visibility Keyframes** (Stages 10A.1–10A.2, 10A.4 complete) ✅
-8. **Phase 7F Stage 1 — Timeline State Packet** (PT_TimelineState = 0x19, frame range + FPS apply) ✅
-9. **Phase 7F Stage 2 — Playback Transport Packet** (PT_PlaybackTransport = 0x1A, SetFrame/Play/Pause/Stop) ✅
-10. **Phase 7G Stage 1 — Camera Sync Audit** 🔍
-11. **Phase 7G Stage 2 — Camera Actor Spawn + Active View Target Apply** ✅
-12. **Phase 7G Stage 3 — Camera Definition / Parameter Sync** ✅
-13. **Phase 7G Stage 4 — Camera Transform Sync** ✅
-14. **Phase 7G Stage 5 — Camera Sequencer Binding + CameraCutTrack** ✅ `PASS_CAMERA_SEQ_BIND_APPLY`
+6. ~~**Phase 7E — Sequencer + Keyframe Replication**~~ **CORE-COMPLETE** ✅
+7. ~~**Phase 7E Stage 10A — Visibility Keyframes**~~ **CORE-COMPLETE** ✅
+8. ~~**Phase 7F Stage 1 — Timeline State Packet**~~ **CORE-COMPLETE** ✅
+9. ~~**Phase 7F Stage 2 — Playback Transport Packet**~~ **CORE-COMPLETE** ✅
+10. ~~**Phase 7G Stage 1 — Camera Sync Audit**~~ **CORE-COMPLETE** ✅
+11. ~~**Phase 7G Stage 2 — Camera Actor Spawn + Active View Target Apply**~~ **CORE-COMPLETE** ✅
+12. ~~**Phase 7G Stage 3 — Camera Definition / Parameter Sync**~~ **CORE-COMPLETE** ✅
+13. ~~**Phase 7G Stage 4 — Camera Transform Sync**~~ **CORE-COMPLETE** ✅
+14. ~~**Phase 7G Stage 5 — Camera Sequencer Binding + CameraCutTrack**~~ **CORE-COMPLETE** ✅
+15. ~~**Phase 7 — Animation & Sequencer Sync**~~ **CORE-COMPLETE** ✅
 15. ~~**Phase 7F — Sequencer Playback Control**~~ **SCOPE LOCK** 🔒
 9. **Phase 8 — High Performance Streaming** — Blender burst packet diagnostics + large scene benchmark completed. No bottleneck found for 1–500 objects. Per-type batching confirmed efficient. **COMPLETE** ✅
 10. **Mesh Reconstruction Baseline** — PT_Mesh proc mesh pipeline ✅ (experimental/debug — FBX is now production mesh sync direction)
@@ -970,6 +972,8 @@ All verified in regression run.
 - **Phase 7G Stage 4 — Camera Transform Sync (CREATE + TRANSFORM + ACTIVE_CAMERA)** (2026-06-16): Validates liveSync camera transform sync via `PT_Create` (LSP_Camera=0x05) + `PT_Transform` (0x01) + `PT_ActiveCamera` (0x15). Injector updated with new modes: `--create-transform-active` (3-packet burst on one connection with 0.2s inter-packet sleeps), `--cameradef-only` (fresh connection, camera GUID from log), `--full-separated` (combined lifecycle). Injector timing fix: switched from fresh-socket-per-packet to one-connection with 0.2s sleeps to avoid `SeenThisTick` dedup skipping TRANSFORM after CREATE in the same UE tick. Injector lifecycle race documented. Runtime markers: `[CAMERA][CREATE]`, `[CAMERA][TRANSFORM_APPLY]`, `[CAMERA][TRANSFORM_CONVERGED]`, `[CAMERA][ACTIVE_RECV]`, `[CAMERA][VIEW_TARGET]` (VIEW_TARGET_FAIL in `-game` mode — GEditor null). Classification: `PASS_CAMERA_TRANSFORM_APPLY`. 26 new source tests PASS. All Phase 7F (48/48) + Phase 7E baseline (49/49) + Phase 7G Stage 2 (21/21) + Stage 3 (61/61) + Stage 4 (26/26) tests pass. Runtime validation confirmed on port 57000 with 5/5 camera markers. ✅
 
 - **Phase 7G Stage 5 — Camera Sequencer Binding + CameraCutTrack Integration** (2026-06-16): `EnsureCameraSequencerBinding()` creates possessable binding + CameraCutTrack + CameraCutSection in asset-backed LevelSequence. 6 new counters. `CAP_SUPPORTS_CAMERA_SEQ_BIND = 0x200`. HandleActiveCamera restructured: binding created unconditionally before CVar gate. 34/34 source tests PASS. **Runtime validation (game mode)**: `[CAMERA][SEQ_BIND] binding=9D6341A3...`, `[CAMERA][CUT_APPLY] range=0-1`, `[CAMERA][CUT_SAVE]` confirmed. Injector fix: 2.0s post-send sleep before disconnect to allow game thread to drain queue. **UE Python validation (editor mode)**: LevelSequence loads at `/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime`, 8 bindings present including CameraActor_0 and CameraActor_1. CameraCutTrack confirmed via C++ log markers (Python API does not expose `get_camera_cut_track()`). Classification: `PASS_CAMERA_SEQ_BIND_APPLY`. All 34 Stage 5 + 26 Stage 4 + 61 Stage 3 + 21 Stage 2 + 48 Stage 7F + 49 Stage 10A.2 + 67 Stage 10A.1 tests pass. ✅
+
+- **Phase 7 — Animation & Sequencer Sync Closeout** (2026-06-16): Phase 7 is audited and **CORE-COMPLETE**. All planned animation and Sequencer sync packets are implemented and tested: PT_Keyframe (0x17) with transform (ch0-8) and visibility (ch9-10) keyframes, PT_SequencerOp (0x18) for sequencer lifecycle, PT_TimelineState (0x19) for frame range + FPS, PT_PlaybackTransport (0x1A) for transport state, PT_CameraDef (0x1B) for camera parameters, PT_ActiveCamera (0x15) + PT_Create (0x03) with LSP_Camera (0x05) for camera lifecycle, and asset-backed LevelSequence persistence. All 11 stable tags exist. 710/710 representative tests PASS (0 failures). Packet registry verified: all Phase 7 types in `kValidTypes`, 0x02 NOT in `kValidTypes`. All 6 UE capability bits defined. Comprehensive audit doc at `Docs/Architecture/phase7-closeout-audit.md`. Known limitations documented: Python API cannot inspect FMovieScene channel key values, camera property keyframes not implemented, CameraCutTrack not exposed to Python, Playback Play/Pause/Stop is PASS_TRANSPORT_STATE_ONLY, -NullRHI invalid. Recommended next: camera property keyframes or FBX handoff pipeline. Tag: `phase7-core-stable`. ✅
 
 - **Stage 10D.1 — Sequencer Editor Usability Validation** (2026-06-15): Validated that the persisted LevelSequence asset is usable in Sequencer Editor workflow. `open_level_sequence()` succeeds. Inspection confirms binding_count=1, Actor_0 binding, MovieScene3DTransformTrack + MovieSceneBoolTrack with sections. Classification: PASS_EDITOR_DATA_ONLY (manual UI scrub not achievable via -ExecutePythonScript). All 75/75 regression tests PASS.
 
