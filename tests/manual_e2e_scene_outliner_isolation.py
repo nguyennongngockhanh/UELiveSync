@@ -186,7 +186,7 @@ class TestIsolationInjectorDoesNotChangeProtocol(unittest.TestCase):
             if "PT_" in line and "# " not in line:
                 # Check it's a known packet type or a comment
                 known = ["PT_CREATE", "PT_TRANSFORM", "PT_ACTIVE_CAMERA",
-                         "PT_CAMERA_DEF"]
+                         "PT_CAMERA_DEF", "PT_HIERARCHY"]
                 defined = [k for k in known if k in line]
                 self.assertTrue(len(defined) > 0 or "0x" in line,
                                 f"Unknown PT_ definition: {line.strip()}")
@@ -310,6 +310,97 @@ class TestNoProtocolChange(unittest.TestCase):
             if "packet_size" in line:
                 self.assertIn("<I H B B Q I I", line,
                               "Header format must be <I H B B Q I I")
+
+
+class TestE2E6HierarchyConfirm(unittest.TestCase):
+    """Static verification for E2E.6 hierarchy guard marker confirmation."""
+    
+    def test_hierarchy_confirm_mode_exists(self):
+        """--hierarchy-confirm mode must exist in injector."""
+        with open(ISOLATION_INJECTOR, "r") as f:
+            content = f.read()
+        self.assertIn("hierarchy_confirm", content,
+                      "Missing --hierarchy-confirm mode in injector")
+    
+    def test_hierarchy_confirm_sends_pt_hierarchy_after_creates(self):
+        """--hierarchy-confirm must send PT_Hierarchy after parent/child CREATE."""
+        with open(ISOLATION_INJECTOR, "r") as f:
+            content = f.read()
+        # Find the hierarchy_confirm function
+        self.assertIn("def mode_hierarchy_confirm", content,
+                      "Missing mode_hierarchy_confirm function")
+        func_start = content.index("def mode_hierarchy_confirm")
+        # Find the next function def
+        next_func = content.index("def mode_", func_start + 1)
+        func_body = content[func_start:next_func]
+        # Must send parent CREATE
+        self.assertIn("parent_guid", func_body,
+                      "mode_hierarchy_confirm must create parent actor")
+        # Must send child CREATE
+        self.assertIn("child_guid", func_body,
+                      "mode_hierarchy_confirm must create child actor")
+        # Must send PT_HIERARCHY
+        self.assertIn("PT_HIERARCHY", func_body,
+                      "mode_hierarchy_confirm must send PT_HIERARCHY packet")
+        # Must send hierarchy after creates
+        parent_idx = func_body.index("parent_pkt")
+        hierarchy_idx = func_body.index("hierarchy_pkt")
+        self.assertTrue(hierarchy_idx > parent_idx,
+                        "PT_HIERARCHY must be sent after parent CREATE")
+    
+    def test_hierarchy_confirm_waits_between_sends(self):
+        """--hierarchy-confirm must have waits between create and hierarchy sends."""
+        with open(ISOLATION_INJECTOR, "r") as f:
+            content = f.read()
+        func_start = content.index("def mode_hierarchy_confirm")
+        next_func = content.index("def mode_", func_start + 1)
+        func_body = content[func_start:next_func]
+        # Must have time.sleep calls
+        sleep_count = func_body.count("time.sleep")
+        self.assertGreaterEqual(sleep_count, 3,
+                                "mode_hierarchy_confirm must wait between sends")
+    
+    def test_docs_corrected_wording_ue_side_not_confirmed(self):
+        """Docs must contain corrected wording: 'UE-side guard execution was not confirmed'."""
+        with open(INVESTIGATION_DOC, "r") as f:
+            content = f.read()
+        self.assertIn("UE-side guard execution was not confirmed",
+                      content,
+                      "Investigation doc must contain corrected wording")
+    
+    def test_safe_attach_logs_attach_guard_marker(self):
+        """SafeAttachLiveSyncActor must log [HIERARCHY][ATTACH_GUARD]."""
+        with open(UE_SUBSYSTEM_PATH, "r") as f:
+            content = f.read()
+        self.assertIn("[HIERARCHY][ATTACH_GUARD]", content,
+                      "SafeAttachLiveSyncActor must log [HIERARCHY][ATTACH_GUARD]")
+    
+    def test_skip_markers_exist(self):
+        """Hierarchy skip markers must exist in UE code."""
+        with open(UE_SUBSYSTEM_PATH, "r") as f:
+            content = f.read()
+        # WouldCreateAttachmentCycle logs these at Warning level
+        self.assertIn("[HIERARCHY][ATTACH_SKIP_SELF]", content,
+                      "Missing [HIERARCHY][ATTACH_SKIP_SELF] marker")
+        self.assertIn("[HIERARCHY][CYCLE]", content,
+                      "Missing [HIERARCHY][CYCLE] marker")
+    
+    def test_no_protocol_change_e2e6(self):
+        """E2E.6 must not change protocol or define new packet type constants."""
+        with open(ISOLATION_INJECTOR, "r") as f:
+            content = f.read()
+        # Find mode_hierarchy_confirm function body
+        if "def mode_hierarchy_confirm" not in content:
+            self.fail("mode_hierarchy_confirm not found")
+        start = content.index("def mode_hierarchy_confirm")
+        next_fn = content.index("def mode_", start + 1)
+        func_body = content[start:next_fn]
+        # Must only use existing PT_HIERARCHY (not define new ones)
+        # No assignments like PT_X = 0xYY inside the function
+        for line in func_body.split("\n"):
+            stripped = line.strip()
+            if re.search(r'^PT_[A-Z_]+\\s*=\\s*[0-9xX]', stripped):
+                self.fail(f"E2E.6 must not define new packet types: {stripped}")
 
 
 if __name__ == '__main__':

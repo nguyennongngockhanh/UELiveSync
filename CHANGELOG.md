@@ -278,3 +278,4 @@ Added `[DIAG]` logging for all domains.
 - No replay divergence — Blender-side detection only
 - No packet format changes
 - No networking changes
+- **Manual E2E.6 — Hierarchy Guard Marker Confirmation (Runtime Complete)**: Added `--hierarchy-confirm` mode to isolation injector. Creates parent actor, waits for registration, creates child actor, waits, sends PT_Hierarchy child->parent. Valid attach confirmed via `[HIERARCHY][ATTACH]` BEGIN/END markers. Cycle detection confirmed (4x `[HIERARCHY][CYCLE]` markers). `[HIERARCHY][ATTACH_GUARD]` not visible in pre-built binary (Log level). No Signal 11/6 crash. C++ changes ready but blocked by pre-existing build errors. **Classification: PASS_E2E6_VALID_HIERARCHY_ATTACH_CONFIRMED_PARTIAL**. Static: 139/139 PASS.

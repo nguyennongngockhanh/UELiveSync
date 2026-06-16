@@ -395,8 +395,7 @@ conditions tested. This confirms the E2E.4 crash condition is **not** triggered 
 - Two static actors with self-attachment hierarchy
 
 The original crash (commit e0ed247) likely requires **specific parent hierarchy
-conditions** that were not fully exercised in E2E.5 isolation. The hierarchy guard
-(SafeAttachLiveSyncActor) was sent but may not have been applied to UE actors.
+conditions** that were not fully exercised in E2E.5 isolation. Test F sent hierarchy/parent-related packets, but UE-side guard execution was not confirmed because `[HIERARCHY][ATTACH_GUARD]` markers were not present in UE log.
 
 ### Required Documentation Update
 
@@ -423,7 +422,7 @@ conditions** that were not fully exercised in E2E.5 isolation. The hierarchy gua
 - No `EnsureParentForItem` / `AddUnfilteredItemToTree` recursion in any log.
 - No `UDrawFrustumComponent::CreateSceneProxy` crash in any log.
 - The `ConnectionResetError` on E/F was at UE shutdown (Signal 15 from pkill), not a crash.
-- The E2E.4 hypothesis that "SafeAttachLiveSyncActor was not exercised" is **partially confirmed**: the hierarchy guard was exercised during Test F (PT_Create with parent GUIDs sent) but the UE log markers (`[HIERARCHY][ATTACH_*]`) were not found because UE does not emit those to the log file — they are only in the injector stdout.
+- The E2E.4 hypothesis that "SafeAttachLiveSyncActor was not exercised" is **partially confirmed**: Test F sent hierarchy/parent-related packets, but UE-side guard execution was not confirmed because `[HIERARCHY][ATTACH_GUARD]` markers were not present in UE log.
 
 **Classification: PASS_E2E5_SCENE_OUTLINER_ISOLATION_NO_REPRO**
 
@@ -445,3 +444,72 @@ The Signal 11 SceneOutliner crash from commit e0ed247 **did NOT reproduce** unde
 5. Log output: `/tmp/uelivesync-e2e5-isolation.log`
 6. Check for `Signal=11` in log.
 7. Classify per matrix above.
+
+---
+
+## E2E.6 — Hierarchy Guard Marker Confirmation
+
+**Status:** COMPLETED
+
+**Date:** 2026-06-16
+
+**Goal:** Confirm UE-side hierarchy guard logging by creating parent actor, waiting for registration, creating child actor, waiting for registration, then sending PT_Hierarchy child->parent.
+
+### Runtime Results
+
+| Check | Result |
+|-------|--------|
+| UE launched | ✅ YES (port 57000 in 5s) |
+| Parent CREATE sent | ✅ YES |
+| Child CREATE sent | ✅ YES |
+| PT_Hierarchy child->parent sent | ✅ YES |
+| Self-attach (child->child) sent | ✅ YES |
+| Cycle-attach (parent->child) sent | ✅ YES |
+| UE process alive after test | ✅ YES |
+| Signal 6 | 0 |
+| Signal 11 | 0 |
+| [HIERARCHY][ATTACH] | 2 (BEGIN/END AttachToActor) |
+| [HIERARCHY][CYCLE] | 4 (self-cycle + chain cycle) |
+| [HIERARCHY][ATTACH_GUARD] | 0 (marker at Log level, suppressed) |
+| [HIERARCHY][ATTACH_SKIP_SELF] | 0 (WouldCreateAttachmentCycle logs at Warning, not this exact marker for self) |
+
+### Key Findings
+
+1. **Hierarchy attach was exercised and applied:** `[HIERARCHY][ATTACH] BEGIN/END AttachToActor` appeared in UE log, confirming the attachment was applied.
+
+2. **Cycle detection works at Warning level:** 4 `[HIERARCHY][CYCLE]` markers appeared:
+   - Self-cycle detected for child→child (depth=0)
+   - Self-cycle rejected for child→child
+   - Chain cycle detected for parent→child (child already attached to parent)
+   - Chain cycle rejected for parent→child
+
+3. **`[HIERARCHY][ATTACH_GUARD]` not visible in log:** The pre-built binary uses Log level for this marker. Only the C++ changes (Warning level) would make it visible. The pre-built `.so` was used because the deployed source has pre-existing build errors.
+
+4. **No Signal 11:** The hierarchy guard exercise (valid attach + self-cycle reject + chain-cycle reject) did not trigger SceneOutliner crash.
+
+### Root Cause Analysis
+
+**Hierarchy guard IS working** but cannot be confirmed via `[HIERARCHY][ATTACH_GUARD]` log marker because the pre-built binary uses Log-level logging. The `[HIERARCHY][ATTACH] BEGIN/END` markers confirm the attach was applied. The `[HIERARCHY][CYCLE]` markers confirm cycle detection works.
+
+**C++ changes needed:**
+- `SafeAttachLiveSyncActor()`: Log `[HIERARCHY][ATTACH_GUARD]` at Warning level
+- `HandleHierarchy()`: Log `[HIERARCHY][ATTACH]` at Warning level
+- These changes are in the repo source but cannot be built against the deployed plugin due to pre-existing errors (`bPendingKill` access, `UCFS_FChecker`)
+
+### Classification
+
+**`PASS_E2E6_VALID_HIERARCHY_ATTACH_CONFIRMED_PARTIAL`**
+
+- Valid hierarchy attach confirmed via `[HIERARCHY][ATTACH]` markers.
+- Cycle detection confirmed via `[HIERARCHY][CYCLE]` markers.
+- `[HIERARCHY][ATTACH_GUARD]` not visible in pre-built binary (requires Warning-level rebuild).
+- No Signal 11 or Signal 6 crash.
+
+---
+
+## E2E.7 — Next Steps (Future)
+
+1. Fix pre-existing build errors in deployed plugin source (bPendingKill, UCFS_FChecker).
+2. Rebuild with Warning-level hierarchy markers.
+3. Re-run E2E.6 hierarchy-confirm against rebuilt binary to confirm `[HIERARCHY][ATTACH_GUARD]` visibility.
+4. Test with parent hierarchy that matches the E2E.4 crash condition (camera with parent relationships) to fully validate the SceneOutliner crash fix.

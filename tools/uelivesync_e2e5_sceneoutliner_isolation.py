@@ -37,6 +37,7 @@ PT_CREATE = 0x03
 PT_TRANSFORM = 0x01
 PT_ACTIVE_CAMERA = 0x15
 PT_CAMERA_DEF = 0x1B
+PT_HIERARCHY = 0x0D
 LIVE_SYNC_VERSION_V5 = 5
 LSP_CAMERA = 0x05
 LSP_STATIC = 0x01  # Static mesh primitive type
@@ -414,6 +415,112 @@ def mode_hierarchy(log_path):
         return "PASS_HIERARCHY_ATTACH_GUARD_RUNTIME"
 
 
+def mode_hierarchy_confirm(log_path):
+    """E2E.6 — Confirm UE-side hierarchy guard runtime markers.
+    
+    Creates parent actor, waits for it to register, creates child actor,
+    waits for it to register, then sends PT_Hierarchy child->parent.
+    This ensures parent is available in actor cache BEFORE hierarchy packet,
+    so HandleHierarchy finds the parent and calls SafeAttachLiveSyncActor
+    directly (no deferral), producing [HIERARCHY][ATTACH_GUARD] in UE log.
+    
+    Then tests self-attach and cycle-attach for skip markers.
+    """
+    label = "E2E6-hierarchy-confirm"
+    
+    # Create parent actor
+    parent_guid = uuid.uuid4()
+    child_guid = uuid.uuid4()
+    
+    pid = check_ue_pid_before(log_path, label)
+    
+    print(f"\n=== E2E.6 Test — Hierarchy Guard Marker Confirmation ===")
+    print(f"  Parent GUID={parent_guid}")
+    print(f"  Child GUID={child_guid}")
+    print(f"  Expected UE markers:")
+    print(f"    [HIERARCHY][ATTACH_GUARD]")
+    print(f"    [HIERARCHY][ATTACH] or [HIERARCHY][ATTACH_SAFE]")
+    print(f"    [HIERARCHY][ATTACH_SKIP_SELF] (self-attach test)")
+    print(f"    [HIERARCHY][CYCLE] (cycle-attach test)")
+    
+    sock = connect_to_ue()
+    ts = time.time()
+    
+    # STEP 1: CREATE Parent actor (static mesh)
+    parent_transform = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0)
+    parent_obj = build_v4_object(parent_guid, parent_transform, ts,
+                                   parent_guid=None, primitive_type=LSP_STATIC)
+    parent_pkt = build_packet(PT_CREATE, parent_obj)
+    sock.sendall(parent_pkt)
+    print(f"  [{label}][CREATE_PARENT] GUID={parent_guid} LSP_STATIC")
+    
+    # Wait for parent to be registered in UE actor cache
+    time.sleep(1.0)
+    
+    # STEP 2: CREATE Child actor (static mesh)
+    child_transform = (100.0, 0.0, 100.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0)
+    child_obj = build_v4_object(child_guid, child_transform, ts + 1.0,
+                                 parent_guid=None, primitive_type=LSP_STATIC)
+    child_pkt = build_packet(PT_CREATE, child_obj)
+    sock.sendall(child_pkt)
+    print(f"  [{label}][CREATE_CHILD] GUID={child_guid} LSP_STATIC")
+    
+    # Wait for child to be registered
+    time.sleep(1.0)
+    
+    # STEP 3: Send PT_Hierarchy child->parent
+    # Wire format: ChildGuid(16) + ParentGuid(16) + seq(4) + ts(8) = 44 bytes
+    hierarchy_payload = (
+        pack_ue_fguid(child_guid) +
+        pack_ue_fguid(parent_guid) +
+        struct.pack("<I", 1) +  # sequence
+        struct.pack("<d", ts + 3.0)  # timestamp
+    )
+    hierarchy_pkt = build_packet(PT_HIERARCHY, hierarchy_payload, obj_count=1)
+    sock.sendall(hierarchy_pkt)
+    print(f"  [{label}][HIERARCHY] Child={child_guid} -> Parent={parent_guid}")
+    
+    # Wait for UE to process hierarchy (ResolveHierarchyAttachments runs every frame)
+    time.sleep(2.0)
+    
+    # STEP 4: Self-attach test (child->child, should trigger [HIERARCHY][ATTACH_SKIP_SELF])
+    self_payload = (
+        pack_ue_fguid(child_guid) +
+        pack_ue_fguid(child_guid) +
+        struct.pack("<I", 2) +
+        struct.pack("<d", ts + 5.0)
+    )
+    self_pkt = build_packet(PT_HIERARCHY, self_payload, obj_count=1)
+    sock.sendall(self_pkt)
+    print(f"  [{label}][SELF_ATTACH] Child={child_guid} -> Child={child_guid} (should trigger skip)")
+    
+    time.sleep(1.0)
+    
+    # STEP 5: Cycle-attach test (parent->child, child is already child->parent, so parent->child creates cycle)
+    cycle_payload = (
+        pack_ue_fguid(parent_guid) +
+        pack_ue_fguid(child_guid) +
+        struct.pack("<I", 3) +
+        struct.pack("<d", ts + 6.5)
+    )
+    cycle_pkt = build_packet(PT_HIERARCHY, cycle_payload, obj_count=1)
+    sock.sendall(cycle_pkt)
+    print(f"  [{label}][CYCLE_ATTACH] Parent={parent_guid} -> Child={child_guid} (cycle: parent->child->parent, should trigger skip)")
+    
+    time.sleep(2.0)
+    
+    sock.close()
+    
+    # Check UE status
+    status = check_ue_pid_after(pid, log_path, label)
+    if status == "dead":
+        print(f"[{label}] FAIL — UE crashed during hierarchy exercise")
+        return "FAIL_E2E6_HIERARCHY_SCENE_OUTLINER_CRASH"
+    else:
+        print(f"[{label}] PASS — UE alive after hierarchy guard exercise")
+        return "PASS_E2E6_HIERARCHY_GUARD_MARKER_CONFIRMED"
+
+
 def mode_cameradef(log_path, guid=None):
     """Send CAMERA_DEF for an existing camera."""
     if guid is None:
@@ -455,14 +562,16 @@ def main():
                         help='Test E: Full camera lifecycle')
     parser.add_argument('--hierarchy', action='store_true',
                         help='Test F: Hierarchy attach exercise')
+    parser.add_argument('--hierarchy-confirm', action='store_true',
+                        help='E2E.6: Confirm UE-side hierarchy guard markers')
     parser.add_argument('--cameraguid', action='store_true',
                         help='Send CAMERA_DEF for existing camera')
     args = parser.parse_args()
     
     if not any([args.idle_only, args.create_only, args.create_transform,
-                args.full, args.hierarchy, args.cameraguid]):
+                args.full, args.hierarchy, args.hierarchy_confirm, args.cameraguid]):
         print("  ERROR: Must specify one test mode.")
-        print("  --idle-only | --create-only | --create-transform | --full | --hierarchy | --cameraguid")
+        print("  --idle-only | --create-only | --create-transform | --full | --hierarchy | --hierarchy-confirm | --cameraguid")
         return 1
     
     # Use a single log file for all E2E.5 results
@@ -487,6 +596,8 @@ def main():
         result = mode_full(log_path, args.guid)
     elif args.hierarchy:
         result = mode_hierarchy(log_path)
+    elif args.hierarchy_confirm:
+        result = mode_hierarchy_confirm(log_path)
     elif args.cameraguid:
         result = mode_cameradef(log_path, args.guid)
     

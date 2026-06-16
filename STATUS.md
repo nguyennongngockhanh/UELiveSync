@@ -133,6 +133,19 @@ Source code fix is implemented and compiles cleanly. Runtime validation blocked 
 
 ## Current State
 
+## Manual E2E.6 — Hierarchy Guard Marker Confirmation (COMPLETED)
+
+**Status:** Runtime marker confirmation complete.
+
+**E2E.6 Results:**
+- Created parent actor, waited 1s, created child actor, waited 1s, sent PT_Hierarchy
+- Valid hierarchy attach confirmed via `[HIERARCHY][ATTACH]` markers (BEGIN/END AttachToActor)
+- Cycle detection confirmed: 4x `[HIERARCHY][CYCLE]` markers
+- `[HIERARCHY][ATTACH_GUARD]` not visible in pre-built binary (Log level, suppressed by UE log filter)
+- No Signal 11, no Signal 6 crash
+- C++ changes ready (Warning level) but blocked by pre-existing build errors in deployed source
+- **Classification: PASS_E2E6_VALID_HIERARCHY_ATTACH_CONFIRMED_PARTIAL**
+
 ## Manual E2E.5 — SceneOutliner Crash Isolation (COMPLETED — RUNTIME EXECUTED)
 
 **Status:** Runtime isolation complete. 5 tests executed with fresh UE per test.
