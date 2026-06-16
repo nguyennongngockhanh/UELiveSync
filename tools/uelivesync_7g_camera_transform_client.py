@@ -284,6 +284,13 @@ def mode_create_transform_active(guid, timestamp):
     # ACTIVE_CAMERA
     send_active_camera(sock, guid)
 
+    # Wait for game thread to process queued packets before disconnect.
+    # In editor mode, StopNetworkThread on disconnect drains/purges the
+    # queue. Keeping the connection alive gives the game thread time to
+    # tick and process TRANSFORM + ACTIVE_CAMERA packets.
+    print("  [SLEEP] 2.0s before disconnect (let game thread process)...")
+    time.sleep(2.0)
+
     sock.close()
     print("  Connection closed. Packets sent with inter-packet delay.")
     return guid
