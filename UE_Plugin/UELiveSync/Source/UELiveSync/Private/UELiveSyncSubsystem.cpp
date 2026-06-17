@@ -9930,6 +9930,25 @@ WouldCreateHierarchyCycle(
 
 
 // =========================================================
+// UE5.7 COMPILE COMPATIBILITY HELPER
+// =========================================================
+// Replaces direct AActor::bPendingKill access (removed in UE5.7)
+// with UE-safe public API.
+// Returns true if Actor is unsafe for attachment:
+//   - null pointer
+//   - IsActorBeingDestroyed() called
+//   - !IsValid (pending kill, unreachable, begin-destroyed, etc.)
+// =========================================================
+
+static bool IsLiveSyncActorInvalidForAttach(const AActor* Actor)
+{
+    return Actor == nullptr
+        || Actor->IsActorBeingDestroyed()
+        || !IsValid(Actor);
+}
+
+
+// =========================================================
 // E2E.3: ACTOR-POINTER-LEVEL ATTACHMENT CYCLE GUARD
 // =========================================================
 // Addresses FAIL_MANUAL_E2E_SCENE_OUTLINER_PARENT_RECURSION.
@@ -9958,16 +9977,21 @@ bool UUELiveSyncSubsystem::WouldCreateAttachmentCycle(
         return true;
     }
 
-    // ---- Pending kill check ----
-    if (Child->bPendingKill || Parent->bPendingKill)
+    // ---- Actor invalidity check (replaces UE5.7-removed bPendingKill) ----
+    if (IsLiveSyncActorInvalidForAttach(Child) ||
+        IsLiveSyncActorInvalidForAttach(Parent))
     {
+        const FString ChildName = Child ? Child->GetActorNameOrLabel() : TEXT("None");
+        const FString ParentName = Parent ? Parent->GetActorNameOrLabel() : TEXT("None");
+        const int32 bChildInvalid = IsLiveSyncActorInvalidForAttach(Child) ? 1 : 0;
+        const int32 bParentInvalid = IsLiveSyncActorInvalidForAttach(Parent) ? 1 : 0;
         UE_LOG(LogLiveSync, Warning,
-            TEXT("[HIERARCHY][ATTACH_SKIP] actor pending kill: "
-                 "child=%s valid=%d | parent=%s valid=%d"),
-            *Child->GetActorNameOrLabel(),
-            Child->bPendingKill ? 1 : 0,
-            *Parent->GetActorNameOrLabel(),
-            Parent->bPendingKill ? 1 : 0);
+            TEXT("[HIERARCHY][ATTACH_SKIP] actor invalid for attach: "
+                 "child=%s invalid=%d | parent=%s invalid=%d"),
+            *ChildName,
+            bChildInvalid,
+            *ParentName,
+            bParentInvalid);
         return true;
     }
 
@@ -10001,13 +10025,15 @@ bool UUELiveSyncSubsystem::WouldCreateAttachmentCycle(
 
         AActor* ParentActor = Probe->GetAttachParentActor();
 
-        // Validate the next probe is not pending kill
-        if (ParentActor && ParentActor->bPendingKill)
+        // Validate the next probe is safe for attach
+        // (only check non-null probes to preserve original null-loop-exit behavior)
+        if (ParentActor && IsLiveSyncActorInvalidForAttach(ParentActor))
         {
+            const FString InvalidName = ParentActor->GetActorNameOrLabel();
             UE_LOG(LogLiveSync, Warning,
-                TEXT("[HIERARCHY][ATTACH_SKIP] parent chain actor pending kill: "
+                TEXT("[HIERARCHY][ATTACH_SKIP] parent chain actor invalid: "
                      "depth=%d actor=%s"),
-                Depth, *ParentActor->GetActorNameOrLabel());
+                Depth, *InvalidName);
             return true;
         }
 
@@ -15610,7 +15636,7 @@ BuildV1MeshFromReassembly()
                 // Assign face normal to each vertex of each triangle
                 // (last writer wins — sufficient for per-triangle isolation)
                 PreservedNormals.Empty();
-                PreservedNormals.SetNum(Positions.Num(), false);
+                PreservedNormals.SetNum(Positions.Num(), EAllowShrinking::No);
                 for (int32 ti = 0; ti < TriangleCount; ti++)
                 {
                     int32 IA = ValidIndices[ti * 3];

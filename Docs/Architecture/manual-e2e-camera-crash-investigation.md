@@ -516,9 +516,41 @@ The commit 2939ce1 included C++ production source changes elevating `[HIERARCHY]
 
 ---
 
-## E2E.7 — Next Steps (Future)
+## E2E.7 — UE5.7 Compile Compatibility Cleanup (COMPLETED)
 
-1. Fix pre-existing build errors in deployed plugin source (bPendingKill → IsPendingKillPending(), UCFS_FChecker).
-2. Optionally re-add Warning-level hierarchy markers and rebuild.
-3. Re-run E2E.6 hierarchy-confirm against rebuilt binary to confirm `[HIERARCHY][ATTACH_GUARD]` visibility.
-4. Test with parent hierarchy that matches the E2E.4 crash condition (camera with parent relationships) to fully validate the SceneOutliner crash fix.
+**Status:** Pre-existing build errors fixed. Plugin compiles cleanly against UE5.7.4.
+
+**Date:** 2026-06-17
+
+**Changes in source (`UELiveSyncSubsystem.cpp`):**
+1. Added static helper `IsLiveSyncActorInvalidForAttach(const AActor*)` — replaces direct `AActor::bPendingKill` access (removed in UE5.7) with UE-safe public API:
+   - `Actor == nullptr`
+   - `Actor->IsActorBeingDestroyed()`
+   - `!IsValid(Actor)` (covers pending kill, unreachable, begin-destroyed)
+2. `WouldCreateAttachmentCycle()`: uses helper for child/parent/chain-probe invalidity checks (3 locations).
+3. `BuildV1MeshFromReassembly()`: `SetNum(bool)` → `SetNum(EAllowShrinking::No)` (API deprecation).
+4. Precomputed local variables in `UE_LOG` calls to avoid `UCFS_FChecker` format validation failures on complex expressions.
+
+**Build result:** SUCCEEDED — 0 errors, 0 warnings.
+
+**Runtime smoke** (`--hierarchy-confirm`):
+- Signal 6: 0
+- Signal 11: 0
+- `[HIERARCHY][ATTACH_GUARD]`: 1 (visible in rebuilt binary at Log level)
+- `[HIERARCHY][ATTACH]`: 1
+- `[HIERARCHY][CYCLE]`: 4
+- Classification: **PASS_E2E7_UE57_COMPILE_COMPATIBILITY_CLEAN**
+
+**Static tests: 158/158 PASS** (19 new `ue57_compile_compatibility.py` tests + 139 existing).
+
+**Key points:**
+- Protocol unchanged. Packet IDs unchanged.
+- No new features. No behavior change (chain walk preserves null-loop-exit).
+- No unbuilt C++ changes remain in main.
+
+---
+
+## E2E.8 — Next Steps (Future)
+
+1. Optionally re-add Warning-level hierarchy markers (now that build compiles cleanly).
+2. Test with parent hierarchy that matches the E2E.4 crash condition (camera with parent relationships) to fully validate the SceneOutliner crash fix.

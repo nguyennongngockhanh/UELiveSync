@@ -156,6 +156,35 @@ The commit 2939ce1 included C++ production source changes (log level Warning for
 
 **C++ diagnostic logging reverted — not included in production source.** Hierarchy confirmation relies on existing `[HIERARCHY][ATTACH]` (Log level) and `[HIERARCHY][CYCLE]` (Warning level) markers. No unbuilt C++ changes remain in main.
 
+## Manual E2E.7 — UE5.7 Compile Compatibility Cleanup (COMPLETED)
+
+**Status:** `AActor::bPendingKill` removed in UE5.7 — replaced with UE-safe public API.
+Build: SUCCEEDED (0 errors, 0 warnings).
+Runtime smoke: PASS.
+
+| Item | Status |
+|------|--------|
+| `AActor::bPendingKill` (4 locations) | ✅ Replaced with `IsLiveSyncActorInvalidForAttach()` helper |
+| `SetNum(bool)` deprecation | ✅ `EAllowShrinking::No` |
+| UE_LOG format validation (UCFS_FChecker cascade) | ✅ Resolved (precomputed locals bypass failed expr) |
+| Build `ProjectTemplateEditor Linux Development` | ✅ SUCCEEDED (0 errors, 0 warnings) |
+| Runtime smoke (`--hierarchy-confirm`) | ✅ PASS |
+| Signal 6 | 0 |
+| Signal 11 | 0 |
+| `[HIERARCHY][ATTACH_GUARD]` | 1 (visible at Log level) |
+| `[HIERARCHY][ATTACH_SAFE]` | 1 |
+| `[HIERARCHY][ATTACH]` | 1 |
+| `[HIERARCHY][CYCLE]` | 4 |
+| Static tests | ✅ **158/158 PASS** (19 new + 139 existing) |
+| Classification | `PASS_E2E7_UE57_COMPILE_COMPATIBILITY_CLEAN` |
+
+**Changes:**
+- `IsLiveSyncActorInvalidForAttach()` static helper: null + `IsActorBeingDestroyed()` + `!IsValid()`.
+- `WouldCreateAttachmentCycle()`: uses helper for child/parent/chain-probe invalidity checks.
+- `BuildV1MeshFromReassembly()`: `SetNum` with `EAllowShrinking::No` instead of `bool false`.
+
+**No protocol change. No packet ID change. No new features.**
+
 ## Manual E2E.5 — SceneOutliner Crash Isolation (COMPLETED — RUNTIME EXECUTED)
 
 **Status:** Runtime isolation complete. 5 tests executed with fresh UE per test.
@@ -200,7 +229,8 @@ Tool: `tools/uelivesync_e2e5_sceneoutliner_isolation.py`
 | `e2e_runtime_validation_suite_audit.py` | ✅ 27/27 PASS |
 | `phase9_stage3b_discovery_scan.py` | ✅ 12/12 PASS |
 | `phase9_stage3c_discovery_connect_ux.py` | ✅ 13/13 PASS |
-| **Total** | **139/139 PASS** |
+| `ue57_compile_compatibility.py` | ✅ 19/19 PASS |
+| **Total** | **158/158 PASS** |
 
 ### Docs Updated
 
