@@ -96,7 +96,7 @@ Source code fix is implemented and compiles cleanly. Runtime validation blocked 
 - **Phase 7B** — Timeline Sync (implemented) ✅
 - **Phase 7C** — Playback Sync (implemented) ✅
 - **Phase 7D** — Active Camera Sync (implemented) ✅
-- **Phase 7E** — Sequencer + Keyframe Replication (Stages 10A-10D complete, core-complete) ✅
+- **Phase 7E** — Sequencer + Keyframe Replication (Stages 10A-10F complete, core-complete) ✅
 - **Phase 7F Stage 1** — Timeline State Packet (PT_TimelineState = 0x19, frame range + FPS apply to LevelSequence) ✅
 - **Phase 7F Stage 2** — Playback Transport Packet (PT_PlaybackTransport = 0x1A, SetFrame/Play/Pause/Stop commands) ✅
 - **Phase 7F** — Core-complete ✅
@@ -1695,3 +1695,83 @@ tracks). The `[KEYFRAME] Applied` summary lines confirm the full pipeline works.
 4. Playback Play/Pause/Stop runtime
 5. UE editor open LevelSequence visual confirmation
 6. Additive vs destructive sequence updates
+
+## Phase 7E Stage 10F — Multi-object Transform + Visibility Sequencer Runtime ✅
+
+**Classification**: `PASS_PHASE7E_STAGE10F_MULTI_OBJECT_TRANSFORM_VISIBILITY`
+
+### What was built
+- `tools/uelivesync_stage10f_multiobject_sequencer_runtime.py` — Blender background runtime harness for multi-object validation
+  - Creates **two** probe objects: Object A (transform + visibility) and Object B (transform only)
+  - Object A: 9 transform keyframes (loc/rot/scale × 3 frames) + 6 visibility keyframes (hide_viewport + hide_render × 3 frames)
+  - Object B: 9 transform keyframes (loc/rot/scale × 3 frames, no visibility)
+  - Extracts FCurves via `_iter_action_fcurves_51` + `_KEYFRAME_CHANNEL_MAP`
+  - Sends CREATE_SEQUENCE → CREATE(A/B) → ADD_POSSESSABLE(A/B) → PT_Keyframe(A×3, B×3) via direct raw TCP
+  - Uses deterministic raw socket send, unique increasing sequence IDs (4000–4010)
+  - Uses correct FQuat 4-float rotation in CREATE payload
+  - Uses correct V5 protocol header
+
+- `tests/phase7e_stage10f_multiobject_sequencer_runtime.py` — Static validation tests (created alongside harness)
+  - Protocol constants, channel semantics, packet order, wire format
+  - Regression: no new packet IDs, unchanged protocol, unchanged FGId format
+
+### Blender 5.1 Boolean Keyframe Fix
+`keyframe_insert(data_path='hide_viewport')` for boolean properties captures the **current property value** at insertion time. If the property is `False` (visible) during the loop, all keyframes default to `0` regardless of intended values.
+
+**Fix applied**: Temporarily set the property value (`obj.hide_viewport = bool(vp_val)`) before `keyframe_insert`, then restore to `False` after for subsequent frames. This ensures correct visibility values (0.0=visible, 1.0=hidden) are captured in keyframes.
+
+### Runtime Validation — COMPLETE ✅
+
+UE launched with fresh explicit log: `/tmp/uelivesync-stage10f-ue-full.log` (1862 lines)
+Port 57000 confirmed listening.
+
+**Blender output:**
+- Object A: 33 FCurves extracted, channels=[0,1,2,3,4,5,6,7,8,9,10] (9 transform + 2 visibility)
+- Object B: 27 FCurves extracted, channels=[0,1,2,3,4,5,6,7,8] (9 transform only)
+- 11 packets sent with unique seq IDs (4000–4010)
+
+**UE marker evidence (from `/tmp/uelivesync-stage10f-ue-full.log`):**
+
+| Packet | Seq | Count | Applied | Missing | Unsupported |
+|--------|-----|-------|---------|---------|-------------|
+| Object A frame=1  | 4005 | 11 | 11 | 0 | 0 |
+| Object A frame=10 | 4006 | 11 | 11 | 0 | 0 |
+| Object A frame=20 | 4007 | 11 | 11 | 0 | 0 |
+| Object B frame=1  | 4008 | 9  | 9  | 0 | 0 |
+| Object B frame=10 | 4009 | 9  | 9  | 0 | 0 |
+| Object B frame=20 | 4010 | 9  | 9  | 0 | 0 |
+
+**Total: 60 keys applied, 0 missing, 0 unsupported**
+
+**Visibility keyframe evidence (Object A, guid=A1B2C3D4E5F60718293A4B5C6D7E8F91):**
+```
+channel=9  frame=1  value=0  (visible)
+channel=10 frame=1  value=0  (visible)
+channel=9  frame=10 value=1  (hidden)
+channel=10 frame=10 value=0  (visible)
+channel=9  frame=20 value=1  (hidden)
+channel=10 frame=20 value=1  (hidden)
+```
+
+**BoolTrack evidence:**
+- `[KEYFRAME][BOOL_TRACK_CREATE]` — Track created
+- `[KEYFRAME][BOOL_SECTION_CREATE]` — Section created
+- `[KEYFRAME][BOOL_KEY]` — 6 keys (channels 9+10 × 3 frames)
+- `[KEYFRAME][BOOL_APPLY]` — 6 applies
+- Values span both 0.0 and 1.0 across frames
+
+**Multi-object binding:**
+- Object A → `ADD_POSSESSABLE` → binding=185AB10EA1D24B429B7575733FAD8059
+- Object B → `ADD_POSSESSABLE` → binding=3A71ADC2B57F407184BCFE24AACA3D3D
+- Independent bindings confirmed. No cross-binding.
+
+**Crash counters:**
+- Signal11 = 0 ✅
+- Signal6 = 0 ✅
+- SceneOutliner crash = 0 ✅
+- DrawFrustum crash = 0 ✅
+
+**UE process**: Alive on port 57000 after full packet cycle.
+
+### Summary
+Stage 10F validates that **two** Blender objects with **independent** transform and visibility keyframes can be bound into the same LevelSequence without cross-contamination. All 60 keys applied with 0 missing and 0 unsupported. Visibility values correctly span 0.0 and 1.0 across frames. Multi-object bindings are independent. UE stable throughout.
