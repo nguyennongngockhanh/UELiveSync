@@ -4,7 +4,7 @@
 Validates that:
 1. HandleActiveCamera calls SetActorLock on level editor viewport clients
 2. [CAMERA][VIEW_TARGET] marker exists
-3. [CAMERA][VIEW_TARGET_SKIP] marker exists
+3. [CAMERA][SAFE_INVALID_SKIP] marker exists
 4. [CAMERA][VIEW_TARGET_FAIL] marker exists
 5. FLevelEditorViewportClient header is included
 6. SetActorLock is called in HandleActiveCamera
@@ -53,7 +53,6 @@ def read_diag():
 def test_view_target_markers_exist():
     content = read_cpp()
     for marker in ["[CAMERA][VIEW_TARGET]",
-                   "[CAMERA][VIEW_TARGET_SKIP]",
                    "[CAMERA][VIEW_TARGET_FAIL]"]:
         assert marker in content, f"Marker {marker} not found"
     print("  PASS: All [CAMERA][VIEW_TARGET] markers present")
@@ -114,8 +113,8 @@ def test_not_camera_skip():
     region = content[idx: idx + 7000]
     assert "ActiveCameraPacketsNotCamera" in region, \
         "ActiveCameraPacketsNotCamera not referenced"
-    assert "[CAMERA][VIEW_TARGET_SKIP]" in region, \
-        "[CAMERA][VIEW_TARGET_SKIP] not in HandleActiveCamera region"
+    assert "[CAMERA][SAFE_INVALID_SKIP]" in region, \
+        "[CAMERA][SAFE_INVALID_SKIP] not in HandleActiveCamera region"
     print("  PASS: Non-camera actors skip gracefully")
     return True
 

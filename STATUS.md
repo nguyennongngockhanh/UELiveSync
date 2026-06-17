@@ -276,6 +276,68 @@ SSceneOutliner::AddUnfilteredItemToTree [SSceneOutliner.cpp:1048]
 2. Consider reporting to Epic Games via UE5.7 support channel.
 3. Do not create stable tag until SceneOutliner crash is resolved.
 
+## Manual E2E.9 — Camera SceneOutliner Safe Lifecycle (PARTIAL — FRUSTUM GUARD WORKS, SCENEOUTLINER CRASH REMAINS)
+
+**Status:** Code fix + static tests complete. Runtime: frustum guard confirmed working (OUTLINER_GUARD marker). SceneOutliner crash still occurs during next-tick tree refresh.
+
+### Code Changes (+145/-11 in UELiveSyncSubsystem.cpp)
+
+| Change | File |
+|--------|------|
+| `IsLiveSyncCameraSafeForEditorUse()` helper (9 checks) | Subsystem ~10001 |
+| `SpawnActorDeferred<ACameraActor>` in HandleCreateObject (LSP_Camera) | Subsystem ~7823 |
+| Frustum guard (`ConfigureLiveSyncCameraActor`) before `FinishSpawning` | Subsystem ~7828 |
+| `SpawnActorDeferred<ACameraActor>` in HandleActiveCamera auto-spawn | Subsystem ~11445 |
+| Safety gate on Sequencer binding (SAFE_SEQ_DEFER) | Subsystem ~11510 |
+| Safety gate on viewport lock (SAFE_ACTIVE_DEFER) | Subsystem ~11545 |
+| Marker rename: `[CAMERA][VIEW_TARGET_SKIP]` → `[CAMERA][SAFE_INVALID_SKIP]` | Subsystem ~11500 |
+
+### Runtime Matrix
+
+| Test | Signal 11 | SceneOutliner crash | Frustum crash | Result |
+|------|-----------|--------------------|---------------|--------|
+| A: Camera full lifecycle (`--full`, E2.5 injector) | **1** | **25x EnsureParentForItem** | 0 (guard works) | **FAIL** |
+| B: Hierarchy (`--hierarchy`) | 0 | 0 | 0 | PASS |
+| C: Legacy camera (`--full-separated`, 7G injector) | N/A (UE dead from A) | N/A | N/A | SKIP |
+
+### Runtime Markers (Test A — UE log confirmed)
+
+| Marker | Present |
+|--------|---------|
+| `[CAMERA][SAFE_LIFECYCLE_ENTER]` | ✅ |
+| `[CAMERA][SAFE_SPAWN_BEGIN]` (deferred) | ✅ |
+| `[CAMERA][FRUSTUM_GUARD]` | ✅ |
+| `[CAMERA][OUTLINER_GUARD]` (pre-FinishSpawning) | ✅ |
+| `[CAMERA][SAFE_CACHE_ADD]` | ✅ |
+| `[CAMERA][SAFE_SPAWN_READY]` | ✅ |
+| `[CAMERA][CREATE]` | ✅ |
+| `[CAMERA][TRANSFORM_CONVERGED]` | ✅ |
+| `[CAMERA][SAFE_SEQ_DEFER]` | ❌ (not needed — camera was safe) |
+| `[CAMERA][SAFE_ACTIVE_DEFER]` | ❌ (not needed — camera was safe) |
+
+### Key Finding
+
+The SceneOutliner crash still occurs **47ms after transform converge**, on the next game tick (frame 90), via `_mi_malloc_generic` heap corruption → `DelegateAllocate` → `FActorMode` filter delegate → `SSceneOutliner::CreateItemFor` → `FindOrCreateParentItem` → recursive `EnsureParentForItem`/`AddUnfilteredItemToTree`. This is **not a frustum crash** — it's a UE engine-level heap corruption triggered when the SceneOutliner rebuilds its tree after a CameraActor enters the world. The deferred spawn/frustum guard only prevents the frustum-specific `CreateSceneProxy` crash path.
+
+### Static Tests
+
+| Suite | Result |
+|-------|--------|
+| `e2e9_camera_sceneoutliner_safe_lifecycle` (new) | ✅ 38/38 |
+| `phase7g_stage2_camera_actor_spawn` | ✅ 10/10 |
+| `phase7g_stage2_active_camera_view_target` | ✅ 11/11 |
+| All other suites | ✅ 453+ total |
+
+### Classification
+
+**PARTIAL_E2E9_FRUSTUM_GUARD_OK_SCENEOUTLINER_CRASH_REMAINS**
+
+### Required Follow-up
+
+1. The SceneOutliner crash is a UE engine bug (heap corruption during outliner tree rebuild after CameraActor creation). Requires Epic fix or workaround at a different level — deferred spawn + frustum guard is insufficient.
+2. No stable tag until SceneOutliner crash is resolved.
+3. Current `manual-e2e-camera-crash-guard-stable` remains PROVISIONAL.
+
 ## Manual E2E.5 — SceneOutliner Crash Isolation (COMPLETED — RUNTIME EXECUTED)
 
 **Status:** Runtime isolation complete. 5 tests executed with fresh UE per test.

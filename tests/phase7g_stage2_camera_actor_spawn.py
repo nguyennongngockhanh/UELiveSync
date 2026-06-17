@@ -85,14 +85,16 @@ def test_camera_active_recv_marker_exists():
 
 def test_acameraactor_spawn_in_handle():
     content = read_cpp()
-    # Use rfind to find the function definition (not the dispatch call)
-    idx = content.rfind("HandleActiveCamera")
+    # Find the function definition (not the dispatch call or log messages)
+    idx = content.rfind("\nHandleActiveCamera(")
+    if idx < 0:
+        idx = content.rfind("HandleActiveCamera(")
     region = content[idx: idx + 2000]
     assert "ACameraActor" in region, \
         "ACameraActor not referenced in HandleActiveCamera"
-    assert "SpawnActor<ACameraActor>" in region, \
-        "SpawnActor<ACameraActor> not found in HandleActiveCamera"
-    print("  PASS: HandleActiveCamera contains SpawnActor<ACameraActor>")
+    assert "SpawnActorDeferred<ACameraActor>" in region, \
+        "SpawnActorDeferred<ACameraActor> not found in HandleActiveCamera"
+    print("  PASS: HandleActiveCamera contains SpawnActorDeferred<ACameraActor>")
     return True
 
 

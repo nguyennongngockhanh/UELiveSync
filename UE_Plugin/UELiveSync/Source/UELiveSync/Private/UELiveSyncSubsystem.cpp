@@ -7638,6 +7638,13 @@ HandleCreateObject(
         return;
     }
 
+    if (PrimitiveType == LSP_Camera)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][SAFE_LIFECYCLE_ENTER] HandleCreateObject guid=%s"),
+            *Guid.ToString(EGuidFormats::Digits));
+    }
+
     // =====================================================
     // COMPREHENSIVE ENTRY DIAGNOSTICS
     // =====================================================
@@ -7813,13 +7820,22 @@ HandleCreateObject(
 
     // =====================================================
     // Camera spawn path (LSP_Camera = 0x05)
+    // E2E.9: Use deferred spawn so frustum guard can be
+    // applied before FinishSpawning. This ensures camera
+    // components (especially UDrawFrustumComponent) are
+    // suppressed before the actor becomes visible to the
+    // SceneOutliner.
     // =====================================================
 
     if (PrimitiveType == LSP_Camera)
     {
-        NewActor =
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][SAFE_SPAWN_BEGIN] Spawning ACameraActor deferred guid=%s"),
+            *Guid.ToString(EGuidFormats::Digits));
 
-            World->SpawnActor<ACameraActor>(
+        ACameraActor* DeferredCam =
+
+            World->SpawnActorDeferred<ACameraActor>(
 
                 ACameraActor::StaticClass(),
 
@@ -7828,7 +7844,27 @@ HandleCreateObject(
                     Location,
                     Scale),
 
-                SpawnParams);
+                nullptr,
+                nullptr,
+                ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+
+        if (DeferredCam)
+        {
+            // Apply frustum guard BEFORE FinishSpawning so the
+            // UDrawFrustumComponent is already suppressed when
+            // the actor becomes visible to the editor.
+            ConfigureLiveSyncCameraActor(DeferredCam);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][OUTLINER_GUARD] Applied frustum guard pre-FinishSpawning guid=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
+
+            DeferredCam->FinishSpawning(FTransform(
+                Rotation,
+                Location,
+                Scale));
+
+            NewActor = DeferredCam;
+        }
     }
     else
     {
@@ -7966,6 +8002,13 @@ HandleCreateObject(
         Guid,
         NewActor);
 
+    if (PrimitiveType == LSP_Camera)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][SAFE_CACHE_ADD] guid=%s"),
+            *Guid.ToString(EGuidFormats::Digits));
+    }
+
     // ── Persistent rename label restoration ──
     // If this GUID has an authoritative label from a previous rename,
     // restore it immediately to prevent the default-label window.
@@ -8096,6 +8139,12 @@ HandleCreateObject(
 
             // Manual E2E.1: Suppress frustum renderer for LiveSync cameras
             ConfigureLiveSyncCameraActor(CamActor);
+
+            // E2E.9: Camera successfully spawned and configured.
+            // Frustum guard is already applied (pre-FinishSpawning).
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][SAFE_SPAWN_READY] ACameraActor ready guid=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
 
             UE_LOG(LogLiveSync, Log,
                 TEXT("[CAMERA][CREATE] Spawned ACameraActor guid=%s"),
@@ -9949,6 +9998,59 @@ static bool IsLiveSyncActorInvalidForAttach(const AActor* Actor)
 
 
 // =========================================================
+// E2E.9: LIVE-SYNC CAMERA ACTOR EDITOR-SAFETY CHECK
+// =========================================================
+// Validates that an ACameraActor is in a safe state for
+// editor-facing operations (SceneOutliner, Sequencer binding,
+// viewport lock). Returns true if the camera is safe.
+// The goal is to prevent the UE SceneOutliner from crashing
+// when attempting to display a camera actor that is in a
+// transitional state.
+// =========================================================
+
+static bool IsLiveSyncCameraSafeForEditorUse(const ACameraActor* Camera)
+{
+    if (Camera == nullptr)
+    {
+        return false;
+    }
+    if (!IsValid(Camera))
+    {
+        return false;
+    }
+    if (Camera->IsActorBeingDestroyed())
+    {
+        return false;
+    }
+    if (Camera->IsUnreachable())
+    {
+        return false;
+    }
+    if (Camera->GetWorld() == nullptr)
+    {
+        return false;
+    }
+    if (Camera->GetLevel() == nullptr)
+    {
+        return false;
+    }
+    if (Camera->GetOuter() == nullptr)
+    {
+        return false;
+    }
+    if (Camera->GetRootComponent() == nullptr)
+    {
+        return false;
+    }
+    if (Camera->GetCameraComponent() == nullptr)
+    {
+        return false;
+    }
+    return true;
+}
+
+
+// =========================================================
 // E2E.3: ACTOR-POINTER-LEVEL ATTACHMENT CYCLE GUARD
 // =========================================================
 // Addresses FAIL_MANUAL_E2E_SCENE_OUTLINER_PARENT_RECURSION.
@@ -11339,18 +11441,31 @@ HandleActiveCamera(
                 FTransform CamTransform(FTransform::Identity);
                 CamTransform.SetLocation(FVector(0.0f, -200.0f, 100.0f));
 
-                ACameraActor* NewCamera = World->SpawnActor<ACameraActor>(
-                    ACameraActor::StaticClass(), CamTransform);
+                // E2E.9: Use deferred spawn + pre-apply frustum guard
+                ACameraActor* NewCamera = World->SpawnActorDeferred<ACameraActor>(
+                    ACameraActor::StaticClass(), CamTransform,
+                    nullptr, nullptr,
+                    ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
                 if (NewCamera)
                 {
+                    // Frustum guard BEFORE finish spawning
+                    ConfigureLiveSyncCameraActor(NewCamera);
+
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[CAMERA][OUTLINER_GUARD] HandleActiveCamera pre-FinishSpawning guid=%s"),
+                        *Payload.CameraGUID.ToString());
+
+                    NewCamera->FinishSpawning(CamTransform);
+
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[CAMERA][SAFE_SPAWN_READY] HandleActiveCamera auto-spawn guid=%s"),
+                        *Payload.CameraGUID.ToString());
+
                     FString TagString = FString::Printf(
                         TEXT("LiveSync_GUID=%s"),
                         *Payload.CameraGUID.ToString(EGuidFormats::Digits));
                     NewCamera->Tags.Add(FName(*TagString));
                     ActorCache.Add(Payload.CameraGUID, NewCamera);
-
-                    // Manual E2E.1: Suppress frustum renderer for LiveSync cameras
-                    ConfigureLiveSyncCameraActor(NewCamera);
 
                     Stats.ActiveCameraPacketsSpawned.fetch_add(1, std::memory_order_relaxed);
 
@@ -11382,7 +11497,7 @@ HandleActiveCamera(
             {
                 Stats.ActiveCameraPacketsNotCamera.fetch_add(1, std::memory_order_relaxed);
                 UE_LOG(LogLiveSync, Warning,
-                    TEXT("[CAMERA][VIEW_TARGET_SKIP] Actor %s (%s) is not a CameraActor"),
+                    TEXT("[CAMERA][SAFE_INVALID_SKIP] Actor %s (%s) is not a CameraActor"),
                     *Found->GetName(), *Found->GetClass()->GetName());
             }
         }
@@ -11390,9 +11505,20 @@ HandleActiveCamera(
     }
 
     // Sequencer binding (always, independent of viewport CVar)
+    // E2E.9: Gate with safety check — defer if camera is not yet safe.
     if (ResolvedCamera)
     {
-        EnsureCameraSequencerBinding(ResolvedCamera, Payload.CameraGUID);
+        if (IsLiveSyncCameraSafeForEditorUse(ResolvedCamera))
+        {
+            EnsureCameraSequencerBinding(ResolvedCamera, Payload.CameraGUID);
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][SAFE_SEQ_DEFER] Deferring Sequencer binding for guid=%s — camera not safe"),
+                *Payload.CameraGUID.ToString());
+            Stats.ActiveCameraCutSkipped.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 
     // Viewport lock is gated by ApplyToViewport CVar
@@ -11416,7 +11542,8 @@ HandleActiveCamera(
 
 #if WITH_EDITOR
     // Lock the camera actor on all level editor viewport clients (pilot mode)
-    if (GEditor)
+    // E2E.9: Gate with safety check — defer if camera is not yet safe.
+    if (GEditor && IsLiveSyncCameraSafeForEditorUse(ResolvedCamera))
     {
         int32 AppliedCount = 0;
         for (FLevelEditorViewportClient* LevelVC : GEditor->GetLevelViewportClients())
@@ -11434,6 +11561,13 @@ HandleActiveCamera(
         UE_LOG(LogLiveSync, Log,
             TEXT("[CAMERA][VIEW_TARGET] SetActorLock on %d viewport(s) for CameraActor=%s"),
             AppliedCount, *ResolvedCamera->GetName());
+    }
+    else if (GEditor && !IsLiveSyncCameraSafeForEditorUse(ResolvedCamera))
+    {
+        Stats.ActiveCameraPacketsViewTargetFailed.fetch_add(1, std::memory_order_relaxed);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][SAFE_ACTIVE_DEFER] Deferring viewport lock for guid=%s — camera not safe"),
+            *Payload.CameraGUID.ToString());
     }
     else
     {

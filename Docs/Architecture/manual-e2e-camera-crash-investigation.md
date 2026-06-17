@@ -591,9 +591,67 @@ This crash is triggered when the SceneOutliner refreshes its tree after a Camera
 
 ---
 
-## E2E.9 — Next Steps (Future)
+## E2E.9 — Camera SceneOutliner Safe Lifecycle (PARTIAL — FRUSTUM GUARD OK, CRASH REMAINS)
 
-1. Report SceneOutliner crash to Epic Games (UE5.7 bug — `AActor::GetWorld()` SEGFAULT in `FActorEditorUtils::IsABuilderBrush` during outliner tree refresh).
-2. Consider Slate-level cycle detection or workaround to prevent `EnsureParentForItem` infinite recursion.
-3. Optionally re-add Warning-level hierarchy markers.
-4. Consider whether a GameThread-safe delayed refresh can avoid the outliner crash during actor creation/destruction.
+**Date:** 2026-06-17
+
+**Goal:** Prevent SceneOutliner crash during CameraActor creation by using `SpawnActorDeferred` + frustum guard before `FinishSpawning`, plus safety gates on Sequencer binding and viewport lock.
+
+### Code Changes
+
+1. **New helper `IsLiveSyncCameraSafeForEditorUse(const ACameraActor*)`** (~Subsystem:10001):
+   - 9 checks: nullptr, `IsValid`, `IsActorBeingDestroyed`, `IsUnreachable`, `GetWorld()`, `GetLevel()`, `GetOuter()`, `GetRootComponent()`, `GetCameraComponent()`.
+
+2. **HandleCreateObject (LSP_Camera)** (~Subsystem:7823):
+   - Changed from `SpawnActor<ACameraActor>` to `SpawnActorDeferred<ACameraActor>`.
+   - `ConfigureLiveSyncCameraActor` (frustum guard) called BEFORE `FinishSpawning`.
+   - Added markers: `SAFE_LIFECYCLE_ENTER`, `SAFE_SPAWN_BEGIN`, `OUTLINER_GUARD`, `SAFE_CACHE_ADD`, `SAFE_SPAWN_READY`.
+
+3. **HandleActiveCamera auto-spawn** (~Subsystem:11445):
+   - Same deferred spawn pattern + frustum guard.
+
+4. **Sequencer binding gate** (~Subsystem:11510):
+   - Before `EnsureCameraSequencerBinding`, check `IsLiveSyncCameraSafeForEditorUse`.
+   - If not safe: `[CAMERA][SAFE_SEQ_DEFER]` marker.
+
+5. **Viewport lock gate** (~Subsystem:11545):
+   - Before `SetActorLock`, check `IsLiveSyncCameraSafeForEditorUse`.
+   - If not safe: `[CAMERA][SAFE_ACTIVE_DEFER]` marker.
+
+### Runtime Result: FAIL (SceneOutliner Crash Persists)
+
+Test A (`--full` camera lifecycle) crashed 47ms after `[CAMERA][TRANSFORM_CONVERGED]`, on the next game tick:
+
+```
+[02.13.28:613] [CAMERA][TRANSFORM_CONVERGED]   ← transform applied
+[02.13.28:660] SIGSEGV                          ← 47ms later, frame 90
+[02.13.28:670] StaticShutdownAfterError
+```
+
+**Root cause:** Heap corruption in `_mi_malloc_generic` (mimalloc) during SceneOutliner tree rebuild after CameraActor enters the world. Not frustum-related — the deferred spawn + frustum guard only prevents the `UDrawFrustumComponent::CreateSceneProxy` crash.
+
+**Crash stack:**
+```
+_mi_malloc_generic [page.c:841]                                   ← heap corruption
+FMemory::Realloc → TSizedHeapAllocator::ResizeAllocation           ← delegate allocate
+DelegateAllocate → CreateCopy → TDelegate::CopyFrom               ← filter delegate
+TSceneOutlinerPredicateFilter::PassesFilterImpl                    ← actor filter
+FSceneOutlinerFilters::GetInteractiveState                         ← filter state
+SSceneOutliner::CreateItemFor<FActorTreeItem, AActor*>             ← item creation
+FActorHierarchy::FindOrCreateParentItem                            ← parent lookup
+SSceneOutliner::EnsureParentForItem [SSceneOutliner.cpp:993]       ← outliner tree
+SSceneOutliner::AddUnfilteredItemToTree [SSceneOutliner.cpp:1048]  ← outliner tree
+(recurse: ~25 cycles EnsureParentForItem ↔ AddUnfilteredItemToTree)
+```
+
+### Classification
+
+**PARTIAL_E2E9_FRUSTUM_GUARD_OK_SCENEOUTLINER_CRASH_REMAINS**
+
+No stable tag. `manual-e2e-camera-crash-guard-stable` remains PROVISIONAL.
+
+### Next Steps
+
+1. The SceneOutliner crash is a UE engine bug requiring Epic fix. Deferred spawn + frustum guard is an improvement but insufficient.
+2. Consider workaround: buffer camera creation during outliner refresh, or use a delayed spawn mechanism (e.g., timer-based).
+3. No unbuilt C++ changes remain beyond E2E.9.
