@@ -185,6 +185,97 @@ Runtime smoke: PASS.
 
 **No protocol change. No packet ID change. No new features.**
 
+## Manual E2E.8 — Full Signal 6/11 Runtime Regression After Rebuild (COMPLETED)
+
+**Status:** Full runtime regression after UE5.7 compile cleanup (commit `d91ebd5`).
+
+### Test A: Camera Full Lifecycle (`--full`)
+
+| Metric | Count |
+|--------|-------|
+| Signal 11 | **1** |
+| Signal 6 | 0 |
+| `SSceneOutliner::EnsureParentForItem` | 25 |
+| `SSceneOutliner::AddUnfilteredItemToTree` | 25 |
+| `UDrawFrustumComponent::CreateSceneProxy` | 0 |
+| `GetSelectionParent` | 0 |
+| `[CAMERA][CREATE]` | 1 |
+| `[CAMERA][FRUSTUM_GUARD]` | 1 |
+| `[CAMERA][TRANSFORM_CONVERGED]` | 1 |
+| **Result** | **FAIL** |
+
+### Test B: Hierarchy Confirm (`--hierarchy-confirm`)
+
+| Metric | Count |
+|--------|-------|
+| Signal 11 | 0 |
+| Signal 6 | 0 |
+| `[HIERARCHY][ATTACH_GUARD]` | 1 |
+| `[HIERARCHY][ATTACH]` | 1 |
+| `[HIERARCHY][ATTACH_SAFE]` | 1 |
+| `[HIERARCHY][CYCLE]` | 4 |
+| **Result** | **PASS** |
+
+### Test C: Legacy Camera Lifecycle (`--full-separated`)
+
+| Metric | Count |
+|--------|-------|
+| Signal 11 | **1** |
+| Signal 6 | 0 |
+| `SSceneOutliner::EnsureParentForItem` | 23 |
+| `[CAMERA][CREATE]` | 1 |
+| `[CAMERA][FRUSTUM_GUARD]` | 1 |
+| `[CAMERA][TRANSFORM_CONVERGED]` | 1 |
+| **Result** | **FAIL** |
+
+### Static Tests
+
+| Suite | Result |
+|-------|--------|
+| `ue57_compile_compatibility` | ✅ 19/19 |
+| `manual_e2e_scene_outliner_parent_guard` | ✅ 30/30 |
+| `manual_e2e_camera_crash_guard` | ✅ 24/24 |
+| `e2e_runtime_validation_suite_audit` | ✅ 27/27 |
+| `phase9_stage3b_discovery_scan` | ✅ 12/12 |
+| `phase9_stage3c_discovery_connect_ux` | ✅ 13/13 |
+| `manual_e2e_scene_outliner_isolation` | ✅ 33/33 |
+| **Total** | **158/158 PASS** |
+
+### Classification
+
+**FAIL_E2E8_SCENE_OUTLINER_REGRESSION**
+
+### Key Findings
+
+1. **SceneOutliner Signal 11 is reproducible, not fixed.** The crash occurs in `FActorMode::IsActorDisplayable` → `FActorEditorUtils::IsABuilderBrush` → `AActor::GetWorld()` → SEGFAULT during SceneOutliner tree refresh when a CameraActor is created/destroyed.
+2. **Frustum guard alone is insufficient.** The `[CAMERA][FRUSTUM_GUARD]` marker protects the `UDrawFrustumComponent::CreateSceneProxy` code path only. The SceneOutliner crash is a separate code path in `SSceneOutliner::EnsureParentForItem`/`AddUnfilteredItemToTree`.
+3. **Hierarchy path is unaffected.** Test B (static mesh actors, no camera) passes cleanly with all hierarchy markers present and no signals.
+4. **No tag created.** `manual-e2e-signal6-signal11-rebuild-stable` not created. Old tag `manual-e2e-camera-crash-guard-stable` retained as **PROVISIONAL**.
+5. **No regression from E2E.7.** The SceneOutliner crash existed before E2E.7 changes but was not detected because the isolation tool checks only PID-alive status (not crash signals in the log).
+
+### Crash Stack (from Test A)
+```
+CommonUnixCrashHandler: Signal=11
+SIGSEGV: invalid attempt to write memory at address 0x00007fff77f32ff8
+UStruct::IsChildOf(UStruct const*) const [Class.cpp:2786]
+UObjectBaseUtility::GetTypedOuter(UClass*) const
+AActor::GetWorld() const
+FActorEditorUtils::IsABuilderBrush(AActor const*) [ActorEditorUtils.cpp:22]
+FActorMode::IsActorDisplayable(SSceneOutliner const*, AActor const*, bool) [ActorMode.cpp:397]
+TSceneOutlinerPredicateFilter<FActorTreeItem>::PassesFilterImpl
+SSceneOutliner::CreateItemFor<FActorTreeItem, AActor*>
+FActorHierarchy::FindOrCreateParentItem
+SSceneOutliner::EnsureParentForItem [SSceneOutliner.cpp:990]
+SSceneOutliner::AddUnfilteredItemToTree [SSceneOutliner.cpp:1048]
+(recurse: ~25 cycles EnsureParentForItem ↔ AddUnfilteredItemToTree)
+```
+
+### Required Follow-up
+
+1. The SceneOutliner crash is a UE engine bug (not LiveSync code). Requires Epic Games fix or Slate-level workaround.
+2. Consider reporting to Epic Games via UE5.7 support channel.
+3. Do not create stable tag until SceneOutliner crash is resolved.
+
 ## Manual E2E.5 — SceneOutliner Crash Isolation (COMPLETED — RUNTIME EXECUTED)
 
 **Status:** Runtime isolation complete. 5 tests executed with fresh UE per test.

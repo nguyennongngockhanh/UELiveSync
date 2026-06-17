@@ -550,7 +550,50 @@ The commit 2939ce1 included C++ production source changes elevating `[HIERARCHY]
 
 ---
 
-## E2E.8 — Next Steps (Future)
+## E2E.8 — Full Signal 6/11 Runtime Regression After Rebuild (COMPLETED)
 
-1. Optionally re-add Warning-level hierarchy markers (now that build compiles cleanly).
-2. Test with parent hierarchy that matches the E2E.4 crash condition (camera with parent relationships) to fully validate the SceneOutliner crash fix.
+**Status:** Full runtime regression after UE5.7 compile cleanup (commit `d91ebd5`).
+
+**Date:** 2026-06-17
+
+**Tests:**
+- **Test A (camera full lifecycle, `--full`):** Signal 11=1 — SceneOutliner crash. `[CAMERA][FRUSTUM_GUARD]` present (1) but did not prevent crash.
+- **Test B (hierarchy confirm, `--hierarchy-confirm`):** PASS — Signal 6/11=0, all hierarchy markers confirmed.
+- **Test C (legacy camera, `--full-separated`):** Signal 11=1 — SceneOutliner crash. `[CAMERA][FRUSTUM_GUARD]` present (1).
+
+**Key finding: The frustum guard alone is insufficient.**
+
+The frustum guard (`[CAMERA][FRUSTUM_GUARD]`) protects the `UDrawFrustumComponent::CreateSceneProxy` code path only. The SceneOutliner crash occurs in a **separate code path**:
+
+```
+FActorMode::IsActorDisplayable
+  → FActorEditorUtils::IsABuilderBrush
+    → AActor::GetWorld()
+      → UObjectBaseUtility::GetTypedOuter(UPackage::StaticClass())
+        → UStruct::IsChildOf()
+          → SIGSEGV (invalid memory write)
+```
+
+This crash is triggered when the SceneOutliner refreshes its tree after a CameraActor is created or destroyed. The outliner attempts to display the actor, calls `IsActorDisplayable` which calls `IsABuilderBrush` which calls `GetWorld()` on an actor in a transitional/invalid state, causing a read from freed memory.
+
+**Crash callstack pattern:** Recursive `EnsureParentForItem` ↔ `AddUnfilteredItemToTree` (~25 cycles) followed by SEGFAULT.
+
+**Not a regression from E2E.7:** The SceneOutliner crash existed before E2E.7 (confirmed already in E2E.4) but was not detected by E2E.6/E2E.7 runtime smoke because:
+- The isolation tool (`uelivesync_e2e5_sceneoutliner_isolation.py`) only checks PID-alive status
+- The CrashReportClient dialog keeps the UE PID alive even after the crash
+- Only log-level `CommonUnixCrashHandler: Signal=11` reveals the crash
+
+**Static tests:** 158/158 PASS.
+
+**Classification:** **FAIL_E2E8_SCENE_OUTLINER_REGRESSION**
+
+**No tag created.** `manual-e2e-signal6-signal11-rebuild-stable` NOT created. Old tag `manual-e2e-camera-crash-guard-stable` remains **PROVISIONAL**.
+
+---
+
+## E2E.9 — Next Steps (Future)
+
+1. Report SceneOutliner crash to Epic Games (UE5.7 bug — `AActor::GetWorld()` SEGFAULT in `FActorEditorUtils::IsABuilderBrush` during outliner tree refresh).
+2. Consider Slate-level cycle detection or workaround to prevent `EnsureParentForItem` infinite recursion.
+3. Optionally re-add Warning-level hierarchy markers.
+4. Consider whether a GameThread-safe delayed refresh can avoid the outliner crash during actor creation/destruction.
