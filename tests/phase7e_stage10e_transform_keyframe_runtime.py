@@ -279,9 +279,9 @@ class TestStage10ETool(unittest.TestCase):
         """Stage 10E tool inserts keyframes for transform."""
         tool_source = read_source(STAGE10E_TOOL)
         self.assertIn("keyframe_insert", tool_source)
-        self.assertIn("location[", tool_source)
-        self.assertIn("rotation_euler[", tool_source)
-        self.assertIn("scale[", tool_source)
+        self.assertIn("data_path='location'", tool_source)
+        self.assertIn("data_path='rotation_euler'", tool_source)
+        self.assertIn("data_path='scale'", tool_source)
 
     def test_28_no_camera_crash_workaround_changes(self):
         """No camera crash workaround code changed."""

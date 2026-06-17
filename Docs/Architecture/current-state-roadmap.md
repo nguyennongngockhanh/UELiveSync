@@ -1,7 +1,7 @@
 # UELiveSync — Current State Roadmap
 
 **Canonical reference.** Supersedes stale scope-lock assumptions from earlier phase docs.
-Last updated: 2026-06-17 (Phase 7E Stage 10E transform keyframe harness). Tag: `current-state-roadmap-stable`.
+Last updated: 2026-06-17 (Phase 7E Stage 10E runtime validated). Tag: `current-state-roadmap-stable`.
 
 ---
 
@@ -172,7 +172,7 @@ Last updated: 2026-06-17 (Phase 7E Stage 10E transform keyframe harness). Tag: `
 | Phase 7E Blender Visibility E2E (Stage 10A.4) | 73 | ✅ PASS |
 | Phase 7E Stage 10A.5 SequencerOp wrap + reserved guard | 4 | ✅ PASS |
 | Phase 7E Stage 10A.6 pytest collection fix | 101 | ✅ PASS |
-| Phase 7E Stage 10E Transform Keyframe Harness | 45 | ✅ PASS |
+| Phase 7E Stage 10E Transform Keyframe Runtime | 45 | ✅ PASS |
 | Phase 7E SequencerOp Wire (Stage 3) | 81 | ✅ PASS |
 | Phase 7E End-to-End Pipeline (Stage 9B) | 63 | ✅ PASS |
 | Phase 7D Stage 3 UE Handler | 92 | ✅ PASS |

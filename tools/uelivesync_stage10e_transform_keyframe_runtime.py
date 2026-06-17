@@ -231,6 +231,13 @@ def main():
     obj.name = OBJECT_NAME
     obj.data.name = OBJECT_NAME + "_Data"
 
+    # Blender 5.1+: must create action first before keyframing
+    if obj.animation_data is None:
+        obj.animation_data_create()
+    if obj.animation_data.action is None:
+        action = bpy.data.actions.new(name=f"{OBJECT_NAME}_Action")
+        obj.animation_data.action = action
+
     # Set keyframe times
     frames = KEYFRAME_TIMES
 
@@ -246,44 +253,55 @@ def main():
     for frame in frames:
         loc_delta = transform_deltas[frame][0]
         for axis_idx, axis_name in enumerate(['X', 'Y', 'Z']):
-            path = f'location[{axis_idx}]'
-            obj.keyframe_insert(data_path=path, frame=frame)
+            obj.keyframe_insert(data_path='location', frame=frame, index=axis_idx)
             val = loc_delta[axis_idx]
-            kf = obj.animation_data.fcurves[-1].keyframe_points
-            kf[-1].co = (frame, val)
-            kf[-1].interpolation = 'LINEAR'
+            # Blender 5.1+: access keyframe via action layer strips
+            action = obj.animation_data.action
+            if hasattr(action, 'layers') and hasattr(action.layers, 'strips'):
+                for strip in action.layers.strips:
+                    for cbag in getattr(strip, 'channelbags', []):
+                        for fc in getattr(cbag, 'fcurves', []):
+                            if getattr(fc, 'data_path', '').startswith('location') and getattr(fc, 'array_index', -1) == axis_idx:
+                                kf = fc.keyframe_points
+                                kf[-1].co = (frame, val)
+                                kf[-1].interpolation = 'LINEAR'
+                                break
             print(f"  Loc{axis_name} frame={frame} value={val}")
 
     # Insert rotation keyframes (channels 3, 4, 5) — Euler
     for frame in frames:
         rot_delta = transform_deltas[frame][1]
         for axis_idx, axis_name in enumerate(['X', 'Y', 'Z']):
-            path = f'data.rotation_euler[{axis_idx}]'
-            obj.data.keyframe_insert(data_path=path, frame=frame)
+            obj.keyframe_insert(data_path='rotation_euler', frame=frame, index=axis_idx)
             val = rot_delta[axis_idx]
-            kf = obj.data.animation_data.fcurves[-1].keyframe_points
-            kf[-1].co = (frame, val)
-            kf[-1].interpolation = 'LINEAR'
+            action = obj.animation_data.action
+            if hasattr(action, 'layers') and hasattr(action.layers, 'strips'):
+                for strip in action.layers.strips:
+                    for cbag in getattr(strip, 'channelbags', []):
+                        for fc in getattr(cbag, 'fcurves', []):
+                            if getattr(fc, 'data_path', '').startswith('rotation_euler') and getattr(fc, 'array_index', -1) == axis_idx:
+                                kf = fc.keyframe_points
+                                kf[-1].co = (frame, val)
+                                kf[-1].interpolation = 'LINEAR'
+                                break
             print(f"  Rot{axis_name} frame={frame} value={val}")
 
     # Insert scale keyframes (channels 6, 7, 8)
     for frame in frames:
         scale_delta = transform_deltas[frame][2]
         for axis_idx, axis_name in enumerate(['X', 'Y', 'Z']):
-            path = f'display_size[{axis_idx}]'  # workaround for mesh display size
-            # Use scale instead
-            pass
-
-    # Proper scale keyframes via object.scale
-    for frame in frames:
-        scale_delta = transform_deltas[frame][2]
-        for axis_idx, axis_name in enumerate(['X', 'Y', 'Z']):
-            path = f'scale[{axis_idx}]'
-            obj.keyframe_insert(data_path=path, frame=frame)
+            obj.keyframe_insert(data_path='scale', frame=frame, index=axis_idx)
             val = scale_delta[axis_idx]
-            kf = obj.animation_data.fcurves[-1].keyframe_points
-            kf[-1].co = (frame, val)
-            kf[-1].interpolation = 'LINEAR'
+            action = obj.animation_data.action
+            if hasattr(action, 'layers') and hasattr(action.layers, 'strips'):
+                for strip in action.layers.strips:
+                    for cbag in getattr(strip, 'channelbags', []):
+                        for fc in getattr(cbag, 'fcurves', []):
+                            if getattr(fc, 'data_path', '').startswith('scale') and getattr(fc, 'array_index', -1) == axis_idx:
+                                kf = fc.keyframe_points
+                                kf[-1].co = (frame, val)
+                                kf[-1].interpolation = 'LINEAR'
+                                break
             print(f"  Scale{axis_name} frame={frame} value={val}")
 
     print(f"  Total keyframes inserted: {len(frames) * 9} (9 axes × {len(frames)} frames)")
