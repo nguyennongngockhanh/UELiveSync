@@ -1544,3 +1544,29 @@ All verified in regression run.
 - `UELiveSyncEditorModule.cpp`: Removed `UStatusBarSubsystem::AddStatusBarWidget` calls (API doesn't exist in UE5.7)
 - Cleaned up local-only files from git tracking (`.opencode/skills/`, `AGENTS.md`, `tests/`)
 - Agent write test passed.
+
+---
+
+## Phase 7E Stage 10A.5 — Blender Visibility BoolRuntime (PASS)
+
+**Status**: Stage 10A.5 PASS — Blender visibility bool keyframe E2E pipeline validated.
+
+**What was built**:
+- `tools/uelivesync_stage10a5_blender_visibility_runtime.py` — Direct raw TCP socket script that creates a probe object, extracts hide_viewport/hide_render keyframes via `_iter_action_fcurves_51`, and sends CREATE_SEQUENCE → CREATE → ADD_POSSESSABLE → PT_Keyframe packets.
+- `tools/run_stage10a5_blender_visibility_runtime.sh` — Shell wrapper.
+- `tests/phase7e_stage10a5_blender_runtime_automation.py` — 43 static tests (43/43 PASS).
+
+**Key fixes discovered**:
+1. **Quaternion wire format**: CREATE payload rotation must be 4 floats (FQuat = `<ffff`), not 3 floats (Euler = `<fff`). This was causing corrupted parent_guid and primitive_type fields.
+2. **Unique sequence numbers**: The addon's `ProcessBinaryPacket` enforces `SequenceId > LastSequenceId` and silently drops packets with duplicate seq IDs. Added `_NEXT_PACKET_SEQ` global counter.
+3. **Packet ordering**: CREATE must precede ADD_POSSESSABLE because `FindActorFast` requires the actor to exist before possessable binding resolution.
+
+**Runtime validation result**:
+- `[KEYFRAME][BOOL_TRACK_CREATE]` = 1 ✅
+- `[KEYFRAME][BOOL_SECTION_CREATE]` = 1 ✅
+- `[KEYFRAME][BOOL_KEY]` = 6 ✅
+- `[KEYFRAME][BOOL_APPLY]` = 6 ✅
+- Signal11 = 0, no crashes ✅
+- 6/6 visibility keyframes (hide_viewport + hide_render × 3 frames each) applied correctly.
+
+**PASS_PHASE7E_STAGE10A5_BLENDER_VISIBILITY_RUNTIME**

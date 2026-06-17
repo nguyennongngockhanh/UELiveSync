@@ -86,6 +86,10 @@
 - Added 81 tests for Blender 5.1 keyframe extraction (transform + visibility channels).
 - Added wrapped SequencerOp send path for CREATE_SEQUENCE / ADD_POSSESSABLE runtime setup.
 - Added Stage 10A.5 active LevelSequence runtime helper (`tools/uelivesync_stage10a5_active_sequence.py`).
+- Added Phase 7E Stage 10A.5 visibility bool runtime validation: Blender probe object with hide_viewport/hide_render keyframes, direct raw TCP socket transport (bypassing addon _send_queue), deterministic packet ordering (CREATE_SEQUENCE → CREATE → ADD_POSSESSABLE → PT_Keyframe).
+- Added `tests/phase7e_stage10a5_blender_runtime_automation.py` — 43 static tests verifying quaternion wire format (4-float FQuat), unique sequence numbers, packet ordering, and socket transport.
+- Added `tools/uelivesync_stage10a5_blender_visibility_runtime.py` — Real Blender 5.1 probe object creation, FCurve extraction via `_iter_action_fcurves_51`, direct TCP packet send.
+- Added `tools/run_stage10a5_blender_visibility_runtime.sh` — Shell wrapper for runtime validation.
 - Added 2 tests for SequencerOp packet wrap and reserved type guard.
 - Stage 10B.1: Asset-backed LevelSequence at `/Game/UELiveSync/Sequences/LS_UELiveSync_Runtime` via `GetOrCreateLiveSyncLevelSequenceAsset()`.
 - Stage 10B.2: Runtime asset sequence validation with TCP injector (`tools/uelivesync_10b_tcp_client.py`) and validator (`tools/uelivesync_10b_asset_sequence_validation.py`).
