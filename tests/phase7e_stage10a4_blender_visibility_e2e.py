@@ -42,7 +42,7 @@ FAIL = 0
 SKIP = 0
 
 
-def test(name, condition, detail=""):
+def check(name, condition, detail=""):
     global PASS, FAIL
     if condition:
         PASS += 1
@@ -67,22 +67,22 @@ def section_1_blender_channel_mapping():
     source = open(SYNC_FILE, encoding="utf-8", errors="replace").read()
 
     # 1.1: hide_viewport maps to channel 9
-    test("1.1: hide_viewport → channel 9",
+    check("1.1: hide_viewport → channel 9",
          '("hide_viewport", 0): 9' in source,
          "Blender _KEYFRAME_CHANNEL_MAP")
 
     # 1.2: hide_render maps to channel 10
-    test("1.2: hide_render → channel 10",
+    check("1.2: hide_render → channel 10",
          '("hide_render", 0): 10' in source,
          "Blender _KEYFRAME_CHANNEL_MAP")
 
     # 1.3: channel 9 comment mentions viewport
-    test("1.3: channel 9 comment says viewport visibility",
+    check("1.3: channel 9 comment says viewport visibility",
          'hide_viewport' in source and 'viewport' in source.lower(),
          "sync.py documentation")
 
     # 1.4: channel 10 comment mentions render
-    test("1.4: channel 10 comment says render visibility",
+    check("1.4: channel 10 comment says render visibility",
          'hide_render' in source and 'render' in source.lower(),
          "sync.py documentation")
 
@@ -92,18 +92,18 @@ def section_1_blender_channel_mapping():
     if map_start >= 0 and map_end >= 0:
         map_block = source[map_start:map_end + 1]
         entry_count = map_block.count("): ")
-        test("1.5: _KEYFRAME_CHANNEL_MAP has 11 channel entries",
+        check("1.5: _KEYFRAME_CHANNEL_MAP has 11 channel entries",
              entry_count == 11,
              f"found {entry_count} entry entries")
 
     # 1.6: channel 0-8 are transform
     for i in range(9):
-        test(f"1.6.{i}: channel {i} exists in map",
+        check(f"1.6.{i}: channel {i} exists in map",
              f"): {i}," in source or f"): {i}" in source,
              f"transform channel {i}")
 
     # 1.7: no channel 11 in the map
-    test("1.7: no channel 11 in _KEYFRAME_CHANNEL_MAP",
+    check("1.7: no channel 11 in _KEYFRAME_CHANNEL_MAP",
          '11,' not in source and '11  # ' not in source.split("_KEYFRAME_CHANNEL_MAP")[1].split("}")[0] if "_KEYFRAME_CHANNEL_MAP" in source else True,
          "channel 11 reserved for future")
 
@@ -118,41 +118,41 @@ def section_2_serialization():
     source = open(NETWORK_FILE, encoding="utf-8", errors="replace").read()
 
     # 2.1: PT_Keyframe = 0x17
-    test("2.1: PT_Keyframe = 0x17",
+    check("2.1: PT_Keyframe = 0x17",
          "PT_Keyframe = 0x17" in source or "PT_KEYFRAME = 0x17" in source or "0x17" in source,
          "network.py packet type")
 
     # 2.2: channel constants defined
-    test("2.2: KEYFRAME_CHANNEL_VISIBILITY_VIEWPORT = 9",
+    check("2.2: KEYFRAME_CHANNEL_VISIBILITY_VIEWPORT = 9",
          "KEYFRAME_CHANNEL_VISIBILITY_VIEWPORT" in source and "9" in source.split("KEYFRAME_CHANNEL_VISIBILITY_VIEWPORT")[1].split("\n")[0],
          "network.py constants")
 
-    test("2.3: KEYFRAME_CHANNEL_VISIBILITY_RENDER = 10",
+    check("2.3: KEYFRAME_CHANNEL_VISIBILITY_RENDER = 10",
          "KEYFRAME_CHANNEL_VISIBILITY_RENDER" in source and "10" in source.split("KEYFRAME_CHANNEL_VISIBILITY_RENDER")[1].split("\n")[0],
          "network.py constants")
 
     # 2.4: serialize_keyframe exists
-    test("2.4: serialize_keyframe function defined",
+    check("2.4: serialize_keyframe function defined",
          "def serialize_keyframe(" in source,
          "network.py")
 
     # 2.5: serialize_visibility function exists (for PT_Visibility, separate path)
-    test("2.5: serialize_visibility function defined",
+    check("2.5: serialize_visibility function defined",
          "def serialize_visibility(" in source,
          "network.py — discrete visibility toggle path")
 
     # 2.6: max keys constant
-    test("2.6: KEYFRAME_MAX_KEYS = 255",
+    check("2.6: KEYFRAME_MAX_KEYS = 255",
          "KEYFRAME_MAX_KEYS" in source,
          "network.py")
 
     # 2.7: min channel = 0
-    test("2.7: KEYFRAME_MIN_CHANNEL = 0",
+    check("2.7: KEYFRAME_MIN_CHANNEL = 0",
          "KEYFRAME_MIN_CHANNEL = 0" in source,
          "network.py")
 
     # 2.8: max channel = 255
-    test("2.8: KEYFRAME_MAX_CHANNEL = 255",
+    check("2.8: KEYFRAME_MAX_CHANNEL = 255",
          "KEYFRAME_MAX_CHANNEL = 255" in source,
          "network.py")
 
@@ -167,69 +167,69 @@ def section_3_ue_implementation():
     source = open(SUBSYSTEM_FILE, encoding="utf-8", errors="replace").read()
 
     # 3.1: Channel 9/10 dispatch
-    test("3.1: Channel 9/10 dispatch in HandleKeyframe",
+    check("3.1: Channel 9/10 dispatch in HandleKeyframe",
          "Entry->ChannelIndex == 9 || Entry->ChannelIndex == 10" in source or
          "ChannelIndex == 9 || ChannelIndex == 10" in source or
          "ChannelIndex == 9" in source,
          "UELiveSyncSubsystem.cpp")
 
     # 3.2: BoolTrack creation
-    test("3.2: UMovieSceneBoolTrack referenced",
+    check("3.2: UMovieSceneBoolTrack referenced",
          "UMovieSceneBoolTrack" in source,
          "UE subsystem uses bool tracks")
 
     # 3.3: BOOL_TRACK_CREATE marker
-    test("3.3: BOOL_TRACK_CREATE marker exists",
+    check("3.3: BOOL_TRACK_CREATE marker exists",
          "[KEYFRAME][BOOL_TRACK_CREATE]" in source,
          "UE logging")
 
     # 3.4: BOOL_SECTION_CREATE marker
-    test("3.4: BOOL_SECTION_CREATE marker exists",
+    check("3.4: BOOL_SECTION_CREATE marker exists",
          "[KEYFRAME][BOOL_SECTION_CREATE]" in source,
          "UE logging")
 
     # 3.5: BOOL_KEY marker
-    test("3.5: BOOL_KEY marker exists",
+    check("3.5: BOOL_KEY marker exists",
          "[KEYFRAME][BOOL_KEY]" in source,
          "UE logging")
 
     # 3.6: BOOL_APPLY marker
-    test("3.6: BOOL_APPLY marker exists",
+    check("3.6: BOOL_APPLY marker exists",
          "[KEYFRAME][BOOL_APPLY]" in source,
          "UE logging")
 
     # 3.7: BOOL_UNSUPPORTED marker
-    test("3.7: BOOL_UNSUPPORTED marker exists for >10",
+    check("3.7: BOOL_UNSUPPORTED marker exists for >10",
          "[KEYFRAME][BOOL_UNSUPPORTED]" in source,
          "UE unsupported channel handling")
 
     # 3.8: Stale sequence rejection for visibility
-    test("3.8: Stale sequence rejection for visibility keys",
+    check("3.8: Stale sequence rejection for visibility keys",
          "stale sequence" in source.lower() or "Stale" in source,
          "UE safety check")
 
     # 3.9: Missing binding handling for visibility
-    test("3.9: Missing binding counter for visibility",
+    check("3.9: Missing binding counter for visibility",
          "KeyframeMissingBinding" in source,
          "UE safety — missing binding")
 
     # 3.10: KeyframeVisibilityKeysApplied counter
-    test("3.10: KeyframeVisibilityKeysApplied counter exists",
+    check("3.10: KeyframeVisibilityKeysApplied counter exists",
          "KeyframeVisibilityKeysApplied" in source,
          "UE stats")
 
     # 3.11: KeyframeVisibilityTrackCreated counter
-    test("3.11: KeyframeVisibilityTrackCreated counter exists",
+    check("3.11: KeyframeVisibilityTrackCreated counter exists",
          "KeyframeVisibilityTrackCreated" in source,
          "UE stats")
 
     # 3.12: KeyframeVisibilitySectionCreated counter
-    test("3.12: KeyframeVisibilitySectionCreated counter exists",
+    check("3.12: KeyframeVisibilitySectionCreated counter exists",
          "KeyframeVisibilitySectionCreated" in source,
          "UE stats")
 
     # 3.13: KeyframeVisibilityUnsupported counter
-    test("3.13: KeyframeVisibilityUnsupported counter exists",
+    check("3.13: KeyframeVisibilityUnsupported counter exists",
          "KeyframeVisibilityUnsupported" in source,
          "UE stats")
 
@@ -243,19 +243,19 @@ def section_4_counters():
 
     source = open(SYNC_TYPES_FILE, encoding="utf-8", errors="replace").read()
 
-    test("4.1: KeyframeVisibilityKeysApplied in SyncTypes.h",
+    check("4.1: KeyframeVisibilityKeysApplied in SyncTypes.h",
          "KeyframeVisibilityKeysApplied" in source,
          "SyncTypes.h")
 
-    test("4.2: KeyframeVisibilityTrackCreated in SyncTypes.h",
+    check("4.2: KeyframeVisibilityTrackCreated in SyncTypes.h",
          "KeyframeVisibilityTrackCreated" in source,
          "SyncTypes.h")
 
-    test("4.3: KeyframeVisibilitySectionCreated in SyncTypes.h",
+    check("4.3: KeyframeVisibilitySectionCreated in SyncTypes.h",
          "KeyframeVisibilitySectionCreated" in source,
          "SyncTypes.h")
 
-    test("4.4: KeyframeVisibilityUnsupported in SyncTypes.h",
+    check("4.4: KeyframeVisibilityUnsupported in SyncTypes.h",
          "KeyframeVisibilityUnsupported" in source,
          "SyncTypes.h")
 
@@ -270,22 +270,22 @@ def section_5_wire_format():
     net_source = open(NETWORK_FILE, encoding="utf-8", errors="replace").read()
 
     # 5.1: PT_Keyframe ID matches both sides
-    test("5.1: PT_Keyframe = 0x17 in Blender addon",
+    check("5.1: PT_Keyframe = 0x17 in Blender addon",
          "0x17" in net_source and "PT_Keyframe" in net_source,
          "network.py")
 
     ue_source = open(SUBSYSTEM_FILE, encoding="utf-8", errors="replace").read()
-    test("5.2: PT_Keyframe = 0x17 in UE subsystem",
+    check("5.2: PT_Keyframe = 0x17 in UE subsystem",
          "0x17" in ue_source and "KEYFRAME" in ue_source,
          "UE subsystem")
 
     # 5.3: Check that kValidTypes includes 0x17
-    test("5.3: kValidTypes includes 0x17 in UE",
+    check("5.3: kValidTypes includes 0x17 in UE",
          "0x17" in ue_source,
          "UE packet validation")
 
     # 5.4: Cap bit for keyframe
-    test("5.4: CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20",
+    check("5.4: CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20",
          "0x20" in net_source and "KEYFRAME_REPLICATION" in net_source,
          "Blender capability bit")
 
@@ -304,42 +304,42 @@ def section_6_injector():
     source = open(INJECTOR_FILE, encoding="utf-8", errors="replace").read()
 
     # 6.1: Injector exists
-    test("6.1: Injector file exists", True, INJECTOR_FILE)
+    check("6.1: Injector file exists", True, INJECTOR_FILE)
 
     # 6.2: Python syntax valid
     try:
         compile(source, INJECTOR_FILE, "exec")
-        test("6.2: Injector Python syntax valid", True, INJECTOR_FILE)
+        check("6.2: Injector Python syntax valid", True, INJECTOR_FILE)
     except SyntaxError as e:
-        test("6.2: Injector Python syntax valid", False, f"SyntaxError: {e}")
+        check("6.2: Injector Python syntax valid", False, f"SyntaxError: {e}")
 
     # 6.3: Defines channel 9 constant
-    test("6.3: CHANNEL_HIDE_VIEWPORT = 9",
+    check("6.3: CHANNEL_HIDE_VIEWPORT = 9",
          "CHANNEL_HIDE_VIEWPORT" in source and "= 9" in source,
          "Injector constants")
 
     # 6.4: Defines channel 10 constant
-    test("6.4: CHANNEL_HIDE_RENDER = 10",
+    check("6.4: CHANNEL_HIDE_RENDER = 10",
          "CHANNEL_HIDE_RENDER" in source and "= 10" in source,
          "Injector constants")
 
     # 6.5: Sends channel 9 keyframes
-    test("6.5: Injector sends channel 9 keyframes",
+    check("6.5: Injector sends channel 9 keyframes",
          "CHANNEL_HIDE_VIEWPORT" in source,
          "Injector sends ch9")
 
     # 6.6: Sends channel 10 keyframes
-    test("6.6: Injector sends channel 10 keyframes",
+    check("6.6: Injector sends channel 10 keyframes",
          "CHANNEL_HIDE_RENDER" in source,
          "Injector sends ch10")
 
     # 6.7: Sends unsupported channel for safety
-    test("6.7: Injector sends unsupported channel for safety check",
+    check("6.7: Injector sends unsupported channel for safety check",
          "unsupported" in source.lower() or "UNSUPPORTED" in source or "99" in source,
          "Injector safety test")
 
     # 6.8: Connects to UE on port 57000
-    test("6.8: Injector targets port 57000",
+    check("6.8: Injector targets port 57000",
          "57000" in source,
          "UE connection target")
 
@@ -354,7 +354,7 @@ def section_7_extraction_logic():
     source = open(SYNC_FILE, encoding="utf-8", errors="replace").read()
 
     # 7.1: _extract_keyframes function exists
-    test("7.1: _extract_keyframes function defined",
+    check("7.1: _extract_keyframes function defined",
          "def _extract_keyframes(" in source,
          "sync.py")
 
@@ -363,20 +363,20 @@ def section_7_extraction_logic():
     doc_end = source.find('"""', doc_start + 3) if doc_start >= 0 else -1
     if doc_start >= 0 and doc_end >= 0:
         doc = source[doc_start:doc_end + 3]
-        test("7.2: _extract_keyframes doc mentions channel 9",
+        check("7.2: _extract_keyframes doc mentions channel 9",
              "channel 9" in doc.lower() or "Channel 9" in doc or "9" in doc,
              "sync.py docstring")
-        test("7.3: _extract_keyframes doc mentions channel 10",
+        check("7.3: _extract_keyframes doc mentions channel 10",
              "channel 10" in doc.lower() or "Channel 10" in doc or "10" in doc,
              "sync.py docstring")
 
     # 7.4: _KEYFRAME_CHANNEL_MAP used in _extract_keyframes
-    test("7.4: _extract_keyframes uses _KEYFRAME_CHANNEL_MAP",
+    check("7.4: _extract_keyframes uses _KEYFRAME_CHANNEL_MAP",
          "_KEYFRAME_CHANNEL_MAP" in source,
          "sync.py extraction")
 
     # 7.5: Channel mapping lookup with None skip
-    test("7.5: Extraction skips unmapped channels",
+    check("7.5: Extraction skips unmapped channels",
          "channel is None" in source or "channel==None" in source or "channel == None" in source,
          "sync.py safe skip")
 
@@ -392,16 +392,16 @@ def section_8_protocol_invariants():
     ue_source = open(SUBSYSTEM_FILE, encoding="utf-8", errors="replace").read()
 
     # 8.1: PT_Keyframe = 0x17 (unchanged)
-    test("8.1: PT_Keyframe = 0x17 (invariant)",
+    check("8.1: PT_Keyframe = 0x17 (invariant)",
          "0x17" in net_source,
          "Blender packet type")
 
-    test("8.2: 0x17 in UE kValidTypes (invariant)",
+    check("8.2: 0x17 in UE kValidTypes (invariant)",
          "0x17" in ue_source,
          "UE packet validation")
 
     # 8.2: No new packet types
-    test("8.3: No new packet type for visibility keys",
+    check("8.3: No new packet type for visibility keys",
          True,
          "Stage 10A.4 uses existing PT_Keyframe")
 
@@ -416,12 +416,12 @@ def section_8_protocol_invariants():
             for i in range(9):
                 if f"): {i}," in map_block:
                     transform_channels += 1
-    test("8.4: Transform channels 0-8 in map",
+    check("8.4: Transform channels 0-8 in map",
          transform_channels == 9,
          f"found {transform_channels} transform channels")
 
     # 8.5: Unsupported channel >10 safe
-    test("8.5: Unsupported channel >10 handled in UE",
+    check("8.5: Unsupported channel >10 handled in UE",
          "Entry->ChannelIndex > 10" in ue_source or
          "ChannelIndex > 10" in ue_source,
          "UE safety guard")
@@ -437,28 +437,28 @@ def section_9_fcurve_extraction():
     source = open(SYNC_FILE, encoding="utf-8", errors="replace").read()
 
     # 9.1: Legacy fcurve path exists
-    test("9.1: Legacy fcurve iteration path exists",
+    check("9.1: Legacy fcurve iteration path exists",
          "for fcurve in action.fcurves" in source or
          "for fcurve in" in source,
          "sync.py legacy path")
 
     # 9.2: 5.1 slotted path exists
-    test("9.2: Blender 5.1+ slotted path exists",
+    check("9.2: Blender 5.1+ slotted path exists",
          "is_action_layered" in source and "_iter_action_fcurves_51" in source,
          "sync.py 5.1+ path")
 
     # 9.3: hide_viewport data_path used
-    test("9.3: hide_viewport data_path referenced",
+    check("9.3: hide_viewport data_path referenced",
          "hide_viewport" in source,
          "sync.py")
 
     # 9.4: hide_render data_path referenced
-    test("9.4: hide_render data_path referenced",
+    check("9.4: hide_render data_path referenced",
          "hide_render" in source,
          "sync.py")
 
     # 9.5: Both hide_viewport and hide_render have array_index 0
-    test("9.5: Both visibility paths use array_index 0",
+    check("9.5: Both visibility paths use array_index 0",
          '("hide_viewport", 0)' in source and '("hide_render", 0)' in source,
          "FCurve array index")
 
@@ -489,17 +489,17 @@ def section_10_documentation():
             continue
 
         # 10.1: Channel 9 documented
-        test("10.1: Channel 9 documented in architecture",
+        check("10.1: Channel 9 documented in architecture",
              "channel 9" in doc.lower() or "Channel 9" in doc or "hide_viewport" in doc,
              os.path.basename(doc_path))
 
         # 10.2: Channel 10 documented
-        test("10.2: Channel 10 documented in architecture",
+        check("10.2: Channel 10 documented in architecture",
              "channel 10" in doc.lower() or "Channel 10" in doc or "hide_render" in doc,
              os.path.basename(doc_path))
 
         # 10.3: BoolTrack documented
-        test("10.3: UMovieSceneBoolTrack documented",
+        check("10.3: UMovieSceneBoolTrack documented",
              "BoolTrack" in doc or "bool track" in doc.lower() or "booltrack" in doc.lower(),
              os.path.basename(doc_path))
 
