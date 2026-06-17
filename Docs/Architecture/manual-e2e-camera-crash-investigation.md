@@ -449,7 +449,7 @@ The Signal 11 SceneOutliner crash from commit e0ed247 **did NOT reproduce** unde
 
 ## E2E.6 — Hierarchy Guard Marker Confirmation
 
-**Status:** COMPLETED
+**Status:** COMPLETED (Runtime Only — C++ production changes reverted)
 
 **Date:** 2026-06-16
 
@@ -491,25 +491,34 @@ The Signal 11 SceneOutliner crash from commit e0ed247 **did NOT reproduce** unde
 
 **Hierarchy guard IS working** but cannot be confirmed via `[HIERARCHY][ATTACH_GUARD]` log marker because the pre-built binary uses Log-level logging. The `[HIERARCHY][ATTACH] BEGIN/END` markers confirm the attach was applied. The `[HIERARCHY][CYCLE]` markers confirm cycle detection works.
 
-**C++ changes needed:**
-- `SafeAttachLiveSyncActor()`: Log `[HIERARCHY][ATTACH_GUARD]` at Warning level
-- `HandleHierarchy()`: Log `[HIERARCHY][ATTACH]` at Warning level
-- These changes are in the repo source but cannot be built against the deployed plugin due to pre-existing errors (`bPendingKill` access, `UCFS_FChecker`)
+### E2E.6B — C++ Production Source Revert
+
+The commit 2939ce1 included C++ production source changes elevating `[HIERARCHY][ATTACH_GUARD]`, `[HIERARCHY][ATTACH]`, and `[HIERARCHY][ATTACH_SAFE]` to Warning level. These changes **could not be built** against the deployed UE5.7 plugin due to pre-existing errors (`AActor::bPendingKill` removed in UE5.7, `UCFS_FChecker` format validation — 11 errors total). The C++ source was reverted to parent commit 11c82a7.
+
+**Current state:**
+- `SafeAttachLiveSyncActor()`: Logs `[HIERARCHY][ATTACH_GUARD]` at **Log** level (pre-existing)
+- `HandleHierarchy()`: Logs `[HIERARCHY][ATTACH]` at **Log** level (pre-existing)
+- `SafeAttachLiveSyncActor()`: Logs `[HIERARCHY][ATTACH_SAFE]` at **Log** level (pre-existing)
+- `WouldCreateAttachmentCycle()`: Logs `[HIERARCHY][CYCLE]` at **Warning** level (pre-existing)
+- `WouldCreateAttachmentCycle()`: Logs `[HIERARCHY][ATTACH_SKIP]` at **Warning** level (pre-existing)
+
+**No unbuilt C++ changes remain in main.** Hierarchy marker validation relies on existing pre-built binary behavior.
 
 ### Classification
 
-**`PASS_E2E6_VALID_HIERARCHY_ATTACH_CONFIRMED_PARTIAL`**
+**`PASS_E2E6_VALID_HIERARCHY_ATTACH_CONFIRMED_PARTIAL_NO_CPP_CHANGE`**
 
 - Valid hierarchy attach confirmed via `[HIERARCHY][ATTACH]` markers.
 - Cycle detection confirmed via `[HIERARCHY][CYCLE]` markers.
-- `[HIERARCHY][ATTACH_GUARD]` not visible in pre-built binary (requires Warning-level rebuild).
+- `[HIERARCHY][ATTACH_GUARD]` not visible in pre-built binary (Log level).
+- C++ diagnostic logging reverted — not included in production source.
 - No Signal 11 or Signal 6 crash.
 
 ---
 
 ## E2E.7 — Next Steps (Future)
 
-1. Fix pre-existing build errors in deployed plugin source (bPendingKill, UCFS_FChecker).
-2. Rebuild with Warning-level hierarchy markers.
+1. Fix pre-existing build errors in deployed plugin source (bPendingKill → IsPendingKillPending(), UCFS_FChecker).
+2. Optionally re-add Warning-level hierarchy markers and rebuild.
 3. Re-run E2E.6 hierarchy-confirm against rebuilt binary to confirm `[HIERARCHY][ATTACH_GUARD]` visibility.
 4. Test with parent hierarchy that matches the E2E.4 crash condition (camera with parent relationships) to fully validate the SceneOutliner crash fix.

@@ -8905,7 +8905,7 @@ HandleHierarchy(
 
     if (!bAttached)
     {
-        UE_LOG(LogLiveSync, Warning,
+        UE_LOG(LogLiveSync, Log,
             TEXT("[HIERARCHY][ATTACH] SKIPPED — safety guard rejected "
                  "child=%s parent=%s"),
             *ChildGuid.ToString(EGuidFormats::Digits),
@@ -8923,7 +8923,7 @@ HandleHierarchy(
         return;
     }
 
-    UE_LOG(LogLiveSync, Warning,
+    UE_LOG(LogLiveSync, Log,
         TEXT("[HIERARCHY][ATTACH] Attached child=%s parent=%s"),
         *ChildGuid.ToString(EGuidFormats::Digits),
         *ParentGuid.ToString(EGuidFormats::Digits));
@@ -10046,11 +10046,9 @@ bool UUELiveSyncSubsystem::SafeAttachLiveSyncActor(
     const FGuid& ChildGuid,
     const FGuid& ParentGuid)
 {
-    // Always log guard entry (Warning level so it appears in UE log files)
-    UE_LOG(LogLiveSync, Warning,
-        TEXT("[HIERARCHY][ATTACH_GUARD] child=%s parent=%s childGuid=%s parentGuid=%s"),
-        *Child->GetName(),
-        *Parent->GetName(),
+    // Always log guard entry
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[HIERARCHY][ATTACH_GUARD] child=%s parent=%s"),
         ChildGuid.IsValid() ? *ChildGuid.ToString(EGuidFormats::Digits)
                              : TEXT("null"),
         ParentGuid.IsValid() ? *ParentGuid.ToString(EGuidFormats::Digits)
@@ -10059,18 +10057,18 @@ bool UUELiveSyncSubsystem::SafeAttachLiveSyncActor(
     // Run cycle detection
     if (WouldCreateAttachmentCycle(Child, Parent))
     {
-        // WouldCreateAttachmentCycle logs specific skip markers at Warning:
-        //   [HIERARCHY][ATTACH_SKIP_SELF] for self-parent
-        //   [HIERARCHY][CYCLE] for chain cycles
-        //   [HIERARCHY][ATTACH_SKIP] for null/pending-kill
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[HIERARCHY][ATTACH_SKIP] Skipping attach for child=%s parent=%s"),
+            ChildGuid.IsValid() ? *ChildGuid.ToString(EGuidFormats::Digits)
+                                : TEXT("null"),
+            ParentGuid.IsValid() ? *ParentGuid.ToString(EGuidFormats::Digits)
+                                 : TEXT("null"));
         return false; // Skip attach
     }
 
     // Proceed with safe attach
-    UE_LOG(LogLiveSync, Warning,
-        TEXT("[HIERARCHY][ATTACH_SAFE] Attached child=%s to parent=%s childGuid=%s parentGuid=%s"),
-        *Child->GetName(),
-        *Parent->GetName(),
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[HIERARCHY][ATTACH_SAFE] Attached child=%s to parent=%s"),
         ChildGuid.IsValid() ? *ChildGuid.ToString(EGuidFormats::Digits)
                             : TEXT("null"),
         ParentGuid.IsValid() ? *ParentGuid.ToString(EGuidFormats::Digits)

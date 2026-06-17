@@ -133,18 +133,28 @@ Source code fix is implemented and compiles cleanly. Runtime validation blocked 
 
 ## Current State
 
-## Manual E2E.6 — Hierarchy Guard Marker Confirmation (COMPLETED)
+## Manual E2E.6B — Hierarchy Guard C++ Diagnostic Logging Revert (COMPLETED)
 
-**Status:** Runtime marker confirmation complete.
+**Status:** C++ production source change reverted; hierarchy marker validation is tooling/docs/runtime-only.
 
-**E2E.6 Results:**
+**E2E.6B Decision — Path B (Revert C++):**
+
+The commit 2939ce1 included C++ production source changes (log level Warning for `[HIERARCHY][ATTACH_GUARD]`, `[HIERARCHY][ATTACH]`, `[HIERARCHY][ATTACH_SAFE]`). These changes could not be built against UE5.7 because of pre-existing errors (`AActor::bPendingKill` removed in UE5.7, `UCFS_FChecker` format validation).
+
+**Build attempted:** FAILED — 11 errors (pre-existing `bPendingKill` access at 4 locations, cascading format validation errors).
+
+**Revert executed:** C++ production source file restored to parent commit 11c82a7.
+
+**E2E.6 Original Results (preserved):**
 - Created parent actor, waited 1s, created child actor, waited 1s, sent PT_Hierarchy
 - Valid hierarchy attach confirmed via `[HIERARCHY][ATTACH]` markers (BEGIN/END AttachToActor)
 - Cycle detection confirmed: 4x `[HIERARCHY][CYCLE]` markers
 - `[HIERARCHY][ATTACH_GUARD]` not visible in pre-built binary (Log level, suppressed by UE log filter)
 - No Signal 11, no Signal 6 crash
-- C++ changes ready (Warning level) but blocked by pre-existing build errors in deployed source
-- **Classification: PASS_E2E6_VALID_HIERARCHY_ATTACH_CONFIRMED_PARTIAL**
+- Static: 139/139 PASS
+- **Classification: PASS_E2E6_VALID_HIERARCHY_ATTACH_CONFIRMED_PARTIAL_NO_CPP_CHANGE**
+
+**C++ diagnostic logging reverted — not included in production source.** Hierarchy confirmation relies on existing `[HIERARCHY][ATTACH]` (Log level) and `[HIERARCHY][CYCLE]` (Warning level) markers. No unbuilt C++ changes remain in main.
 
 ## Manual E2E.5 — SceneOutliner Crash Isolation (COMPLETED — RUNTIME EXECUTED)
 
@@ -190,7 +200,7 @@ Tool: `tools/uelivesync_e2e5_sceneoutliner_isolation.py`
 | `e2e_runtime_validation_suite_audit.py` | ✅ 27/27 PASS |
 | `phase9_stage3b_discovery_scan.py` | ✅ 12/12 PASS |
 | `phase9_stage3c_discovery_connect_ux.py` | ✅ 13/13 PASS |
-| **Total** | **132/132 PASS** |
+| **Total** | **139/139 PASS** |
 
 ### Docs Updated
 
