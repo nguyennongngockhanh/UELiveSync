@@ -1,7 +1,7 @@
 # UELiveSync — Current State Roadmap
 
 **Canonical reference.** Supersedes stale scope-lock assumptions from earlier phase docs.
-Last updated: 2026-06-16 (Stage 3B discovery scan + Stage 3C auto-fill/connect UX implemented). Tag: `current-state-roadmap-stable`.
+Last updated: 2026-06-17 (E2E.10 Camera SceneOutliner Workaround final). Tag: `current-state-roadmap-stable`.
 
 ---
 
@@ -24,7 +24,7 @@ Last updated: 2026-06-16 (Stage 3B discovery scan + Stage 3C auto-fill/connect U
 | `fbx-test-hygiene-stable` | FBX Test Debt Cleanup | COMPLETE |
 | `phase8-audit-stable` | Phase 8 High Performance Streaming Audit | `PASS_PHASE8_AUDIT_ONLY` |
 | `e2e-runtime-validation-audit-stable` | E2E Runtime Validation Suite Audit | `PASS_E2E_AUDIT_ONLY` |
-| `manual-e2e-camera-crash-guard-stable` | Manual E2E.1 — Camera Frustum Crash Guard | `PASS_CAMERA_FRUSTUM_CRASH_GUARD` — **PROVISIONAL** (Signal 6 fixed, Signal 11 not resolved) |
+| `manual-e2e-camera-crash-guard-stable` | Manual E2E.1/E2E.10 — Camera Frustum Crash Guard + SceneOutliner Workaround | `PASS_CAMERA_FRUSTUM_CRASH_GUARD` / `PASS_E2E10_CAMERA_SCENEOUTLINER_WORKAROUND` — **FINAL** (Signal 6 and Signal 11 both resolved via W3 `bHideFromSceneOutliner`) |
 | `phase9-audit-stable` | Phase 9 Production Ecosystem Audit | `PASS_PHASE9_AUDIT_ONLY` |
 | `phase9-stage3b-discovery-stable` | Phase 9 Stage 3B — Discovery Scan | `PASS_DISCOVERY_LOCALHOST_SCAN` |
 | `phase9-stage3c-connect-ux-stable` | Phase 9 Stage 3C — Discovery Auto-fill / Connect UX | `PASS_DISCOVERY_CONNECT_UX` |
@@ -219,6 +219,8 @@ Last updated: 2026-06-16 (Stage 3B discovery scan + Stage 3C auto-fill/connect U
 7. **Manual E2E.6B — C++ Diagnostic Logging Revert.** Build failed (11 errors, pre-existing `bPendingKill` removal in UE5.7). C++ production source change reverted from 2939ce1. Hierarchy confirmation remains tooling-only. **PASS_E2E6_VALID_HIERARCHY_ATTACH_CONFIRMED_PARTIAL_NO_CPP_CHANGE**.
 8. **Manual E2E.7 — UE5.7 Compile Compatibility Cleanup.** Fixed 4 `AActor::bPendingKill` access locations via `IsLiveSyncActorInvalidForAttach()` helper. Fixed `SetNum(bool)` deprecation. Build SUCCEEDED (0 errors, 0 warnings). Runtime smoke PASS — `[HIERARCHY][ATTACH_GUARD]` visible in rebuilt binary, all markers confirmed, 0 signals. Static: 158/158 PASS. **PASS_E2E7_UE57_COMPILE_COMPATIBILITY_CLEAN**.
 9. **Manual E2E.8 — Full Signal 6/11 Runtime Regression After Rebuild.** Full regression after UE5.7 compile cleanup. **FAIL_E2E8_SCENE_OUTLINER_REGRESSION**. Test A (camera full lifecycle): Signal 11=1, SceneOutliner crash. Test B (hierarchy confirm): PASS, all markers, 0 signals. Test C (legacy camera): Signal 11=1, SceneOutliner crash. Key finding: SceneOutliner crash is a separate code path from frustum guard (`[CAMERA][FRUSTUM_GUARD]` present). Pre-existing issue, not a regression from E2E7. No tag created. Old tag remains PROVISIONAL.
+10. **Manual E2E.9 — Camera SceneOutliner Safe Lifecycle (PARTIAL).** Frustum guard confirmed working. SceneOutliner crash remained (heap corruption during outliner tree rebuild). Superseded by W3 workaround in E2E.10.
+11. **Manual E2E.10 — Camera SceneOutliner Workaround (COMPLETED).** `PASS_E2E10_CAMERA_SCENEOUTLINER_WORKAROUND`. `FActorSpawnParameters::bHideFromSceneOutliner=true` eliminates SceneOutliner crash. Tag `manual-e2e-camera-crash-guard-stable` is now **FINAL (non-provisional)**.
 
 ### Short-term (Standalone, No UE Build Required)
 3. **Proactive Scene Health.** Recurring scene scan to detect divergent GUID states.

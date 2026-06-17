@@ -7829,13 +7829,18 @@ HandleCreateObject(
 
     if (PrimitiveType == LSP_Camera)
     {
+        FActorSpawnParameters CamSpawnParams;
+        CamSpawnParams.SpawnCollisionHandlingOverride =
+            ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        CamSpawnParams.bHideFromSceneOutliner = true;
+
         UE_LOG(LogLiveSync, Log,
-            TEXT("[CAMERA][SAFE_SPAWN_BEGIN] Spawning ACameraActor deferred guid=%s"),
+            TEXT("[CAMERA][SAFE_SPAWN_BEGIN] Spawning ACameraActor (hide-outliner) guid=%s"),
             *Guid.ToString(EGuidFormats::Digits));
 
-        ACameraActor* DeferredCam =
+        ACameraActor* Cam =
 
-            World->SpawnActorDeferred<ACameraActor>(
+            World->SpawnActor<ACameraActor>(
 
                 ACameraActor::StaticClass(),
 
@@ -7844,26 +7849,23 @@ HandleCreateObject(
                     Location,
                     Scale),
 
-                nullptr,
-                nullptr,
-                ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+                CamSpawnParams);
 
-        if (DeferredCam)
+        if (Cam)
         {
-            // Apply frustum guard BEFORE FinishSpawning so the
-            // UDrawFrustumComponent is already suppressed when
-            // the actor becomes visible to the editor.
-            ConfigureLiveSyncCameraActor(DeferredCam);
+            // Apply frustum guard after spawn. Camera is hidden from
+            // SceneOutliner, but frustum guard prevents the red-screen
+            // UDrawFrustumComponent flash on the next render frame.
+            ConfigureLiveSyncCameraActor(Cam);
             UE_LOG(LogLiveSync, Log,
-                TEXT("[CAMERA][OUTLINER_GUARD] Applied frustum guard pre-FinishSpawning guid=%s"),
+                TEXT("[CAMERA][OUTLINER_GUARD] Applied frustum guard post-spawn guid=%s"),
                 *Guid.ToString(EGuidFormats::Digits));
 
-            DeferredCam->FinishSpawning(FTransform(
-                Rotation,
-                Location,
-                Scale));
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][E2E10_OUTLINER_HIDE] guid=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
 
-            NewActor = DeferredCam;
+            NewActor = Cam;
         }
     }
     else
@@ -8007,6 +8009,10 @@ HandleCreateObject(
         UE_LOG(LogLiveSync, Log,
             TEXT("[CAMERA][SAFE_CACHE_ADD] guid=%s"),
             *Guid.ToString(EGuidFormats::Digits));
+
+        // Camera is spawned with bHideFromSceneOutliner=true — no
+        // Need for deferred active processing (E2E.10 W3 approach).
+        // The OUTLINER_HIDE marker confirms the actor is outliner-hidden.
     }
 
     // ── Persistent rename label restoration ──
@@ -11406,6 +11412,99 @@ void UUELiveSyncSubsystem::EnsureCameraSequencerBinding(
 #endif
 }
 
+// =========================================================
+// E2E.10: Process deferred camera work one tick later.
+// Defers Sequencer binding and viewport lock for
+// newly-created cameras so the SceneOutliner tree can
+// settle before active operations.
+// =========================================================
+void UUELiveSyncSubsystem::ProcessDeferredCameras()
+{
+    if (PendingActiveCameraData.Num() == 0)
+    {
+        return;
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA][E2E10_DEFERRED_PROCESS] Processing %d deferred camera(s)"),
+        PendingActiveCameraData.Num());
+
+    // Process each deferred camera. If the camera is no longer
+    // valid or safe, skip with log.
+    TArray<FGuid> DeferredGUIDs;
+    PendingActiveCameraData.GetKeys(DeferredGUIDs);
+
+    for (const FGuid& GUID : DeferredGUIDs)
+    {
+        AActor* Found = FindActorFast(GUID);
+        if (!Found)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][E2E10_DEFERRED_SKIP] guid=%s — actor not found in cache"),
+                *GUID.ToString());
+            PendingActiveCameraData.Remove(GUID);
+            continue;
+        }
+
+        ACameraActor* Camera = Cast<ACameraActor>(Found);
+        if (!Camera)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][E2E10_DEFERRED_SKIP] guid=%s — not a CameraActor"),
+                *GUID.ToString());
+            PendingActiveCameraData.Remove(GUID);
+            continue;
+        }
+
+        if (!IsLiveSyncCameraSafeForEditorUse(Camera))
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][E2E10_DEFERRED_SKIP] guid=%s — camera not safe for editor use"),
+                *GUID.ToString());
+            PendingActiveCameraData.Remove(GUID);
+            continue;
+        }
+
+        const FPendingCameraActivePayload* Payload =
+            PendingActiveCameraData.Find(GUID);
+        if (!Payload)
+        {
+            continue;
+        }
+
+        // Apply deferred Sequencer binding
+        EnsureCameraSequencerBinding(Camera, GUID);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][E2E10_DEFERRED_SEQ] Applied Sequencer binding for guid=%s"),
+            *GUID.ToString());
+
+        // Apply deferred viewport lock
+#if WITH_EDITOR
+        if (GEditor)
+        {
+            int32 AppliedCount = 0;
+            for (FLevelEditorViewportClient* LevelVC : GEditor->GetLevelViewportClients())
+            {
+                if (LevelVC)
+                {
+                    LevelVC->SetActorLock(Camera);
+                    AppliedCount++;
+                }
+            }
+
+            Stats.ActiveCameraPacketsAppliedToViewport.fetch_add(
+                AppliedCount, std::memory_order_relaxed);
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][E2E10_DEFERRED_LOCK] SetActorLock on %d viewport(s) for CameraActor=%s"),
+                AppliedCount, *Camera->GetName());
+        }
+#endif
+
+        PendingActiveCameraData.Remove(GUID);
+    }
+}
+
 void UUELiveSyncSubsystem::
 HandleActiveCamera(
     const FActiveCameraPayload& Payload)
@@ -11441,21 +11540,29 @@ HandleActiveCamera(
                 FTransform CamTransform(FTransform::Identity);
                 CamTransform.SetLocation(FVector(0.0f, -200.0f, 100.0f));
 
-                // E2E.9: Use deferred spawn + pre-apply frustum guard
-                ACameraActor* NewCamera = World->SpawnActorDeferred<ACameraActor>(
+                // E2E.10: Use non-deferred spawn with bHideFromSceneOutliner=true.
+                // Prevents UE SceneOutliner EnsureParentForItem crash on camera spawn.
+                FActorSpawnParameters AutoSpawnParams;
+                AutoSpawnParams.SpawnCollisionHandlingOverride =
+                    ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+                AutoSpawnParams.bHideFromSceneOutliner = true;
+
+                ACameraActor* NewCamera = World->SpawnActor<ACameraActor>(
                     ACameraActor::StaticClass(), CamTransform,
-                    nullptr, nullptr,
-                    ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+                    AutoSpawnParams);
                 if (NewCamera)
                 {
-                    // Frustum guard BEFORE finish spawning
+                    // Apply frustum guard after spawn. Camera is hidden from
+                    // SceneOutliner, so no EnsureParentForItem crash on this path.
                     ConfigureLiveSyncCameraActor(NewCamera);
 
                     UE_LOG(LogLiveSync, Log,
-                        TEXT("[CAMERA][OUTLINER_GUARD] HandleActiveCamera pre-FinishSpawning guid=%s"),
+                        TEXT("[CAMERA][OUTLINER_GUARD] HandleActiveCamera post-spawn guid=%s"),
                         *Payload.CameraGUID.ToString());
 
-                    NewCamera->FinishSpawning(CamTransform);
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[CAMERA][E2E10_OUTLINER_HIDE] auto-spawn guid=%s"),
+                        *Payload.CameraGUID.ToString());
 
                     UE_LOG(LogLiveSync, Log,
                         TEXT("[CAMERA][SAFE_SPAWN_READY] HandleActiveCamera auto-spawn guid=%s"),
@@ -11502,6 +11609,15 @@ HandleActiveCamera(
             }
         }
 #endif
+    }
+
+    // E2E.10: Camera is spawned with bHideFromSceneOutliner=true, so the
+    // SceneOutliner EnsureParentForItem crash is avoided. Process Sequencer
+    // binding and viewport lock immediately (no deferral needed).
+    // Clean up any stale pending data from previous E2E.10 attempts.
+    if (ResolvedCamera)
+    {
+        PendingActiveCameraData.Remove(Payload.CameraGUID);
     }
 
     // Sequencer binding (always, independent of viewport CVar)

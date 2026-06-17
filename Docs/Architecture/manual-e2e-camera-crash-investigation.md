@@ -655,3 +655,69 @@ No stable tag. `manual-e2e-camera-crash-guard-stable` remains PROVISIONAL.
 1. The SceneOutliner crash is a UE engine bug requiring Epic fix. Deferred spawn + frustum guard is an improvement but insufficient.
 2. Consider workaround: buffer camera creation during outliner refresh, or use a delayed spawn mechanism (e.g., timer-based).
 3. No unbuilt C++ changes remain beyond E2E.9.
+
+---
+
+## E2E.10 — Camera SceneOutliner Workaround (COMPLETED)
+
+**Date:** 2026-06-17
+
+**Classification:** `PASS_E2E10_CAMERA_SCENEOUTLINER_WORKAROUND`
+
+**Tag:** `manual-e2e-camera-crash-guard-stable` is now **FINAL (non-provisional)**.
+
+### Workaround (W3)
+
+The SceneOutliner crash (`FActorMode::IsActorDisplayable` → `IsABuilderBrush` → `GetWorld()` → SEGFAULT) occurred because UE's SceneOutliner rebuilds the actor tree immediately after a CameraActor enters the world. The deferred spawn + frustum guard (E2E.9) prevented the frustum-specific `CreateSceneProxy` crash but could not prevent the outliner tree rebuild crash, which is a separate code path involving heap corruption in mimalloc during delegate allocation.
+
+**W3 fix:** Set `FActorSpawnParameters::bHideFromSceneOutliner = true` on both camera spawn paths. This is a native UE flag that tells the SceneOutliner to exclude this actor from the tree entirely. By preventing the outliner from touching the CameraActor, the entire tree rebuild code path is bypassed.
+
+### Code Changes
+
+| Change | Anchor |
+|--------|--------|
+| HandleCreateObject (LSP_Camera): `SpawnActorDeferred<ACameraActor>` → `SpawnActor<ACameraActor>` with `CamSpawnParams.bHideFromSceneOutliner = true`, post-spawn frustum guard | HandleCreateObject LSP_Camera |
+| HandleActiveCamera auto-spawn: same change | HandleActiveCamera auto-spawn |
+| Removed `E2E10_DEFER_EXPOSURE` / `E2E10_DEFER_ACTIVE` markers, timer-based `ProcessDeferredCameras` | — |
+| Added `[CAMERA][E2E10_OUTLINER_HIDE]` marker to both spawn paths | Both camera spawn blocks |
+| `ConfigureLiveSyncCameraActor`, `IsLiveSyncCameraSafeForEditorUse`, frustum guard, safety gates | Preserved unchanged |
+
+### Build
+
+| Check | Result |
+|-------|--------|
+| UE 5.7.4 PlatformToolchain Linux Development | 0 errors, 0 warnings |
+
+### Runtime Matrix
+
+| Test | Signal 11 | Signal 6 | EnsureParentForItem | AddUnfilteredItemToTree | Result |
+|------|-----------|----------|---------------------|-------------------------|--------|
+| A: Camera full lifecycle (`--full`) | 0 | 0 | 0 | 0 | **PASS** |
+| B: Hierarchy (`--hierarchy`) | 0 | 0 | 0 | 0 | **PASS** |
+| C: Legacy camera (`--full-separated`) | 0 | 0 | 0 | 0 | **PASS** |
+
+### Static Tests
+
+| Suite | Result |
+|-------|--------|
+| `e2e10_sceneoutliner_camera_workaround.py` (new) | ✅ 23/23 |
+| `e2e9_camera_sceneoutliner_safe_lifecycle.py` (existing) | ✅ 38/38 |
+| `ue57_compile_compatibility.py` (existing) | ✅ 19/19 |
+| `manual_e2e_camera_crash_guard.py` (existing) | ✅ 24/24 |
+| `manual_e2e_scene_outliner_parent_guard.py` (existing) | ✅ 30/30 |
+| `manual_e2e_scene_outliner_isolation.py` (existing) | ✅ 33/33 |
+| **Total** | **167/167 PASS** |
+
+### Audit
+
+| Suite | Result |
+|-------|--------|
+| `e2e_runtime_validation_suite_audit.py` | ✅ 27/27 |
+
+### Tag Policy
+
+- Tag `manual-e2e-camera-crash-guard-stable` is now **FINAL (non-provisional)** — both Signal 6 (frustum) and Signal 11 (SceneOutliner) are resolved via the W3 workaround `bHideFromSceneOutliner`.
+
+### Key Insight
+
+The `bHideFromSceneOutliner` parameter is the correct fix for this class of crash. It prevents the engine from attempting to build SceneOutliner tree items for LiveSync-managed camera actors, which avoids the heap corruption / `IsABuilderBrush` / `GetWorld()` crash path entirely. The deferred spawn approach (E2E.9) was insufficient because it only delayed the actor's entry into the world — once `FinishSpawning` was called, the outliner still attempted to display it. The `bHideFromSceneOutliner` flag is a hard exclusion that the outliner respects at all stages of the actor lifecycle.

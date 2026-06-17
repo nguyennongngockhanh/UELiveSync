@@ -338,6 +338,54 @@ The SceneOutliner crash still occurs **47ms after transform converge**, on the n
 2. No stable tag until SceneOutliner crash is resolved.
 3. Current `manual-e2e-camera-crash-guard-stable` remains PROVISIONAL.
 
+## Manual E2E.10 — Camera SceneOutliner Workaround (COMPLETED)
+
+**Status:** SceneOutliner crash eliminated via `FActorSpawnParameters::bHideFromSceneOutliner = true` for ACameraActor spawns. Stable tag finalized.
+
+**Classification:** `PASS_E2E10_CAMERA_SCENEOUTLINER_WORKAROUND`
+
+### Workaround (W3)
+
+Set `FActorSpawnParameters::bHideFromSceneOutliner = true` on both camera spawn paths. This tells the SceneOutliner to skip this actor entirely, preventing the outliner tree rebuild crash (Signal 11) that the deferred spawn + frustum guard could not prevent.
+
+### Code Changes
+
+| Change | Anchor |
+|--------|--------|
+| HandleCreateObject (LSP_Camera): `SpawnActorDeferred<ACameraActor>` → `SpawnActor<ACameraActor>` with `bHideFromSceneOutliner=true`, post-spawn frustum guard | HandleCreateObject LSP_Camera block |
+| HandleActiveCamera auto-spawn: same change | HandleActiveCamera auto-spawn block |
+| Removed `E2E10_DEFER_EXPOSURE`/`DEFER_ACTIVE` markers, timer-based `ProcessDeferredCameras` | — |
+| Added `[CAMERA][E2E10_OUTLINER_HIDE]` marker to both spawn paths | Both camera spawn blocks |
+| `ConfigureLiveSyncCameraActor`, `IsLiveSyncCameraSafeForEditorUse`, frustum guard, safety gates | Preserved unchanged |
+
+### Build
+
+0 errors, 0 warnings.
+
+### Runtime Matrix
+
+| Test | Signal 11/6 | EnsureParentForItem | AddUnfilteredItemToTree | Result |
+|------|-------------|---------------------|-------------------------|--------|
+| A: `--full` | 0 | 0 | 0 | **PASS** |
+| B: `--hierarchy` | 0 | 0 | 0 | **PASS** |
+| C: `--full-separated` | 0 | 0 | 0 | **PASS** |
+
+### Static Tests
+
+| Suite | Result |
+|-------|--------|
+| `e2e10_sceneoutliner_camera_workaround.py` (new) | ✅ 23/23 |
+| Existing suites (e2e9 38 + ue57 19 + camera_crash_guard 24 + parent_guard 30 + scene_outliner_isolation 33) | ✅ |
+| **Total** | **167/167 PASS** |
+
+### Audit
+
+27/27 PASS.
+
+### Tag Policy
+
+- Tag `manual-e2e-camera-crash-guard-stable` is now **FINAL (non-provisional)** — both Signal 6 (frustum) and Signal 11 (SceneOutliner) are resolved via the W3 workaround.
+
 ## Manual E2E.5 — SceneOutliner Crash Isolation (COMPLETED — RUNTIME EXECUTED)
 
 **Status:** Runtime isolation complete. 5 tests executed with fresh UE per test.

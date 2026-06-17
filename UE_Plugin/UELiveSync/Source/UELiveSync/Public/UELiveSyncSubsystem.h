@@ -944,6 +944,22 @@ private:
     void ProcessDeferredRepairs();
 
     // =====================================================
+    // E2E.10: Deferred camera work for SceneOutliner safety
+    // =====================================================
+    // Defers Sequencer binding and viewport lock for
+    // newly-spawned camera to next tick, allowing the
+    // SceneOutliner tree to settle before manipulating
+    // the camera actor.
+    struct FPendingCameraActivePayload
+    {
+        uint32 Sequence = 0;
+        double Timestamp = 0.0;
+    };
+    TMap<FGuid, FPendingCameraActivePayload> PendingActiveCameraData;
+
+    void ProcessDeferredCameras();
+
+    // =====================================================
     // MESH CHUNK REASSEMBLY DATA (Phase 7C Stage 1B)
     // =====================================================
 
