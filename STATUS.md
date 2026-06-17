@@ -1622,3 +1622,53 @@ This validates the entire transform pipeline end-to-end rather than code-only, a
 - Multi-object bindings work correctly with transform keyframes
 - Asset-backed LevelSequence correctly persists transform keys
 - Additive updates do not corrupt existing data
+
+---
+
+## Phase 7E Stage 10E — Transform Keyframe E2E Harness (RUNTIME_PENDING)
+
+**Classification**: `RUNTIME_PENDING`
+
+### What was built
+- `tools/uelivesync_stage10e_transform_keyframe_runtime.py` — Blender background runtime harness
+  - Creates a cube probe object (Stage10E_TransformProbe)
+  - Inserts 9 transform keyframes (location X/Y/Z, rotation X/Y/Z, scale X/Y/Z) across frames 1, 10, 20
+  - Extracts FCurves via `_iter_action_fcurves_51` + `_KEYFRAME_CHANNEL_MAP`
+  - Sends CREATE_SEQUENCE → CREATE → ADD_POSSESSABLE → PT_Keyframe via direct raw TCP
+  - Uses deterministic raw socket send, unique increasing sequence IDs
+  - Uses correct FQuat 4-float rotation in CREATE payload
+  - Uses correct V5 protocol header
+
+- `tests/phase7e_stage10e_transform_keyframe_runtime.py` — 45 static tests (45/45 PASS)
+  - Protocol constants: PT_Keyframe=0x17, PT_SequencerOp=0x18, PT_TimelineState=0x19, PT_PlaybackTransport=0x1A, PT_CameraDef=0x1B
+  - 0x02 reserved/invalid
+  - Channels 0–8 transform channels, 9–10 visibility
+  - Deterministic packet order verified
+  - FSequencerOpHeader (BBHId) present
+  - FQuat 4-float rotation verified
+  - No camera crash workaround code changed
+  - UE subsystem: TrackCreated/SectionCreated counters, AddLinearKey, FindActorFast
+  - Regression: no new packet IDs, unchanged FGId format, unchanged 81-byte CREATE layout
+
+### UE subsystem evidence
+- `UMovieScene3DTransformTrack` — included via header, used in HandleKeyframe Step 3
+- `UMovieScene3DTransformSection` — included via header, used in HandleKeyframe Step 4
+- `KeyframeTrackCreated` counter — fetch_add on track creation
+- `KeyframeSectionCreated` counter — fetch_add on section creation
+- `KeyframeKeysApplied` counter — applied keys (transform + visibility)
+- `AddLinearKey(FFrameNumber, double)` — transform key insertion
+- `GetChannel<FMovieSceneDoubleChannel>(channel_index)` — per-axis key access
+- `SaveLiveSyncLevelSequenceAsset()` — asset persistence after keyframe apply
+
+### Next step (runtime validation)
+1. Build UE plugin
+2. Launch UE with fresh log
+3. Run `tools/uelivesync_stage10e_transform_keyframe_runtime.py` in Blender
+4. Verify UE markers:
+   - `[KEYFRAME][TRACK_CREATE]  >= 1`
+   - `[KEYFRAME][SECTION_CREATE]>= 1`
+   - `[KEYFRAME][KEY]           >= 27` (9 axes × 3 frames)
+   - `[KEYFRAME][APPLY]         >= 27`
+   - `[KEYFRAME] missing_binding = 0`
+   - `[KEYFRAME] unsupported_channel = 0`
+   - Signal11 = 0, Signal6 = 0, SceneOutliner crash = 0, DrawFrustum crash = 0
