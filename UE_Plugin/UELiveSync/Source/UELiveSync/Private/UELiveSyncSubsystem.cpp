@@ -9560,6 +9560,9 @@ HandleKeyframe(
             {
                 BoolTrack = MovieScene->AddTrack<UMovieSceneBoolTrack>(*FoundBinding);
                 Stats.KeyframeVisibilityTrackCreated.fetch_add(1, std::memory_order_relaxed);
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[KEYFRAME][BOOL_TRACK_CREATE] guid=%s channel=%d"),
+                    *Entry->ObjectGUID.ToString(), Entry->ChannelIndex);
             }
 
             // Find or create bool section
@@ -9577,6 +9580,9 @@ HandleKeyframe(
                     BoolTrack->AddSection(*NewSection);
                     BoolSection = Cast<UMovieSceneBoolSection>(NewSection);
                     Stats.KeyframeVisibilitySectionCreated.fetch_add(1, std::memory_order_relaxed);
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[KEYFRAME][BOOL_SECTION_CREATE] guid=%s channel=%d"),
+                        *Entry->ObjectGUID.ToString(), Entry->ChannelIndex);
                 }
             }
 
@@ -9589,6 +9595,14 @@ HandleKeyframe(
                     { bValue });
                 Stats.KeyframeVisibilityKeysApplied.fetch_add(1, std::memory_order_relaxed);
                 AppliedKeys++;
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[KEYFRAME][BOOL_KEY] guid=%s channel=%d value=%d frame=%d"),
+                    *Entry->ObjectGUID.ToString(), Entry->ChannelIndex,
+                    bValue ? 1 : 0, Entry->Frame);
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[KEYFRAME][BOOL_APPLY] guid=%s channel=%d value=%d frame=%d"),
+                    *Entry->ObjectGUID.ToString(), Entry->ChannelIndex,
+                    bValue ? 1 : 0, Entry->Frame);
                 UE_LOG(LogLiveSync, Log,
                     TEXT("[KEYFRAME][VISIBILITY] applied channel=%d guid=%s value=%d frame=%d"),
                     Entry->ChannelIndex, *Entry->ObjectGUID.ToString(),
@@ -9610,6 +9624,9 @@ HandleKeyframe(
         {
             Stats.KeyframeVisibilityUnsupported.fetch_add(1, std::memory_order_relaxed);
             UnsupportedChannel++;
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[KEYFRAME][BOOL_UNSUPPORTED] channel=%d guid=%s — skipping"),
+                Entry->ChannelIndex, *Entry->ObjectGUID.ToString());
             UE_LOG(LogLiveSync, Verbose,
                 TEXT("[KEYFRAME][VISIBILITY] unsupported channel=%d guid=%s — skipping"),
                 Entry->ChannelIndex, *Entry->ObjectGUID.ToString());

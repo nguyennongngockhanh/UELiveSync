@@ -1,7 +1,7 @@
 # UELiveSync — Current State Roadmap
 
 **Canonical reference.** Supersedes stale scope-lock assumptions from earlier phase docs.
-Last updated: 2026-06-17 (E2E.10 Camera SceneOutliner Workaround final). Tag: `current-state-roadmap-stable`.
+Last updated: 2026-06-17 (Phase 7E Stage 10A.2 BoolTrack apply refinement). Tag: `current-state-roadmap-stable`.
 
 ---
 
@@ -82,7 +82,7 @@ Last updated: 2026-06-17 (E2E.10 Camera SceneOutliner Workaround final). Tag: `c
 | 0x14 | PT_PlaybackState | 7C | ✅ Yes | Playback state (play/pause/stop, storage-only) |
 | 0x15 | PT_ActiveCamera | 7D | ✅ Yes | Active camera GUID (viewport apply behind CVar) |
 | 0x16 | PT_FBXImportRequest | 7C/3A | ✅ Yes | FBX mesh import request, 688 bytes fixed |
-| 0x17 | PT_Keyframe | 7E | ✅ Yes | Keyframe replication (header + entries, ch 0–10) |
+| 0x17 | PT_Keyframe | 7E | ✅ Yes | Keyframe replication (header + entries, ch 0–10, transform ch 0–8 + visibility BoolTrack ch 9–10) |
 | 0x18 | PT_SequencerOp | 7E | ✅ Yes | Sequencer opcode (create sequence, add binding, etc.) |
 | 0x19 | PT_TimelineState | 7F | ✅ Yes | Timeline state applied to LevelSequence |
 | 0x1A | PT_PlaybackTransport | 7F | ✅ Yes | Playback transport command (SetFrame/Play/Pause/Stop) |
@@ -167,6 +167,7 @@ Last updated: 2026-06-17 (E2E.10 Camera SceneOutliner Workaround final). Tag: `c
 | Phase 7E Keyframe Apply (Stage 9) | 97 | ✅ PASS |
 | Phase 7E Keyframe Wire (Stage 7) | 79 | ✅ PASS |
 | Phase 7E Visibility Extract (Stage 10A.1) | 67 | ✅ PASS |
+| Phase 7E Visibility BoolTrack Apply (Stage 10A.2) | 32 | ✅ PASS |
 | Phase 7E SequencerOp Wire (Stage 3) | 81 | ✅ PASS |
 | Phase 7E End-to-End Pipeline (Stage 9B) | 63 | ✅ PASS |
 | Phase 7D Stage 3 UE Handler | 92 | ✅ PASS |
