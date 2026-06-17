@@ -1,7 +1,7 @@
 # UELiveSync — Current State Roadmap
 
 **Canonical reference.** Supersedes stale scope-lock assumptions from earlier phase docs.
-Last updated: 2026-06-17 (Phase 7E Stage 10A.3 BoolTrack runtime validated). Tag: `current-state-roadmap-stable`.
+Last updated: 2026-06-17 (Phase 7E Stage 10A.4 Blender visibility E2E validated). Tag: `current-state-roadmap-stable`.
 
 ---
 
@@ -169,6 +169,7 @@ Last updated: 2026-06-17 (Phase 7E Stage 10A.3 BoolTrack runtime validated). Tag
 | Phase 7E Visibility Extract (Stage 10A.1) | 67 | ✅ PASS |
 | Phase 7E Visibility BoolTrack Apply (Stage 10A.2) | 32 | ✅ PASS |
 | Phase 7E BoolTrack Runtime Smoke (Stage 10A.3) | 26 | ✅ PASS |
+| Phase 7E Blender Visibility E2E (Stage 10A.4) | 73 | ✅ PASS |
 | Phase 7E SequencerOp Wire (Stage 3) | 81 | ✅ PASS |
 | Phase 7E End-to-End Pipeline (Stage 9B) | 63 | ✅ PASS |
 | Phase 7D Stage 3 UE Handler | 92 | ✅ PASS |
