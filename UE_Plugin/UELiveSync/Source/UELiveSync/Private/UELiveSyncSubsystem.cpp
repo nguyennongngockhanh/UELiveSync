@@ -4785,6 +4785,7 @@ ProcessBinaryPacket(
                 DeferredFBXRepairs.Add(Entry2);
             };
             // Phase 10J.5L: After EnsureFBXMeshRenderable fallback, restore generated MIDs.
+            // Phase 7H/7G.5: do NOT override imported FBX materials with MIDs.
             Ctx.OnRestoreGeneratedMaterials = [this](const FGuid& G, UStaticMeshComponent* SMC)
             {
                 if (!SMC)
@@ -4792,6 +4793,7 @@ ProcessBinaryPacket(
                 const FString GuidShort = G.ToString(EGuidFormats::Short);
                 const int32 NumSlots = SMC->GetNumMaterials();
                 int32 RestoredCount = 0;
+                int32 SkipImportedCount = 0;
                 for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
                 {
                     const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
@@ -4799,12 +4801,22 @@ ProcessBinaryPacket(
                     if (Found && *Found)
                     {
                         UMaterialInterface* CurrentMat = SMC->GetMaterial(SlotIdx);
+                        // Phase 7H/7G.5: if slot has an imported FBX material, do NOT override
+                        if (CurrentMat && CurrentMat->GetPathName().StartsWith(TEXT("/Game/UELiveSync/Imported")))
+                        {
+                            ++SkipImportedCount;
+                            UE_LOG(LogLiveSync, Log,
+                                TEXT("[MATERIAL][MID_OVERRIDE_SKIP_IMPORTED] guid=%s slot=%d path=%s"),
+                                *G.ToString(EGuidFormats::Digits), SlotIdx,
+                                *CurrentMat->GetPathName());
+                            continue;
+                        }
                         if (CurrentMat != *Found)
                         {
                             SMC->SetMaterial(SlotIdx, *Found);
                             ++RestoredCount;
                             UE_LOG(LogLiveSync, Log,
-                                TEXT("[MAT][RESTORE] guid=%s slot=%d restored=MID_UELiveSync_%s_%d"),
+                                TEXT("[MATERIAL][MID_FALLBACK_APPLY] guid=%s slot=%d restored=MID_UELiveSync_%s_%d"),
                                 *G.ToString(EGuidFormats::Digits), SlotIdx,
                                 *GuidShort, SlotIdx);
                         }
@@ -4815,6 +4827,12 @@ ProcessBinaryPacket(
                     UE_LOG(LogLiveSync, Log,
                         TEXT("[MAT][AUTH] guid=%s slot_count=%d authority=generated_mid"),
                         *G.ToString(EGuidFormats::Digits), RestoredCount);
+                }
+                if (SkipImportedCount > 0)
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MAT][AUTH] guid=%s skip_imported_count=%d authority=imported_fbx"),
+                        *G.ToString(EGuidFormats::Digits), SkipImportedCount);
                 }
             };
             FLiveSyncFBXImporter::HandleImport(Ptr, ObjSize, Ctx);
@@ -13575,6 +13593,20 @@ ParseAndApplyGeneratedMaterial(
         if (!MID)
             continue;
 
+        // Phase 7H/7G.5: do NOT override imported FBX material with generated MID
+        if (SlotIdx < SMC->GetNumMaterials())
+        {
+            UMaterialInterface* CurrentSlotMat = SMC->GetMaterial(SlotIdx);
+            if (CurrentSlotMat && CurrentSlotMat->GetPathName().StartsWith(TEXT("/Game/UELiveSync/Imported")))
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][MID_OVERRIDE_SKIP_IMPORTED] guid=%s slot=%d path=%s reason=parse_and_apply"),
+                    *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+                    *CurrentSlotMat->GetPathName());
+                continue;
+            }
+        }
+
         // Phase 10K.3: apply imported textures to generated MID
         ApplyImportedTexturesToGeneratedMID(Guid, SlotIdx, MID);
 
@@ -13583,7 +13615,7 @@ ParseAndApplyGeneratedMaterial(
 
         // Phase 10J.5M: log per-parameter detail for verification
         UE_LOG(LogLiveSync, Log,
-            TEXT("[MAT][GEN_PARAM] guid=%s slot=%d "
+            TEXT("[MATERIAL][MID_FALLBACK_APPLY] guid=%s slot=%d "
                  "BaseColor=(%.3f,%.3f,%.3f,%.3f) "
                  "Roughness=%.3f Metallic=%.3f Alpha=%.3f"),
             *Guid.ToString(EGuidFormats::Digits), SlotIdx,

@@ -1774,4 +1774,96 @@ channel=10 frame=20 value=1  (hidden)
 **UE process**: Alive on port 57000 after full packet cycle.
 
 ### Summary
+
+**Classification**: `PASS_PHASE7H_MATERIAL_POLICY_CAMERA_UX`
+
+### What was built
+
+- **Material Policy**: FBX-imported materials (`/Game/UELiveSync/Imported/*`) are no longer treated as unsafe by `IsUnsafeFBXMaterial`. This prevents `EnsureFBXMeshRenderable` from overwriting them with SafeMaterial, and prevents MID fallback (`OnRestoreGeneratedMaterials`, `ParseAndApplyGeneratedMaterial`) from overriding them. SafeMaterial fallback still applies for null/WorldGrid slots.
+
+- **Camera Sync UX**: New Blender operator `UELIVESYNC_OT_sync_active_camera_to_ue` (`bl_idname: uelivesync.sync_active_camera_to_ue`) with button `"Sync Active Camera to UE"` (CAMERA_DATA icon) in the UE Sync panel. Sends PT_Create (0x03) + PT_Transform (default) + PT_CameraDef (0x1B) + PT_ActiveCamera (0x15) for the active scene camera (falls back to selected camera object). Reports warnings on no camera/no connection.
+
+### UE-side changes
+
+| File | Change |
+|------|--------|
+| `LiveSyncFBXImporter.cpp` | `IsUnsafeFBXMaterial` — `/Game/UELiveSync/Imported` now returns `false` (kept) with `[MATERIAL][FBX_IMPORTED_KEEP]` log. `EnsureFBXMeshRenderable` else branch logs `[MATERIAL][FBX_IMPORTED_APPLY]` when imported material is kept. |
+| `UELiveSyncSubsystem.cpp` | `OnRestoreGeneratedMaterials` lambda — skips MID restoration when slot has `/Game/UELiveSync/Imported` material. `ParseAndApplyGeneratedMaterial` skips MID apply when slot has imported material. Both log `[MATERIAL][MID_OVERRIDE_SKIP_IMPORTED]`. |
+
+### Blender-side changes
+
+| File | Change |
+|------|--------|
+| `__init__.py` | New `UELIVESYNC_OT_sync_active_camera_to_ue` operator class with `execute()` method. Button added to panel after FBX button with CAMERA_DATA icon. Registered in classes tuple. |
+
+### Invariants preserved
+
+- No packet format changes
+- No protocol ID changes (PT_CameraDef=0x1B, PT_ActiveCamera=0x15, PT_Keyframe=0x17, LSP_Camera=0x05)
+- 0x02 remains reserved/invalid
+- Camera crash workaround (`bHideFromSceneOutliner=true`) preserved
+- Transform keyframe handling (channels 0-8) unchanged
+- SafeMaterial fallback still works for null/WorldGrid slots
+- SafeMaterial fallback still works for imported FBX materials (now preserved)
+
+### Tests
+
+**34/34 PASS** — `tests/phase7h_material_policy_camera_ux.py`
+
+- Material policy: imported markers, unsafe null/WorldGrid checks, skip guards
+- Camera UX: operator existence, button, registration, warnings, packet types, protocol markers
+- Protocol invariants: no packet ID changes, crash workaround preserved
+
+### Known pre-existing failures (not caused by this change)
+- `test_acameraactor_spawn_in_handle`: expects `SpawnActorDeferred<ACameraActor>` but code uses `World->SpawnActor<ACameraActor>` (non-deferred)
+- Fixture `name` not found errors in `phase7g_stage4_camera_transform_sync.py` and `phase7g_stage5_camera_sequencer_binding.py` (non-standard test pattern incompatible with newer pytest)
+
+### Summary
 Stage 10F validates that **two** Blender objects with **independent** transform and visibility keyframes can be bound into the same LevelSequence without cross-contamination. All 60 keys applied with 0 missing and 0 unsupported. Visibility values correctly span 0.0 and 1.0 across frames. Multi-object bindings are independent. UE stable throughout.
+
+---
+
+## Phase 7H / 7G.5 — Material Assignment Policy + Manual Camera Sync UX ✅
+
+**Classification**: `PASS_PHASE7H_MATERIAL_POLICY_CAMERA_UX`
+
+### What was built
+
+- **Material Policy**: FBX-imported materials (`/Game/UELiveSync/Imported/*`) are no longer treated as unsafe by `IsUnsafeFBXMaterial`. This prevents `EnsureFBXMeshRenderable` from overwriting them with SafeMaterial, and prevents MID fallback (`OnRestoreGeneratedMaterials`, `ParseAndApplyGeneratedMaterial`) from overriding them. SafeMaterial fallback still applies for null/WorldGrid slots.
+
+- **Camera Sync UX**: New Blender operator `UELIVESYNC_OT_sync_active_camera_to_ue` (`bl_idname: uelivesync.sync_active_camera_to_ue`) with button `"Sync Active Camera to UE"` (CAMERA_DATA icon) in the UE Sync panel. Sends PT_Create (0x03) + PT_Transform (default) + PT_CameraDef (0x1B) + PT_ActiveCamera (0x15) for the active scene camera (falls back to selected camera object). Reports warnings on no camera/no connection.
+
+### UE-side changes
+
+| File | Change |
+|------|--------|
+| `LiveSyncFBXImporter.cpp` | `IsUnsafeFBXMaterial` — `/Game/UELiveSync/Imported` now returns `false` (kept) with `[MATERIAL][FBX_IMPORTED_KEEP]` log. `EnsureFBXMeshRenderable` else branch logs `[MATERIAL][FBX_IMPORTED_APPLY]` when imported material is kept. |
+| `UELiveSyncSubsystem.cpp` | `OnRestoreGeneratedMaterials` lambda — skips MID restoration when slot has `/Game/UELiveSync/Imported` material. `ParseAndApplyGeneratedMaterial` skips MID apply when slot has imported material. Both log `[MATERIAL][MID_OVERRIDE_SKIP_IMPORTED]`. |
+
+### Blender-side changes
+
+| File | Change |
+|------|--------|
+| `__init__.py` | New `UELIVESYNC_OT_sync_active_camera_to_ue` operator class with `execute()` method. Button added to panel after FBX button with CAMERA_DATA icon. Registered in classes tuple. |
+
+### Invariants preserved
+
+- No packet format changes
+- No protocol ID changes (PT_CameraDef=0x1B, PT_ActiveCamera=0x15, PT_Keyframe=0x17, LSP_Camera=0x05)
+- 0x02 remains reserved/invalid
+- Camera crash workaround (`bHideFromSceneOutliner=true`) preserved
+- Transform keyframe handling (channels 0-8) unchanged
+- SafeMaterial fallback still works for null/WorldGrid slots
+- SafeMaterial fallback still works for imported FBX materials (now preserved)
+
+### Tests
+
+**34/34 PASS** — `tests/phase7h_material_policy_camera_ux.py`
+
+- Material policy: imported markers, unsafe null/WorldGrid checks, skip guards
+- Camera UX: operator existence, button, registration, warnings, packet types, protocol markers
+- Protocol invariants: no packet ID changes, crash workaround preserved
+
+### Known pre-existing failures (not caused by this change)
+- `test_acameraactor_spawn_in_handle`: expects `SpawnActorDeferred<ACameraActor>` but code uses `World->SpawnActor<ACameraActor>` (non-deferred)
+- Fixture `name` not found errors in `phase7g_stage4_camera_transform_sync.py` and `phase7g_stage5_camera_sequencer_binding.py` (non-standard test pattern incompatible with newer pytest)

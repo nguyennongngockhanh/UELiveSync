@@ -370,8 +370,9 @@ static bool IsWorldGridMaterialPath(const FString& Path)
 // =========================================================
 // Phase 10J.5D.3: unsafe-material check
 // =========================================================
-// Returns true when Mat is null, WorldGrid, or
-// /Game/UELiveSync/Imported — all unsafe for visibility.
+// Returns true when Mat is null or WorldGrid.
+// /Game/UELiveSync/Imported materials are valid FBX-imported
+// assets and MUST NOT be replaced.
 static bool IsUnsafeFBXMaterial(UMaterialInterface* Mat)
 {
     if (!Mat)
@@ -382,8 +383,16 @@ static bool IsUnsafeFBXMaterial(UMaterialInterface* Mat)
     if (IsWorldGridMaterialPath(MatPath))
         return true;
 
+    // Phase 7H/7G.5: /Game/UELiveSync/Imported is now VALID.
+    // These are legitimately imported FBX materials that must
+    // NOT be replaced by SafeMaterial fallback.
     if (MatPath.StartsWith(TEXT("/Game/UELiveSync/Imported")))
-        return true;
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MATERIAL][FBX_IMPORTED_KEEP] slot=%s path=%s"),
+            *MatPath);
+        return false;
+    }
 
     return false;
 }
@@ -535,6 +544,17 @@ void FLiveSyncFBXImporter::EnsureFBXMeshRenderable(
                     *Current->GetPathName(),
                     *SafeMaterial->GetPathName(),
                     *Reason);
+            }
+        }
+        // Phase 7H/7G.5: log when imported FBX material is kept
+        else if (Current)
+        {
+            const FString MatPath = Current->GetPathName();
+            if (MatPath.StartsWith(TEXT("/Game/UELiveSync/Imported")))
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][FBX_IMPORTED_APPLY] guid=%s slot=%d path=%s"),
+                    *Guid.ToString(EGuidFormats::Digits), i, *MatPath);
             }
         }
     }

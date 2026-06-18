@@ -1291,6 +1291,188 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
 
 
 # =========================================================
+# PHASE 7H / 7G.5: SYNC ACTIVE CAMERA TO UE
+# =========================================================
+
+class UELIVESYNC_OT_sync_active_camera_to_ue(
+    bpy.types.Operator
+):
+
+    bl_idname = \
+        "uelivesync.sync_active_camera_to_ue"
+
+    bl_label = "Sync Active Camera to UE"
+
+    bl_description = \
+        "Send the active Blender camera to UE via " \
+        "existing camera protocol paths (PT_Create, " \
+        "PT_Transform, PT_CameraDef, PT_ActiveCamera)"
+
+    _camera_sequence: int = 0
+
+    def execute(self, context):
+
+        import time
+        from uuid import UUID
+
+        # --- Find the camera ---
+        camera_obj = getattr(
+            context.scene, "camera", None
+        )
+
+        if camera_obj is None:
+            # Fallback: selected active object if it is a camera
+            active = getattr(
+                context, "active_object", None
+            )
+            if active is not None and \
+               active.type == 'CAMERA':
+                camera_obj = active
+
+        if camera_obj is None:
+            self.report(
+                {'WARNING'},
+                "No active camera found: "
+                "set scene.camera or select a camera object"
+            )
+            return {'CANCELLED'}
+
+        # --- Ensure connection ---
+        if not sync.is_connected():
+            self.report(
+                {'WARNING'},
+                "Not connected to UE LiveSync server"
+            )
+            return {'CANCELLED'}
+
+        # --- Ensure GUID ---
+        guid_hex = sync.ensure_guid(camera_obj)
+        guid_obj = UUID(guid_hex)
+
+        # --- Extract transform ---
+        loc = camera_obj.location
+        rot = camera_obj.rotation_quaternion
+        scl = camera_obj.scale
+        transform = {
+            "location": (loc.x, loc.y, loc.z),
+            "rotation": (rot.x, rot.y, rot.z, rot.w),
+            "scale": (scl.x, scl.y, scl.z),
+        }
+        timestamp = time.time()
+
+        # --- Serialize create/transform payload (PT_Create + PT_Transform) ---
+        try:
+            obj_payload = network.serialize_object_v3(
+                guid_obj,
+                transform,
+                timestamp,
+                parent_guid_obj=None,
+                primitive_type=network.PRIMITIVE_CAMERA,
+            )
+        except Exception as e:
+            self.report(
+                {'ERROR'},
+                f"Camera serialization failed: {e}"
+            )
+            return {'CANCELLED'}
+
+        # --- Serialize camera definition (PT_CameraDef) ---
+        cam_data = camera_obj.data
+        focal = getattr(cam_data, 'lens', 50.0)
+        sensor_width = getattr(
+            cam_data, 'sensor_width', 36.0
+        )
+        sensor_height = getattr(
+            cam_data, 'sensor_height', 24.0
+        )
+        clip_start = getattr(
+            cam_data, 'clip_start', 0.1
+        )
+        clip_end = getattr(
+            cam_data, 'clip_end', 1000.0
+        )
+        is_ortho = getattr(
+            cam_data, 'type', 'PERSP'
+        ) == 'ORTHO'
+        ortho_scale = getattr(
+            cam_data, 'ortho_scale', 6.0
+        )
+        flags = 0
+        if is_ortho:
+            flags |= network.CAMERA_DEF_FLAG_IS_ORTHO
+        flags |= network.CAMERA_DEF_FLAG_HAS_CAMERA_DEF
+
+        try:
+            camdef_payload = network.serialize_camera_def(
+                guid_obj,
+                focal_length_mm=focal,
+                sensor_width_mm=sensor_width,
+                sensor_height_mm=sensor_height,
+                clip_start=clip_start,
+                clip_end=clip_end,
+                ortho_scale=ortho_scale,
+                flags=flags,
+            )
+        except Exception as e:
+            self.report(
+                {'ERROR'},
+                f"CameraDef serialization failed: {e}"
+            )
+            return {'CANCELLED'}
+
+        # --- Serialize active camera (PT_ActiveCamera) ---
+        type(self)._camera_sequence += 1
+        try:
+            active_payload = network.serialize_active_camera(
+                guid_obj,
+                type(self)._camera_sequence,
+                timestamp,
+            )
+        except Exception as e:
+            self.report(
+                {'ERROR'},
+                f"ActiveCamera serialization failed: {e}"
+            )
+            return {'CANCELLED'}
+
+        # --- Send packets ---
+        try:
+            # PT_Create (0x03) to spawn camera actor
+            network.send_objects(
+                [obj_payload],
+                packet_type=0x03,
+            )
+            # PT_Transform (0x01, default) for position
+            network.send_objects(
+                [obj_payload],
+            )
+            # PT_CameraDef (0x1B) for lens/sensor/clip
+            network.send_objects(
+                [camdef_payload],
+                packet_type=network.PT_CameraDef,
+                version=5,
+            )
+            # PT_ActiveCamera (0x15)
+            network.send_objects(
+                [active_payload],
+                packet_type=network.PT_ActiveCamera,
+                version=5,
+            )
+        except Exception as e:
+            self.report(
+                {'ERROR'},
+                f"Failed to send camera packets: {e}"
+            )
+            return {'CANCELLED'}
+
+        self.report(
+            {'INFO'},
+            f"LiveSync camera sync sent: {camera_obj.name}"
+        )
+        return {'FINISHED'}
+
+
+# =========================================================
 # CONNECTION STATUS PANEL
 # =========================================================
 
@@ -1503,6 +1685,11 @@ class UELIVESYNC_PT_panel(
             icon='MESH_DATA',
         )
 
+        layout.operator(
+            "uelivesync.sync_active_camera_to_ue",
+            icon='CAMERA_DATA',
+        )
+
         layout.separator()
 
         # Preferences shortcut
@@ -1534,6 +1721,7 @@ classes = (
     UELIVESYNC_OT_discover_and_connect,
     UELIVESYNC_OT_sync_selected_mesh_to_ue,
     UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx,
+    UELIVESYNC_OT_sync_active_camera_to_ue,
     UELIVESYNC_PT_panel,
 )
 

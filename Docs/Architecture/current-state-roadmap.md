@@ -1,7 +1,7 @@
 # UELiveSync — Current State Roadmap
 
 **Canonical reference.** Supersedes stale scope-lock assumptions from earlier phase docs.
-Last updated: 2026-06-17 (Phase 7E Stage 10E runtime validated). Tag: `current-state-roadmap-stable`.
+Last updated: 2026-06-18 (Phase 7H/7G.5 material policy + camera UX). Tag: `current-state-roadmap-stable`.
 
 ---
 
