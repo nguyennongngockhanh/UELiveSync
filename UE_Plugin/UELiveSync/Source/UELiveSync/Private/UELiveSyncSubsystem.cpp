@@ -13809,6 +13809,27 @@ CopyImportedTexturesFromParent(
             TEXT("[MATERIAL][TEXTURE_TOGGLE_READBACK] guid=%s slot=%d param=UseBaseColorTexture value=%d"),
             *GuidStr, SlotIndex,
             CheckUseBaseColor > 0.5f ? 1 : 0);
+
+        // Phase 7H.7: VALUE_PARAM_READBACK for scalar values
+        float CheckBaseColorR = 0.0f, CheckBaseColorG = 0.0f, CheckBaseColorB = 0.0f, CheckAlpha = 0.0f;
+        LiveSyncMID->GetScalarParameterValue(TEXT("BaseColorR"), CheckBaseColorR);
+        LiveSyncMID->GetScalarParameterValue(TEXT("BaseColorG"), CheckBaseColorG);
+        LiveSyncMID->GetScalarParameterValue(TEXT("BaseColorB"), CheckBaseColorB);
+        LiveSyncMID->GetScalarParameterValue(TEXT("Alpha"), CheckAlpha);
+        float CheckRoughness = 0.0f;
+        LiveSyncMID->GetScalarParameterValue(TEXT("Roughness"), CheckRoughness);
+        float CheckMetallic = 0.0f;
+        LiveSyncMID->GetScalarParameterValue(TEXT("Metallic"), CheckMetallic);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][VALUE_PARAM_READBACK] guid=%s slot=%d param=BaseColor value=(%.3f,%.3f,%.3f,%.3f)"),
+            *GuidStr, SlotIndex, CheckBaseColorR, CheckBaseColorG, CheckBaseColorB, CheckAlpha);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][VALUE_PARAM_READBACK] guid=%s slot=%d param=Roughness value=%.3f"),
+            *GuidStr, SlotIndex, CheckRoughness);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][VALUE_PARAM_READBACK] guid=%s slot=%d param=Metallic value=%.3f"),
+            *GuidStr, SlotIndex, CheckMetallic);
     }
 
     MaterialImportedTextureCopied += CopiedCount;
@@ -13989,6 +14010,14 @@ ParseAndApplyGeneratedMaterial(
         {
             static const TCHAR* ScalarParams[] = { TEXT("Roughness"), TEXT("Metallic"), TEXT("Alpha") };
             static const float ScalarValues[] = { Props.Roughness, Props.Metallic, Props.Alpha };
+
+            // Phase 7H: log VALUE_PARAM_SET for scalar values (including BaseColor)
+            const FString BCLog = TEXT("[MATERIAL][VALUE_PARAM_SET] guid=") + Guid.ToString(EGuidFormats::Digits) +
+                TEXT(" slot=") + FString::FromInt(SlotIdx) +
+                TEXT(" param=BaseColor value=(") + FString::SanitizeFloat(Props.BaseColor.R) + TEXT(",") +
+                FString::SanitizeFloat(Props.BaseColor.G) + TEXT(",") + FString::SanitizeFloat(Props.BaseColor.B) +
+                TEXT(",") + FString::SanitizeFloat(Props.BaseColor.A) + TEXT(")");
+            UE_LOG(LogLiveSync, Log, TEXT("%s"), *BCLog);
 
             // Log VALUE_PARAM_SET for scalar values
             for (int32 c = 0; c < 3; c++)

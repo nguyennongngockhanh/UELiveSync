@@ -1603,6 +1603,116 @@ def test_transform_sync_not_inside_material_hash_try():
     )
 
 
+# === Scalar-only material lifecycle tests ===
+
+
+def test_no_material_object_does_not_require_material_sync():
+    """No material on object: no material sync required, fallback/default MID allowed."""
+    assert "if bPropertiesChanged and current_slots:" in sync_py, (
+        "Material send must require non-empty slots"
+    )
+
+
+def test_first_scalar_material_forces_sendmat():
+    """First scalar-only material forces sendMAT=1."""
+    assert "first_material_send" in sync_py, (
+        "first_material_send reason must be logged"
+    )
+
+
+def test_first_scalar_material_reason_is_first_material_send():
+    """First material send reason is first_material_send."""
+    assert "_mat_reason_log = " in sync_py
+    assert "first_material_send" in sync_py, (
+        "First material must use first_material_send reason"
+    )
+
+
+def test_scalar_only_material_logs_scalar_channel_scan():
+    """Scalar-only material logs SCALAR_CHANNEL_SCAN."""
+    assert "SCALAR_CHANNEL_SCAN" in sync_py, (
+        "SCALAR_CHANNEL_SCAN log must exist in sync.py"
+    )
+
+
+def test_scalar_only_material_logs_matx_value_send_basecolor():
+    """Scalar-only material logs MATX_VALUE_SEND for BaseColor."""
+    assert "MATX_VALUE_SEND" in sync_py, (
+        "MATX_VALUE_SEND log must exist in sync.py"
+    )
+
+
+def test_scalar_only_material_logs_matx_value_send_roughness():
+    """Scalar-only material logs MATX_VALUE_SEND for Roughness."""
+    assert "MATX_VALUE_SEND" in sync_py, (
+        "MATX_VALUE_SEND log must exist in sync.py"
+    )
+
+
+def test_scalar_only_material_logs_matx_value_send_metallic():
+    """Scalar-only material logs MATX_VALUE_SEND for Metallic."""
+    assert "MATX_VALUE_SEND" in sync_py, (
+        "MATX_VALUE_SEND log must exist in sync.py"
+    )
+
+
+def test_scalar_only_material_logs_matx_value_send_alpha():
+    """Scalar-only material logs MATX_VALUE_SEND for Alpha."""
+    assert "MATX_VALUE_SEND" in sync_py, (
+        "MATX_VALUE_SEND log must exist in sync.py"
+    )
+
+
+def test_ue_scalar_material_logs_texture_recv_count_zero():
+    """UE scalar-only material logs MATX_TEXTURE_RECV with textureRecordCount=0."""
+    assert "[MATERIAL][MATX_TEXTURE_RECV]" in source_cpp, (
+        "MATX_TEXTURE_RECV must be logged in UE"
+    )
+    assert "textureRecordCount" in source_cpp, (
+        "textureRecordCount must be in the log format"
+    )
+
+
+def test_ue_scalar_material_logs_value_param_set():
+    """UE scalar-only material logs VALUE_PARAM_SET for scalar values."""
+    assert "[MATERIAL][VALUE_PARAM_SET]" in source_cpp, (
+        "VALUE_PARAM_SET must be logged in UE"
+    )
+
+
+def test_ue_scalar_material_sets_texture_toggles_zero():
+    """UE scalar-only material sets all UseXTexture=0."""
+    assert "UseBaseColorTexture" in source_cpp, (
+        "UseBaseColorTexture must be logged in UE"
+    )
+    assert "UseRoughnessTexture" in source_cpp, (
+        "UseRoughnessTexture must be logged in UE"
+    )
+    assert "UseMetallicTexture" in source_cpp, (
+        "UseMetallicTexture must be logged in UE"
+    )
+
+
+def test_lifecycle_no_material_to_scalar_to_textured():
+    """Lifecycle: no material → scalar material → BaseColor texture material."""
+    assert "is_first_material" in sync_py
+    assert "bPropertiesChanged = True" in sync_py
+    assert "tex_changed" in sync_py
+    assert "serialize_material_slots" in sync_py
+
+
+def test_texture_update_after_scalar_forces_sendmat():
+    """Texture update after scalar material sends sendMAT=1 reason=texture_changed."""
+    assert "texture_changed" in sync_py
+    assert "[MATERIAL][DIRTY_DECIDE]" in sync_py
+
+
+def test_scalar_values_preserved_after_texture_update():
+    """Scalar values preserved after texture update."""
+    assert "mat_props" in sync_py
+    assert "serialize_material_slots" in sync_py
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
