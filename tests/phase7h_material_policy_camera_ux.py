@@ -820,6 +820,61 @@ def test_fbx_sidecar_texture_import_ok_ue_marker():
     assert "[FBX][SIDECAR_TEXTURE_IMPORT_OK]" in fbx_cpp
 
 
+def test_blender_texture_sidecar_function_exists():
+    """_copy_textures_sidecar function is defined in __init__.py."""
+    assert "def _copy_textures_sidecar(" in init_py
+
+
+def test_blender_texture_sidecar_scan_marker():
+    """[FBX][TEXTURE_SIDECAR_SCAN] marker exists in __init__.py."""
+    assert "[FBX][TEXTURE_SIDECAR_SCAN]" in init_py
+
+
+def test_blender_texture_copy_marker():
+    """[FBX][TEXTURE_COPY] marker exists in __init__.py."""
+    assert "[FBX][TEXTURE_COPY]" in init_py
+
+
+def test_blender_texture_copy_fail_marker():
+    """[FBX][TEXTURE_COPY_FAIL] marker exists in __init__.py."""
+    assert "[FBX][TEXTURE_COPY_FAIL]" in init_py
+
+
+def test_blender_texture_sidecar_summary_marker():
+    """[FBX][TEXTURE_SIDECAR_SUMMARY] marker exists in __init__.py."""
+    assert "[FBX][TEXTURE_SIDECAR_SUMMARY]" in init_py
+
+
+def test_blender_texture_sidecar_called_before_cache_list():
+    """_copy_textures_sidecar is called before CACHE_FOLDER_LIST."""
+    # Find the call and confirm it precedes CACHE_FOLDER_LIST
+    call_pos = init_py.find("_copy_textures_sidecar(")
+    cache_pos = init_py.find("[FBX][CACHE_FOLDER_LIST]")
+    assert call_pos >= 0, "_copy_textures_sidecar call not found"
+    assert cache_pos >= 0, "CACHE_FOLDER_LIST not found"
+    assert call_pos < cache_pos, (
+        f"_copy_textures_sidecar at {call_pos} must precede "
+        f"CACHE_FOLDER_LIST at {cache_pos}"
+    )
+
+
+def test_blender_texture_sidecar_no_material_slots_log():
+    """no_material_slots branch logs TEXTURE_SIDECAR."""
+    assert "no_material_slots" in init_py
+
+
+def test_blender_texture_sidecar_imports_shutil():
+    """shutil is imported inside _copy_textures_sidecar."""
+    assert "import shutil" in init_py
+
+
+def test_fbx_sidecar_texture_scan_ue_scans_textures_subfolder():
+    """UE sidecar scan checks textures/ subfolder."""
+    assert "textures" in fbx_cpp or "TEXTURES" in fbx_cpp
+    # Confirm the subfolder scan pattern exists
+    assert "FbxDir / TEXT(\"textures\")" in fbx_cpp
+
+
 # =====================================================================
 # SUCCESS REPORT
 # =====================================================================

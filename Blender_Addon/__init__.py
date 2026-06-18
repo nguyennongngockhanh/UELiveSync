@@ -928,6 +928,104 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
             bpy.context.view_layer.objects.active = orig_active
 
 
+def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
+    """Copy material texture images into dest_dir for UE sidecar import.
+    
+    Iterates obj material slots, finds TEX_IMAGE nodes, and copies
+    referenced images into dest_dir (the FBX cache folder).
+    Handles FILE source (direct copy), packed images, and GENERATED images.
+    Returns number of textures copied.
+    """
+    import shutil
+    import uuid as _uuid
+
+    if not obj.material_slots:
+        _fbx_log(f"[FBX][TEXTURE_SIDECAR] guid={guid_short} "
+                 f"object={obj.name} no_material_slots")
+        return 0
+
+    copied_count = 0
+    for slot in obj.material_slots:
+        mat = slot.material
+        if not mat or not mat.use_nodes or not mat.node_tree:
+            continue
+        for node in mat.node_tree.nodes:
+            if node.type != 'TEX_IMAGE' or not node.image:
+                continue
+            img = node.image
+            filepath = getattr(img, "filepath", "") or ""
+            filepath_raw = getattr(img, "filepath_raw", "") or ""
+            source = getattr(img, "source", "")
+            is_packed = bool(getattr(img, "packed_file", False))
+
+            _fbx_log(f"[FBX][TEXTURE_SIDECAR_SCAN] guid={guid_short} "
+                     f"object={obj.name} material={mat.name} "
+                     f"image={img.name} source={source} "
+                     f"packed={1 if is_packed else 0}")
+
+            if source == 'FILE' and not is_packed:
+                abs_path = bpy.path.abspath(filepath)
+                if not os.path.isfile(abs_path):
+                    _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
+                             f"object={obj.name} material={mat.name} "
+                             f"image={img.name} reason=file_not_found "
+                             f"path={abs_path}")
+                    continue
+                dest_name = os.path.basename(abs_path)
+                dest_path = os.path.join(dest_dir, dest_name)
+                if os.path.exists(dest_path):
+                    base, ext = os.path.splitext(dest_name)
+                    dest_name = f"{base}_{_uuid.uuid4().hex[:8]}{ext}"
+                    dest_path = os.path.join(dest_dir, dest_name)
+                try:
+                    shutil.copy2(abs_path, dest_path)
+                    _fbx_log(f"[FBX][TEXTURE_COPY] guid={guid_short} "
+                             f"object={obj.name} material={mat.name} "
+                             f"image={img.name} src={abs_path} "
+                             f"dst={dest_path}")
+                    copied_count += 1
+                except Exception as e:
+                    _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
+                             f"object={obj.name} material={mat.name} "
+                             f"image={img.name} reason=copy_failed "
+                             f"error={e}")
+            elif is_packed or source == 'GENERATED':
+                ext = ".png"
+                try:
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tf:
+                        temp_path = tf.name
+                    img.save_render(temp_path)
+                    dest_name = f"{img.name}{ext}"
+                    dest_path = os.path.join(dest_dir, dest_name)
+                    if os.path.exists(dest_path):
+                        base = os.path.splitext(dest_name)[0]
+                        dest_name = f"{base}_{_uuid.uuid4().hex[:8]}{ext}"
+                        dest_path = os.path.join(dest_dir, dest_name)
+                    shutil.move(temp_path, dest_path)
+                    _fbx_log(f"[FBX][TEXTURE_COPY] guid={guid_short} "
+                             f"object={obj.name} material={mat.name} "
+                             f"image={img.name} "
+                             f"source={'packed' if is_packed else 'generated'} "
+                             f"dst={dest_path}")
+                    copied_count += 1
+                except Exception as e:
+                    _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
+                             f"object={obj.name} material={mat.name} "
+                             f"image={img.name} "
+                             f"source={'packed' if is_packed else 'generated'} "
+                             f"reason=save_failed error={e}")
+            else:
+                _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
+                         f"object={obj.name} material={mat.name} "
+                         f"image={img.name} source={source} "
+                         f"reason=unsupported_source")
+
+    _fbx_log(f"[FBX][TEXTURE_SIDECAR_SUMMARY] guid={guid_short} "
+             f"object={obj.name} copied={copied_count}")
+    return copied_count
+
+
 class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
     bpy.types.Operator
 ):
@@ -1077,6 +1175,9 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         "not created"
                     )
                     continue
+
+                # Phase 7H.6: explicit sidecar texture copy for UE import
+                _copy_textures_sidecar(obj, obj_dir, guid_hex[:8])
 
                 # Phase 7H.6: diagnostics after successful FBX export
                 cache_files = _glob.glob(os.path.join(obj_dir, "*"))
