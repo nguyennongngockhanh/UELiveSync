@@ -154,6 +154,8 @@ try:
         CAMERA_DEF_FLAG_IS_ORTHO,
         CAMERA_DEF_FLAG_HAS_CAMERA_DEF,
         CAP_SUPPORTS_CAMERA_DEF_SYNC,
+        compute_material_texture_hash,
+        compute_material_dirty_sig,
         _append_blender_debug_log,
     )
 except ImportError:
@@ -262,6 +264,8 @@ except ImportError:
         _keyframes_sent as _net_keyframes_sent,
         _animated_objects_scanned as _net_animated_objects_scanned,
         pack_ue_fguid,
+        compute_material_texture_hash,
+        compute_material_dirty_sig,
         _append_blender_debug_log,
     )
 
@@ -1764,65 +1768,77 @@ def check_updates():
         except Exception:
             current_prop_sig = None
 
-        # Phase 7H: compute per-slot texture hash
+        # Phase 7H: compute per-slot texture hash (exception-isolated)
         current_tex_maps = None
-        if current_prop_sig is not None:
-            current_tex_sigs = {}
-            current_tex_maps = {}
-            for slot_index, slot in enumerate(obj.material_slots):
-                if slot and slot.material:
-                    maps = extract_texture_maps_for_slot(slot.material)
-                    if maps:
-                        current_tex_maps[slot_index] = maps
-                        tex_hash = compute_material_texture_hash(slot_index, maps)
-                        current_tex_sigs[slot_index] = tex_hash
+        current_tex_sigs = {}
+        _mat_dirty_error = None
+        try:
+            if current_prop_sig is not None:
+                current_tex_maps = {}
+                for slot_index, slot in enumerate(obj.material_slots):
+                    if slot and slot.material:
+                        maps = extract_texture_maps_for_slot(slot.material)
+                        if maps:
+                            current_tex_maps[slot_index] = maps
+                            tex_hash = compute_material_texture_hash(slot_index, maps)
+                            current_tex_sigs[slot_index] = tex_hash
 
-        if is_first_material:
-            bPropertiesChanged = True
-        elif current_slots != prev_slots:
-            bPropertiesChanged = True
-        elif current_prop_sig is not None:
-            prev_prop_sig = _last_material_property_sig.get(guid)
-            scalar_changed = prev_prop_sig is None or current_prop_sig != prev_prop_sig
-            tex_changed = False
-            if prev_prop_sig is not None and len(prev_prop_sig) == len(current_prop_sig):
-                prev_tex_sigs = {}
-                for si in prev_prop_sig:
-                    prev_tex_sigs[si] = prev_prop_sig[si][6:] if len(prev_prop_sig[si]) > 6 else ()
-                tex_changed = (current_tex_sigs != prev_tex_sigs)
-            if scalar_changed or tex_changed:
+            if is_first_material:
                 bPropertiesChanged = True
+            elif current_slots != prev_slots:
+                bPropertiesChanged = True
+            elif current_prop_sig is not None:
+                prev_prop_sig = _last_material_property_sig.get(guid)
+                scalar_changed = prev_prop_sig is None or current_prop_sig != prev_prop_sig
+                tex_changed = False
+                if prev_prop_sig is not None and len(prev_prop_sig) == len(current_prop_sig):
+                    prev_tex_sigs = {}
+                    for si in prev_prop_sig:
+                        prev_tex_sigs[si] = prev_prop_sig[si][6:] if len(prev_prop_sig[si]) > 6 else ()
+                    tex_changed = (current_tex_sigs != prev_tex_sigs)
+                if scalar_changed or tex_changed:
+                    bPropertiesChanged = True
 
-        if not is_first_material and bPropertiesChanged:
-            _mat_stall_cur_count = len(current_slots)
-            _mat_stall_prev_count = len(prev_slots) if prev_slots is not None else 0
-            # MATSTALL: log material slot change for diagnostics.
-            if _verbose_logging or _mat_stall_name == "Suzanne":
-                print(
-                    f"[MATSTALL][BLENDER] mat_changed guid={guid} "
-                    f"obj={_mat_stall_name} prev_count={_mat_stall_prev_count} "
-                    f"cur_count={_mat_stall_cur_count} "
-                    f"prev_keys={list(prev_slots.keys()) if prev_slots else 'None'} "
-                    f"cur_keys={list(current_slots.keys()) if current_slots else 'None'}"
+            if not is_first_material and bPropertiesChanged:
+                _mat_stall_cur_count = len(current_slots)
+                _mat_stall_prev_count = len(prev_slots) if prev_slots is not None else 0
+                # MATSTALL: log material slot change for diagnostics.
+                if _verbose_logging or _mat_stall_name == "Suzanne":
+                    print(
+                        f"[MATSTALL][BLENDER] mat_changed guid={guid} "
+                        f"obj={_mat_stall_name} prev_count={_mat_stall_prev_count} "
+                        f"cur_count={_mat_stall_cur_count} "
+                        f"prev_keys={list(prev_slots.keys()) if prev_slots else 'None'} "
+                        f"cur_keys={list(current_slots.keys()) if current_slots else 'None'}"
+                    )
+                # Phase 10J.5I + Phase 7H: log dirty reason with texture hash info
+                _mat_reason = "identity" if current_slots != prev_slots else "properties"
+                scalar_hash, tex_hash_val, combined_hash_val = (0, 0, 0)
+                if current_prop_sig is not None and current_tex_sigs is not None:
+                    scalar_hash, tex_hash_val, combined_hash_val = compute_material_dirty_sig(current_prop_sig, current_tex_sigs)
+                print(f"[MATERIAL][DIRTY_HASH] guid={guid} "
+                      f"scalarHash={scalar_hash} textureHash={tex_hash_val} "
+                      f"combinedHash={combined_hash_val}")
+                _mat_reason_log = "texture_changed" if (not scalar_changed and tex_changed) else _mat_reason
+                print(f"[MATERIAL][DIRTY_DECIDE] guid={guid} "
+                      f"property_changed={bPropertiesChanged} "
+                      f"reason={_mat_reason_log} "
+                      f"slots={_mat_stall_cur_count}")
+                _append_blender_debug_log(
+                    f"[MAT][SIG] guid={guid} "
+                    f"reason={_mat_reason_log} "
+                    f"slots={_mat_stall_cur_count}"
                 )
-            # Phase 10J.5I + Phase 7H: log dirty reason with texture hash info
-            _mat_reason = "identity" if current_slots != prev_slots else "properties"
-            scalar_hash, tex_hash_val, combined_hash_val = (0, 0, 0)
-            if current_prop_sig is not None and current_tex_sigs is not None:
-                scalar_hash, tex_hash_val, combined_hash_val = compute_material_dirty_sig(current_prop_sig, current_tex_sigs)
-            print(f"[MATERIAL][DIRTY_HASH] guid={guid} "
-                  f"scalarHash={scalar_hash} textureHash={tex_hash_val} "
-                  f"combinedHash={combined_hash_val}")
-            _mat_reason_log = "texture_changed" if (not scalar_changed and tex_changed) else _mat_reason
-            print(f"[MATERIAL][DIRTY_DECIDE] guid={guid} "
-                  f"property_changed={bPropertiesChanged} "
-                  f"reason={_mat_reason_log} "
-                  f"slots={_mat_stall_cur_count}")
+        except Exception as _mat_exc:
+            _mat_dirty_error = _mat_exc
+            print(f"[MATERIAL][DIRTY_HASH_ERROR] guid={guid} error={_mat_exc} action=send_material_fallback")
             _append_blender_debug_log(
-                f"[MAT][SIG] guid={guid} "
-                f"reason={_mat_reason_log} "
-                f"slots={_mat_stall_cur_count}"
+                f"[MAT][ERROR] guid={guid} error={_mat_exc}"
             )
+            # Conservative fallback: send material to avoid staleness
+            bPropertiesChanged = True
+            current_tex_sigs = {}
+            current_tex_maps = None
 
             # Phase 10J: exception-isolated material send
             # Phase 10J.5H: extract basic material properties for each slot

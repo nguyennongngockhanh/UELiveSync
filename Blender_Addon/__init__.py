@@ -2290,3 +2290,23 @@ def unregister():
 
 if __name__ == "__main__":
     register()
+
+
+# =========================================================
+# Phase 7H.5: Material hash helpers readiness check
+# =========================================================
+
+try:
+    _mat_helper_ready = (
+        hasattr(network, "compute_material_texture_hash")
+        and hasattr(network, "compute_material_dirty_sig")
+    )
+    _mat_helper_flags = []
+    _mat_helper_flags.append(f"compute_material_texture_hash={1 if hasattr(network, 'compute_material_texture_hash') else 0}")
+    _mat_helper_flags.append(f"compute_material_dirty_sig={1 if hasattr(network, 'compute_material_dirty_sig') else 0}")
+    if _mat_helper_ready:
+        print(f"[MATERIAL][HASH_HELPERS_READY] {' '.join(_mat_helper_flags)}")
+    else:
+        print(f"[MATERIAL][HASH_HELPERS_MISSING] {' '.join(_mat_helper_flags)} — material texture dirty detection disabled")
+except Exception:
+    pass

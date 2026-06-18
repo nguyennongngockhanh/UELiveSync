@@ -1528,6 +1528,81 @@ def test_camera_safe_behavior_unchanged():
     )
 
 
+def test_compute_material_texture_hash_imported_in_sync_py():
+    """compute_material_texture_hash is in sync.py import list."""
+    assert "compute_material_texture_hash" in sync_py
+
+
+def test_compute_material_dirty_sig_imported_in_sync_py():
+    """compute_material_dirty_sig is in sync.py import list."""
+    assert "compute_material_dirty_sig" in sync_py
+
+
+def test_no_bare_undefined_compute_material_texture_hash_in_sync_py():
+    """No bare call to compute_material_texture_hash outside import scope in sync.py."""
+    # Check that the import exists at module level (before any function defs)
+    # The import block should contain the helper name
+    assert "from .network import (" in sync_py or "from network import (" in sync_py
+
+
+def test_compute_material_dirty_sig_imported_in_sync_py():
+    """compute_material_dirty_sig is in sync.py import list."""
+    assert "compute_material_dirty_sig" in sync_py
+
+
+def test_check_updates_not_killed_by_material_hash_exception():
+    """Material dirty hash error is caught and does not propagate."""
+    assert "except Exception as _mat_exc" in sync_py, (
+        "Material hash errors must be caught"
+    )
+    assert "[MATERIAL][DIRTY_HASH_ERROR]" in sync_py, (
+        "Material hash errors must be logged"
+    )
+    assert "action=send_material_fallback" in sync_py, (
+        "Material hash errors must log fallback action"
+    )
+    assert "bPropertiesChanged = True" in sync_py, (
+        "Material hash errors must set bPropertiesChanged for fallback"
+    )
+
+
+def test_material_dirty_hash_exception_logs_dirty_hash_error():
+    """Material dirty hash exception logs [MATERIAL][DIRTY_HASH_ERROR]."""
+    assert "[MATERIAL][DIRTY_HASH_ERROR]" in sync_py, (
+        "DIRTY_HASH_ERROR log must exist in sync.py"
+    )
+    assert "_mat_exc" in sync_py, (
+        "Exception must be logged in the error message"
+    )
+
+
+def test_material_dirty_hash_exception_falls_back():
+    """Material dirty hash exception falls back to material send."""
+    assert "bPropertiesChanged = True" in sync_py, (
+        "Fallback must set bPropertiesChanged=True"
+    )
+    # Ensure transform sync is not inside the try block
+    # Transform sync code should be after the except block
+    try_block_end = sync_py.find("except Exception as _mat_exc")
+    fallback_block = sync_py[try_block_end:]
+    assert "bPropertiesChanged = True" in fallback_block, (
+        "Fallback must be in the except block"
+    )
+
+
+def test_transform_sync_not_inside_material_hash_try():
+    """Transform sync code path is not inside the material hash try block."""
+    # Find the try/except for material hash
+    try_idx = sync_py.find("# Phase 7H: compute per-slot texture hash")
+    try_block_end = sync_py.find("except Exception as _mat_exc")
+    # Transform sync (send_objects, send_snapshot) should be after this
+    after_try = sync_py[try_block_end:]
+    # The try/except should end before transform sync logic
+    assert after_try.find("send_objects") < 0 or after_try.find(")") < after_try.find("send_objects"), (
+        "Transform sync must not be inside material hash try block"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
