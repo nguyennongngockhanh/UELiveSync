@@ -449,6 +449,18 @@ private:
         int32 SlotIndex,
         const FMaterialSlotBasicProperties& Props);
 
+    /** Phase 7H fix: Create or update a UMaterialInstanceDynamic
+     *  whose parent is the imported FBX material (not the master
+     *  material). Used for imported materials where we want to
+     *  preserve the imported material identity while still syncing
+     *  BaseColor/Roughness/Metallic/Alpha from Blender.
+     */
+    UMaterialInstanceDynamic* GetOrCreateImportedParentMID(
+        const FGuid& Guid,
+        int32 SlotIndex,
+        const FMaterialSlotBasicProperties& Props,
+        UMaterialInterface* ImportedParentMat);
+
     /** Build a consistent cache key for generated materials. */
     FString MakeGeneratedMaterialKey(
         const FGuid& Guid,
@@ -879,8 +891,15 @@ private:
     // Stores runtime MID created from Blender material properties.
     TMap<FString, TObjectPtr<UMaterialInstanceDynamic>> GeneratedMaterialCache;
 
+    // Cache of MIDs parented to imported FBX materials (Phase 7H fix).
+    // Key: "GUID8_SlotIndex" (same convention as GeneratedMaterialCache).
+    TMap<FString, TObjectPtr<UMaterialInstanceDynamic>> ImportedMaterialMIDCache;
+
     // Count of generated material applications.
     int32 MaterialGeneratedApplied = 0;
+
+    // Count of imported-parent MID applications (Phase 7H material property sync).
+    int32 MaterialImportedParentMIDApplied = 0;
 
     // =====================================================
     // TEXTURE MAP METADATA CACHE (Phase 10K.1)

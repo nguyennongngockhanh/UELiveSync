@@ -790,6 +790,18 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
+        TEXT("  MatGeneratedApplied: %d"),
+        MaterialGeneratedApplied);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
+        TEXT("  MatImportedParent:   %d"),
+        MaterialImportedParentMIDApplied);
+
+    UE_LOG(
+        LogLiveSync,
+        Log,
         TEXT("  MatAssignments:      %d"),
         MaterialAssignmentsSucceeded);
 
@@ -1613,7 +1625,10 @@ ConsoleReset()
     MaterialPathCache.Empty();
     MaterialDefsReceived = 0;
     MaterialAssignmentsSucceeded = 0;
+    MaterialGeneratedApplied = 0;
+    MaterialImportedParentMIDApplied = 0;
     MaterialTextureMapCache.Empty();
+    ImportedMaterialMIDCache.Empty();
     MtexBlocksParsed = 0;
     MtexRecordsParsed = 0;
     MtexMalformed = 0;

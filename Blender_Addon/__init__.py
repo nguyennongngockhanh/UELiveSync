@@ -1304,9 +1304,8 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
     bl_label = "Sync Active Camera to UE"
 
     bl_description = \
-        "Send the active Blender camera to UE via " \
-        "existing camera protocol paths (PT_Create, " \
-        "PT_Transform, PT_CameraDef)"
+        "Send active camera Transform + CameraDef to UE " \
+        "(safe: does NOT spawn or switch viewport)"
 
     def execute(self, context):
 
@@ -1358,7 +1357,7 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
         }
         timestamp = time.time()
 
-        # --- Serialize create/transform payload (PT_Create + PT_Transform) ---
+        # --- Serialize transform payload (PT_Transform) ---
         try:
             obj_payload = network.serialize_object_v3(
                 guid_obj,
@@ -1419,12 +1418,13 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
             return {'CANCELLED'}
 
         # --- Send packets ---
+        # SAFETY: Do NOT send PT_Create (camera actor spawn is
+        # handled by auto-detect path). Only send PT_Transform +
+        # PT_CameraDef. Spawn-too-early + rapid subsequent packets
+        # can cause editor freeze. PT_ActiveCamera is never sent
+        # manually — viewport switching is unsafe and gated by
+        # the active_camera_sync preference in the auto-detect path.
         try:
-            # PT_Create (0x03) to spawn camera actor
-            network.send_objects(
-                [obj_payload],
-                packet_type=0x03,
-            )
             # PT_Transform (0x01, default) for position
             network.send_objects(
                 [obj_payload],
@@ -1435,9 +1435,6 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
                 packet_type=network.PT_CameraDef,
                 version=5,
             )
-            # PT_ActiveCamera deliberately NOT sent — viewport
-            # switching is unsafe and handled by auto-detect path
-            # when the user enables active_camera_sync preference.
         except Exception as e:
             self.report(
                 {'ERROR'},
@@ -1448,6 +1445,209 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
         self.report(
             {'INFO'},
             f"LiveSync camera sync sent: {camera_obj.name}"
+        )
+        return {'FINISHED'}
+
+
+# =========================================================
+# PHASE 7H: DEBUG CAMERA PACKET ISOLATION OPERATOR
+# =========================================================
+# Internal/debug operator for isolating which packet type
+# causes the UE freeze. Not registered in the panel UI.
+# Call from Blender Python console:
+#   bpy.ops.uelivesync.debug_send_camera_packets(
+#       send_create=True, send_transform=True,
+#       send_cameradef=True)
+# =========================================================
+
+class UELIVESYNC_OT_debug_send_camera_packets(
+    bpy.types.Operator
+):
+
+    bl_idname = \
+        "uelivesync.debug_send_camera_packets"
+
+    bl_label = "Debug: Send Camera Packets (Isolation)"
+
+    bl_description = \
+        "Send specific camera packet types for freeze isolation"
+
+    send_create: bpy.props.BoolProperty(
+        name="Send PT_Create",
+        description="Send PT_Create (0x03) to spawn camera actor",
+        default=False,
+    )
+
+    send_transform: bpy.props.BoolProperty(
+        name="Send PT_Transform",
+        description="Send PT_Transform (0x01) for position",
+        default=False,
+    )
+
+    send_cameradef: bpy.props.BoolProperty(
+        name="Send PT_CameraDef",
+        description="Send PT_CameraDef (0x1B) for lens/sensor/clip",
+        default=False,
+    )
+
+    def execute(self, context):
+
+        import time
+        from uuid import UUID
+
+        # --- Find the camera ---
+        camera_obj = getattr(
+            context.scene, "camera", None
+        )
+
+        if camera_obj is None:
+            active = getattr(
+                context, "active_object", None
+            )
+            if active is not None and \
+               active.type == 'CAMERA':
+                camera_obj = active
+
+        if camera_obj is None:
+            self.report(
+                {'WARNING'},
+                "No active camera found"
+            )
+            return {'CANCELLED'}
+
+        if not sync.is_connected():
+            self.report(
+                {'WARNING'},
+                "Not connected to UE LiveSync server"
+            )
+            return {'CANCELLED'}
+
+        guid_hex = sync.ensure_guid(camera_obj)
+        guid_obj = UUID(guid_hex)
+
+        loc = camera_obj.location
+        rot = camera_obj.rotation_quaternion
+        scl = camera_obj.scale
+        transform = {
+            "location": (loc.x, loc.y, loc.z),
+            "rotation": (rot.x, rot.y, rot.z, rot.w),
+            "scale": (scl.x, scl.y, scl.z),
+        }
+        timestamp = time.time()
+
+        sent_packets = []
+
+        # --- PT_Create (0x03) ---
+        if self.send_create:
+            try:
+                obj_payload = network.serialize_object_v3(
+                    guid_obj,
+                    transform,
+                    timestamp,
+                    parent_guid_obj=None,
+                    primitive_type=network.PRIMITIVE_CAMERA,
+                )
+                network.send_objects(
+                    [obj_payload],
+                    packet_type=0x03,
+                )
+                sent_packets.append("PT_Create")
+            except Exception as e:
+                self.report(
+                    {'ERROR'},
+                    f"PT_Create send failed: {e}"
+                )
+                return {'CANCELLED'}
+
+        # --- PT_Transform (0x01, default) ---
+        if self.send_transform and not self.send_create:
+            # Rebuild payload if we didn't already create it
+            try:
+                obj_payload = network.serialize_object_v3(
+                    guid_obj,
+                    transform,
+                    timestamp,
+                    parent_guid_obj=None,
+                    primitive_type=network.PRIMITIVE_CAMERA,
+                )
+                network.send_objects(
+                    [obj_payload],
+                )
+                sent_packets.append("PT_Transform")
+            except Exception as e:
+                self.report(
+                    {'ERROR'},
+                    f"PT_Transform send failed: {e}"
+                )
+                return {'CANCELLED'}
+        elif self.send_transform:
+            # send_create was True, payload already exists
+            try:
+                network.send_objects(
+                    [obj_payload],
+                )
+                sent_packets.append("PT_Transform")
+            except Exception as e:
+                self.report(
+                    {'ERROR'},
+                    f"PT_Transform send failed: {e}"
+                )
+                return {'CANCELLED'}
+
+        # --- PT_CameraDef (0x1B) ---
+        if self.send_cameradef:
+            cam_data = camera_obj.data
+            focal = getattr(cam_data, 'lens', 50.0)
+            sensor_width = getattr(
+                cam_data, 'sensor_width', 36.0
+            )
+            sensor_height = getattr(
+                cam_data, 'sensor_height', 24.0
+            )
+            clip_start = getattr(
+                cam_data, 'clip_start', 0.1
+            )
+            clip_end = getattr(
+                cam_data, 'clip_end', 1000.0
+            )
+            is_ortho = getattr(
+                cam_data, 'type', 'PERSP'
+            ) == 'ORTHO'
+            ortho_scale = getattr(
+                cam_data, 'ortho_scale', 6.0
+            )
+            flags = 0
+            if is_ortho:
+                flags |= network.CAMERA_DEF_FLAG_IS_ORTHO
+            flags |= network.CAMERA_DEF_FLAG_HAS_CAMERA_DEF
+
+            try:
+                camdef_payload = network.serialize_camera_def(
+                    guid_obj,
+                    focal_length_mm=focal,
+                    sensor_width_mm=sensor_width,
+                    sensor_height_mm=sensor_height,
+                    clip_start=clip_start,
+                    clip_end=clip_end,
+                    ortho_scale=ortho_scale,
+                    flags=flags,
+                )
+                network.send_objects(
+                    [camdef_payload],
+                    packet_type=network.PT_CameraDef,
+                    version=5,
+                )
+                sent_packets.append("PT_CameraDef")
+            except Exception as e:
+                self.report(
+                    {'ERROR'},
+                    f"PT_CameraDef send failed: {e}"
+                )
+                return {'CANCELLED'}
+
+        self.report(
+            {'INFO'},
+            f"Debug: sent {', '.join(sent_packets)} for {camera_obj.name}"
         )
         return {'FINISHED'}
 
@@ -1702,6 +1902,7 @@ classes = (
     UELIVESYNC_OT_sync_selected_mesh_to_ue,
     UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx,
     UELIVESYNC_OT_sync_active_camera_to_ue,
+    UELIVESYNC_OT_debug_send_camera_packets,
     UELIVESYNC_PT_panel,
 )
 
