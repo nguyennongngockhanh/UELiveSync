@@ -449,17 +449,16 @@ private:
         int32 SlotIndex,
         const FMaterialSlotBasicProperties& Props);
 
-    /** Phase 7H fix: Create or update a UMaterialInstanceDynamic
-     *  whose parent is the imported FBX material (not the master
-     *  material). Used for imported materials where we want to
-     *  preserve the imported material identity while still syncing
-     *  BaseColor/Roughness/Metallic/Alpha from Blender.
+    /** Phase 7H hotfix: Copy textures from an imported FBX material
+     *  to a LiveSync master-material MID. Enumerates texture parameters
+     *  on the imported material and maps them to LiveSync texture
+     *  parameter names by channel convention.
      */
-    UMaterialInstanceDynamic* GetOrCreateImportedParentMID(
+    void CopyImportedTexturesFromParent(
+        class UMaterialInstanceDynamic* LiveSyncMID,
+        UMaterialInterface* ImportedParentMat,
         const FGuid& Guid,
-        int32 SlotIndex,
-        const FMaterialSlotBasicProperties& Props,
-        UMaterialInterface* ImportedParentMat);
+        int32 SlotIndex);
 
     /** Build a consistent cache key for generated materials. */
     FString MakeGeneratedMaterialKey(
@@ -891,15 +890,11 @@ private:
     // Stores runtime MID created from Blender material properties.
     TMap<FString, TObjectPtr<UMaterialInstanceDynamic>> GeneratedMaterialCache;
 
-    // Cache of MIDs parented to imported FBX materials (Phase 7H fix).
-    // Key: "GUID8_SlotIndex" (same convention as GeneratedMaterialCache).
-    TMap<FString, TObjectPtr<UMaterialInstanceDynamic>> ImportedMaterialMIDCache;
-
-    // Count of generated material applications.
+    // Count of generated material applications (regular or imported slots).
     int32 MaterialGeneratedApplied = 0;
 
-    // Count of imported-parent MID applications (Phase 7H material property sync).
-    int32 MaterialImportedParentMIDApplied = 0;
+    // Count of imported textures copied to LiveSync param MID (Phase 7H hotfix).
+    int32 MaterialImportedTextureCopied = 0;
 
     // =====================================================
     // TEXTURE MAP METADATA CACHE (Phase 10K.1)

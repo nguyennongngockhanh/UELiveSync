@@ -796,8 +796,8 @@ ConsoleDumpState()
     UE_LOG(
         LogLiveSync,
         Log,
-        TEXT("  MatImportedParent:   %d"),
-        MaterialImportedParentMIDApplied);
+        TEXT("  MatImportedTexCopy:  %d"),
+        MaterialImportedTextureCopied);
 
     UE_LOG(
         LogLiveSync,
@@ -1626,9 +1626,8 @@ ConsoleReset()
     MaterialDefsReceived = 0;
     MaterialAssignmentsSucceeded = 0;
     MaterialGeneratedApplied = 0;
-    MaterialImportedParentMIDApplied = 0;
+    MaterialImportedTextureCopied = 0;
     MaterialTextureMapCache.Empty();
-    ImportedMaterialMIDCache.Empty();
     MtexBlocksParsed = 0;
     MtexRecordsParsed = 0;
     MtexMalformed = 0;

@@ -1,34 +1,31 @@
 """
-Phase 7H / 7G.5 — Material Assignment Policy + Manual Camera Sync UX.
+Phase 7H hotfix — Visual Material Sync + Camera Spawn Stability.
 
-Part A — Material Policy:
-- /Game/UELiveSync/Imported materials are no longer treated as unsafe
-- OnRestoreGeneratedMaterials checks imported-parent MID cache before skipping
-- ParseAndApplyGeneratedMaterial creates imported-parent MID for property sync
-- [MATERIAL][FBX_IMPORTED_APPLY] marker present
-- [MATERIAL][FBX_IMPORTED_KEEP] marker present
-- [MATERIAL][MID_FALLBACK_APPLY] marker present (for no-material fallback)
-- [MATERIAL][MID_FALLBACK_SKIP_IMPORTED] marker present (OnRestoreGeneratedMaterials + ParseAndApply skip)
-- [MATERIAL][TEXTURE_PRESERVE_IMPORTED_PARENT] marker present
-- [MATERIAL][IMPORTED_PARENT_MID_APPLY] marker present
-- [MAT][IMPORTED_PARENT] marker present
-- [MAT][IMPORTED_PARENT_CREATE] marker present
-- Counter MaterialImportedParentMIDApplied exists in header
-- SafeMaterial fallback still applied for null/WorldGrid slots
+Part A — Material Property Sync (visual, not assumed-inherited):
+- Imported FBX material slots use LiveSync master-material MID (parameter-compatible).
+- CopyImportedTexturesFromParent copies textures from imported material into LiveSync MID.
+- [MATERIAL][GENERATED_PARAM_MID_APPLY] marker for param-compatible MID apply.
+- [MATERIAL][IMPORTED_TEXTURE_TO_PARAM] marker for texture copy from imported material.
+- [MATERIAL][NO_IMPORTED_TEXTURE_FOUND] marker when imported material has no texture.
+- [MATERIAL][MID_FALLBACK_SKIP_IMPORTED] marker present for fallback skip.
+- [MATERIAL][FBX_IMPORTED_APPLY] marker present.
+- [MATERIAL][FBX_IMPORTED_KEEP] marker present.
+- [MATERIAL][MID_FALLBACK_APPLY] marker present (for no-material fallback).
+- Counter MaterialImportedTextureCopied exists in header.
+- IsUnsafeFBXMaterial still returns false for /Game/UELiveSync/Imported.
+- SafeMaterial fallback still applied for null/WorldGrid slots.
+- OnRestoreGeneratedMaterials uses GeneratedMaterialCache for all slots.
+- No protocol IDs changed.
 
-Part B — Camera Sync UX:
-- uelivesync.sync_active_camera_to_ue operator exists in __init__.py
-- "Sync Active Camera to UE" button in panel
-- Operator registered in classes tuple
-- No-camera warning path exists
-- Uses scene.camera fallback/selected camera logic
-- SAFE: sends PT_Create + PT_Transform + PT_CameraDef (no viewport switch)
-- SAFE: does NOT send PT_ActiveCamera (viewport switching unsafe)
-- Operator has print() output for packet verification
-- uelivesync.debug_send_camera_packets operator exists for freeze isolation
-- PT_ActiveCamera remains 0x15 in protocol, just not sent by manual operator
-- Dump Diagnostics no longer has undefined network reference
-- Camera crash workaround (bHideFromSceneOutliner) not removed
+Part B — Camera Sync UX (safe, no PT_Create):
+- Primary operator sends PT_Transform + PT_CameraDef only.
+- Primary operator does NOT send PT_Create (actor spawn is unstable in editor).
+- Primary operator does NOT send PT_ActiveCamera (viewport switching unsafe).
+- Primary operator reports spawn-disabled warning.
+- Debug operator keeps experimental PT_Create capability.
+- bHideFromSceneOutliner preserved.
+- Camera crash workaround (ConfigureLiveSyncCameraActor) not removed.
+- Dump Diagnostics no longer has undefined network reference.
 """
 
 import os
@@ -54,6 +51,10 @@ INIT_PY = os.path.join(
 NETWORK_PY = os.path.join(
     REPO_ROOT, "Blender_Addon", "network.py"
 )
+HEADER_H = os.path.join(
+    REPO_ROOT, "UE_Plugin", "UELiveSync", "Source", "UELiveSync",
+    "Public", "UELiveSyncSubsystem.h"
+)
 
 
 def read_file(path):
@@ -66,6 +67,7 @@ fbx_cpp = read_file(FBX_IMPORTER_CPP)
 sync_types = read_file(SYNC_TYPES_H)
 init_py = read_file(INIT_PY)
 network_py = read_file(NETWORK_PY)
+header_h = read_file(HEADER_H)
 
 
 # =====================================================================
@@ -94,7 +96,7 @@ def test_material_mid_override_skip_imported_marker():
     count = source_cpp.count("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED]")
     assert count >= 1, (
         f"[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] should appear at least 1 time"
-        f" (OnRestoreGeneratedMaterials + ParseAndApplyGeneratedMaterial skip), found {count}"
+        f" (in ParseAndApplyGeneratedMaterial), found {count}"
     )
 
 
@@ -102,11 +104,9 @@ def test_material_mid_override_skip_imported_marker():
 
 def test_unsafe_fbx_material_no_longer_checks_imported():
     """IsUnsafeFBXMaterial no longer treats /Game/UELiveSync/Imported as unsafe."""
-    # Check the function body in LiveSyncFBXImporter.cpp
     idx = fbx_cpp.find("static bool IsUnsafeFBXMaterial")
     assert idx != -1, "IsUnsafeFBXMaterial not found"
     chunk = fbx_cpp[idx:idx + 800]
-    # The old check for /Game/UELiveSync/Imported should now return false
     assert "return false;" in chunk.split(
         'StartsWith(TEXT("/Game/UELiveSync/Imported"))'
     )[1].split('}')[0], (
@@ -124,145 +124,132 @@ def test_unsafe_fbx_material_still_rejects_worldgrid():
     assert "WorldGrid" in fbx_cpp[fbx_cpp.find("IsUnsafeFBXMaterial"):fbx_cpp.find("IsUnsafeFBXMaterial") + 600]
 
 
-# --- OnRestoreGeneratedMaterials guard ---
+# --- OnRestoreGeneratedMaterials ---
 
-def test_on_restore_generated_skip_imported():
-    """OnRestoreGeneratedMaterials skips MID when imported material exists."""
+def test_on_restore_generated_uses_generated_cache():
+    """OnRestoreGeneratedMaterials uses GeneratedMaterialCache for all slots."""
     idx = source_cpp.find("Ctx.OnRestoreGeneratedMaterials")
     assert idx != -1, "OnRestoreGeneratedMaterials not found"
-    chunk = source_cpp[idx:idx + 3500]
-    assert "/Game/UELiveSync/Imported" in chunk, (
-        "OnRestoreGeneratedMaterials must check for imported material path"
+    chunk = source_cpp[idx:idx + 3000]
+    # Must check GeneratedMaterialCache
+    assert "GeneratedMaterialCache" in chunk, (
+        "OnRestoreGeneratedMaterials must use GeneratedMaterialCache"
     )
-    # Check that it uses the new MID_FALLBACK_SKIP_IMPORTED marker
-    assert "MID_FALLBACK_SKIP_IMPORTED" in chunk or "IMPORTED_PARENT_MID_APPLY" in chunk, (
-        "OnRestoreGeneratedMaterials must have MID_FALLBACK_SKIP_IMPORTED or IMPORTED_PARENT_MID_APPLY marker"
-    )
-    # Verify it has a guarded path (either continue or skip)
-    assert ("continue" in chunk) or ("SKIP" in chunk.upper()), (
-        "OnRestoreGeneratedMaterials must skip when imported material exists"
-    )
-    # Verify it does 3-way detection (path, MID parent, cache)
-    assert "IsA<UMaterialInstanceDynamic>" in chunk, (
-        "OnRestoreGeneratedMaterials must check for MID with imported parent"
-    )
-    assert "ImportedMaterialMIDCache" in chunk, (
-        "OnRestoreGeneratedMaterials must check ImportedMaterialMIDCache"
+    # Must not use ImportedMaterialMIDCache
+    assert "ImportedMaterialMIDCache" not in chunk, (
+        "OnRestoreGeneratedMaterials should no longer use ImportedMaterialMIDCache"
     )
 
 
-# --- ParseAndApplyGeneratedMaterial imported-parent MID path ---
+# --- ParseAndApplyGeneratedMaterial imported slot path ---
 
-def test_parse_and_apply_imported_parent_mid():
-    """ParseAndApplyGeneratedMaterial creates imported-parent MID for property sync."""
+def test_parse_and_apply_uses_generated_mid_for_imported():
+    """ParseAndApplyGeneratedMaterial uses generated MID + texture copy for imported slots."""
     idx = source_cpp.find("ParseAndApplyGeneratedMaterial(\n    const FGuid& Guid")
     if idx == -1:
         idx = source_cpp.find("ParseAndApplyGeneratedMaterial(")
     assert idx != -1, "ParseAndApplyGeneratedMaterial definition not found"
     chunk = source_cpp[idx:idx + 4000]
+    # Must detect imported material path
     assert "/Game/UELiveSync/Imported" in chunk, (
         "ParseAndApplyGeneratedMaterial must check for imported material path"
     )
-    assert "IMPORTED_PARENT_MID_APPLY" in chunk, (
-        "ParseAndApplyGeneratedMaterial must apply imported-parent MID marker"
+    # Must use GetOrCreateGeneratedMID (not GetOrCreateImportedParentMID)
+    assert "GetOrCreateGeneratedMID" in chunk, (
+        "ParseAndApplyGeneratedMaterial must use GetOrCreateGeneratedMID for imported slots"
+    )
+    # Must copy textures from imported material
+    assert "CopyImportedTexturesFromParent" in chunk, (
+        "ParseAndApplyGeneratedMaterial must copy textures from imported material"
+    )
+    # Must log GENERATED_PARAM_MID_APPLY (not IMPORTED_PARENT_MID_APPLY)
+    assert "GENERATED_PARAM_MID_APPLY" in chunk, (
+        "ParseAndApplyGeneratedMaterial must use GENERATED_PARAM_MID_APPLY marker"
     )
 
 
-def test_parse_and_apply_has_imported_parent_mid_cache():
-    """ParseAndApplyGeneratedMaterial uses GetOrCreateImportedParentMID."""
-    assert "GetOrCreateImportedParentMID" in source_cpp, (
-        "GetOrCreateImportedParentMID function must exist in subsystem"
-    )
-    assert "ImportedMaterialMIDCache" in source_cpp, (
-        "ImportedMaterialMIDCache cache must exist in subsystem"
-    )
-    assert "MaterialImportedParentMIDApplied" in source_cpp, (
-        "MaterialImportedParentMIDApplied counter must exist in subsystem"
-    )
-
-
-# --- Imported-parent MID markers ---
-
-def test_imported_parent_mid_apply_marker():
-    """[MATERIAL][IMPORTED_PARENT_MID_APPLY] marker exists in subsystem."""
-    assert "[MATERIAL][IMPORTED_PARENT_MID_APPLY]" in source_cpp
-
-
-def test_imported_parent_marker():
-    """[MAT][IMPORTED_PARENT] marker exists in subsystem."""
-    assert "[MAT][IMPORTED_PARENT]" in source_cpp
-
-
-def test_imported_parent_create_marker():
-    """[MAT][IMPORTED_PARENT_CREATE] marker exists in subsystem."""
-    assert "[MAT][IMPORTED_PARENT_CREATE]" in source_cpp
-
-
-def test_imported_material_mid_cache_in_header():
-    """ImportedMaterialMIDCache declared in subsystem header."""
-    header = read_file(os.path.join(
-        REPO_ROOT, "UE_Plugin", "UELiveSync", "Source", "UELiveSync",
-        "Public", "UELiveSyncSubsystem.h"
-    ))
-    assert "ImportedMaterialMIDCache" in header
-
-
-def test_material_imported_parent_counter_in_header():
-    """MaterialImportedParentMIDApplied declared in subsystem header."""
-    header = read_file(os.path.join(
-        REPO_ROOT, "UE_Plugin", "UELiveSync", "Source", "UELiveSync",
-        "Public", "UELiveSyncSubsystem.h"
-    ))
-    assert "MaterialImportedParentMIDApplied" in header
-
-
-# --- MID_FALLBACK_SKIP_IMPORTED guard ---
-
-def test_material_mid_fallback_skip_imported_marker():
-    """[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] marker exists in subsystem."""
-    count = source_cpp.count("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED]")
-    assert count >= 1, (
-        f"[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] should appear at least 1 time"
-        f" (fallback skip guard in ParseAndApplyGeneratedMaterial), found {count}"
-    )
-
-
-def test_material_texture_preserve_imported_parent_marker():
-    """[MATERIAL][TEXTURE_PRESERVE_IMPORTED_PARENT] marker exists in subsystem."""
-    assert "[MATERIAL][TEXTURE_PRESERVE_IMPORTED_PARENT]" in source_cpp, (
-        "TEXTURE_PRESERVE_IMPORTED_PARENT marker must exist for imported-parent texture preservation"
-    )
-
-
-def test_parse_and_apply_detects_imported_parent_mid_by_parent():
-    """ParseAndApplyGeneratedMaterial detects imported-parent MID by parent path."""
+def test_parse_and_apply_still_detects_imported_parent_mid():
+    """ParseAndApplyGeneratedMaterial detects MID whose parent is imported material."""
     idx = source_cpp.find("ParseAndApplyGeneratedMaterial(\n    const FGuid& Guid")
     if idx == -1:
         idx = source_cpp.find("ParseAndApplyGeneratedMaterial(")
     assert idx != -1, "ParseAndApplyGeneratedMaterial definition not found"
     chunk = source_cpp[idx:idx + 5000]
-    # Must check MID parent path (not just direct imported material path)
+    # Must detect MID parent path (not just direct imported path)
     assert "SlotMID->Parent" in chunk or "Parent->GetPathName()" in chunk, (
-        "ParseAndApplyGeneratedMaterial must detect imported-parent MID by parent path"
-    )
-    # Must also check ImportedMaterialMIDCache for cached entry
-    assert "ImportedMaterialMIDCache.Find" in chunk or "ImportedMaterialMIDCache.Find" in source_cpp[idx:idx + 6000], (
-        "ParseAndApplyGeneratedMaterial must check ImportedMaterialMIDCache for cached entries"
+        "ParseAndApplyGeneratedMaterial must detect MID with imported parent"
     )
 
 
-def test_on_restore_detects_imported_parent_mid_by_parent():
-    """OnRestoreGeneratedMaterials detects imported-parent MID by parent path."""
-    idx = source_cpp.find("Ctx.OnRestoreGeneratedMaterials")
-    assert idx != -1, "OnRestoreGeneratedMaterials not found"
-    chunk = source_cpp[idx:idx + 3500]
-    # Must detect MID whose parent is imported material
-    assert "IsA<UMaterialInstanceDynamic>" in chunk or "SlotMID->Parent" in chunk or "CurrentMID->Parent" in chunk, (
-        "OnRestoreGeneratedMaterials must detect imported-parent MID by parent path"
+# --- New approach markers ---
+
+def test_generated_param_mid_apply_marker():
+    """[MATERIAL][GENERATED_PARAM_MID_APPLY] marker exists in subsystem."""
+    assert "[MATERIAL][GENERATED_PARAM_MID_APPLY]" in source_cpp
+
+
+def test_imported_texture_to_param_marker():
+    """[MATERIAL][IMPORTED_TEXTURE_TO_PARAM] marker exists in subsystem."""
+    assert "[MATERIAL][IMPORTED_TEXTURE_TO_PARAM]" in source_cpp
+
+
+def test_no_imported_texture_found_marker():
+    """[MATERIAL][NO_IMPORTED_TEXTURE_FOUND] marker exists in subsystem."""
+    assert "[MATERIAL][NO_IMPORTED_TEXTURE_FOUND]" in source_cpp
+
+
+# --- New function and counter existence ---
+
+def test_copy_imported_textures_function_exists():
+    """CopyImportedTexturesFromParent function exists in subsystem."""
+    assert "CopyImportedTexturesFromParent" in source_cpp, (
+        "CopyImportedTexturesFromParent function must exist in subsystem"
     )
-    assert "ImportedMaterialMIDCache" in chunk, (
-        "OnRestoreGeneratedMaterials must check ImportedMaterialMIDCache"
+
+
+def test_material_imported_texture_copied_counter_in_source():
+    """MaterialImportedTextureCopied counter exists in subsystem source."""
+    assert "MaterialImportedTextureCopied" in source_cpp, (
+        "MaterialImportedTextureCopied counter must exist in subsystem source"
     )
+
+
+def test_material_imported_texture_copied_counter_in_header():
+    """MaterialImportedTextureCopied counter declared in subsystem header."""
+    assert "MaterialImportedTextureCopied" in header_h, (
+        "MaterialImportedTextureCopied counter must be declared in header"
+    )
+
+
+# --- Old approach removed ---
+
+def test_old_imported_parent_mid_cache_removed():
+    """Old ImportedMaterialMIDCache no longer used (no misleading parameter assignment)."""
+    assert "ImportedMaterialMIDCache" not in source_cpp, (
+        "ImportedMaterialMIDCache should no longer exist in source"
+    )
+
+
+def test_old_get_or_create_imported_parent_mid_removed():
+    """Old GetOrCreateImportedParentMID function removed."""
+    assert "GetOrCreateImportedParentMID" not in source_cpp, (
+        "GetOrCreateImportedParentMID should no longer exist in source"
+    )
+
+
+def test_old_texture_preserve_marker_removed():
+    """Misleading TEXTURE_PRESERVE_IMPORTED_PARENT marker removed."""
+    assert "[MATERIAL][TEXTURE_PRESERVE_IMPORTED_PARENT]" not in source_cpp, (
+        "TEXTURE_PRESERVE_IMPORTED_PARENT is misleading — actually copies textures to param MID"
+    )
+
+
+def test_old_imported_parent_mid_apply_marker_removed():
+    """Old IMPORTED_PARENT_MID_APPLY marker removed."""
+    assert "[MATERIAL][IMPORTED_PARENT_MID_APPLY]" not in source_cpp, (
+        "IMPORTED_PARENT_MID_APPLY replaced by GENERATED_PARAM_MID_APPLY"
+    )
+
 
 # --- EnsureFBXMeshRenderable still applies SafeMaterial for null ---
 
@@ -297,16 +284,12 @@ def test_camera_operator_class_defined():
 def test_camera_button_in_panel():
     """Panel has button for camera sync."""
     assert 'uelivesync.sync_active_camera_to_ue' in init_py
-    # Should appear as layout.operator or row.operator
     assert "sync_active_camera_to_ue" in init_py
 
 
 def test_camera_button_icon_camera_data():
     """Camera button uses CAMERA_DATA icon."""
-    # Search for the specific layout.operator call with icon='CAMERA_DATA'
-    # Search whole file since panel is large
     assert "icon='CAMERA_DATA'" in init_py or 'icon="CAMERA_DATA"' in init_py
-    # Verify it's associated with the camera button
     camera_icon_idx = init_py.find("CAMERA_DATA")
     chunk_around_icon = init_py[camera_icon_idx - 100:camera_icon_idx + 100]
     assert "sync_active_camera_to_ue" in chunk_around_icon
@@ -364,22 +347,40 @@ def test_camera_uses_pt_cameradef():
     assert "PT_CameraDef" in chunk
 
 
+def test_camera_does_not_send_pt_create():
+    """Primary operator does NOT send PT_Create (0x03) — actor spawn unstable."""
+    idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
+    chunk = init_py[idx:idx + 6000]
+    assert "packet_type=0x03" not in chunk, (
+        "Primary operator must not send PT_Create — camera actor spawn freezes UE"
+    )
+
+
 def test_camera_does_not_send_pt_activecamera():
-    """Operator does NOT send PT_ActiveCamera as a packet."""
+    """Primary operator does NOT send PT_ActiveCamera as a packet."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
     chunk = init_py[idx:idx + 4000]
-    # PT_ActiveCamera must NOT be used in send_objects (packet dispatch)
     assert "packet_type=network.PT_ActiveCamera" not in chunk, (
         "Operator must not send PT_ActiveCamera as a packet — viewport switching causes freeze"
     )
 
 
 def test_camera_bl_description_no_activecamera():
-    """bl_description no longer mentions PT_ActiveCamera."""
+    """bl_description does not mention PT_ActiveCamera."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
     chunk = init_py[idx:idx + 1000]
-    assert "PT_ActiveCamera" not in chunk, (
-        "bl_description should not mention PT_ActiveCamera"
+    assert "PT_ActiveCamera" not in chunk
+
+
+def test_camera_bl_description_safe():
+    """bl_description mentions safe behavior (no spawn, no viewport switch)."""
+    idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
+    chunk = init_py[idx:idx + 1000]
+    assert "no actor spawn" in chunk or "no viewport switch" in chunk, (
+        "bl_description should indicate safe behavior"
+    )
+    assert "no viewport switch" in chunk.lower() or "viewport" in chunk.lower(), (
+        "bl_description should indicate no viewport switch"
     )
 
 
@@ -394,13 +395,11 @@ def test_camera_does_not_use_serialize_active_camera():
     """Operator does NOT call serialize_active_camera()."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
     chunk = init_py[idx:idx + 4000]
-    assert "network.serialize_active_camera" not in chunk, (
-        "Operator must not serialize active camera — viewport switching unsafe"
-    )
+    assert "network.serialize_active_camera" not in chunk
 
 
 def test_camera_uses_serialize_object_v3():
-    """Operator uses serialize_object_v3() for create/transform."""
+    """Operator uses serialize_object_v3()."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
     chunk = init_py[idx:idx + 4000]
     assert "serialize_object_v3" in chunk
@@ -415,16 +414,6 @@ def test_camera_uses_primitve_camera():
 
 # --- Uses existing serialization functions ---
 
-def test_camera_sends_create_packet():
-    """Operator sends PT_Create (0x03) to spawn camera actor."""
-    idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
-    chunk = init_py[idx:idx + 6000]
-    # PT_Create (0x03) should appear as a packet_type in the operator's send loop
-    assert "packet_type=0x03" in chunk, (
-        "Operator must send PT_Create (0x03) to spawn camera actor in UE"
-    )
-
-
 def test_camera_sends_transform_packet():
     """Operator sends PT_Transform (default 0x01) packet."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
@@ -436,48 +425,31 @@ def test_camera_sends_transform_packet():
     )
 
 
-# --- Safe bl_description ---
-
-def test_camera_bl_description_safe():
-    """bl_description mentions spawn/create behavior."""
-    idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
-    chunk = init_py[idx:idx + 1000]
-    assert "Spawn/update" in chunk or "PT_Create" in chunk, (
-        "bl_description should mention creation/update behavior"
-    )
-    assert "no viewport switch" in chunk.lower() or "viewport" in chunk.lower(), (
-        "bl_description should indicate no viewport switch"
-    )
-
-
 # --- Camera operator packet reporting ---
 
 def test_camera_operator_has_print_output():
     """Operator has print() statements for Blender console packet verification."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
     chunk = init_py[idx:idx + 6000]
-    # Must have print() calls for each sent packet type
-    assert "Sent PT_Create" in chunk, (
-        "Operator must print PT_Create send confirmation to Blender console"
-    )
+    # Must print transform and CameraDef (no PT_Create)
     assert "Sent PT_Transform" in chunk, (
-        "Operator must print PT_Transform send confirmation to Blender console"
+        "Operator must print PT_Transform send confirmation"
     )
     assert "Sent PT_CameraDef" in chunk, (
-        "Operator must print PT_CameraDef send confirmation to Blender console"
+        "Operator must print PT_CameraDef send confirmation"
+    )
+    # Must NOT print PT_Create
+    assert "Sent PT_Create" not in chunk, (
+        "Operator must not print PT_Create send confirmation"
     )
 
 
-def test_camera_operator_report_contains_packet_types():
-    """Operator report mentions create+transform+def."""
+def test_camera_operator_report_spawn_disabled():
+    """Operator report mentions spawn disabled for stability."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
     chunk = init_py[idx:idx + 6000]
-    # Final report should list the packet types sent
-    assert "create+transform+def" in chunk or "PT_Create" in chunk, (
-        "Operator report should mention PT_Create"
-    )
-    assert "packet_type=network.PT_ActiveCamera" not in chunk, (
-        "Operator must not send PT_ActiveCamera as a packet"
+    assert "spawn disabled" in chunk, (
+        "Operator report should mention spawn is disabled for stability"
     )
 
 
@@ -498,6 +470,15 @@ def test_debug_operator_has_isolation_props():
     assert "send_create" in init_py
     assert "send_transform" in init_py
     assert "send_cameradef" in init_py
+
+
+def test_debug_operator_experimental_warning():
+    """Debug operator PT_Create has experimental warning print."""
+    idx = init_py.find("UELIVESYNC_OT_debug_send_camera_packets")
+    chunk = init_py[idx:idx + 4000]
+    assert "EXPERIMENTAL" in chunk or "experimental" in chunk, (
+        "Debug operator should warn experimental for PT_Create"
+    )
 
 
 # --- Diagnostics fix ---
@@ -546,7 +527,6 @@ def test_pt_activecamera_unchanged():
 def test_lsp_camera_unchanged():
     """LSP_Camera remains 0x05."""
     assert "LSP_Camera" in sync_types or "LSP_Camera" in network_py
-    # Check network.py
     assert "PRIMITIVE_CAMERA   = 0x05" in network_py
 
 

@@ -1304,8 +1304,8 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
     bl_label = "Sync Active Camera to UE"
 
     bl_description = \
-        "Spawn/update camera actor in UE via PT_Create + " \
-        "PT_Transform + PT_CameraDef (no viewport switch)"
+        "Update camera actor in UE via PT_Transform + " \
+        "PT_CameraDef only (no actor spawn, no viewport switch)"
 
     def execute(self, context):
 
@@ -1357,7 +1357,7 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
         }
         timestamp = time.time()
 
-        # --- Serialize create/transform payload ---
+        # --- Serialize transform payload ---
         try:
             obj_payload = network.serialize_object_v3(
                 guid_obj,
@@ -1417,17 +1417,8 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
             )
             return {'CANCELLED'}
 
-        # --- Send packets ---
+        # --- Send packets (no PT_Create — actor spawn is unstable) ---
         try:
-            # PT_Create (0x03) to spawn camera actor in UE
-            network.send_objects(
-                [obj_payload],
-                packet_type=0x03,
-            )
-            print(
-                f"[LiveSync] Sent PT_Create for camera "
-                f"{camera_obj.name} GUID={guid_hex}"
-            )
             # PT_Transform (0x01, default) for position
             network.send_objects(
                 [obj_payload],
@@ -1453,14 +1444,17 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
             )
             return {'CANCELLED'}
 
-        # PT_ActiveCamera is intentionally NOT sent.
-        # Viewport switching is unsafe and gated by the
-        # active_camera_sync preference in auto-detect.
+        # PT_Create is NOT sent because UE camera actor spawn is
+        # currently unstable in editor. Use the auto-detect path
+        # (active_camera_sync pref) for actor spawning, or use the
+        # experimental debug operator (debug_send_camera_packets).
+        # PT_ActiveCamera is NOT sent (viewport switching unsafe).
 
         self.report(
             {'INFO'},
-            f"LiveSync camera sync sent: "
-            f"create+transform+def for {camera_obj.name}"
+            f"LiveSync camera def+transform sent to UE "
+            f"(spawn disabled for stability): "
+            f"{camera_obj.name}"
         )
         return {'FINISHED'}
 
@@ -1569,8 +1563,9 @@ class UELIVESYNC_OT_debug_send_camera_packets(
                 )
                 sent_packets.append("PT_Create")
                 print(
-                    f"[LiveSync][DEBUG] Sent PT_Create for "
-                    f"{camera_obj.name} GUID={guid_hex}"
+                    f"[LiveSync][DEBUG] EXPERIMENTAL: Sent PT_Create for "
+                    f"{camera_obj.name} GUID={guid_hex} — "
+                    f"if UE freezes, camera actor spawn is the cause"
                 )
             except Exception as e:
                 self.report(

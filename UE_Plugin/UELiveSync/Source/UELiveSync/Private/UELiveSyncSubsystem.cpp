@@ -4793,58 +4793,11 @@ ProcessBinaryPacket(
                 const FString GuidShort = G.ToString(EGuidFormats::Short);
                 const int32 NumSlots = SMC->GetNumMaterials();
                 int32 RestoredCount = 0;
-                int32 SkipImportedCount = 0;
                 for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
                 {
                     const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
-                    // Check imported-material backing FIRST (robust detection)
-                    bool bIsImportedSlot = false;
-                    UMaterialInterface* CurrentMat = SMC->GetMaterial(SlotIdx);
-
-                    // Check 1: raw imported material path
-                    if (CurrentMat && CurrentMat->GetPathName().StartsWith(TEXT("/Game/UELiveSync/Imported")))
-                    {
-                        bIsImportedSlot = true;
-                    }
-                    // Check 2: MID whose parent is imported material
-                    if (!bIsImportedSlot && CurrentMat && CurrentMat->IsA<UMaterialInstanceDynamic>())
-                    {
-                        UMaterialInstanceDynamic* CurrentMID = Cast<UMaterialInstanceDynamic>(CurrentMat);
-                        if (CurrentMID && CurrentMID->Parent &&
-                            CurrentMID->Parent->GetPathName().StartsWith(TEXT("/Game/UELiveSync/Imported")))
-                        {
-                            bIsImportedSlot = true;
-                        }
-                    }
-                    // Check 3: cached in ImportedMaterialMIDCache
-                    if (!bIsImportedSlot && ImportedMaterialMIDCache.Find(Key))
-                    {
-                        bIsImportedSlot = true;
-                    }
-
-                    if (bIsImportedSlot)
-                    {
-                        TObjectPtr<UMaterialInstanceDynamic>* ImpFound = ImportedMaterialMIDCache.Find(Key);
-                        if (ImpFound && *ImpFound)
-                        {
-                            SMC->SetMaterial(SlotIdx, *ImpFound);
-                            ++RestoredCount;
-                            UE_LOG(LogLiveSync, Log,
-                                TEXT("[MATERIAL][IMPORTED_PARENT_MID_APPLY] guid=%s slot=%d restored name=MID_UELiveSync_Imported_%s_%d"),
-                                *G.ToString(EGuidFormats::Digits), SlotIdx,
-                                *GuidShort, SlotIdx);
-                        }
-                        else
-                        {
-                            ++SkipImportedCount;
-                            UE_LOG(LogLiveSync, Log,
-                                TEXT("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] guid=%s slot=%d reason=no_cached_imported_mid"),
-                                *G.ToString(EGuidFormats::Digits), SlotIdx);
-                        }
-                        continue;
-                    }
-
                     TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
+                    UMaterialInterface* CurrentMat = SMC->GetMaterial(SlotIdx);
                     if (Found && *Found && CurrentMat != *Found)
                     {
                         SMC->SetMaterial(SlotIdx, *Found);
@@ -4860,12 +4813,6 @@ ProcessBinaryPacket(
                     UE_LOG(LogLiveSync, Log,
                         TEXT("[MAT][AUTH] guid=%s slot_count=%d authority=generated_mid"),
                         *G.ToString(EGuidFormats::Digits), RestoredCount);
-                }
-                if (SkipImportedCount > 0)
-                {
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("[MAT][AUTH] guid=%s skip_imported_count=%d authority=imported_fbx"),
-                        *G.ToString(EGuidFormats::Digits), SkipImportedCount);
                 }
             };
             FLiveSyncFBXImporter::HandleImport(Ptr, ObjSize, Ctx);
@@ -11770,6 +11717,20 @@ HandleActiveCamera(
 
 
 // =========================================================
+// FUTURE: UE-side camera actor spawn stability (Phase 7H hotfix)
+// =========================================================
+// ACameraActor spawn via PT_Create (0x03) in the editor currently
+// freezes after CREATE + DEF + TRANSFORM sequence. Potential future
+// alternatives:
+//   1. Spawn deferred on editor tick (ProcessDeferredCameras model)
+//   2. Spawn transient non-transactional actor
+//   3. Avoid ACameraActor and use lightweight preview component
+//   4. Use existing camera actor only (pre-spawned)
+//   5. Create actor through editor subsystem safely
+// For now, PT_Create is disabled in the manual camera operator.
+// =========================================================
+
+// =========================================================
 // CAMERA DEFINITION (Phase 7G Stage 3)
 // =========================================================
 // Applies camera parameters from PT_CameraDef (0x1B) to the
@@ -13580,83 +13541,102 @@ GetOrCreateGeneratedMID(
 
 
 // =========================================================
-// GET OR CREATE IMPORTED PARENT MID (Phase 7H fix)
+// COPY IMPORTED TEXTURES TO PARAM MID (Phase 7H hotfix)
 // =========================================================
-// Creates a UMaterialInstanceDynamic whose parent is the
-// imported FBX material, allowing Blender property values
-// (BaseColor, Roughness, Metallic, Alpha) to sync while
-// preserving the imported material identity.
+// Enumerates texture parameters on the imported FBX material
+// and copies matching textures to the LiveSync master-material
+// MID by channel convention (BaseColor, Roughness, Metallic,
+// Normal, Alpha).
 
-UMaterialInstanceDynamic* UUELiveSyncSubsystem::
-GetOrCreateImportedParentMID(
+void UUELiveSyncSubsystem::
+CopyImportedTexturesFromParent(
+    UMaterialInstanceDynamic* LiveSyncMID,
+    UMaterialInterface* ImportedParentMat,
     const FGuid& Guid,
-    int32 SlotIndex,
-    const FMaterialSlotBasicProperties& Props,
-    UMaterialInterface* ImportedParentMat)
+    int32 SlotIndex)
 {
-    if (!ImportedParentMat)
+    if (!LiveSyncMID || !ImportedParentMat)
     {
-        return nullptr;
+        return;
     }
 
-    const FString Key = MakeGeneratedMaterialKey(Guid, SlotIndex);
-    TObjectPtr<UMaterialInstanceDynamic>* Existing = ImportedMaterialMIDCache.Find(Key);
-    if (Existing && *Existing)
+    const FString GuidStr = Guid.ToString(EGuidFormats::Digits);
+
+    // Target LiveSync texture parameter names and their aliases in imported materials
+    struct FTextureChannelEntry
     {
-        UMaterialInstanceDynamic* MID = *Existing;
-        MID->SetVectorParameterValue(FName("Base Color"), Props.BaseColor);
-        MID->SetVectorParameterValue(FName("BaseColor"), Props.BaseColor);
-        MID->SetVectorParameterValue(FName("Color"), Props.BaseColor);
-        MID->SetVectorParameterValue(FName("Diffuse Color"), Props.BaseColor);
-        MID->SetVectorParameterValue(FName("DiffuseColor"), Props.BaseColor);
-        MID->SetScalarParameterValue(FName("Roughness"), Props.Roughness);
-        MID->SetScalarParameterValue(FName("Metallic"), Props.Metallic);
-        MID->SetScalarParameterValue(FName("Alpha"), Props.Alpha);
-        MID->SetScalarParameterValue(FName("Opacity"), Props.Alpha);
-        return MID;
+        const TCHAR* LiveSyncParamName;
+        const TCHAR* ImportedNameHint;
+    };
+    static const FTextureChannelEntry ChannelsToCopy[] = {
+        { TEXT("BaseColorTexture"),  TEXT("BaseColor") },
+        { TEXT("BaseColorTexture"),  TEXT("Albedo") },
+        { TEXT("BaseColorTexture"),  TEXT("Diffuse") },
+        { TEXT("RoughnessTexture"),  TEXT("Roughness") },
+        { TEXT("MetallicTexture"),   TEXT("Metallic") },
+        { TEXT("MetallicTexture"),   TEXT("Metalness") },
+        { TEXT("NormalTexture"),     TEXT("Normal") },
+        { TEXT("NormalTexture"),     TEXT("Bump") },
+        { TEXT("AlphaTexture"),      TEXT("Alpha") },
+        { TEXT("AlphaTexture"),      TEXT("Opacity") },
+    };
+
+    int32 CopiedCount = 0;
+    TSet<FName> AlreadySet; // avoid setting same LiveSync param multiple times
+
+    for (const FTextureChannelEntry& Entry : ChannelsToCopy)
+    {
+        FName LiveSyncParam(Entry.LiveSyncParamName);
+        if (AlreadySet.Contains(LiveSyncParam))
+        {
+            continue;
+        }
+
+        // Try the hint name first (e.g. "BaseColor" on imported material)
+        UTexture* FoundTexture = nullptr;
+        FName FoundParamName = NAME_None;
+        FName HintName(Entry.ImportedNameHint);
+        ImportedParentMat->GetTextureParameterValue(HintName, FoundTexture);
+        if (FoundTexture)
+        {
+            FoundParamName = HintName;
+        }
+
+        // If not found by hint, try exact LiveSync name match
+        if (!FoundTexture)
+        {
+            ImportedParentMat->GetTextureParameterValue(LiveSyncParam, FoundTexture);
+            if (FoundTexture)
+            {
+                FoundParamName = LiveSyncParam;
+            }
+        }
+
+        if (FoundTexture)
+        {
+            LiveSyncMID->SetTextureParameterValue(LiveSyncParam, FoundTexture);
+            AlreadySet.Add(LiveSyncParam);
+            CopiedCount++;
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][IMPORTED_TEXTURE_TO_PARAM] guid=%s slot=%d "
+                     "liveSyncParam=%s importedParam=%s texture=%s"),
+                *GuidStr, SlotIndex,
+                *LiveSyncParam.ToString(),
+                *FoundParamName.ToString(),
+                *FoundTexture->GetName());
+        }
     }
 
-    UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(ImportedParentMat, this);
-    if (!MID)
+    if (CopiedCount == 0)
     {
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[MATERIAL] Failed to create imported-parent MID for GUID=%s slot=%d"),
-            *Guid.ToString(EGuidFormats::Digits), SlotIndex);
-        return nullptr;
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][NO_IMPORTED_TEXTURE_FOUND] guid=%s slot=%d parent=%s reason=no_matching_texture_params"),
+            *GuidStr, SlotIndex,
+            *ImportedParentMat->GetPathName());
     }
 
-    const FString GuidShort = Guid.ToString(EGuidFormats::Short);
-    MID->Rename(*FString::Printf(TEXT("MID_UELiveSync_Imported_%s_%d"), *GuidShort, SlotIndex), this);
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[MAT][IMPORTED_PARENT] guid=%s slot=%d parent=%s"),
-        *Guid.ToString(EGuidFormats::Digits), SlotIndex,
-        *ImportedParentMat->GetPathName());
-
-    MID->SetVectorParameterValue(FName("Base Color"), Props.BaseColor);
-    MID->SetVectorParameterValue(FName("BaseColor"), Props.BaseColor);
-    MID->SetVectorParameterValue(FName("Color"), Props.BaseColor);
-    MID->SetVectorParameterValue(FName("Diffuse Color"), Props.BaseColor);
-    MID->SetVectorParameterValue(FName("DiffuseColor"), Props.BaseColor);
-    MID->SetScalarParameterValue(FName("Roughness"), Props.Roughness);
-    MID->SetScalarParameterValue(FName("Metallic"), Props.Metallic);
-    MID->SetScalarParameterValue(FName("Alpha"), Props.Alpha);
-    MID->SetScalarParameterValue(FName("Opacity"), Props.Alpha);
-
-    MID->SetFlags(RF_Transient);
-
-    ImportedMaterialMIDCache.Add(Key, MID);
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[MAT][IMPORTED_PARENT_CREATE] guid=%s slot=%d name=MID_UELiveSync_Imported_%s_%d "
-             "color=(%.1f,%.1f,%.1f,%.1f) roughness=%.3f metallic=%.3f parent=%s"),
-        *Guid.ToString(EGuidFormats::Digits), SlotIndex,
-        *GuidShort, SlotIndex,
-        Props.BaseColor.R, Props.BaseColor.G, Props.BaseColor.B, Props.BaseColor.A,
-        Props.Roughness, Props.Metallic,
-        *ImportedParentMat->GetPathName());
-
-    return MID;
+    MaterialImportedTextureCopied += CopiedCount;
 }
 
 
@@ -13690,7 +13670,6 @@ ParseAndApplyGeneratedMaterial(
 
     int32 AppliedCount = 0;
     bool bHadRegularGeneratedMID = false;
-    bool bHadImportedParentMID = false;
     int32 SkipImportedCount = 0;
     for (int32 SlotIdx = 0; SlotIdx < BasicProps.Num(); SlotIdx++)
     {
@@ -13706,12 +13685,9 @@ ParseAndApplyGeneratedMaterial(
             continue;
         }
 
-        // Phase 7H fix: detect if this slot is backed by an imported FBX material.
-        // Three cases:
-        //   1) Slot has raw /Game/UELiveSync/Imported material.
-        //   2) Slot has a MID whose parent is /Game/UELiveSync/Imported material.
-        //   3) Slot does NOT match either but is cached in ImportedMaterialMIDCache.
-        // In all cases use imported-parent MID and skip fallback.
+        // Phase 7H hotfix: detect if this slot is backed by an imported FBX material.
+        // For imported slots, use LiveSync master-material MID (parameter-compatible)
+        // and copy textures from the imported FBX material into the LiveSync MID.
         bool bIsImportedSlot = false;
         UMaterialInterface* ImportedParentMat = nullptr;
         if (SlotIdx < SMC->GetNumMaterials())
@@ -13735,64 +13711,41 @@ ParseAndApplyGeneratedMaterial(
                     }
                 }
             }
-            if (!bIsImportedSlot)
-            {
-                const FString CheckKey = MakeGeneratedMaterialKey(Guid, SlotIdx);
-                if (TObjectPtr<UMaterialInstanceDynamic>* CachedEntry = ImportedMaterialMIDCache.Find(CheckKey))
-                {
-                    if (*CachedEntry)
-                    {
-                        bIsImportedSlot = true;
-                        ImportedParentMat = (*CachedEntry)->Parent;
-                    }
-                }
-            }
         }
 
         if (bIsImportedSlot)
         {
-            if (ImportedParentMat)
-            {
-                UMaterialInstanceDynamic* ImportedMID = GetOrCreateImportedParentMID(Guid, SlotIdx, Props, ImportedParentMat);
-                if (ImportedMID)
-                {
-                    // Apply imported textures (MTEX) to imported-parent MID as well
-                    ApplyImportedTexturesToGeneratedMID(Guid, SlotIdx, ImportedMID);
-
-                    SMC->SetMaterial(SlotIdx, ImportedMID);
-                    AppliedCount++;
-                    bHadImportedParentMID = true;
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("[MATERIAL][IMPORTED_PARENT_MID_APPLY] guid=%s slot=%d "
-                             "parent=%s BaseColor=(%.3f,%.3f,%.3f,%.3f) "
-                             "Roughness=%.3f Metallic=%.3f Alpha=%.3f"),
-                        *Guid.ToString(EGuidFormats::Digits), SlotIdx,
-                        *ImportedParentMat->GetPathName(),
-                        Props.BaseColor.R, Props.BaseColor.G, Props.BaseColor.B, Props.BaseColor.A,
-                        Props.Roughness, Props.Metallic, Props.Alpha);
-
-                    // Log texture preservation status
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("[MATERIAL][TEXTURE_PRESERVE_IMPORTED_PARENT] guid=%s slot=%d "
-                             "parent=%s"),
-                        *Guid.ToString(EGuidFormats::Digits), SlotIdx,
-                        *ImportedParentMat->GetPathName());
-                }
-                else
-                {
-                    UE_LOG(LogLiveSync, Warning,
-                        TEXT("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] guid=%s slot=%d reason=failed_to_create_parent_mid"),
-                        *Guid.ToString(EGuidFormats::Digits), SlotIdx);
-                    ++SkipImportedCount;
-                }
-            }
-            else
+            // Use LiveSync master material MID (parameter-compatible with BaseColor/Roughness/etc)
+            UMaterialInstanceDynamic* MID = GetOrCreateGeneratedMID(Guid, SlotIdx, Props);
+            if (!MID)
             {
                 UE_LOG(LogLiveSync, Warning,
-                    TEXT("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] guid=%s slot=%d reason=no_parent_resolved"),
+                    TEXT("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] guid=%s slot=%d reason=no_generated_mid"),
                     *Guid.ToString(EGuidFormats::Digits), SlotIdx);
                 ++SkipImportedCount;
+                continue;
             }
+
+            // Copy textures from imported FBX material to LiveSync param MID
+            if (ImportedParentMat)
+            {
+                CopyImportedTexturesFromParent(MID, ImportedParentMat, Guid, SlotIdx);
+            }
+
+            // Also apply MTEX textures from Blender if available
+            ApplyImportedTexturesToGeneratedMID(Guid, SlotIdx, MID);
+
+            SMC->SetMaterial(SlotIdx, MID);
+            AppliedCount++;
+            bHadRegularGeneratedMID = true;
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][GENERATED_PARAM_MID_APPLY] guid=%s slot=%d "
+                     "BaseColor=(%.3f,%.3f,%.3f,%.3f) "
+                     "Roughness=%.3f Metallic=%.3f Alpha=%.3f"),
+                *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+                Props.BaseColor.R, Props.BaseColor.G, Props.BaseColor.B, Props.BaseColor.A,
+                Props.Roughness, Props.Metallic, Props.Alpha);
             continue;
         }
 
@@ -13831,14 +13784,8 @@ ParseAndApplyGeneratedMaterial(
 
     if (AppliedCount > 0)
     {
-        if (bHadRegularGeneratedMID)
-        {
-            MaterialGeneratedApplied++;
-        }
-        if (bHadImportedParentMID)
-        {
-            MaterialImportedParentMIDApplied++;
-        }
+        // Both regular and imported slots use GeneratedMID — always count
+        MaterialGeneratedApplied++;
         // Phase 10J.5I: log each slot apply for runtime diagnostics
         for (int32 SlotIdx = 0; SlotIdx < BasicProps.Num(); SlotIdx++)
         {
