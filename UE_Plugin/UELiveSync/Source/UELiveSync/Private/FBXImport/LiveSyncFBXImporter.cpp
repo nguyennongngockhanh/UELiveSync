@@ -1161,36 +1161,65 @@ bool FLiveSyncFBXImporter::HandleImport(
             };
 
             // Scan a single folder via IterateDirectory.
-            auto ScanFolder = [&SidecarFiles, &IsImageExtension](const FString& FolderPath, const FString& /*FolderLabel*/)
+            auto ScanFolder = [&SidecarFiles, &IsImageExtension, &FbxDir](const FString& FolderPath, const FString& FolderLabel)
             {
                 bool bIterOk = IFileManager::Get().IterateDirectory(
                     *FolderPath,
-                    [&SidecarFiles, &IsImageExtension](const TCHAR* Filename, bool bIsFolder)
+                    [&SidecarFiles, &IsImageExtension, &FolderPath, &FolderLabel](const TCHAR* Filename, bool bIsFolder)
                     {
+                        // Task E.1: raw directory entry log
+                        const bool bIsImageCheck = !bIsFolder;
+                        if (bIsImageCheck)
+                        {
+                            FString EntryLog = TEXT("[FBX][SIDECAR_TEXTURE_DIR_ENTRY] folder=") + FolderPath + TEXT(" name=") + Filename + TEXT(" isDir=") + FString::FromInt(bIsFolder ? 1 : 0);
+                            UE_LOG(LogLiveSync, Log, TEXT("%s"), *EntryLog);
+                        }
+
                         if (bIsFolder)
                             return true;
 
                         FString FilenameStr(Filename);
                         const FString ExtLower = FPaths::GetExtension(FilenameStr).ToLower();
-                        if (!IsImageExtension(ExtLower))
-                            return true;
 
                         const FString AbsPath = FolderPath / FilenameStr;
                         const bool bExists = IFileManager::Get().FileExists(*AbsPath);
+                        const bool bIsImage = IsImageExtension(ExtLower);
 
-                        UE_LOG(LogLiveSync, Log,
-                            TEXT("[FBX][SIDECAR_TEXTURE_CANDIDATE] folder=%s file=%s ext=%s isImage=1 exists=%d"),
-                            *FolderPath, *Filename, *ExtLower, bExists);
+                        // Task E.2: candidate log for every non-folder entry
+                        FString CandidateLog = TEXT("[FBX][SIDECAR_TEXTURE_CANDIDATE] folder=") + FolderPath + TEXT(" file=") + FilenameStr + TEXT(" ext=") + ExtLower + TEXT(" isImage=") + FString::FromInt(bIsImage ? 1 : 0) + TEXT(" exists=") + FString::FromInt(bExists ? 1 : 0);
+                        UE_LOG(LogLiveSync, Log, TEXT("%s"), *CandidateLog);
 
-                        SidecarFiles.Add(AbsPath);
+                        if (bIsImage)
+                        {
+                            SidecarFiles.Add(AbsPath);
+                        }
                         return true;
                     });
 
                 if (!bIterOk)
                 {
-                    UE_LOG(LogLiveSync, Warning,
-                        TEXT("[FBX][SIDECAR_TEXTURE_SCAN_FOLDER_FAIL] folder=%s reason=directory_iter_failed"),
-                        *FolderPath);
+                    // Task E.3: distinguish missing optional subfolder from real failure
+                    const bool bExistsDir = IFileManager::Get().DirectoryExists(*FolderPath);
+                    if (bExistsDir)
+                    {
+                        UE_LOG(LogLiveSync, Warning,
+                            TEXT("[FBX][SIDECAR_TEXTURE_SCAN_FOLDER_FAIL] folder=%s reason=directory_iter_failed"),
+                            *FolderPath);
+                    }
+                    else if (FolderLabel == TEXT("textures"))
+                    {
+                        // Missing optional subfolder — log as info, not failure
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[FBX][SIDECAR_TEXTURE_SCAN_FOLDER_SKIP] folder=%s reason=missing_optional_subfolder"),
+                            *FolderPath);
+                    }
+                    else
+                    {
+                        // Base folder missing — real error
+                        UE_LOG(LogLiveSync, Error,
+                            TEXT("[FBX][SIDECAR_TEXTURE_SCAN_FOLDER_FAIL] folder=%s reason=directory_does_not_exist"),
+                            *FolderPath);
+                    }
                 }
             };
 
@@ -1212,7 +1241,12 @@ bool FLiveSyncFBXImporter::HandleImport(
 
             if (SidecarFiles.Num() > 0)
             {
-                const FString FileListStr = FileNames.JoinByString(", ");
+                FString FileListStr;
+                for (int32 Fi = 0; Fi < FileNames.Num(); ++Fi)
+                {
+                    if (Fi > 0) FileListStr += TEXT(", ");
+                    FileListStr += FileNames[Fi];
+                }
                 UE_LOG(LogLiveSync, Log,
                     TEXT("[FBX][SIDECAR_TEXTURE_SCAN] folder=%s count=%d files=[%s]"),
                     *FbxDir, SidecarFiles.Num(), *FileListStr);

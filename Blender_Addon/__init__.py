@@ -860,7 +860,10 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
         temp_obj.select_set(True)
         bpy.context.view_layer.objects.active = temp_obj
 
-        # Texture image scan diagnostic before FBX export
+        # Texture image scan diagnostic before FBX export.
+        # NOTE: use 'tex_filepath' not 'filepath' — 'filepath' is the
+        # FBX export path parameter and MUST NOT be shadowed.
+        fbx_export_path = filepath  # preserve before texture loop
         if obj.material_slots:
             for slot in obj.material_slots:
                 mat = slot.material
@@ -868,20 +871,26 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
                     for node in mat.node_tree.nodes:
                         if node.type == 'TEX_IMAGE' and node.image:
                             img = node.image
-                            filepath = getattr(img, "filepath", "")
-                            filepath_raw = getattr(img, "filepath_raw", "")
+                            tex_filepath = getattr(img, "filepath", "")
+                            tex_filepath_raw = getattr(img, "filepath_raw", "")
                             source = getattr(img, "source", "")
                             is_packed = bool(getattr(img, "packed_file", False))
-                            exists = os.path.isfile(bpy.path.abspath(filepath)) if filepath else False
+                            tex_exists = os.path.isfile(bpy.path.abspath(tex_filepath)) if tex_filepath else False
                             _fbx_log(
                                 f"[FBX][TEXTURE_IMAGE_SCAN] object={obj.name} "
                                 f"material={mat.name} image={img.name} "
-                                f"source={source} filepath={filepath} "
-                                f"filepath_raw={filepath_raw} "
-                                f"exists={1 if exists else 0} "
+                                f"source={source} filepath={tex_filepath} "
+                                f"filepath_raw={tex_filepath_raw} "
+                                f"exists={1 if tex_exists else 0} "
                                 f"packed={1 if is_packed else 0}")
         else:
             _fbx_log(f"[FBX][TEXTURE_IMAGE_SCAN] object={obj.name} no_material_slots")
+
+        # --- Task A/B/F/G: safety guard before export ---
+        _fbx_log(f"[FBX][EXPORT_CALL] guid={guid_short} filepath={fbx_export_path} is_fbx={1 if fbx_export_path.endswith('.fbx') else 0}")
+        if not fbx_export_path.endswith(".fbx"):
+            _fbx_log(f"[FBX][EXPORT_ABORT] reason=export_filepath_not_fbx filepath={fbx_export_path}")
+            return False
 
         _fbx_log(f"[FBX][EXPORT_SETTINGS] guid={guid_short} "
                  f"global_scale=1.0 apply_scale_options=FBX_SCALE_UNITS "
@@ -891,7 +900,7 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
 
         try:
             bpy.ops.export_scene.fbx(
-                filepath=filepath,
+                filepath=fbx_export_path,
                 use_selection=True,
                 object_types={'MESH'},
                 global_scale=1.0,
@@ -964,6 +973,7 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
                      f"packed={1 if is_packed else 0}")
 
             if source == 'FILE' and not is_packed:
+                # --- Task C: non-destructive copy for FILE source ---
                 abs_path = bpy.path.abspath(filepath)
                 if not os.path.isfile(abs_path):
                     _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
@@ -971,12 +981,22 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
                              f"image={img.name} reason=file_not_found "
                              f"path={abs_path}")
                     continue
+
+                # --- Task A: safety guard — never write to source path ---
+                resolved_src = os.path.realpath(abs_path)
+                resolved_dst = os.path.realpath(os.path.join(dest_dir, os.path.basename(abs_path)))
+                if resolved_dst == resolved_src:
+                    _fbx_log(f"[FBX][TEXTURE_SOURCE_WRITE_BLOCKED] path={resolved_dst} reason=destination_equals_source")
+                    continue
+
                 dest_name = os.path.basename(abs_path)
                 dest_path = os.path.join(dest_dir, dest_name)
                 if os.path.exists(dest_path):
                     base, ext = os.path.splitext(dest_name)
                     dest_name = f"{base}_{_uuid.uuid4().hex[:8]}{ext}"
                     dest_path = os.path.join(dest_dir, dest_name)
+
+                # Use shutil.copy2 (never img.save_render) for FILE sources
                 try:
                     shutil.copy2(abs_path, dest_path)
                     _fbx_log(f"[FBX][TEXTURE_COPY] guid={guid_short} "
@@ -989,13 +1009,16 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
                              f"object={obj.name} material={mat.name} "
                              f"image={img.name} reason=copy_failed "
                              f"error={e}")
+
             elif is_packed or source == 'GENERATED':
+                # --- Task C: temp save must be inside cache folder ---
                 ext = ".png"
                 try:
                     import tempfile
-                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tf:
+                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
                         temp_path = tf.name
                     img.save_render(temp_path)
+                    _fbx_log(f"[FBX][TEXTURE_TEMP_SAVE] dst={temp_path} source={'PACKED' if is_packed else 'GENERATED'}")
                     dest_name = f"{img.name}{ext}"
                     dest_path = os.path.join(dest_dir, dest_name)
                     if os.path.exists(dest_path):
@@ -1176,8 +1199,49 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     )
                     continue
 
+                # --- Task D: log source texture state BEFORE sidecar ---
+                source_stats_before = []
+                if obj.material_slots:
+                    for slot in obj.material_slots:
+                        mat = slot.material
+                        if not mat or not mat.use_nodes or not mat.node_tree:
+                            continue
+                        for node in mat.node_tree.nodes:
+                            if node.type != 'TEX_IMAGE' or not node.image:
+                                continue
+                            img = node.image
+                            src_path = getattr(img, "filepath_raw", "") or getattr(img, "filepath", "")
+                            if src_path and img.source == 'FILE':
+                                abs_src = bpy.path.abspath(src_path)
+                                try:
+                                    st = os.stat(abs_src)
+                                    source_stats_before.append((abs_src, st.st_size, st.st_mtime))
+                                except Exception:
+                                    pass
+                for p, sz, mt in source_stats_before:
+                    _fbx_log(f"[FBX][TEXTURE_SOURCE_STAT_BEFORE] path={p} size={sz} mtime={mt:.6f}")
+
                 # Phase 7H.6: explicit sidecar texture copy for UE import
                 _copy_textures_sidecar(obj, obj_dir, guid_hex[:8])
+
+                # --- Task D: log source texture state AFTER sidecar ---
+                source_modified = False
+                for abs_src, before_sz, _mt in source_stats_before:
+                    try:
+                        st = os.stat(abs_src)
+                        after_sz = st.st_size
+                        changed = 1 if (after_sz != before_sz) else 0
+                        _fbx_log(f"[FBX][TEXTURE_SOURCE_STAT_AFTER] path={abs_src} size={after_sz} mtime={st.st_mtime:.6f} changed={changed}")
+                        if changed:
+                            _fbx_log(f"[FBX][TEXTURE_SOURCE_MODIFIED_ERROR] path={abs_src} before_size={before_sz} after_size={after_sz}")
+                            source_modified = True
+                    except Exception:
+                        _fbx_log(f"[FBX][TEXTURE_SOURCE_STAT_AFTER] path={abs_src} size=stat_failed changed=1")
+                        source_modified = True
+
+                if source_modified:
+                    _fbx_log(f"[FBX][SYNC_ABORT] reason=source_texture_modified guid={guid_hex[:8]} object={obj.name}")
+                    continue
 
                 # Phase 7H.6: diagnostics after successful FBX export
                 cache_files = _glob.glob(os.path.join(obj_dir, "*"))

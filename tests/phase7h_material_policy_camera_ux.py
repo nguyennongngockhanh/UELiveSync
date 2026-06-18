@@ -968,6 +968,121 @@ def test_ue_sidecar_scan_log_format():
 
 
 # =====================================================================
+# PART F — FBX DATA-LOSS PREVENTION AND UE SCANNER FIXES
+# =====================================================================
+
+# Task A/B/F/G — Blender addon safety invariants
+
+def test_export_filepath_ends_in_fbx():
+    """bpy.ops.export_scene.fbx(filepath=...) path ends in .fbx."""
+    assert "filepath=fbx_export_path" in init_py
+    assert ".fbx\"" in init_py or ".fbx'" in init_py
+
+
+def test_export_call_log_exists():
+    """Code has [FBX][EXPORT_CALL]."""
+    assert "[FBX][EXPORT_CALL]" in init_py
+
+
+def test_export_abort_log_exists():
+    """Code has [FBX][EXPORT_ABORT] reason=export_filepath_not_fbx."""
+    assert "[FBX][EXPORT_ABORT]" in init_py
+    assert "export_filepath_not_fbx" in init_py
+
+
+def test_source_texture_not_used_as_fbx_path():
+    """Source texture filepath cannot be used as FBX export filepath."""
+    assert 'filepath=filepath' not in init_py, (
+        "Export must not use bare 'filepath' (shadowed by texture loop)"
+    )
+    assert "filepath=fbx_export_path" in init_py
+
+
+def test_file_source_uses_shutil_copy2():
+    """FILE source sidecar copy uses shutil.copy2(src, dst)."""
+    assert "shutil.copy2(abs_path, dest_path)" in init_py
+
+
+def test_file_source_not_passed_to_save_render():
+    """FILE source path is never passed to img.save_render."""
+    save_render_lines = [
+        line.strip() for line in init_py.split("\n")
+        if "save_render" in line and not line.strip().startswith("#")
+    ]
+    for line in save_render_lines:
+        assert "abs_path" not in line, (
+            f"save_render must not use abs_path: {line}"
+        )
+
+
+def test_packed_generated_save_to_cache_folder():
+    """Packed/generated image temp save path is under FBX cache folder."""
+    assert "dir=dest_dir" in init_py
+    assert "[FBX][TEXTURE_TEMP_SAVE]" in init_py
+
+
+def test_source_stat_before_log():
+    """Code logs TEXTURE_SOURCE_STAT_BEFORE."""
+    assert "[FBX][TEXTURE_SOURCE_STAT_BEFORE]" in init_py
+
+
+def test_source_stat_after_log():
+    """Code logs TEXTURE_SOURCE_STAT_AFTER."""
+    assert "[FBX][TEXTURE_SOURCE_STAT_AFTER]" in init_py
+
+
+def test_source_write_blocked_log():
+    """Code logs TEXTURE_SOURCE_WRITE_BLOCKED."""
+    assert "[FBX][TEXTURE_SOURCE_WRITE_BLOCKED]" in init_py
+
+
+def test_source_modified_abort_log():
+    """Code logs SYNC_ABORT when source texture is modified."""
+    assert "[FBX][SYNC_ABORT]" in init_py
+    assert "source_texture_modified" in init_py
+
+
+# Task E — UE scanner diagnostics
+
+def test_ue_scanner_logs_dir_entry():
+    """Scanner logs SIDECAR_TEXTURE_DIR_ENTRY."""
+    assert "[FBX][SIDECAR_TEXTURE_DIR_ENTRY]" in fbx_cpp
+
+
+def test_ue_scanner_missing_textures_folder_is_skip():
+    """Missing textures/ subfolder is skip/info, not warning/failure."""
+    assert "[FBX][SIDECAR_TEXTURE_SCAN_FOLDER_SKIP]" in fbx_cpp
+    assert "missing_optional_subfolder" in fbx_cpp
+    assert "DirectoryExists" in fbx_cpp
+
+
+def test_ue_base_folder_jpg_detected():
+    """Base folder .jpg is detected."""
+    assert "ScanFolder(FbxDir" in fbx_cpp or "ScanFolder( *FbxDir" in fbx_cpp
+    ext_section_start = fbx_cpp.find("AcceptedExtensions")
+    assert ext_section_start >= 0
+    ext_block = fbx_cpp[ext_section_start:ext_section_start + 500]
+    assert '"jpg"' in ext_block or "'jpg'" in ext_block
+
+
+def test_ue_fbx_json_not_image_candidates():
+    """.fbx and .json are not image candidates."""
+    ext_section_start = fbx_cpp.find("AcceptedExtensions")
+    assert ext_section_start >= 0
+    ext_block = fbx_cpp[ext_section_start:ext_section_start + 500]
+    assert '"fbx"' not in ext_block and "'fbx'" not in ext_block
+    assert '"json"' not in ext_block and "'json'" not in ext_block
+    assert '"manifest"' not in ext_block and "'manifest'" not in ext_block
+
+
+def test_ue_sidecar_scan_log_format():
+    """Final scan log includes file names."""
+    assert "[FBX][SIDECAR_TEXTURE_SCAN]" in fbx_cpp
+    assert "count=" in fbx_cpp
+    assert "files=[" in fbx_cpp
+
+
+# =====================================================================
 # SUCCESS REPORT
 # =====================================================================
 
