@@ -1306,9 +1306,7 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
     bl_description = \
         "Send the active Blender camera to UE via " \
         "existing camera protocol paths (PT_Create, " \
-        "PT_Transform, PT_CameraDef, PT_ActiveCamera)"
-
-    _camera_sequence: int = 0
+        "PT_Transform, PT_CameraDef)"
 
     def execute(self, context):
 
@@ -1420,21 +1418,6 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
             )
             return {'CANCELLED'}
 
-        # --- Serialize active camera (PT_ActiveCamera) ---
-        type(self)._camera_sequence += 1
-        try:
-            active_payload = network.serialize_active_camera(
-                guid_obj,
-                type(self)._camera_sequence,
-                timestamp,
-            )
-        except Exception as e:
-            self.report(
-                {'ERROR'},
-                f"ActiveCamera serialization failed: {e}"
-            )
-            return {'CANCELLED'}
-
         # --- Send packets ---
         try:
             # PT_Create (0x03) to spawn camera actor
@@ -1452,12 +1435,9 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
                 packet_type=network.PT_CameraDef,
                 version=5,
             )
-            # PT_ActiveCamera (0x15)
-            network.send_objects(
-                [active_payload],
-                packet_type=network.PT_ActiveCamera,
-                version=5,
-            )
+            # PT_ActiveCamera deliberately NOT sent — viewport
+            # switching is unsafe and handled by auto-detect path
+            # when the user enables active_camera_sync preference.
         except Exception as e:
             self.report(
                 {'ERROR'},

@@ -13,6 +13,7 @@ from mathutils import Matrix
 from uuid import UUID
 
 try:
+    from . import network as _network_mod
     from .network import (
         connect,
         disconnect,
@@ -156,6 +157,7 @@ try:
         _append_blender_debug_log,
     )
 except ImportError:
+    import network as _network_mod
     from network import (
         connect,
         disconnect,
@@ -2636,12 +2638,12 @@ def dump_diagnostics():
 
     print(f"  [Discovery]")
     print(
-        f"    Configured host:   {network._host}"
+        f"    Configured host:   {_network_mod._host}"
     )
     print(
-        f"    Configured port:   {network._port}"
+        f"    Configured port:   {_network_mod._port}"
     )
-    discovery_results = network.get_discovery_results()
+    discovery_results = _network_mod.get_discovery_results()
     if discovery_results:
         for r in discovery_results:
             status = "FOUND" if r["success"] else "MISS"

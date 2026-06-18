@@ -17,8 +17,9 @@ Part B — Camera Sync UX:
 - Operator registered in classes tuple
 - No-camera warning path exists
 - Uses scene.camera fallback/selected camera logic
-- Uses existing PT_CameraDef / PT_ActiveCamera constants
-- Does not change packet IDs
+- Uses PT_CameraDef but does NOT send PT_ActiveCamera (viewport switching unsafe)
+- PT_ActiveCamera remains 0x15 in protocol, just not sent by manual operator
+- Dump Diagnostics no longer has undefined network reference
 - Camera crash workaround (bHideFromSceneOutliner) not removed
 """
 
@@ -253,11 +254,23 @@ def test_camera_uses_pt_cameradef():
     assert "PT_CameraDef" in chunk
 
 
-def test_camera_uses_pt_activecamera():
-    """Operator uses PT_ActiveCamera (0x15)."""
+def test_camera_does_not_send_pt_activecamera():
+    """Operator does NOT send PT_ActiveCamera as a packet."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
     chunk = init_py[idx:idx + 4000]
-    assert "PT_ActiveCamera" in chunk
+    # PT_ActiveCamera must NOT be used in send_objects (packet dispatch)
+    assert "packet_type=network.PT_ActiveCamera" not in chunk, (
+        "Operator must not send PT_ActiveCamera as a packet — viewport switching causes freeze"
+    )
+
+
+def test_camera_bl_description_no_activecamera():
+    """bl_description no longer mentions PT_ActiveCamera."""
+    idx = init_py.find("bl_description =")
+    chunk = init_py[idx:idx + 500]
+    assert "PT_ActiveCamera" not in chunk, (
+        "bl_description should not mention PT_ActiveCamera"
+    )
 
 
 def test_camera_uses_serialize_camera_def():
@@ -267,11 +280,13 @@ def test_camera_uses_serialize_camera_def():
     assert "serialize_camera_def" in chunk
 
 
-def test_camera_uses_serialize_active_camera():
-    """Operator uses serialize_active_camera()."""
+def test_camera_does_not_use_serialize_active_camera():
+    """Operator does NOT call serialize_active_camera()."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
     chunk = init_py[idx:idx + 4000]
-    assert "serialize_active_camera" in chunk
+    assert "network.serialize_active_camera" not in chunk, (
+        "Operator must not serialize active camera — viewport switching unsafe"
+    )
 
 
 def test_camera_uses_serialize_object_v3():
@@ -308,6 +323,24 @@ def test_camera_sends_transform_packet():
     assert has_default, (
         "Must have a send_objects() call without explicit packet_type (transform default 0x01)"
     )
+
+
+# --- Diagnostics fix ---
+
+def test_sync_py_imports_network_module():
+    """sync.py imports network module for dump_diagnostics."""
+    sync_py = read_file(os.path.join(REPO_ROOT, "Blender_Addon", "sync.py"))
+    assert "import network as _network_mod" in sync_py or "from . import network as _network_mod" in sync_py
+
+
+def test_dump_diagnostics_uses_network_mod():
+    """dump_diagnostics uses _network_mod instead of undefined network."""
+    sync_py = read_file(os.path.join(REPO_ROOT, "Blender_Addon", "sync.py"))
+    idx = sync_py.find("def dump_diagnostics")
+    chunk = sync_py[idx:idx + 5000]
+    assert "_network_mod._host" in chunk
+    assert "_network_mod._port" in chunk
+    assert "_network_mod.get_discovery_results" in chunk
 
 
 # --- Camera crash workaround preserved (bHideFromSceneOutliner) ---
