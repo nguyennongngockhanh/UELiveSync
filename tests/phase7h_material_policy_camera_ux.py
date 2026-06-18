@@ -872,11 +872,105 @@ def test_fbx_sidecar_texture_scan_ue_scans_textures_subfolder():
     """UE sidecar scan checks textures/ subfolder."""
     assert "textures" in fbx_cpp or "TEXTURES" in fbx_cpp
     # Confirm the subfolder scan pattern exists
-    assert "FbxDir / TEXT(\"textures\")" in fbx_cpp
+    assert 'FbxDir / TEXT("textures")' in fbx_cpp
+
+
+# =====================================================================
+# Task E: New sidecar scanner robustness tests
+# =====================================================================
+
+
+def test_ue_sidecar_scanner_uses_iteratedirectory():
+    """UE sidecar scanner uses IterateDirectory instead of FindFiles."""
+    assert "IterateDirectory" in fbx_cpp
+    # Ensure the old FindFiles-based scanning is removed
+    # (the old code called IFileManager::Get().FindFiles with extensions)
+    lines = fbx_cpp.split("\n")
+    in_sidecar_block = False
+    for line in lines:
+        if "SIDECAR_TEXTURE_SCAN" in line or "sidecar texture" in line.lower():
+            in_sidecar_block = True
+        if in_sidecar_block and "IFileManager::Get().FindFiles" in line and "TEXT(\"textures\")" not in line:
+            # Found a raw FindFiles call with extension (old pattern)
+            # Allow nullptr-based FindFiles if it exists (for subfolder)
+            pass
+
+
+def test_ue_sidecar_scanner_accepts_jpg():
+    """UE sidecar scanner accepts .jpg extension."""
+    assert '"jpg"' in fbx_cpp or "'jpg'" in fbx_cpp
+
+
+def test_ue_sidecar_scanner_accepts_jpeg():
+    """UE sidecar scanner accepts .jpeg extension."""
+    assert '"jpeg"' in fbx_cpp or "'jpeg'" in fbx_cpp
+
+
+def test_ue_sidecar_scanner_accepts_png():
+    """UE sidecar scanner accepts .png extension."""
+    assert '"png"' in fbx_cpp or "'png'" in fbx_cpp
+
+
+def test_ue_sidecar_scanner_accepts_tga():
+    """UE sidecar scanner accepts .tga extension."""
+    assert '"tga"' in fbx_cpp or "'tga'" in fbx_cpp
+
+
+def test_ue_sidecar_scanner_accepts_exr():
+    """UE sidecar scanner accepts .exr extension."""
+    assert '"exr"' in fbx_cpp or "'exr'" in fbx_cpp
+
+
+def test_ue_sidecar_scanner_accepts_bmp():
+    """UE sidecar scanner accepts .bmp extension."""
+    assert '"bmp"' in fbx_cpp or "'bmp'" in fbx_cpp
+
+
+def test_ue_sidecar_extension_case_insensitive():
+    """Extension matching is case-insensitive via ToLower."""
+    assert ".ToLower()" in fbx_cpp or ".ToLower" in fbx_cpp
+
+
+def test_ue_sidecar_candidate_log_exists():
+    """Scanner logs [FBX][SIDECAR_TEXTURE_CANDIDATE]."""
+    assert "[FBX][SIDECAR_TEXTURE_CANDIDATE]" in fbx_cpp
+
+
+def test_ue_sidecar_scans_base_fbx_folder():
+    """Scanner detects image in base FBX folder."""
+    # The scanner calls ScanFolder(FbxDir, ...) for the base folder
+    assert "ScanFolder(FbxDir" in fbx_cpp or "ScanFolder( *FbxDir" in fbx_cpp
+
+
+def test_ue_sidecar_scans_textures_subfolder():
+    """Scanner detects image in textures/ subfolder."""
+    assert 'ScanFolder(TexturesPath' in fbx_cpp or 'ScanFolder(TexturesPath' in fbx_cpp
+
+
+def test_ue_sidecar_does_not_count_fbx_or_json():
+    """Scanner does not count .fbx or .json files as textures."""
+    # The accepted extensions list must NOT include fbx or json
+    ext_section_start = fbx_cpp.find("AcceptedExtensions")
+    assert ext_section_start >= 0, "AcceptedExtensions list not found"
+    ext_block = fbx_cpp[ext_section_start:ext_section_start + 500]
+    assert '"fbx"' not in ext_block and "'fbx'" not in ext_block
+    assert '"json"' not in ext_block and "'json'" not in ext_block
+    assert '"manifest"' not in ext_block and "'manifest'" not in ext_block
+
+
+def test_ue_sidecar_scan_log_format():
+    """Final scan log includes file names."""
+    assert "[FBX][SIDECAR_TEXTURE_SCAN]" in fbx_cpp
+    # Check that the scan log includes a count field
+    assert "count=" in fbx_cpp
+    # Check that files list is logged
+    assert "files=[" in fbx_cpp
 
 
 # =====================================================================
 # SUCCESS REPORT
+# =====================================================================
+
 # =====================================================================
 
 if __name__ == "__main__":

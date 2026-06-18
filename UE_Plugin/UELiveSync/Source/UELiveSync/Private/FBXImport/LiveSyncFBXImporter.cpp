@@ -1135,44 +1135,87 @@ bool FLiveSyncFBXImporter::HandleImport(
         // Phase 7H.6: sidecar texture import fallback
         // If FBX import produced zero textures, scan the FBX directory
         // for image files and import them directly via AssetTools.
+        // Uses explicit directory enumeration (IterateDirectory) for
+        // robustness over FindFiles extension filtering on Linux.
         if (TexCount == 0)
         {
             const FString FbxDir = FPaths::GetPath(FbxPathStr);
-            static const TCHAR* ImagePatterns[] = {
-                TEXT("*.png"), TEXT("*.jpg"), TEXT("*.jpeg"),
-                TEXT("*.tga"), TEXT("*.exr"), TEXT("*.bmp")
-            };
             TArray<FString> SidecarFiles;
-            for (const TCHAR* Pattern : ImagePatterns)
+
+            // Canonical extension list (lowercase, no leading dot).
+            static const TCHAR* AcceptedExtensions[] = {
+                TEXT("png"), TEXT("jpg"), TEXT("jpeg"),
+                TEXT("tga"), TEXT("exr"), TEXT("bmp"),
+                TEXT("tif"), TEXT("tiff"), TEXT("hdr")
+            };
+            constexpr int32 NumAcceptedExtensions = 9;
+
+            auto IsImageExtension = [](const FString& ExtLower)
             {
-                TArray<FString> Found;
-                IFileManager::Get().FindFiles(
-                    Found, *(FbxDir / Pattern), nullptr);
-                for (FString& F : Found)
-                    SidecarFiles.Add(FbxDir / F);
-            }
-            // Also check textures/ subfolder
-            {
-                TArray<FString> Found;
-                IFileManager::Get().FindFiles(
-                    Found, *(FbxDir / TEXT("textures") / TEXT("*")), nullptr);
-                for (FString& F : Found)
+                for (int32 i = 0; i < NumAcceptedExtensions; ++i)
                 {
-                    FString Ext = FPaths::GetExtension(F).ToLower();
-                    if (Ext == TEXT("png") || Ext == TEXT("jpg") ||
-                        Ext == TEXT("jpeg") || Ext == TEXT("tga") ||
-                        Ext == TEXT("exr") || Ext == TEXT("bmp"))
-                    {
-                        SidecarFiles.Add(FbxDir / TEXT("textures") / F);
-                    }
+                    if (ExtLower == AcceptedExtensions[i])
+                        return true;
                 }
+                return false;
+            };
+
+            // Scan a single folder via IterateDirectory.
+            auto ScanFolder = [&SidecarFiles, &IsImageExtension](const FString& FolderPath, const FString& /*FolderLabel*/)
+            {
+                bool bIterOk = IFileManager::Get().IterateDirectory(
+                    *FolderPath,
+                    [&SidecarFiles, &IsImageExtension](const TCHAR* Filename, bool bIsFolder)
+                    {
+                        if (bIsFolder)
+                            return true;
+
+                        FString FilenameStr(Filename);
+                        const FString ExtLower = FPaths::GetExtension(FilenameStr).ToLower();
+                        if (!IsImageExtension(ExtLower))
+                            return true;
+
+                        const FString AbsPath = FolderPath / FilenameStr;
+                        const bool bExists = IFileManager::Get().FileExists(*AbsPath);
+
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[FBX][SIDECAR_TEXTURE_CANDIDATE] folder=%s file=%s ext=%s isImage=1 exists=%d"),
+                            *FolderPath, *Filename, *ExtLower, bExists);
+
+                        SidecarFiles.Add(AbsPath);
+                        return true;
+                    });
+
+                if (!bIterOk)
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[FBX][SIDECAR_TEXTURE_SCAN_FOLDER_FAIL] folder=%s reason=directory_iter_failed"),
+                        *FolderPath);
+                }
+            };
+
+            // Scan base FBX folder.
+            ScanFolder(FbxDir, TEXT("base"));
+
+            // Also scan textures/ subfolder.
+            {
+                const FString TexturesPath = FbxDir / TEXT("textures");
+                ScanFolder(TexturesPath, TEXT("textures"));
+            }
+
+            // Build per-file list for summary log.
+            TArray<FString> FileNames;
+            for (const FString& P : SidecarFiles)
+            {
+                FileNames.Add(FPaths::GetCleanFilename(P));
             }
 
             if (SidecarFiles.Num() > 0)
             {
+                const FString FileListStr = FileNames.JoinByString(", ");
                 UE_LOG(LogLiveSync, Log,
-                    TEXT("[FBX][SIDECAR_TEXTURE_SCAN] folder=%s count=%d"),
-                    *FbxDir, SidecarFiles.Num());
+                    TEXT("[FBX][SIDECAR_TEXTURE_SCAN] folder=%s count=%d files=[%s]"),
+                    *FbxDir, SidecarFiles.Num(), *FileListStr);
 
                 TArray<UObject*> ImportedTexs =
                     AssetTools.ImportAssets(SidecarFiles, AssetBasePath);
@@ -1186,14 +1229,25 @@ bool FLiveSyncFBXImporter::HandleImport(
                             *Request.ObjectGUID.ToString(EGuidFormats::Digits),
                             *Tex->GetPathName());
                     }
+                    else if (Tex)
+                    {
+                        UE_LOG(LogLiveSync, Warning,
+                            TEXT("[FBX][SIDECAR_TEXTURE_IMPORT_FAIL] src=%s reason=not_a_texture"),
+                            *Tex->GetPathName());
+                    }
                 }
 
                 if (ImportedTexs.Num() > 0)
                 {
                     UE_LOG(LogLiveSync, Log,
-                        TEXT("[FBX][IMPORTED_ASSET_SUMMARY] guid=%s meshes=%d materials=%d textures=%d (after sidecar)"),
+                        TEXT("[FBX][IMPORTED_ASSET_SUMMARY] guid=%s meshes=%d materials=%d textures=%d (after_sidecar)"),
                         *Request.ObjectGUID.ToString(EGuidFormats::Digits),
                         MeshCount, MatCount, TexCount + ImportedTexs.Num());
+                }
+                else
+                {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[FBX][SIDECAR_TEXTURE_IMPORT_FAIL] src=all reason=import_assets_returned_zero"));
                 }
             }
             else
