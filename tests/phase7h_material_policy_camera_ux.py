@@ -765,6 +765,41 @@ def test_packet_type_0x02_reserved():
     assert "0x02" in sync_types
 
 
+# --- Phase 7H.7 follow-up: missing import os + failure message fix ---
+
+def test_fbx_import_os_at_module_level():
+    """import os exists at module level (not only inside execute)."""
+    # Must be before any function definition, not just inside execute().
+    assert "import os" in init_py[:init_py.find("def ")], (
+        "import os must be at module level in __init__.py"
+    )
+
+
+def test_fbx_export_failed_warning_message():
+    """'FBX sync failed for N mesh object(s)' warning exists."""
+    assert "FBX sync failed for" in init_py, (
+        "Must warn 'FBX sync failed for N mesh object(s)' when mesh found but export fails"
+    )
+
+
+def test_fbx_export_failed_warning_refs_len_selected():
+    """Export-failed warning uses len(selected) and references [FBX] ERROR."""
+    idx = init_py.find("FBX sync failed for")
+    assert idx != -1, "export-failed warning not found"
+    chunk = init_py[idx:idx + 200]
+    assert "len(selected)" in chunk, (
+        "Message must reference len(selected) to show object count"
+    )
+    assert "[FBX] ERROR" in chunk, (
+        "Message must direct user to console/log for [FBX] ERROR"
+    )
+
+
+def test_fbx_no_mesh_warning_still_present():
+    """'No mesh objects could be FBX-synced' still exists for empty selection."""
+    assert "No mesh objects could be FBX-synced" in init_py
+
+
 # =====================================================================
 # SUCCESS REPORT
 # =====================================================================

@@ -8,6 +8,7 @@ bl_info = {
 }
 
 import bpy
+import os
 
 from bpy.props import (
     IntProperty,
@@ -990,7 +991,6 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
             )
             return {'CANCELLED'}
 
-        import os
         import uuid
         import json
         import time
@@ -1335,6 +1335,12 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
             self.report(
                 {'INFO'},
                 f"FBX synced {synced_count} mesh object(s) to UE"
+            )
+        elif len(selected) > 0:
+            self.report(
+                {'WARNING'},
+                f"FBX sync failed for {len(selected)} mesh object(s); "
+                "see console/log for [FBX] ERROR"
             )
         else:
             self.report(
