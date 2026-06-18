@@ -272,8 +272,9 @@ def test_imported_texture_candidate_marker():
 
 
 def test_generated_texture_param_check_marker():
-    """[MATERIAL][GENERATED_TEXTURE_PARAM_CHECK] marker exists."""
-    assert "[MATERIAL][GENERATED_TEXTURE_PARAM_CHECK]" in source_cpp
+    """GENERATED_TEXTURE_PARAM_CHECK replaced by expanded per-param readback."""
+    assert "[MATERIAL][TEXTURE_PARAM_READBACK]" in source_cpp
+    assert "[MATERIAL][TEXTURE_TOGGLE_READBACK]" in source_cpp
 
 
 def test_no_imported_texture_found_reason_asset_candidate():
@@ -1173,6 +1174,75 @@ def test_camera_safe_behavior_unchanged():
     # The sync_active_camera operator exists
     assert "sync_active_camera_to_ue" in init_py_check
     assert "debug_send_camera_packets" in init_py_check
+
+
+# --- Manifest and sidecar readiness tests ---
+
+def test_blender_logs_sidcar_ready():
+    """Blender logs [FBX][SIDECAR_READY] after copy."""
+    assert "[FBX][SIDECAR_READY]" in init_py
+    assert "copied=" in init_py
+
+
+def test_blender_logs_manifest_write():
+    """Blender logs [FBX][MANIFEST_WRITE] with sidecar count."""
+    assert "[FBX][MANIFEST_WRITE]" in init_py
+    assert "sidecarTextures=" in init_py
+
+
+def test_blender_manifest_contains_sidecar_textures():
+    """Manifest dict includes sidecar_textures field."""
+    assert '"sidecar_textures"' in init_py
+
+
+def test_blender_logs_send_ready_after_sidecar():
+    """[FBX][SEND_READY] logged after sidecar/manifest steps."""
+    assert "[FBX][SEND_READY]" in init_py
+    assert "sidecarTextures=" in init_py
+
+
+def test_ue_logs_manifest_read():
+    """UE logs [FBX][SIDECAR_MANIFEST_READ]."""
+    assert "[FBX][SIDECAR_MANIFEST_READ]" in fbx_cpp
+
+
+def test_ue_logs_manifest_expected():
+    """UE logs [FBX][SIDECAR_EXPECTED]."""
+    assert "[FBX][SIDECAR_EXPECTED]" in fbx_cpp
+
+
+def test_ue_bounded_retry_logs():
+    """UE bounded retry logs [FBX][SIDECAR_EXPECTED_WAIT]."""
+    assert "[FBX][SIDECAR_EXPECTED_WAIT]" in fbx_cpp
+
+
+def test_ue_logs_expected_found():
+    """UE logs [FBX][SIDECAR_EXPECTED_FOUND]."""
+    assert "[FBX][SIDECAR_EXPECTED_FOUND]" in fbx_cpp
+
+
+def test_ue_imports_manifest_sidecar_directly():
+    """UE logs [FBX][SIDECAR_TEXTURE_IMPORT] for manifest sidecar."""
+    assert "[FBX][SIDECAR_TEXTURE_IMPORT]" in fbx_cpp
+
+
+def test_ue_directory_scan_still_fallback():
+    """Directory scan remains as fallback (IterateDirectory still used)."""
+    assert "IterateDirectory" in fbx_cpp
+
+
+def test_ue_texture_param_readback():
+    """Material texture param readback log exists."""
+    with open(SUBSYSTEM_CPP) as sf:
+        src = sf.read()
+    assert "[MATERIAL][TEXTURE_PARAM_READBACK]" in src
+
+
+def test_ue_texture_toggle_readback():
+    """Material texture toggle readback log exists."""
+    with open(SUBSYSTEM_CPP) as sf:
+        src = sf.read()
+    assert "[MATERIAL][TEXTURE_TOGGLE_READBACK]" in src
 
 
 # =====================================================================

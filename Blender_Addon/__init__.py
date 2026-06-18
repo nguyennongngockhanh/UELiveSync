@@ -943,7 +943,7 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
     Iterates obj material slots, finds TEX_IMAGE nodes, and copies
     referenced images into dest_dir (the FBX cache folder).
     Handles FILE source (direct copy), packed images, and GENERATED images.
-    Returns number of textures copied.
+    Returns (copied_count, sidecar_info_list).
     """
     import shutil
     import uuid as _uuid
@@ -951,9 +951,10 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
     if not obj.material_slots:
         _fbx_log(f"[FBX][TEXTURE_SIDECAR] guid={guid_short} "
                  f"object={obj.name} no_material_slots")
-        return 0
+        return 0, []
 
     copied_count = 0
+    sidecar_info = []  # list of dicts: {filename, path, source_path, size}
     for slot in obj.material_slots:
         mat = slot.material
         if not mat or not mat.use_nodes or not mat.node_tree:
@@ -1003,6 +1004,19 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
                              f"object={obj.name} material={mat.name} "
                              f"image={img.name} src={abs_path} "
                              f"dst={dest_path}")
+                    # Task A: record sidecar info for manifest
+                    try:
+                        src_size = os.stat(abs_path).st_size
+                    except Exception:
+                        src_size = 0
+                    sidecar_info.append({
+                        "filename": os.path.basename(dest_path),
+                        "path": dest_path,
+                        "size": src_size,
+                        "source": abs_path,
+                    })
+                    _fbx_log(f"[FBX][MANIFEST_SIDECAR_TEXTURE] guid={guid_short} "
+                             f"file={os.path.basename(dest_path)} size={src_size}")
                     copied_count += 1
                 except Exception as e:
                     _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
@@ -1046,7 +1060,7 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
 
     _fbx_log(f"[FBX][TEXTURE_SIDECAR_SUMMARY] guid={guid_short} "
              f"object={obj.name} copied={copied_count}")
-    return copied_count
+    return copied_count, sidecar_info
 
 
 class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
@@ -1222,7 +1236,9 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     _fbx_log(f"[FBX][TEXTURE_SOURCE_STAT_BEFORE] path={p} size={sz} mtime={mt:.6f}")
 
                 # Phase 7H.6: explicit sidecar texture copy for UE import
-                _copy_textures_sidecar(obj, obj_dir, guid_hex[:8])
+                sidecar_copied, sidecar_info = _copy_textures_sidecar(obj, obj_dir, guid_hex[:8])
+                # Task A: deterministic ordering log for sidecar readiness
+                print(f"[FBX][SIDECAR_READY] guid={guid_hex[:8]} copied={sidecar_copied}")
 
                 # --- Task D: log source texture state AFTER sidecar ---
                 source_modified = False
@@ -1295,6 +1311,10 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 finally:
                     evaluated_obj.to_mesh_clear()
 
+                # Task B: add sidecar_textures to manifest for UE deterministic discovery
+                if sidecar_info:
+                    manifest["sidecar_textures"] = sidecar_info
+
                 # Write manifest JSON
                 manifest = {
                     "object_guid": guid_hex,
@@ -1306,6 +1326,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     "mat_slot_count": mat_slot_count,
                     "timestamp": time.time(),
                     "source": "Blender FBX export",
+                    "sidecar_textures": manifest.get("sidecar_textures", []),
                 }
 
                 manifest_path = os.path.join(
@@ -1318,6 +1339,9 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     json.dump(
                         manifest, f, indent=2
                     )
+
+                # Task A: deterministic ordering log — manifest written before packet send
+                print(f"[FBX][MANIFEST_WRITE] guid={guid_hex[:8]} path={manifest_path} sidecarTextures={len(manifest['sidecar_textures'])}")
 
                 # Phase 10J.5L: compute mesh bounds (both meters and expected cm)
                 bounds_min_m = (0.0, 0.0, 0.0)
@@ -1385,6 +1409,9 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         timestamp=time.time(),
                         geometry_hash=geometry_hash,
                     )
+
+                # Task A: deterministic send-ready log after all sidecar/manifest steps
+                print(f"[FBX][SEND_READY] guid={guid_hex[:8]} fbx={fbx_path} sidecarTextures={len(manifest['sidecar_textures'])}")
 
                 network.send_objects(
                     [payload],

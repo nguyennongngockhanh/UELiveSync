@@ -13780,13 +13780,21 @@ CopyImportedTexturesFromParent(
     }
     else
     {
+        // Task E: readback log after texture binding to verify correctness
         UTexture* CheckTex = nullptr;
         LiveSyncMID->GetTextureParameterValue(TEXT("BaseColorTexture"), CheckTex);
         float CheckUseBaseColor = 0.0f;
         LiveSyncMID->GetScalarParameterValue(TEXT("UseBaseColorTexture"), CheckUseBaseColor);
+
         UE_LOG(LogLiveSync, Log,
-            TEXT("[MATERIAL][GENERATED_TEXTURE_PARAM_CHECK] hasBaseColorTexture=%d hasUseBaseColorTexture=%d"),
+            TEXT("[MATERIAL][TEXTURE_PARAM_READBACK] guid=%s slot=%d param=BaseColorTexture bound=%d texture=%s"),
+            *GuidStr, SlotIndex,
             CheckTex ? 1 : 0,
+            CheckTex ? *CheckTex->GetName() : TEXT("none"));
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][TEXTURE_TOGGLE_READBACK] guid=%s slot=%d param=UseBaseColorTexture value=%d"),
+            *GuidStr, SlotIndex,
             CheckUseBaseColor > 0.5f ? 1 : 0);
     }
 

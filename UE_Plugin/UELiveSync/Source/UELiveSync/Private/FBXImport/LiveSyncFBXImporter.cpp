@@ -1141,6 +1141,113 @@ bool FLiveSyncFBXImporter::HandleImport(
         if (TexCount == 0)
         {
             const FString FbxDir = FPaths::GetPath(FbxPathStr);
+            TArray<FString> ManifestSidecarFiles;
+
+            // Task C/D: read manifest.json for deterministic sidecar texture discovery
+            FString MeshName = FPaths::GetCleanFilename(FbxPathStr);
+            const FString FbxExt = TEXT(".fbx");
+            if (MeshName.EndsWith(FbxExt))
+            {
+                MeshName = MeshName.Left(MeshName.Len() - FbxExt.Len());
+            }
+            const FString ManifestPath = FbxDir / (MeshName + TEXT(".manifest.json"));
+
+            if (IFileManager::Get().FileExists(*ManifestPath))
+            {
+                FString ManifestContent;
+                if (FFileHelper::LoadFileToString(ManifestContent, *ManifestPath))
+                {
+                    TSharedPtr<FJsonObject> ManifestJson;
+                    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ManifestContent);
+                    if (FJsonSerializer::Deserialize(Reader, ManifestJson) && ManifestJson.IsValid())
+                    {
+                        if (ManifestJson->HasTypedField<EJson::Array>(TEXT("sidecar_textures")))
+                        {
+                            const TArray<TSharedPtr<FJsonValue>>& SidecarArray =
+                                ManifestJson->GetArrayField(TEXT("sidecar_textures"));
+                            FString LogStr = TEXT("[FBX][SIDECAR_MANIFEST_READ] path=") + ManifestPath +
+                                TEXT(" textureCount=") + FString::FromInt(SidecarArray.Num());
+                            UE_LOG(LogLiveSync, Log, TEXT("%s"), *LogStr);
+
+                            for (const TSharedPtr<FJsonValue>& Val : SidecarArray)
+                            {
+                                if (Val->Type != EJson::Object)
+                                    continue;
+
+                                const TSharedPtr<FJsonObject>* SidecarObj = nullptr;
+                                if (Val->TryGetObject(SidecarObj) && SidecarObj)
+                                {
+                                    FString SidecarFile = (*SidecarObj)->GetStringField(TEXT("filename"));
+                                    FString SidecarPath = (*SidecarObj)->GetStringField(TEXT("path"));
+                                    int64 SidecarSize = (*SidecarObj)->GetNumberField(TEXT("size"));
+
+                                    FString ExpLog = TEXT("[FBX][SIDECAR_EXPECTED] file=") + SidecarFile +
+                                        TEXT(" path=") + SidecarPath +
+                                        TEXT(" size=") + FString::FromInt(SidecarSize);
+                                    UE_LOG(LogLiveSync, Log, TEXT("%s"), *ExpLog);
+
+                                    int32 WaitAttempts = 0;
+                                    const int32 MaxWaitAttempts = 10;
+                                    const float WaitMs = 0.1f;
+                                    bool bFound = false;
+
+                                    while (WaitAttempts < MaxWaitAttempts)
+                                    {
+                                        if (IFileManager::Get().FileExists(*SidecarPath))
+                                        {
+                                            int64 ActualSize = IFileManager::Get().FileSize(*SidecarPath);
+                                            if (ActualSize > 0)
+                                            {
+                                                FString FoundLog = TEXT("[FBX][SIDECAR_EXPECTED_FOUND] file=") + SidecarFile +
+                                                    TEXT(" path=") + SidecarPath +
+                                                    TEXT(" size=") + FString::FromInt(ActualSize);
+                                                UE_LOG(LogLiveSync, Log, TEXT("%s"), *FoundLog);
+                                                ManifestSidecarFiles.Add(SidecarPath);
+                                                bFound = true;
+                                                break;
+                                            }
+                                        }
+                                        WaitAttempts++;
+                                        FString WaitLog = TEXT("[FBX][SIDECAR_EXPECTED_WAIT] file=") + SidecarFile +
+                                            TEXT(" attempt=") + FString::FromInt(WaitAttempts) +
+                                            TEXT(" exists=0 size=0");
+                                        UE_LOG(LogLiveSync, Log, TEXT("%s"), *WaitLog);
+                                        FPlatformProcess::Sleep(WaitMs);
+                                    }
+
+                                    if (!bFound)
+                                    {
+                                        FString MissingLog = TEXT("[FBX][SIDECAR_EXPECTED_MISSING] file=") + SidecarFile +
+                                            TEXT(" attempts=") + FString::FromInt(WaitAttempts);
+                                        UE_LOG(LogLiveSync, Log, TEXT("%s"), *MissingLog);
+                                    }
+                                }
+                            }
+                        }
+                        else
+                        {
+                            FString NoTexLog = TEXT("[FBX][SIDECAR_MANIFEST_NO_TEXTURES_FIELD] path=") + ManifestPath;
+                            UE_LOG(LogLiveSync, Log, TEXT("%s"), *NoTexLog);
+                        }
+                    }
+                    else
+                    {
+                        FString ParseFailLog = TEXT("[FBX][SIDECAR_MANIFEST_PARSE_FAIL] path=") + ManifestPath;
+                        UE_LOG(LogLiveSync, Log, TEXT("%s"), *ParseFailLog);
+                    }
+                }
+                else
+                {
+                    FString ReadFailLog = TEXT("[FBX][SIDECAR_MANIFEST_READ_FAIL] path=") + ManifestPath;
+                    UE_LOG(LogLiveSync, Log, TEXT("%s"), *ReadFailLog);
+                }
+            }
+            else
+            {
+                FString NotFoundLog = TEXT("[FBX][SIDECAR_MANIFEST_NOT_FOUND] path=") + ManifestPath;
+                UE_LOG(LogLiveSync, Log, TEXT("%s"), *NotFoundLog);
+            }
+
             TArray<FString> SidecarFiles;
 
             // Canonical extension list (lowercase, no leading dot).
@@ -1338,6 +1445,15 @@ bool FLiveSyncFBXImporter::HandleImport(
                         SidecarFiles.Add(FullPath);
                     }
                 }
+            }
+
+            // Task D: merge manifest-declared sidecar files into scan list
+            for (const FString& M : ManifestSidecarFiles)
+            {
+                SidecarFiles.AddUnique(M);
+                FString ImportLog = TEXT("[FBX][SIDECAR_TEXTURE_IMPORT] src=") + M +
+                    TEXT(" dst=") + AssetBasePath;
+                UE_LOG(LogLiveSync, Log, TEXT("%s"), *ImportLog);
             }
 
             // Build per-file list for summary log.
