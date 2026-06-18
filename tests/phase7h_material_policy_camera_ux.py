@@ -8,7 +8,8 @@ Part A — Material Policy:
 - [MATERIAL][FBX_IMPORTED_APPLY] marker present
 - [MATERIAL][FBX_IMPORTED_KEEP] marker present
 - [MATERIAL][MID_FALLBACK_APPLY] marker present (for no-material fallback)
-- [MATERIAL][MID_OVERRIDE_SKIP_IMPORTED] marker present (OnRestoreGeneratedMaterials fallback)
+- [MATERIAL][MID_FALLBACK_SKIP_IMPORTED] marker present (OnRestoreGeneratedMaterials + ParseAndApply skip)
+- [MATERIAL][TEXTURE_PRESERVE_IMPORTED_PARENT] marker present
 - [MATERIAL][IMPORTED_PARENT_MID_APPLY] marker present
 - [MAT][IMPORTED_PARENT] marker present
 - [MAT][IMPORTED_PARENT_CREATE] marker present
@@ -21,9 +22,9 @@ Part B — Camera Sync UX:
 - Operator registered in classes tuple
 - No-camera warning path exists
 - Uses scene.camera fallback/selected camera logic
-- SAFE: does NOT send PT_Create (camera spawn deferred to auto-detect)
+- SAFE: sends PT_Create + PT_Transform + PT_CameraDef (no viewport switch)
 - SAFE: does NOT send PT_ActiveCamera (viewport switching unsafe)
-- Sends only PT_Transform + PT_CameraDef for existing camera actors
+- Operator has print() output for packet verification
 - uelivesync.debug_send_camera_packets operator exists for freeze isolation
 - PT_ActiveCamera remains 0x15 in protocol, just not sent by manual operator
 - Dump Diagnostics no longer has undefined network reference
@@ -89,11 +90,11 @@ def test_material_mid_fallback_apply_marker():
 
 
 def test_material_mid_override_skip_imported_marker():
-    """[MATERIAL][MID_OVERRIDE_SKIP_IMPORTED] marker exists in subsystem."""
-    count = source_cpp.count("[MATERIAL][MID_OVERRIDE_SKIP_IMPORTED]")
+    """[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] marker exists in subsystem."""
+    count = source_cpp.count("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED]")
     assert count >= 1, (
-        f"[MATERIAL][MID_OVERRIDE_SKIP_IMPORTED] should appear at least 1 time"
-        f" (OnRestoreGeneratedMaterials fallback), found {count}"
+        f"[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] should appear at least 1 time"
+        f" (OnRestoreGeneratedMaterials + ParseAndApplyGeneratedMaterial skip), found {count}"
     )
 
 
@@ -129,16 +130,24 @@ def test_on_restore_generated_skip_imported():
     """OnRestoreGeneratedMaterials skips MID when imported material exists."""
     idx = source_cpp.find("Ctx.OnRestoreGeneratedMaterials")
     assert idx != -1, "OnRestoreGeneratedMaterials not found"
-    chunk = source_cpp[idx:idx + 3000]
+    chunk = source_cpp[idx:idx + 3500]
     assert "/Game/UELiveSync/Imported" in chunk, (
         "OnRestoreGeneratedMaterials must check for imported material path"
     )
-    assert "MID_OVERRIDE_SKIP_IMPORTED" in chunk, (
-        "OnRestoreGeneratedMaterials must have MID_OVERRIDE_SKIP_IMPORTED marker"
+    # Check that it uses the new MID_FALLBACK_SKIP_IMPORTED marker
+    assert "MID_FALLBACK_SKIP_IMPORTED" in chunk or "IMPORTED_PARENT_MID_APPLY" in chunk, (
+        "OnRestoreGeneratedMaterials must have MID_FALLBACK_SKIP_IMPORTED or IMPORTED_PARENT_MID_APPLY marker"
     )
     # Verify it has a guarded path (either continue or skip)
     assert ("continue" in chunk) or ("SKIP" in chunk.upper()), (
         "OnRestoreGeneratedMaterials must skip when imported material exists"
+    )
+    # Verify it does 3-way detection (path, MID parent, cache)
+    assert "IsA<UMaterialInstanceDynamic>" in chunk, (
+        "OnRestoreGeneratedMaterials must check for MID with imported parent"
+    )
+    assert "ImportedMaterialMIDCache" in chunk, (
+        "OnRestoreGeneratedMaterials must check ImportedMaterialMIDCache"
     )
 
 
@@ -206,6 +215,54 @@ def test_material_imported_parent_counter_in_header():
     ))
     assert "MaterialImportedParentMIDApplied" in header
 
+
+# --- MID_FALLBACK_SKIP_IMPORTED guard ---
+
+def test_material_mid_fallback_skip_imported_marker():
+    """[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] marker exists in subsystem."""
+    count = source_cpp.count("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED]")
+    assert count >= 1, (
+        f"[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] should appear at least 1 time"
+        f" (fallback skip guard in ParseAndApplyGeneratedMaterial), found {count}"
+    )
+
+
+def test_material_texture_preserve_imported_parent_marker():
+    """[MATERIAL][TEXTURE_PRESERVE_IMPORTED_PARENT] marker exists in subsystem."""
+    assert "[MATERIAL][TEXTURE_PRESERVE_IMPORTED_PARENT]" in source_cpp, (
+        "TEXTURE_PRESERVE_IMPORTED_PARENT marker must exist for imported-parent texture preservation"
+    )
+
+
+def test_parse_and_apply_detects_imported_parent_mid_by_parent():
+    """ParseAndApplyGeneratedMaterial detects imported-parent MID by parent path."""
+    idx = source_cpp.find("ParseAndApplyGeneratedMaterial(\n    const FGuid& Guid")
+    if idx == -1:
+        idx = source_cpp.find("ParseAndApplyGeneratedMaterial(")
+    assert idx != -1, "ParseAndApplyGeneratedMaterial definition not found"
+    chunk = source_cpp[idx:idx + 5000]
+    # Must check MID parent path (not just direct imported material path)
+    assert "SlotMID->Parent" in chunk or "Parent->GetPathName()" in chunk, (
+        "ParseAndApplyGeneratedMaterial must detect imported-parent MID by parent path"
+    )
+    # Must also check ImportedMaterialMIDCache for cached entry
+    assert "ImportedMaterialMIDCache.Find" in chunk or "ImportedMaterialMIDCache.Find" in source_cpp[idx:idx + 6000], (
+        "ParseAndApplyGeneratedMaterial must check ImportedMaterialMIDCache for cached entries"
+    )
+
+
+def test_on_restore_detects_imported_parent_mid_by_parent():
+    """OnRestoreGeneratedMaterials detects imported-parent MID by parent path."""
+    idx = source_cpp.find("Ctx.OnRestoreGeneratedMaterials")
+    assert idx != -1, "OnRestoreGeneratedMaterials not found"
+    chunk = source_cpp[idx:idx + 3500]
+    # Must detect MID whose parent is imported material
+    assert "IsA<UMaterialInstanceDynamic>" in chunk or "SlotMID->Parent" in chunk or "CurrentMID->Parent" in chunk, (
+        "OnRestoreGeneratedMaterials must detect imported-parent MID by parent path"
+    )
+    assert "ImportedMaterialMIDCache" in chunk, (
+        "OnRestoreGeneratedMaterials must check ImportedMaterialMIDCache"
+    )
 
 # --- EnsureFBXMeshRenderable still applies SafeMaterial for null ---
 
@@ -358,13 +415,13 @@ def test_camera_uses_primitve_camera():
 
 # --- Uses existing serialization functions ---
 
-def test_camera_does_not_send_create_packet():
-    """Operator does NOT send PT_Create (0x03) — spawn deferred to auto-detect."""
+def test_camera_sends_create_packet():
+    """Operator sends PT_Create (0x03) to spawn camera actor."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
     chunk = init_py[idx:idx + 6000]
-    # PT_Create (0x03) should NOT appear as a packet_type in the operator's send loop
-    assert "packet_type=0x03" not in chunk, (
-        "Operator must not send PT_Create — camera actor spawn can cause freeze"
+    # PT_Create (0x03) should appear as a packet_type in the operator's send loop
+    assert "packet_type=0x03" in chunk, (
+        "Operator must send PT_Create (0x03) to spawn camera actor in UE"
     )
 
 
@@ -382,11 +439,45 @@ def test_camera_sends_transform_packet():
 # --- Safe bl_description ---
 
 def test_camera_bl_description_safe():
-    """bl_description mentions safe behavior (no spawn/viewport switch)."""
+    """bl_description mentions spawn/create behavior."""
     idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
     chunk = init_py[idx:idx + 1000]
-    assert "safe" in chunk.lower(), (
-        "bl_description should indicate operator is safe (no spawn/viewport switch)"
+    assert "Spawn/update" in chunk or "PT_Create" in chunk, (
+        "bl_description should mention creation/update behavior"
+    )
+    assert "no viewport switch" in chunk.lower() or "viewport" in chunk.lower(), (
+        "bl_description should indicate no viewport switch"
+    )
+
+
+# --- Camera operator packet reporting ---
+
+def test_camera_operator_has_print_output():
+    """Operator has print() statements for Blender console packet verification."""
+    idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
+    chunk = init_py[idx:idx + 6000]
+    # Must have print() calls for each sent packet type
+    assert "Sent PT_Create" in chunk, (
+        "Operator must print PT_Create send confirmation to Blender console"
+    )
+    assert "Sent PT_Transform" in chunk, (
+        "Operator must print PT_Transform send confirmation to Blender console"
+    )
+    assert "Sent PT_CameraDef" in chunk, (
+        "Operator must print PT_CameraDef send confirmation to Blender console"
+    )
+
+
+def test_camera_operator_report_contains_packet_types():
+    """Operator report mentions create+transform+def."""
+    idx = init_py.find("UELIVESYNC_OT_sync_active_camera_to_ue")
+    chunk = init_py[idx:idx + 6000]
+    # Final report should list the packet types sent
+    assert "create+transform+def" in chunk or "PT_Create" in chunk, (
+        "Operator report should mention PT_Create"
+    )
+    assert "packet_type=network.PT_ActiveCamera" not in chunk, (
+        "Operator must not send PT_ActiveCamera as a packet"
     )
 
 

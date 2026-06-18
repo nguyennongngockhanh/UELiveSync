@@ -4797,43 +4797,62 @@ ProcessBinaryPacket(
                 for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
                 {
                     const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
-                    TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
-                    if (Found && *Found)
+                    // Check imported-material backing FIRST (robust detection)
+                    bool bIsImportedSlot = false;
+                    UMaterialInterface* CurrentMat = SMC->GetMaterial(SlotIdx);
+
+                    // Check 1: raw imported material path
+                    if (CurrentMat && CurrentMat->GetPathName().StartsWith(TEXT("/Game/UELiveSync/Imported")))
                     {
-                        UMaterialInterface* CurrentMat = SMC->GetMaterial(SlotIdx);
-                        // Phase 7H/7G.5: if slot has an imported FBX material,
-                        // check cached imported-parent MID first, then skip.
-                        if (CurrentMat && CurrentMat->GetPathName().StartsWith(TEXT("/Game/UELiveSync/Imported")))
+                        bIsImportedSlot = true;
+                    }
+                    // Check 2: MID whose parent is imported material
+                    if (!bIsImportedSlot && CurrentMat && CurrentMat->IsA<UMaterialInstanceDynamic>())
+                    {
+                        UMaterialInstanceDynamic* CurrentMID = Cast<UMaterialInstanceDynamic>(CurrentMat);
+                        if (CurrentMID && CurrentMID->Parent &&
+                            CurrentMID->Parent->GetPathName().StartsWith(TEXT("/Game/UELiveSync/Imported")))
                         {
-                            TObjectPtr<UMaterialInstanceDynamic>* ImpFound = ImportedMaterialMIDCache.Find(Key);
-                            if (ImpFound && *ImpFound)
-                            {
-                                SMC->SetMaterial(SlotIdx, *ImpFound);
-                                ++RestoredCount;
-                                UE_LOG(LogLiveSync, Log,
-                                    TEXT("[MATERIAL][IMPORTED_PARENT_MID_APPLY] guid=%s slot=%d restored name=MID_UELiveSync_Imported_%s_%d"),
-                                    *G.ToString(EGuidFormats::Digits), SlotIdx,
-                                    *GuidShort, SlotIdx);
-                            }
-                            else
-                            {
-                                ++SkipImportedCount;
-                                UE_LOG(LogLiveSync, Log,
-                                    TEXT("[MATERIAL][MID_OVERRIDE_SKIP_IMPORTED] guid=%s slot=%d path=%s"),
-                                    *G.ToString(EGuidFormats::Digits), SlotIdx,
-                                    *CurrentMat->GetPathName());
-                            }
-                            continue;
+                            bIsImportedSlot = true;
                         }
-                        if (CurrentMat != *Found)
+                    }
+                    // Check 3: cached in ImportedMaterialMIDCache
+                    if (!bIsImportedSlot && ImportedMaterialMIDCache.Find(Key))
+                    {
+                        bIsImportedSlot = true;
+                    }
+
+                    if (bIsImportedSlot)
+                    {
+                        TObjectPtr<UMaterialInstanceDynamic>* ImpFound = ImportedMaterialMIDCache.Find(Key);
+                        if (ImpFound && *ImpFound)
                         {
-                            SMC->SetMaterial(SlotIdx, *Found);
+                            SMC->SetMaterial(SlotIdx, *ImpFound);
                             ++RestoredCount;
                             UE_LOG(LogLiveSync, Log,
-                                TEXT("[MATERIAL][MID_FALLBACK_APPLY] guid=%s slot=%d restored=MID_UELiveSync_%s_%d"),
+                                TEXT("[MATERIAL][IMPORTED_PARENT_MID_APPLY] guid=%s slot=%d restored name=MID_UELiveSync_Imported_%s_%d"),
                                 *G.ToString(EGuidFormats::Digits), SlotIdx,
                                 *GuidShort, SlotIdx);
                         }
+                        else
+                        {
+                            ++SkipImportedCount;
+                            UE_LOG(LogLiveSync, Log,
+                                TEXT("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] guid=%s slot=%d reason=no_cached_imported_mid"),
+                                *G.ToString(EGuidFormats::Digits), SlotIdx);
+                        }
+                        continue;
+                    }
+
+                    TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
+                    if (Found && *Found && CurrentMat != *Found)
+                    {
+                        SMC->SetMaterial(SlotIdx, *Found);
+                        ++RestoredCount;
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[MATERIAL][MID_FALLBACK_APPLY] guid=%s slot=%d restored=MID_UELiveSync_%s_%d"),
+                            *G.ToString(EGuidFormats::Digits), SlotIdx,
+                            *GuidShort, SlotIdx);
                     }
                 }
                 if (RestoredCount > 0)
@@ -13672,6 +13691,7 @@ ParseAndApplyGeneratedMaterial(
     int32 AppliedCount = 0;
     bool bHadRegularGeneratedMID = false;
     bool bHadImportedParentMID = false;
+    int32 SkipImportedCount = 0;
     for (int32 SlotIdx = 0; SlotIdx < BasicProps.Num(); SlotIdx++)
     {
         const FMaterialSlotBasicProperties& Props = BasicProps[SlotIdx];
@@ -13686,20 +13706,59 @@ ParseAndApplyGeneratedMaterial(
             continue;
         }
 
-        UMaterialInstanceDynamic* MID = GetOrCreateGeneratedMID(Guid, SlotIdx, Props);
-        if (!MID)
-            continue;
-
-        // Phase 7H fix: for imported FBX materials, create MID parented to imported
-        // material and sync property values, instead of skipping property sync.
+        // Phase 7H fix: detect if this slot is backed by an imported FBX material.
+        // Three cases:
+        //   1) Slot has raw /Game/UELiveSync/Imported material.
+        //   2) Slot has a MID whose parent is /Game/UELiveSync/Imported material.
+        //   3) Slot does NOT match either but is cached in ImportedMaterialMIDCache.
+        // In all cases use imported-parent MID and skip fallback.
+        bool bIsImportedSlot = false;
+        UMaterialInterface* ImportedParentMat = nullptr;
         if (SlotIdx < SMC->GetNumMaterials())
         {
-            UMaterialInterface* CurrentSlotMat = SMC->GetMaterial(SlotIdx);
-            if (CurrentSlotMat && CurrentSlotMat->GetPathName().StartsWith(TEXT("/Game/UELiveSync/Imported")))
+            UMaterialInterface* SlotMat = SMC->GetMaterial(SlotIdx);
+            if (SlotMat)
             {
-                UMaterialInstanceDynamic* ImportedMID = GetOrCreateImportedParentMID(Guid, SlotIdx, Props, CurrentSlotMat);
+                if (SlotMat->GetPathName().StartsWith(TEXT("/Game/UELiveSync/Imported")))
+                {
+                    bIsImportedSlot = true;
+                    ImportedParentMat = SlotMat;
+                }
+                else if (SlotMat->IsA<UMaterialInstanceDynamic>())
+                {
+                    UMaterialInstanceDynamic* SlotMID = Cast<UMaterialInstanceDynamic>(SlotMat);
+                    if (SlotMID && SlotMID->Parent &&
+                        SlotMID->Parent->GetPathName().StartsWith(TEXT("/Game/UELiveSync/Imported")))
+                    {
+                        bIsImportedSlot = true;
+                        ImportedParentMat = SlotMID->Parent;
+                    }
+                }
+            }
+            if (!bIsImportedSlot)
+            {
+                const FString CheckKey = MakeGeneratedMaterialKey(Guid, SlotIdx);
+                if (TObjectPtr<UMaterialInstanceDynamic>* CachedEntry = ImportedMaterialMIDCache.Find(CheckKey))
+                {
+                    if (*CachedEntry)
+                    {
+                        bIsImportedSlot = true;
+                        ImportedParentMat = (*CachedEntry)->Parent;
+                    }
+                }
+            }
+        }
+
+        if (bIsImportedSlot)
+        {
+            if (ImportedParentMat)
+            {
+                UMaterialInstanceDynamic* ImportedMID = GetOrCreateImportedParentMID(Guid, SlotIdx, Props, ImportedParentMat);
                 if (ImportedMID)
                 {
+                    // Apply imported textures (MTEX) to imported-parent MID as well
+                    ApplyImportedTexturesToGeneratedMID(Guid, SlotIdx, ImportedMID);
+
                     SMC->SetMaterial(SlotIdx, ImportedMID);
                     AppliedCount++;
                     bHadImportedParentMID = true;
@@ -13708,19 +13767,39 @@ ParseAndApplyGeneratedMaterial(
                              "parent=%s BaseColor=(%.3f,%.3f,%.3f,%.3f) "
                              "Roughness=%.3f Metallic=%.3f Alpha=%.3f"),
                         *Guid.ToString(EGuidFormats::Digits), SlotIdx,
-                        *CurrentSlotMat->GetPathName(),
+                        *ImportedParentMat->GetPathName(),
                         Props.BaseColor.R, Props.BaseColor.G, Props.BaseColor.B, Props.BaseColor.A,
                         Props.Roughness, Props.Metallic, Props.Alpha);
+
+                    // Log texture preservation status
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MATERIAL][TEXTURE_PRESERVE_IMPORTED_PARENT] guid=%s slot=%d "
+                             "parent=%s"),
+                        *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+                        *ImportedParentMat->GetPathName());
                 }
                 else
                 {
                     UE_LOG(LogLiveSync, Warning,
-                        TEXT("[MATERIAL] Failed to create imported-parent MID for guid=%s slot=%d"),
+                        TEXT("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] guid=%s slot=%d reason=failed_to_create_parent_mid"),
                         *Guid.ToString(EGuidFormats::Digits), SlotIdx);
+                    ++SkipImportedCount;
                 }
-                continue;
             }
+            else
+            {
+                UE_LOG(LogLiveSync, Warning,
+                    TEXT("[MATERIAL][MID_FALLBACK_SKIP_IMPORTED] guid=%s slot=%d reason=no_parent_resolved"),
+                    *Guid.ToString(EGuidFormats::Digits), SlotIdx);
+                ++SkipImportedCount;
+            }
+            continue;
         }
+
+        // Non-imported slot: create/update regular generated MID
+        UMaterialInstanceDynamic* MID = GetOrCreateGeneratedMID(Guid, SlotIdx, Props);
+        if (!MID)
+            continue;
 
         // Phase 10K.3: apply imported textures to generated MID
         ApplyImportedTexturesToGeneratedMID(Guid, SlotIdx, MID);
