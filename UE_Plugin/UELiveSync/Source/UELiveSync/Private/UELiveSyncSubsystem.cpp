@@ -4457,6 +4457,11 @@ ProcessBinaryPacket(
                 MtexRecordsParsed += TexMaps.Num();
             }
 
+            // Phase 7H: log texture record count for all PT_Material packets
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_TEXTURE_RECV] guid=%s textureRecordCount=%d"),
+                *Guid.ToString(EGuidFormats::Digits), TexMaps.Num());
+
 #if WITH_EDITOR
             // Phase 10K.2: import textures from discovered MTEX records
             if (TexMaps.Num() > 0)

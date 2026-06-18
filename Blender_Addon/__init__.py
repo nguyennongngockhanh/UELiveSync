@@ -1443,40 +1443,70 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
 
                 if current_prop_sig is not None:
                     prev_prop_sig = sync._last_material_property_sig.get(guid_hex)
-                    if prev_prop_sig is None or current_prop_sig != prev_prop_sig:
-                        print(f"[SYNC][DECIDE] seq={seq} guid={guid_hex[:8]} "
-                              f"sendMAT=1 reason=property_changed oldMatSig={'None'} "
-                              f"newMatSig={list(current_prop_sig.keys())}")
-                        # Extract material slots with MATX for send
-                        mat_props = {}
+                    # Phase 7H: include texture hash in dirty detection
+                    current_tex_sigs = {}
+                    for slot_idx, slot in enumerate(obj.material_slots):
+                        if slot and slot.material:
+                            maps = network.extract_texture_maps_for_slot(slot.material)
+                            if maps:
+                                tex_hash = network.compute_material_texture_hash(slot_idx, maps)
+                                current_tex_sigs[slot_idx] = tex_hash
+
+                    # Compute dirty hashes for logging
+                    scalar_hash_val, tex_hash_val, combined_hash_val = (
+                        network.compute_material_dirty_sig(current_prop_sig, current_tex_sigs)
+                    )
+                    print(f"[MATERIAL][DIRTY_HASH] guid={guid_hex[:8]} "
+                          f"scalarHash={scalar_hash_val} textureHash={tex_hash_val} "
+                          f"combinedHash={combined_hash_val}")
+
+                    scalar_changed = prev_prop_sig is None or current_prop_sig != prev_prop_sig
+                    tex_changed = False
+                    if prev_prop_sig is not None and len(prev_prop_sig) == len(current_prop_sig):
+                        prev_tex_sigs = {}
+                        for si in prev_prop_sig:
+                            prev_tex_sigs[si] = prev_prop_sig[si][6:] if len(prev_prop_sig[si]) > 6 else ()
+                        tex_changed = (current_tex_sigs != prev_tex_sigs)
+
+                    # Phase 7H: always extract tex_maps + mat_props so we can send
+                    # even when only texture changed (scalars unchanged).
+                    mat_props = {}
+                    for slot_idx, slot in enumerate(obj.material_slots):
+                        if slot and slot.material:
+                            p = network.get_material_basic_properties(slot.material)
+                            if p is not None:
+                                mat_props[slot_idx] = p
+
+                    tex_maps = None
+                    try:
+                        tex_maps_dict = {}
                         for slot_idx, slot in enumerate(obj.material_slots):
                             if slot and slot.material:
-                                p = network.get_material_basic_properties(slot.material)
-                                if p is not None:
-                                    mat_props[slot_idx] = p
-                        # Phase 7H.6 Task B: extract texture map references with per-channel scan logs
+                                maps = network.extract_texture_maps_for_slot(slot.material)
+                                if maps:
+                                    tex_maps_dict[slot_idx] = maps
+                                    for ch, fpath, img_name, flags in maps:
+                                        abs_path = bpy.path.abspath(fpath) if fpath else ""
+                                        file_exists = os.path.isfile(abs_path) if abs_path else False
+                                        source = "PACKED" if (flags & network.MTEX_FLAG_IMAGE_PACKED) else "FILE"
+                                        ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
+                                        has_tex = "1" if abs_path else "0"
+                                        exists_str = "1" if file_exists else "0"
+                                        print(f"[MATERIAL][TEXTURE_CHANNEL_SCAN] object={obj.name} slot={slot_idx} material={slot.material.name} channel={ch_name} hasTexture={has_tex} image={img_name} path={abs_path[:200] if abs_path else ''} exists={exists_str} source={source}")
+                        if tex_maps_dict:
+                            tex_maps = tex_maps_dict
+                    except Exception:
                         tex_maps = None
-                        try:
-                            tex_maps_dict = {}
-                            for slot_idx, slot in enumerate(obj.material_slots):
-                                if slot and slot.material:
-                                    maps = network.extract_texture_maps_for_slot(slot.material)
-                                    if maps:
-                                        tex_maps_dict[slot_idx] = maps
-                                        for ch, fpath, img_name, flags in maps:
-                                            abs_path = bpy.path.abspath(fpath) if fpath else ""
-                                            file_exists = os.path.isfile(abs_path) if abs_path else False
-                                            # Determine source type from flags
-                                            source = "PACKED" if (flags & network.MTEX_FLAG_IMAGE_PACKED) else "FILE"
-                                            # Map channel int to name
-                                            ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
-                                            has_tex = "1" if abs_path else "0"
-                                            exists_str = "1" if file_exists else "0"
-                                            print(f"[MATERIAL][TEXTURE_CHANNEL_SCAN] object={obj.name} slot={slot_idx} material={slot.material.name} channel={ch_name} hasTexture={has_tex} image={img_name} path={abs_path[:200] if abs_path else ''} exists={exists_str} source={source}")
-                            if tex_maps_dict:
-                                tex_maps = tex_maps_dict
-                        except Exception:
-                            tex_maps = None
+
+                    # Phase 7H: decide whether to send based on scalar OR texture change
+                    if scalar_changed or tex_changed:
+                        reason = "texture_changed" if (not scalar_changed and tex_changed) else "property_changed"
+                        print(f"[MATERIAL][DIRTY_DECIDE] guid={guid_hex[:8]} "
+                              f"property_changed=True reason={reason} "
+                              f"slots={list(current_prop_sig.keys())}")
+                        print(f"[SYNC][DECIDE] seq={seq} guid={guid_hex[:8]} "
+                              f"sendMAT=1 reason={reason} "
+                              f"newMatSig={list(current_prop_sig.keys())}")
 
                         # Log per-slot MATX value/texture send before packet dispatch
                         if tex_maps:
@@ -1492,13 +1522,12 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         # Build material packet payload
                         try:
                             mat_payload = network.serialize_material_slots(
-                                guid_obj, 
-                                {i: (0, 0) for i in range(len(mat_props))},  # identity placeholder
+                                guid_obj,
+                                {i: (0, 0) for i in range(len(mat_props))},
                                 mat_props,
                                 tex_maps
                             )
                             mat_payloads_to_send.append(mat_payload)
-                            # Log MATX send details
                             for si in mat_props:
                                 pp = mat_props[si]
                                 print(f"[MAT][SEND] seq={seq} guid={guid_hex[:8]} "
@@ -1507,7 +1536,6 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                                       f"roughness={pp.get('Roughness',0.5):.3f} "
                                       f"metallic={pp.get('Metallic',0):.3f} "
                                       f"alpha={pp.get('Alpha',1):.3f}")
-                                # Per-channel MATX_VALUE_SEND logs
                                 print(f"[MATERIAL][MATX_VALUE_SEND] guid={guid_hex[:8]} slot={si} channel=BaseColor value=({pp.get('BaseColorR',0):.3f},{pp.get('BaseColorG',0):.3f},{pp.get('BaseColorB',0):.3f},{pp.get('Alpha',1):.3f})")
                                 print(f"[MATERIAL][MATX_VALUE_SEND] guid={guid_hex[:8]} slot={si} channel=Roughness value={pp.get('Roughness',0.5):.3f}")
                                 print(f"[MATERIAL][MATX_VALUE_SEND] guid={guid_hex[:8]} slot={si} channel=Metallic value={pp.get('Metallic',0):.3f}")
@@ -1521,10 +1549,21 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                                 )
                         except Exception as _mat_exc:
                             print(f"[MAT][ERROR] failed to build material payload for {obj.name}: {_mat_exc}")
+
+                        # Phase 7H: update texture-aware property sig
+                        merged_sig = {}
+                        for si in current_prop_sig:
+                            prop_tuple = current_prop_sig[si]
+                            tex_tuple = current_tex_sigs.get(si, (0, 0))
+                            merged_sig[si] = prop_tuple + tuple(tex_tuple)
+                        sync._last_material_property_sig[guid_hex] = merged_sig
                     else:
+                        print(f"[MATERIAL][DIRTY_DECIDE] guid={guid_hex[:8]} "
+                              f"property_changed=False reason=property_unchanged "
+                              f"slots={list(current_prop_sig.keys())}")
                         print(f"[SYNC][DECIDE] seq={seq} guid={guid_hex[:8]} "
                               f"sendMAT=0 reason=property_unchanged")
-                    sync._last_material_property_sig[guid_hex] = current_prop_sig
+                        sync._last_material_property_sig[guid_hex] = current_prop_sig
 
                 synced_count += 1
 

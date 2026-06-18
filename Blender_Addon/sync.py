@@ -1742,11 +1742,11 @@ def check_updates():
         prev_slots = _last_material_identity.get(guid)
         is_first_material = (prev_slots is None)
 
-        # Phase 10J.5I: also compare material property signatures
-        # so that BaseColor/Roughness/Metallic/Alpha changes trigger
-        # PT_Material even when material name/hash is unchanged.
+        # Phase 10J.5I + Phase 7H: also compare material property signatures
+        # AND texture metadata hashes to detect BaseColor texture changes.
         bPropertiesChanged = False
         current_prop_sig = None
+        current_tex_sigs = {}  # slot_index -> (low64, high64)
         try:
             current_prop_sig = {}
             for slot_index, slot in enumerate(obj.material_slots):
@@ -1764,13 +1764,33 @@ def check_updates():
         except Exception:
             current_prop_sig = None
 
+        # Phase 7H: compute per-slot texture hash
+        current_tex_maps = None
+        if current_prop_sig is not None:
+            current_tex_sigs = {}
+            current_tex_maps = {}
+            for slot_index, slot in enumerate(obj.material_slots):
+                if slot and slot.material:
+                    maps = extract_texture_maps_for_slot(slot.material)
+                    if maps:
+                        current_tex_maps[slot_index] = maps
+                        tex_hash = compute_material_texture_hash(slot_index, maps)
+                        current_tex_sigs[slot_index] = tex_hash
+
         if is_first_material:
             bPropertiesChanged = True
         elif current_slots != prev_slots:
             bPropertiesChanged = True
         elif current_prop_sig is not None:
             prev_prop_sig = _last_material_property_sig.get(guid)
-            if prev_prop_sig is None or current_prop_sig != prev_prop_sig:
+            scalar_changed = prev_prop_sig is None or current_prop_sig != prev_prop_sig
+            tex_changed = False
+            if prev_prop_sig is not None and len(prev_prop_sig) == len(current_prop_sig):
+                prev_tex_sigs = {}
+                for si in prev_prop_sig:
+                    prev_tex_sigs[si] = prev_prop_sig[si][6:] if len(prev_prop_sig[si]) > 6 else ()
+                tex_changed = (current_tex_sigs != prev_tex_sigs)
+            if scalar_changed or tex_changed:
                 bPropertiesChanged = True
 
         if not is_first_material and bPropertiesChanged:
@@ -1785,12 +1805,22 @@ def check_updates():
                     f"prev_keys={list(prev_slots.keys()) if prev_slots else 'None'} "
                     f"cur_keys={list(current_slots.keys()) if current_slots else 'None'}"
                 )
-            # Phase 10J.5I: log dirty reason
+            # Phase 10J.5I + Phase 7H: log dirty reason with texture hash info
             _mat_reason = "identity" if current_slots != prev_slots else "properties"
-            print(f"[MAT][DIRTY] property_changed guid={guid} reason={_mat_reason} slots={_mat_stall_cur_count}")
+            scalar_hash, tex_hash_val, combined_hash_val = (0, 0, 0)
+            if current_prop_sig is not None and current_tex_sigs is not None:
+                scalar_hash, tex_hash_val, combined_hash_val = compute_material_dirty_sig(current_prop_sig, current_tex_sigs)
+            print(f"[MATERIAL][DIRTY_HASH] guid={guid} "
+                  f"scalarHash={scalar_hash} textureHash={tex_hash_val} "
+                  f"combinedHash={combined_hash_val}")
+            _mat_reason_log = "texture_changed" if (not scalar_changed and tex_changed) else _mat_reason
+            print(f"[MATERIAL][DIRTY_DECIDE] guid={guid} "
+                  f"property_changed={bPropertiesChanged} "
+                  f"reason={_mat_reason_log} "
+                  f"slots={_mat_stall_cur_count}")
             _append_blender_debug_log(
                 f"[MAT][SIG] guid={guid} "
-                f"reason={_mat_reason} "
+                f"reason={_mat_reason_log} "
                 f"slots={_mat_stall_cur_count}"
             )
 
@@ -1838,9 +1868,15 @@ def check_updates():
 
         _last_material_identity[guid] = current_slots
 
-        # Phase 10J.5I: update property signature for dirty detection
+        # Phase 10J.5I + Phase 7H: update property signature for dirty detection.
+        # Store texture hash tuples appended to each slot's prop tuple.
         if current_prop_sig is not None:
-            _last_material_property_sig[guid] = current_prop_sig
+            merged_sig = {}
+            for si in current_prop_sig:
+                prop_tuple = current_prop_sig[si]
+                tex_tuple = current_tex_sigs.get(si, (0, 0))
+                merged_sig[si] = prop_tuple + tuple(tex_tuple)
+            _last_material_property_sig[guid] = merged_sig
         elif guid in _last_material_property_sig:
             del _last_material_property_sig[guid]
 

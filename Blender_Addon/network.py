@@ -1009,6 +1009,84 @@ def extract_texture_maps_for_slot(material):
     return results
 
 
+# =========================================================
+# MATERIAL TEXTURE DIRTY HASH (Phase 7H)
+# =========================================================
+
+
+def compute_material_texture_hash(slot_index, texture_maps):
+    """Return a deterministic hash key for the texture metadata of one slot.
+
+    Each entry in texture_maps is (channel, filepath, image_name, flags).
+    Includes: file size + mtime for FILE sources, packed flag, path,
+    and image name.  Channel order is deterministic.
+
+    Returns:
+        tuple of (low64, high64) or (0, 0) if no maps.
+    """
+    if not texture_maps:
+        return (0, 0)
+
+    # Build a deterministic string: channel|path_or_packed|image_name|size|mtime
+    parts = []
+    for ch, fpath, img_name, flags in texture_maps:
+        is_packed = bool(flags & MTEX_FLAG_IMAGE_PACKED)
+        file_size = 0
+        file_mtime = 0
+        source = "PACKED" if is_packed else "FILE"
+
+        if not is_packed and fpath:
+            try:
+                st = os.stat(fpath)
+                file_size = st.st_size
+                file_mtime = int(st.st_mtime)
+            except Exception:
+                pass
+
+        parts.append(
+            f"{ch}|{source}|{fpath}|{img_name}|{file_size}|{file_mtime}"
+        )
+
+    key_str = "|".join(parts)
+    hash_value = xxh64(key_str.encode("utf-8"))
+
+    low = hash_value & 0xFFFFFFFFFFFFFFFF
+    high = (hash_value >> 64) & 0xFFFFFFFFFFFFFFFF
+
+    return (low, high)
+
+
+def compute_material_dirty_sig(current_prop_sig, current_tex_sigs):
+    """Return a combined dirty-signal tuple for material dirty detection.
+
+    Args:
+        current_prop_sig: dict slot_index -> (BaseColorR, G, B, Alpha, Roughness, Metallic)
+        current_tex_sigs: dict slot_index -> (low64, high64) texture hash
+
+    Returns:
+        tuple (scalar_hash, texture_hash, combined_hash) where each is a string.
+    """
+    # Scalar hash from property sig
+    scalar_items = []
+    for si in sorted(current_prop_sig.keys()):
+        sig = current_prop_sig[si]
+        scalar_items.append(f"{si}:{sig[0]:.6f},{sig[1]:.6f},{sig[2]:.6f},{sig[3]:.6f},{sig[4]:.6f},{sig[5]:.6f}")
+    scalar_hash = xxh64("|".join(scalar_items).encode("utf-8")) if scalar_items else 0
+
+    # Texture hash from texture sigs
+    tex_items = []
+    for si in sorted(current_tex_sigs.keys()):
+        low, high = current_tex_sigs[si]
+        tex_items.append(f"{si}:{low:016x}{high:016x}")
+    texture_hash = xxh64("|".join(tex_items).encode("utf-8")) if tex_items else 0
+
+    # Combined hash
+    combined_str = f"s{scalar_hash:016x}t{texture_hash:016x}"
+    combined_hash = xxh64(combined_str.encode("utf-8"))
+
+    return (int(scalar_hash), int(texture_hash), int(combined_hash))
+
+
 def serialize_material_slots(guid_obj, slots, properties=None, texture_maps=None):
     """Serialize material slot data for one object into PT_Material wire format.
 

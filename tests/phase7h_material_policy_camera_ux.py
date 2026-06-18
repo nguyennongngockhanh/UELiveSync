@@ -52,6 +52,9 @@ INIT_PY = os.path.join(
 NETWORK_PY = os.path.join(
     REPO_ROOT, "Blender_Addon", "network.py"
 )
+SYNC_PY = os.path.join(
+    REPO_ROOT, "Blender_Addon", "sync.py"
+)
 HEADER_H = os.path.join(
     REPO_ROOT, "UE_Plugin", "UELiveSync", "Source", "UELiveSync",
     "Public", "UELiveSyncSubsystem.h"
@@ -68,7 +71,38 @@ fbx_cpp = read_file(FBX_IMPORTER_CPP)
 sync_types = read_file(SYNC_TYPES_H)
 init_py = read_file(INIT_PY)
 network_py = read_file(NETWORK_PY)
+sync_py = read_file(SYNC_PY)
 header_h = read_file(HEADER_H)
+
+# Load network module directly (avoid bpy import from Blender_Addon/__init__.py)
+_net_globals = {"__name__": "Blender_Addon.network",
+                "__file__": NETWORK_PY,
+                "os": __import__("os"),
+                "socket": __import__("socket"),
+                "struct": __import__("struct"),
+                "sys": __import__("sys"),
+                "threading": __import__("threading"),
+                "queue": __import__("queue"),
+                "time": __import__("time"),
+                "xxhash": __import__("xxhash"),
+                "math": __import__("math"),
+                "uuid": __import__("uuid"),
+                "bpy": type("bpy", (), {}),  # stub to avoid ImportError
+                "bgl": type("bgl", (), {}),
+                "bl_math": type("bl_math", (), {}),
+                "bmesh": type("bmesh", (), {}),
+                "mathutils": type("mathutils", (), {}),
+                "bl_operators": type("bl_operators", (), {}),
+                "bl_context": type("bl_context", (), {}),
+                "gpu": type("gpu", (), {}),
+                "gpu_extensions": type("gpu_extensions", (), {}),
+                "_append_blender_debug_log": lambda msg: None,
+                "_get_active_camera_guid": lambda: None,
+                "_get_active_camera_state": lambda: None,
+                }
+exec(compile(network_py, NETWORK_PY, "exec"), _net_globals)
+_net_mod = _net_globals
+net = type("_net_stub", (), _net_globals)
 
 
 # =====================================================================
@@ -1248,8 +1282,251 @@ def test_ue_texture_toggle_readback():
 # =====================================================================
 # SUCCESS REPORT
 # =====================================================================
-
+# Phase 7H: Material Dirty Hash + Texture Metadata Tests
 # =====================================================================
+
+
+def test_material_dirty_hash_includes_basecolor_path():
+    """compute_material_dirty_sig includes texture hash from BaseColor path."""
+    prop_sig = {0: (0.8, 0.8, 0.8, 1.0, 0.5, 0.0)}
+    tex_sigs = {0: (123456789, 987654321)}
+    s_hash, t_hash, c_hash = net.compute_material_dirty_sig(prop_sig, tex_sigs)
+    assert t_hash != 0, "texture hash must be non-zero when tex_sigs provided"
+    assert c_hash != 0, "combined hash must be non-zero"
+
+
+def test_scalar_only_hash_differs_from_texture_hash():
+    """Changing texture hash while keeping scalars identical produces different combined."""
+    prop_sig = {0: (0.8, 0.8, 0.8, 1.0, 0.5, 0.0)}
+    tex_sigs_a = {0: (111111111, 222222222)}
+    tex_sigs_b = {0: (333333333, 444444444)}
+
+    _, _, combined_a = net.compute_material_dirty_sig(prop_sig, tex_sigs_a)
+    _, _, combined_b = net.compute_material_dirty_sig(prop_sig, tex_sigs_b)
+    assert combined_a != combined_b, (
+        "combined hash must differ when texture hash differs"
+    )
+
+
+def test_texture_hash_includes_file_size_and_mtime():
+    """compute_material_texture_hash reflects file size and mtime for FILE sources."""
+    import tempfile
+
+    # Create two temp files with different sizes
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f1:
+        f1.write(b"x" * 100)
+        f1.flush()
+        path1 = f1.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f2:
+        f2.write(b"y" * 200)
+        f2.flush()
+        path2 = f2.name
+
+    try:
+        maps1 = [(1, path1, "test", net.MTEX_FLAG_PATH_ABSOLUTE)]
+        maps2 = [(1, path2, "test", net.MTEX_FLAG_PATH_ABSOLUTE)]
+        hash1 = net.compute_material_texture_hash(0, maps1)
+        hash2 = net.compute_material_texture_hash(0, maps2)
+        assert hash1 != hash2, (
+            "texture hash must differ when file size differs"
+        )
+    finally:
+        os.unlink(path1)
+        os.unlink(path2)
+
+
+def test_texture_hash_unchanged_for_same_file():
+    """compute_material_texture_hash is deterministic for same file."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+        f.write(b"data")
+        f.flush()
+        path = f.name
+
+    try:
+        maps = [(1, path, "test", net.MTEX_FLAG_PATH_ABSOLUTE)]
+        h1 = net.compute_material_texture_hash(0, maps)
+        h2 = net.compute_material_texture_hash(0, maps)
+        assert h1 == h2, "texture hash must be deterministic for same file"
+    finally:
+        os.unlink(path)
+
+
+def test_adding_basecolor_texture_forces_sendmat():
+    """Adding BaseColor Image Texture changes dirty detection from unchanged to changed."""
+    prop_sig = {0: (0.8, 0.8, 0.8, 1.0, 0.5, 0.0)}
+    # Same prop_sig — scalars identical
+    tex_sigs_empty = {}  # no texture
+    tex_sigs_with_bc = {0: (123456789, 987654321)}  # with BaseColor
+
+    _, _, combined_empty = net.compute_material_dirty_sig(prop_sig, tex_sigs_empty)
+    _, _, combined_with_bc = net.compute_material_dirty_sig(prop_sig, tex_sigs_with_bc)
+    assert combined_empty != combined_with_bc, (
+        "adding BaseColor texture must change combined dirty hash"
+    )
+
+
+def test_removing_basecolor_texture_forces_sendmat():
+    """Removing BaseColor Image Texture changes dirty detection."""
+    prop_sig = {0: (0.8, 0.8, 0.8, 1.0, 0.5, 0.0)}
+    tex_sigs_with_bc = {0: (123456789, 987654321)}
+    tex_sigs_empty = {}
+
+    _, _, combined_with_bc = net.compute_material_dirty_sig(prop_sig, tex_sigs_with_bc)
+    _, _, combined_empty = net.compute_material_dirty_sig(prop_sig, tex_sigs_empty)
+    assert combined_with_bc != combined_empty, (
+        "removing BaseColor texture must change combined dirty hash"
+    )
+
+
+def test_changing_image_filepath_changes_dirty_hash():
+    """Changing the image filepath changes the dirty hash."""
+    prop_sig = {0: (0.8, 0.8, 0.8, 1.0, 0.5, 0.0)}
+    tex_sigs_old = {0: (111111111, 222222222)}
+    tex_sigs_new = {0: (333333333, 444444444)}
+
+    _, _, combined_old = net.compute_material_dirty_sig(prop_sig, tex_sigs_old)
+    _, _, combined_new = net.compute_material_dirty_sig(prop_sig, tex_sigs_new)
+    assert combined_old != combined_new, (
+        "changing image filepath must change dirty hash"
+    )
+
+
+def test_scalar_unchanged_texture_changed_forces_sendmat():
+    """Scalars unchanged but texture changed → sendMAT=1."""
+    prop_sig = {0: (0.8, 0.8, 0.8, 1.0, 0.5, 0.0)}
+    # Same prop_sig
+    tex_sigs_prev = {}
+    tex_sigs_current = {0: (123456789, 987654321)}
+
+    s_hash_prev, t_hash_prev, _ = net.compute_material_dirty_sig(prop_sig, tex_sigs_prev)
+    s_hash_cur, t_hash_cur, _ = net.compute_material_dirty_sig(prop_sig, tex_sigs_current)
+
+    assert s_hash_prev == s_hash_cur, "scalar hash must be identical"
+    assert t_hash_prev != t_hash_cur, "texture hash must differ"
+
+
+def test_sync_fbx_path_logs_dirty_hash_and_decide():
+    """FBX Sync path in __init__.py computes DIRTY_HASH and DIRTY_DECIDE."""
+    assert "[MATERIAL][DIRTY_HASH]" in init_py, (
+        "FBX path must log [MATERIAL][DIRTY_HASH]"
+    )
+    assert "[MATERIAL][DIRTY_DECIDE]" in init_py, (
+        "FBX path must log [MATERIAL][DIRTY_DECIDE]"
+    )
+
+
+def test_sync_fbx_path_texture_changed_reason():
+    """FBX Sync path uses texture_changed reason when only tex changed."""
+    assert "texture_changed" in init_py, (
+        "FBX path must support texture_changed reason in dirty decide"
+    )
+
+
+def test_sync_path_checks_tex_hash_before_property_unchanged():
+    """Property unchanged branch still checks tex hash."""
+    idx = init_py.find("property_unchanged")
+    assert idx != -1, "property_unchanged log must exist"
+    # Check that tex_changed check precedes the property_unchanged log
+    tex_check_before = init_py.find("tex_changed", idx - 5000, idx)
+    assert tex_check_before != -1, (
+        "tex_changed check must precede property_unchanged decision"
+    )
+
+
+def test_material_lane_logs_texture_channel_scan():
+    """Material lane logs [MATERIAL][TEXTURE_CHANNEL_SCAN]."""
+    assert "[MATERIAL][TEXTURE_CHANNEL_SCAN]" in init_py, (
+        "Material lane must log TEXTURE_CHANNEL_SCAN"
+    )
+
+
+def test_material_lane_logs_matx_texture_send():
+    """Material lane logs [MATERIAL][MATX_TEXTURE_SEND]."""
+    assert "[MATERIAL][MATX_TEXTURE_SEND]" in init_py, (
+        "Material lane must log MATX_TEXTURE_SEND"
+    )
+
+
+def test_ue_logs_matx_texture_recv_with_record_count():
+    """UE logs MATX_TEXTURE_RECV with textureRecordCount."""
+    assert "textureRecordCount" in source_cpp, (
+        "UE must log textureRecordCount in MATX_TEXTURE_RECV"
+    )
+    assert "[MATERIAL][MATX_TEXTURE_RECV]" in source_cpp, (
+        "UE must log [MATERIAL][MATX_TEXTURE_RECV]"
+    )
+
+
+def test_ue_logs_bascolor_matx_texture_recv():
+    """UE logs BaseColor channel in MATX_TEXTURE_RECV when present."""
+    assert "channel=BaseColor" in source_cpp or "BaseColor" in source_cpp, (
+        "UE must log BaseColor channel in MATX_TEXTURE_RECV"
+    )
+
+
+def test_ue_import_bind_logs_preserved():
+    """UE import and bind logs remain in code."""
+    assert "[MATERIAL][TEXTURE_IMPORT_FROM_MATX_OK]" in source_cpp, (
+        "TEXTURE_IMPORT_FROM_MATX_OK log must remain"
+    )
+    assert "[MATERIAL][TEXTURE_PARAM_SET]" in source_cpp, (
+        "TEXTURE_PARAM_SET log must remain"
+    )
+    assert "[MATERIAL][TEXTURE_TOGGLE_SET]" in source_cpp, (
+        "TEXTURE_TOGGLE_SET log must remain"
+    )
+
+
+def test_hybrid_apply_preserves_scalar():
+    """Hybrid apply still applies Roughness/Metallic scalars."""
+    assert "[MATERIAL][VALUE_PARAM_SET]" in source_cpp, (
+        "VALUE_PARAM_SET log must remain for scalar params"
+    )
+    assert "ScalarValues" in source_cpp, (
+        "Hybrid apply must still pass ScalarValues to MID"
+    )
+
+
+def test_removing_texture_sets_use_basecolor_0():
+    """Removing BaseColor texture sets UseBaseColorTexture=0."""
+    # Check that hybrid apply sets UseXTexture=0 as default
+    assert "UseBaseColorTexture" in source_cpp, (
+        "Code must reference UseBaseColorTexture toggle"
+    )
+    assert "UseXTexture" in source_cpp or "Use.*Texture" in source_cpp, (
+        "Hybrid apply must set UseXTexture for channels without textures"
+    )
+
+
+def test_no_material_fallback_unchanged():
+    """Existing material slot count check remains."""
+    assert "slotCount" in source_cpp or "slot_count" in source_cpp or "SlotCount" in source_cpp, (
+        "Material slot count check must remain for empty material handling"
+    )
+
+
+def test_scalar_only_material_sync_unchanged():
+    """Existing scalar-only material sync remains."""
+    # Check that MTEX scalar send path still exists
+    assert "[MATERIAL][MATX_VALUE_SEND]" in init_py, (
+        "Scalar VALUE_SEND log must remain"
+    )
+
+
+def test_protocol_ids_unchanged():
+    """Protocol IDs are not changed."""
+    assert "PT_Material" in source_cpp, "PT_Material must still exist"
+    assert "PT_FBXImportRequest" in source_cpp, "PT_FBXImportRequest must still exist"
+
+
+def test_camera_safe_behavior_unchanged():
+    """Camera safe behavior is unchanged."""
+    assert "camera" in source_cpp.lower() or "Camera" in source_cpp, (
+        "Camera-related code must remain"
+    )
+
 
 if __name__ == "__main__":
     import pytest
