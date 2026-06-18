@@ -13640,13 +13640,13 @@ CopyImportedTexturesFromParent(
             FARFilter Filter;
             Filter.PackagePaths.Add(FName(*ImportedFolder));
             Filter.ClassPaths.Add(UTexture2D::StaticClass()->GetClassPathName());
-            Filter.bRecursivePaths = false;
+            Filter.bRecursivePaths = true;
 
             TArray<FAssetData> TextureAssets;
             AssetReg->GetAssets(Filter, TextureAssets);
 
             UE_LOG(LogLiveSync, Log,
-                TEXT("[MATERIAL][IMPORTED_TEXTURE_FOLDER_SCAN] folder=%s textureCount=%d"),
+                TEXT("[MATERIAL][IMPORTED_TEXTURE_FOLDER_SCAN] folder=%s recursive=1 textureCount=%d"),
                 *ImportedFolder, TextureAssets.Num());
 
             if (TextureAssets.Num() > 0)

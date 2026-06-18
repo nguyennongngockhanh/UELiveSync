@@ -325,6 +325,77 @@ def test_texture_to_param_marker_after_folder_scan():
     assert "[MATERIAL][IMPORTED_TEXTURE_TO_PARAM]" in source_cpp
 
 
+# --- Phase 7H.6: Blender FBX export texture diagnostics ---
+
+def test_fbx_texture_image_scan_marker():
+    """[FBX][TEXTURE_IMAGE_SCAN] marker exists in __init__.py."""
+    assert "[FBX][TEXTURE_IMAGE_SCAN]" in init_py
+
+
+def test_fbx_export_path_mode_copy():
+    """FBX export uses path_mode='COPY'."""
+    assert "path_mode='COPY'" in init_py or 'path_mode="COPY"' in init_py
+
+
+def test_fbx_export_embed_textures_log():
+    """EXPORT_SETTINGS log includes path_mode=COPY embed_textures=0."""
+    idx = init_py.find("[FBX][EXPORT_SETTINGS]")
+    assert idx != -1, "EXPORT_SETTINGS not found"
+    chunk = init_py[idx:idx + 400]
+    assert "path_mode=COPY" in chunk, (
+        "EXPORT_SETTINGS must log path_mode=COPY"
+    )
+    assert "embed_textures=0" in chunk, (
+        "EXPORT_SETTINGS must log embed_textures=0"
+    )
+
+
+# --- Phase 7H.6: UE FBX import texture options ---
+
+def test_fbx_import_texture_options_enabled():
+    """FBX import sets bImportMaterials=1 bImportTextures=1."""
+    assert "bImportMaterials=1" in fbx_cpp and "bImportTextures=1" in fbx_cpp, (
+        "FBX import must enable material and texture import"
+    )
+
+
+def test_fbx_import_options_log_marker():
+    """[FBX][IMPORT_OPTIONS] marker exists in FBX importer."""
+    assert "[FBX][IMPORT_OPTIONS]" in fbx_cpp
+
+
+def test_fbx_imported_asset_summary_marker():
+    """[FBX][IMPORTED_ASSET_SUMMARY] marker exists in FBX importer."""
+    assert "[FBX][IMPORTED_ASSET_SUMMARY]" in fbx_cpp
+
+
+def test_fbx_imported_texture_marker():
+    """[FBX][IMPORTED_TEXTURE] marker exists in FBX importer."""
+    assert "[FBX][IMPORTED_TEXTURE]" in fbx_cpp
+
+
+def test_fbx_importer_includes_texture_header():
+    """FBX importer includes Engine/Texture.h for texture type check."""
+    assert '#include "Engine/Texture.h"' in fbx_cpp
+
+
+# --- Phase 7H.6: Recursive folder scan ---
+
+def test_folder_scan_recursive():
+    """Folder scan uses bRecursivePaths=true (subfolders included)."""
+    assert "bRecursivePaths = true" in source_cpp
+
+
+def test_folder_scan_recursive_log():
+    """Folder scan log includes recursive=1."""
+    idx = source_cpp.find("IMPORTED_TEXTURE_FOLDER_SCAN")
+    assert idx != -1, "FOLDER_SCAN not found"
+    chunk = source_cpp[idx:idx + 200]
+    assert "recursive=1" in chunk, (
+        "FOLDER_SCAN log must include recursive=1"
+    )
+
+
 # =====================================================================
 # PART B — CAMERA SYNC UX
 # =====================================================================

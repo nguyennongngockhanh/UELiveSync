@@ -4,6 +4,7 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/Material.h"
+#include "Engine/Texture.h"
 #include "Components/SceneComponent.h"
 
 #if WITH_EDITOR
@@ -1086,14 +1087,17 @@ bool FLiveSyncFBXImporter::HandleImport(
     UFbxFactory* FbxFactory = NewObject<UFbxFactory>();
     if (FbxFactory)
     {
-        FbxFactory->ImportUI->bAutomatedImportShouldDetectType = true;
+        UFbxImportUI* ImportUI = FbxFactory->ImportUI;
+        ImportUI->bAutomatedImportShouldDetectType = true;
+        ImportUI->bImportMaterials = true;
+        ImportUI->bImportTextures = true;
         // Phase 10J.5O: Blender exports vertex data in meters; FBX_SCALE_UNITS
         // sets the FBX file unit metadata. UE converts via bConvertSceneUnit=true.
-        FbxFactory->ImportUI->StaticMeshImportData->bConvertSceneUnit = true;
+        ImportUI->StaticMeshImportData->bConvertSceneUnit = true;
         ImportTask->Factory = FbxFactory;
 
         UE_LOG(LogLiveSync, Log,
-            TEXT("[FBX][IMPORT_SETTINGS] guid=%s bConvertSceneUnit=1 importScale=1"),
+            TEXT("[FBX][IMPORT_OPTIONS] guid=%s bImportMaterials=1 bImportTextures=1 bConvertSceneUnit=1 importScale=1"),
             *Request.ObjectGUID.ToString(EGuidFormats::Digits));
     }
 
@@ -1103,6 +1107,32 @@ bool FLiveSyncFBXImporter::HandleImport(
 
     // === Phase 10J.5Q: Check pending import result ===
     TArray<UObject*> ImportedObjects = ImportTask->GetObjects();
+
+    {
+        int32 MeshCount = 0, MatCount = 0, TexCount = 0;
+        for (UObject* Obj : ImportedObjects)
+        {
+            if (Obj->IsA<UStaticMesh>()) ++MeshCount;
+            else if (Obj->IsA<UMaterial>()) ++MatCount;
+            else if (Obj->IsA<UTexture>()) ++TexCount;
+        }
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][IMPORTED_ASSET_SUMMARY] guid=%s meshes=%d materials=%d textures=%d"),
+            *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+            MeshCount, MatCount, TexCount);
+
+        for (UObject* Obj : ImportedObjects)
+        {
+            if (Obj->IsA<UTexture>())
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[FBX][IMPORTED_TEXTURE] guid=%s path=%s"),
+                    *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                    *Obj->GetPathName());
+            }
+        }
+    }
+
     UObject* PendingAsset = nullptr;
     if (ImportedObjects.Num() > 0)
     {

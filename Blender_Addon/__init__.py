@@ -859,9 +859,33 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
         temp_obj.select_set(True)
         bpy.context.view_layer.objects.active = temp_obj
 
+        # Texture image scan diagnostic before FBX export
+        if obj.material_slots:
+            for slot in obj.material_slots:
+                mat = slot.material
+                if mat and mat.use_nodes:
+                    for node in mat.node_tree.nodes:
+                        if node.type == 'TEX_IMAGE' and node.image:
+                            img = node.image
+                            filepath = getattr(img, "filepath", "")
+                            filepath_raw = getattr(img, "filepath_raw", "")
+                            source = getattr(img, "source", "")
+                            is_packed = bool(getattr(img, "packed_file", False))
+                            exists = os.path.isfile(bpy.path.abspath(filepath)) if filepath else False
+                            _fbx_log(
+                                f"[FBX][TEXTURE_IMAGE_SCAN] object={obj.name} "
+                                f"material={mat.name} image={img.name} "
+                                f"source={source} filepath={filepath} "
+                                f"filepath_raw={filepath_raw} "
+                                f"exists={1 if exists else 0} "
+                                f"packed={1 if is_packed else 0}")
+        else:
+            _fbx_log(f"[FBX][TEXTURE_IMAGE_SCAN] object={obj.name} no_material_slots")
+
         _fbx_log(f"[FBX][EXPORT_SETTINGS] guid={guid_short} "
                  f"global_scale=1.0 apply_scale_options=FBX_SCALE_UNITS "
                  f"bake_space_transform=0 use_mesh_modifiers=0 use_tspace=0 "
+                 f"path_mode=COPY embed_textures=0 "
                  f"unit_strategy=fbx_scale_units")
 
         try:
@@ -875,6 +899,7 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
                 mesh_smooth_type='FACE',
                 use_mesh_modifiers=False,
                 use_tspace=False,
+                path_mode='COPY',
             )
         except Exception as e:
             _fbx_log(f"[FBX] Export failed: {e}")
