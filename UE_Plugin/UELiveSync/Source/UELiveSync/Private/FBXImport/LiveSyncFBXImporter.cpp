@@ -389,7 +389,7 @@ static bool IsUnsafeFBXMaterial(UMaterialInterface* Mat)
     if (MatPath.StartsWith(TEXT("/Game/UELiveSync/Imported")))
     {
         UE_LOG(LogLiveSync, Verbose,
-            TEXT("[MATERIAL][FBX_IMPORTED_KEEP] slot=%s path=%s"),
+            TEXT("[MATERIAL][FBX_IMPORTED_KEEP] path=%s"),
             *MatPath);
         return false;
     }
