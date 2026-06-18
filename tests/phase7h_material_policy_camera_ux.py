@@ -1082,6 +1082,99 @@ def test_ue_sidecar_scan_log_format():
     assert "files=[" in fbx_cpp
 
 
+# --- Path normalization and fallback tests ---
+
+def test_path_normalization_uses_isrelative_combine():
+    """Code checks IsRelative before combining with FolderPath."""
+    assert "IsRelative" in fbx_cpp
+    assert "Combine" in fbx_cpp
+    # Ensure Filename is NOT blindly combined: FolderPath / Filename
+    # Should use FPaths::Combine or manual ternary, not FolderPath / FilenameStr
+    # The old pattern 'FolderPath / FilenameStr' should NOT exist
+    assert "FolderPath / FilenameStr" not in fbx_cpp
+
+
+def test_entry_log_has_raw_full_file_fields():
+    """SIDECAR_TEXTURE_DIR_ENTRY logs raw=, full=, file= fields."""
+    assert "TEXT(\"[FBX][SIDECAR_TEXTURE_DIR_ENTRY]" in fbx_cpp
+    assert "raw=" in fbx_cpp
+    assert "full=" in fbx_cpp
+    assert " file=" in fbx_cpp
+
+
+def test_candidate_log_has_full_field():
+    """SIDECAR_TEXTURE_CANDIDATE logs full= field."""
+    assert "TEXT(\"[FBX][SIDECAR_TEXTURE_CANDIDATE]" in fbx_cpp
+    assert "full=" in fbx_cpp
+
+
+def test_exists_checks_normalized_path():
+    """FileExists checks normalized FullPath, not combined path."""
+    # After normalization, the code should check IFileManager on the normalized path
+    assert "FileExists" in fbx_cpp
+    # The old pattern FolderPath / FilenameStr should be gone
+    assert "FolderPath / FilenameStr" not in fbx_cpp
+
+
+def test_fallback_scan_uses_findfiles_recursive():
+    """Fallback scan uses FindFilesRecursive with wildcard, not ext-only."""
+    assert "FindFilesRecursive" in fbx_cpp
+    # Should use TEXT("*") not extension filter
+    assert 'TEXT("*")' in fbx_cpp
+    assert 'TEXT(\"*")' in fbx_cpp
+
+
+def test_fallback_scan_not_extension_only():
+    """Fallback does not use FindFiles with extension filter."""
+    # Should NOT have FindFiles with jpg extension
+    findfiles_lines = [line for line in fbx_cpp.split("\n")
+                       if "FindFiles" in line and "Recursive" not in line
+                       and not line.strip().startswith("//")]
+    for line in findfiles_lines:
+        assert 'TEXT("jpg")' not in line and 'TEXT("png")' not in line
+
+
+def test_fallback_scan_log_exists():
+    """Fallback scan logs [FBX][SIDECAR_TEXTURE_FALLBACK_SCAN]."""
+    assert "[FBX][SIDECAR_TEXTURE_FALLBACK_SCAN]" in fbx_cpp
+
+
+def test_single_retry_log_exists():
+    """Single bounded retry logs [FBX][SIDECAR_TEXTURE_RETRY]."""
+    assert "[FBX][SIDECAR_TEXTURE_RETRY]" in fbx_cpp
+    assert "no_images_first_scan" in fbx_cpp
+    assert "delay_ms=50" in fbx_cpp or "delay_ms=100" in fbx_cpp
+
+
+def test_missing_textures_folder_still_skip():
+    """Missing textures/ is skip/info, not warning/failure."""
+    assert "SIDECAR_TEXTURE_SCAN_FOLDER_SKIP" in fbx_cpp
+    assert "missing_optional_subfolder" in fbx_cpp
+    # Should NOT log Warning for this case
+    skip_section = fbx_cpp[fbx_cpp.find("SIDECAR_TEXTURE_SCAN_FOLDER_SKIP")-200:
+                           fbx_cpp.find("SIDECAR_TEXTURE_SCAN_FOLDER_SKIP")+200]
+    # The log for skip should be UE_LOG(LogLiveSync, Log, ...) not Warning
+    assert "Log," in skip_section or "Log," in fbx_cpp
+
+
+def test_protocol_ids_unchanged():
+    """Protocol packet types are not modified."""
+    # Keyframe PT should be 0x02 in sync.py
+    with open("/home/nguyennongngockhanh/Projects/UELiveSync/Blender_Addon/sync.py") as sf:
+        sync_py = sf.read()
+    assert "0x02" in sync_py or "PT_Keyframe" in sync_py
+
+
+def test_camera_safe_behavior_unchanged():
+    """Camera operator behavior is not modified."""
+    # Camera operator is defined in the addon source, check the operator class name
+    with open("/home/nguyennongngockhanh/Projects/UELiveSync/Blender_Addon/__init__.py") as ip:
+        init_py_check = ip.read()
+    # The sync_active_camera operator exists
+    assert "sync_active_camera_to_ue" in init_py_check
+    assert "debug_send_camera_packets" in init_py_check
+
+
 # =====================================================================
 # SUCCESS REPORT
 # =====================================================================

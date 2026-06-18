@@ -1,5 +1,6 @@
 #include "FBXImport/LiveSyncFBXImporter.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
 
 #include "Engine/StaticMeshActor.h"
 #include "Engine/StaticMesh.h"
@@ -1161,37 +1162,62 @@ bool FLiveSyncFBXImporter::HandleImport(
             };
 
             // Scan a single folder via IterateDirectory.
+            // NOTE: On Linux, IterateDirectory visitor receives the FULL PATH (Directory / d_name),
+            // not just the basename. Must detect and handle this correctly.
             auto ScanFolder = [&SidecarFiles, &IsImageExtension, &FbxDir](const FString& FolderPath, const FString& FolderLabel)
             {
                 bool bIterOk = IFileManager::Get().IterateDirectory(
                     *FolderPath,
                     [&SidecarFiles, &IsImageExtension, &FolderPath, &FolderLabel](const TCHAR* Filename, bool bIsFolder)
                     {
-                        // Task E.1: raw directory entry log
+                        // Normalize entry path: detect if Filename is already absolute
+                        FString EntryPath = Filename;
+                        FPaths::NormalizeFilename(EntryPath);
+
+                        FString FullPath;
+                        if (FPaths::IsRelative(EntryPath))
+                        {
+                            FullPath = FPaths::Combine(FolderPath, EntryPath);
+                        }
+                        else
+                        {
+                            FullPath = EntryPath;
+                        }
+                        FPaths::NormalizeFilename(FullPath);
+
+                        const FString FileName = FPaths::GetCleanFilename(FullPath);
+                        const FString ExtLower = FPaths::GetExtension(FullPath).ToLower();
+                        const bool bExists = IFileManager::Get().FileExists(*FullPath);
+                        const bool bIsImage = IsImageExtension(ExtLower);
+
+                        // Task E.1: raw directory entry log with normalized values
                         const bool bIsImageCheck = !bIsFolder;
                         if (bIsImageCheck)
                         {
-                            FString EntryLog = TEXT("[FBX][SIDECAR_TEXTURE_DIR_ENTRY] folder=") + FolderPath + TEXT(" name=") + Filename + TEXT(" isDir=") + FString::FromInt(bIsFolder ? 1 : 0);
+                            FString EntryLog = TEXT("[FBX][SIDECAR_TEXTURE_DIR_ENTRY] folder=") + FolderPath +
+                                TEXT(" raw=") + Filename +
+                                TEXT(" full=") + FullPath +
+                                TEXT(" file=") + FileName +
+                                TEXT(" isDir=") + FString::FromInt(bIsFolder ? 1 : 0) +
+                                TEXT(" exists=") + FString::FromInt(bExists ? 1 : 0);
                             UE_LOG(LogLiveSync, Log, TEXT("%s"), *EntryLog);
                         }
 
                         if (bIsFolder)
                             return true;
 
-                        FString FilenameStr(Filename);
-                        const FString ExtLower = FPaths::GetExtension(FilenameStr).ToLower();
-
-                        const FString AbsPath = FolderPath / FilenameStr;
-                        const bool bExists = IFileManager::Get().FileExists(*AbsPath);
-                        const bool bIsImage = IsImageExtension(ExtLower);
-
-                        // Task E.2: candidate log for every non-folder entry
-                        FString CandidateLog = TEXT("[FBX][SIDECAR_TEXTURE_CANDIDATE] folder=") + FolderPath + TEXT(" file=") + FilenameStr + TEXT(" ext=") + ExtLower + TEXT(" isImage=") + FString::FromInt(bIsImage ? 1 : 0) + TEXT(" exists=") + FString::FromInt(bExists ? 1 : 0);
+                        // Task E.2: candidate log with normalized values
+                        FString CandidateLog = TEXT("[FBX][SIDECAR_TEXTURE_CANDIDATE] folder=") + FolderPath +
+                            TEXT(" file=") + FileName +
+                            TEXT(" full=") + FullPath +
+                            TEXT(" ext=") + ExtLower +
+                            TEXT(" isImage=") + FString::FromInt(bIsImage ? 1 : 0) +
+                            TEXT(" exists=") + FString::FromInt(bExists ? 1 : 0);
                         UE_LOG(LogLiveSync, Log, TEXT("%s"), *CandidateLog);
 
                         if (bIsImage)
                         {
-                            SidecarFiles.Add(AbsPath);
+                            SidecarFiles.Add(FullPath);
                         }
                         return true;
                     });
@@ -1230,6 +1256,88 @@ bool FLiveSyncFBXImporter::HandleImport(
             {
                 const FString TexturesPath = FbxDir / TEXT("textures");
                 ScanFolder(TexturesPath, TEXT("textures"));
+            }
+
+            // Task C: Single bounded retry — Blender may not have finished writing sidecar files.
+            if (SidecarFiles.Num() == 0)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[FBX][SIDECAR_TEXTURE_RETRY] reason=no_images_first_scan delay_ms=50"));
+                FPlatformProcess::Sleep(0.05f);
+
+                // Re-scan base folder only
+                IFileManager::Get().IterateDirectory(
+                    *FbxDir,
+                    [&SidecarFiles, &IsImageExtension, &FbxDir](const TCHAR* Filename, bool bIsFolder)
+                    {
+                        FString EntryPath = Filename;
+                        FPaths::NormalizeFilename(EntryPath);
+                        if (!FPaths::IsRelative(EntryPath))
+                        {
+                            // Already absolute from Linux IterateDirectory — skip combine
+                        }
+                        else
+                        {
+                            // Relative path (shouldn't happen on Linux, but be safe)
+                        }
+                        FString CleanPath = FPaths::IsRelative(EntryPath)
+                            ? FPaths::Combine(FbxDir, EntryPath)
+                            : EntryPath;
+                        FPaths::NormalizeFilename(CleanPath);
+
+                        if (bIsFolder) return true;
+                        const FString FileName = FPaths::GetCleanFilename(CleanPath);
+                        const FString ExtLower = FPaths::GetExtension(CleanPath).ToLower();
+                        const bool bExists = IFileManager::Get().FileExists(*CleanPath);
+                        const bool bIsImage = IsImageExtension(ExtLower);
+
+                        FString CandidateLog = TEXT("[FBX][SIDECAR_TEXTURE_CANDIDATE] folder=") + FbxDir +
+                            TEXT(" file=") + FileName +
+                            TEXT(" full=") + CleanPath +
+                            TEXT(" ext=") + ExtLower +
+                            TEXT(" isImage=") + FString::FromInt(bIsImage ? 1 : 0) +
+                            TEXT(" exists=") + FString::FromInt(bExists ? 1 : 0);
+                        UE_LOG(LogLiveSync, Log, TEXT("%s"), *CandidateLog);
+
+                        if (bIsImage)
+                        {
+                            SidecarFiles.Add(CleanPath);
+                        }
+                        return true;
+                    });
+            }
+
+            // Task B: Fallback scan using FindFilesRecursive if IterateDirectory found nothing.
+            if (SidecarFiles.Num() == 0)
+            {
+                TArray<FString> AllFiles;
+                IFileManager::Get().FindFilesRecursive(AllFiles, *FbxDir, TEXT("*"), true, false);
+                int32 RawCount = AllFiles.Num();
+
+                FString FallbackLog = TEXT("[FBX][SIDECAR_TEXTURE_FALLBACK_SCAN] folder=") + FbxDir +
+                    TEXT(" rawCount=") + FString::FromInt(RawCount) +
+                    TEXT(" found=") + FString::FromInt(RawCount);
+                UE_LOG(LogLiveSync, Log, TEXT("%s"), *FallbackLog);
+
+                for (const FString& FullPath : AllFiles)
+                {
+                    const FString FileName = FPaths::GetCleanFilename(FullPath);
+                    const FString ExtLower = FPaths::GetExtension(FullPath).ToLower();
+                    const bool bIsImage = IsImageExtension(ExtLower);
+
+                    FString CandidateLog = TEXT("[FBX][SIDECAR_TEXTURE_CANDIDATE] folder=") + FbxDir +
+                        TEXT(" file=") + FileName +
+                        TEXT(" full=") + FullPath +
+                        TEXT(" ext=") + ExtLower +
+                        TEXT(" isImage=") + FString::FromInt(bIsImage ? 1 : 0) +
+                        TEXT(" exists=") + FString::FromInt(1);  // Found by FindFilesRecursive so exists
+                    UE_LOG(LogLiveSync, Log, TEXT("%s"), *CandidateLog);
+
+                    if (bIsImage)
+                    {
+                        SidecarFiles.Add(FullPath);
+                    }
+                }
             }
 
             // Build per-file list for summary log.
