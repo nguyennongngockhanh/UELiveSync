@@ -65,6 +65,8 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "UObject/SavePackage.h"
 
+#include "AssetRegistry/IAssetRegistry.h"
+
 #endif
 
 #include "FBXImport/LiveSyncFBXImporter.h"
@@ -13590,8 +13592,6 @@ CopyImportedTexturesFromParent(
     TSet<FName> AlreadySet;
 
     // Try known texture parameter names via GetTextureParameterValue.
-    // This works on both UMaterialInstance (parameter overrides) and UMaterial
-    // (GetTextureParameterDefaultValue iterates the expression graph internally).
     for (const FTextureChannelEntry& Entry : ChannelsToCopy)
     {
         FName LiveSyncParam(Entry.LiveSyncParamName);
@@ -13613,6 +13613,135 @@ CopyImportedTexturesFromParent(
             AlreadySet.Add(LiveSyncParam);
         }
     }
+
+    // --- PHASE 7H.5: FOLDER SCAN FALLBACK ---
+    // If parameter-based discovery found nothing, scan the imported folder
+    // for UTexture2D assets using the AssetRegistry (editor only).
+#if WITH_EDITOR
+    if (FoundTextures.Num() == 0)
+    {
+        FString ImportedFolder = TEXT("/Game/UELiveSync/Imported");
+        {
+            UPackage* MatPkg = ImportedParentMat->GetPackage();
+            if (MatPkg)
+            {
+                FString PkgName = MatPkg->GetName();
+                int32 LastSlash = INDEX_NONE;
+                if (PkgName.FindLastChar(TCHAR('/'), LastSlash))
+                {
+                    ImportedFolder = PkgName.Left(LastSlash);
+                }
+            }
+        }
+
+        IAssetRegistry* AssetReg = IAssetRegistry::Get();
+        if (AssetReg)
+        {
+            FARFilter Filter;
+            Filter.PackagePaths.Add(FName(*ImportedFolder));
+            Filter.ClassPaths.Add(UTexture2D::StaticClass()->GetClassPathName());
+            Filter.bRecursivePaths = false;
+
+            TArray<FAssetData> TextureAssets;
+            AssetReg->GetAssets(Filter, TextureAssets);
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][IMPORTED_TEXTURE_FOLDER_SCAN] folder=%s textureCount=%d"),
+                *ImportedFolder, TextureAssets.Num());
+
+            if (TextureAssets.Num() > 0)
+            {
+                FString MatName = ImportedParentMat->GetName();
+                if (MatName.StartsWith(TEXT("M_")))
+                    MatName.RightChopInline(2);
+
+                struct FScanChannel {
+                    FName ParamName;
+                    FName ToggleName;
+                    TArray<FString> Keywords;
+                };
+                FScanChannel ScanChannels[] = {
+                    { FName("BaseColorTexture"), FName("UseBaseColorTexture"),
+                      { TEXT("BaseColor"), TEXT("Base_Color"), TEXT("Albedo"), TEXT("Diffuse"), TEXT("Color"), TEXT("Col") } },
+                    { FName("RoughnessTexture"), FName("UseRoughnessTexture"),
+                      { TEXT("Roughness"), TEXT("Rough") } },
+                    { FName("MetallicTexture"), FName("UseMetallicTexture"),
+                      { TEXT("Metallic"), TEXT("Metalness"), TEXT("Metal") } },
+                    { FName("NormalTexture"), FName("UseNormalTexture"),
+                      { TEXT("Normal"), TEXT("Bump"), TEXT("NormalMap") } },
+                    { FName("AlphaTexture"), FName("UseAlphaTexture"),
+                      { TEXT("Alpha"), TEXT("Opacity"), TEXT("Trans") } },
+                };
+
+                for (const FScanChannel& Chan : ScanChannels)
+                {
+                    if (AlreadySet.Contains(Chan.ParamName))
+                        continue;
+
+                    FAssetData* BestAsset = nullptr;
+                    int32 BestScore = 0;
+
+                    for (FAssetData& Asset : TextureAssets)
+                    {
+                        FString AssetName = Asset.AssetName.ToString();
+                        int32 Score = 0;
+
+                        if (!MatName.IsEmpty() && AssetName.Contains(MatName))
+                            Score += 3;
+
+                        for (const FString& Kw : Chan.Keywords)
+                        {
+                            if (AssetName.Contains(Kw))
+                            {
+                                Score += 2;
+                                break;
+                            }
+                        }
+
+                        if (Score > 0)
+                        {
+                            UE_LOG(LogLiveSync, Verbose,
+                                TEXT("[MATERIAL][IMPORTED_TEXTURE_CANDIDATE] path=%s score=%d"),
+                                *Asset.GetObjectPathString(), Score);
+                        }
+
+                        if (Score > BestScore)
+                        {
+                            BestScore = Score;
+                            BestAsset = &Asset;
+                        }
+                    }
+
+                    if (BestAsset && BestScore > 0)
+                    {
+                        UTexture2D* Tex = Cast<UTexture2D>(BestAsset->GetAsset());
+                        if (Tex)
+                        {
+                            FoundTextures.Add(Chan.ParamName, Tex);
+                            AlreadySet.Add(Chan.ParamName);
+                            UE_LOG(LogLiveSync, Log,
+                                TEXT("[MATERIAL][IMPORTED_TEXTURE_CANDIDATE] path=%s score=%d reason=selected"),
+                                *BestAsset->GetObjectPathString(), BestScore);
+                        }
+                    }
+                }
+
+                if (FoundTextures.Num() == 0 && TextureAssets.Num() == 1)
+                {
+                    UTexture2D* Tex = Cast<UTexture2D>(TextureAssets[0].GetAsset());
+                    if (Tex)
+                    {
+                        FoundTextures.Add(FName("BaseColorTexture"), Tex);
+                        AlreadySet.Add(FName("BaseColorTexture"));
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[MATERIAL][IMPORTED_TEXTURE_CANDIDATE] path=%s score=0 reason=single_texture_fallback"),
+                            *TextureAssets[0].GetObjectPathString());
+                    }
+                }
+            }
+        }
+    }
+#endif
 
     // Apply found textures to LiveSync MID
     int32 CopiedCount = 0;
@@ -13645,9 +13774,20 @@ CopyImportedTexturesFromParent(
     if (CopiedCount == 0)
     {
         UE_LOG(LogLiveSync, Log,
-            TEXT("[MATERIAL][NO_IMPORTED_TEXTURE_FOUND] guid=%s slot=%d parent=%s reason=no_texture_sample_or_dependency"),
+            TEXT("[MATERIAL][NO_IMPORTED_TEXTURE_FOUND] guid=%s slot=%d parent=%s reason=no_texture_asset_candidate"),
             *GuidStr, SlotIndex,
             *ImportedParentMat->GetPathName());
+    }
+    else
+    {
+        UTexture* CheckTex = nullptr;
+        LiveSyncMID->GetTextureParameterValue(TEXT("BaseColorTexture"), CheckTex);
+        float CheckUseBaseColor = 0.0f;
+        LiveSyncMID->GetScalarParameterValue(TEXT("UseBaseColorTexture"), CheckUseBaseColor);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][GENERATED_TEXTURE_PARAM_CHECK] hasBaseColorTexture=%d hasUseBaseColorTexture=%d"),
+            CheckTex ? 1 : 0,
+            CheckUseBaseColor > 0.5f ? 1 : 0);
     }
 
     MaterialImportedTextureCopied += CopiedCount;

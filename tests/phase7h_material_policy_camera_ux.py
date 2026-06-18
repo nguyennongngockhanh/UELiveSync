@@ -259,6 +259,72 @@ def test_ensure_renderable_still_has_fallback():
     assert "fallback" in fbx_cpp[fbx_cpp.find("EnsureFBXMeshRenderable"):fbx_cpp.find("EnsureFBXMeshRenderable") + 2000]
 
 
+# --- Phase 7H.5: Folder scan fallback for texture discovery ---
+
+def test_imported_texture_folder_scan_marker():
+    """[MATERIAL][IMPORTED_TEXTURE_FOLDER_SCAN] marker exists."""
+    assert "[MATERIAL][IMPORTED_TEXTURE_FOLDER_SCAN]" in source_cpp
+
+
+def test_imported_texture_candidate_marker():
+    """[MATERIAL][IMPORTED_TEXTURE_CANDIDATE] marker exists."""
+    assert "[MATERIAL][IMPORTED_TEXTURE_CANDIDATE]" in source_cpp
+
+
+def test_generated_texture_param_check_marker():
+    """[MATERIAL][GENERATED_TEXTURE_PARAM_CHECK] marker exists."""
+    assert "[MATERIAL][GENERATED_TEXTURE_PARAM_CHECK]" in source_cpp
+
+
+def test_no_imported_texture_found_reason_asset_candidate():
+    """NO_IMPORTED_TEXTURE_FOUND uses reason=no_texture_asset_candidate."""
+    idx = source_cpp.find("NO_IMPORTED_TEXTURE_FOUND")
+    assert idx != -1, "NO_IMPORTED_TEXTURE_FOUND not found"
+    chunk = source_cpp[idx:idx + 500]
+    assert "reason=no_texture_asset_candidate" in chunk, (
+        "NO_IMPORTED_TEXTURE_FOUND must use reason=no_texture_asset_candidate"
+    )
+
+
+def test_asset_registry_include_exists():
+    """AssetRegistry IAssetRegistry.h included in subsystem."""
+    assert "AssetRegistry/IAssetRegistry.h" in source_cpp, (
+        "Must include IAssetRegistry.h for folder scan"
+    )
+
+
+def test_folder_scan_uses_texture2d_class():
+    """Folder scan uses UTexture2D::StaticClass()->GetClassPathName()."""
+    idx = source_cpp.find("IMPORTED_TEXTURE_FOLDER_SCAN")
+    assert idx != -1, "Folder scan not found"
+    chunk = source_cpp[idx - 500:idx + 500]
+    assert "UTexture2D::StaticClass()->GetClassPathName()" in chunk, (
+        "Folder scan must filter by UTexture2D class"
+    )
+
+
+def test_folder_scan_single_texture_fallback():
+    """Folder scan falls back to single texture if only one found."""
+    assert "single_texture_fallback" in source_cpp, (
+        "Folder scan must have single-texture fallback when exactly one UTexture2D exists"
+    )
+
+
+def test_folder_scan_candidate_logs_path_score():
+    """CANDIDATE log includes path and score."""
+    idx = source_cpp.find("IMPORTED_TEXTURE_CANDIDATE")
+    assert idx != -1, "CANDIDATE marker not found"
+    chunk = source_cpp[idx:idx + 300]
+    assert "path=" in chunk and "score=" in chunk, (
+        "CANDIDATE log must include path and score"
+    )
+
+
+def test_texture_to_param_marker_after_folder_scan():
+    """IMPORTED_TEXTURE_TO_PARAM still present for folder scan success path."""
+    assert "[MATERIAL][IMPORTED_TEXTURE_TO_PARAM]" in source_cpp
+
+
 # =====================================================================
 # PART B — CAMERA SYNC UX
 # =====================================================================

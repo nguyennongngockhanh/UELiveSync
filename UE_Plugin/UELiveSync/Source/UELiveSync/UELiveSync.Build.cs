@@ -51,7 +51,8 @@ public class UELiveSync : ModuleRules
 				"ProceduralMeshComponent",
 
 				"UnrealEd",
-				"AssetTools"
+				"AssetTools",
+				"AssetRegistry"
 			}
 		);
 
