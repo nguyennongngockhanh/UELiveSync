@@ -396,6 +396,93 @@ def test_folder_scan_recursive_log():
     )
 
 
+# --- Phase 7H.7: FBX sync mesh selection robustness ---
+
+def test_fbx_object_selection_marker():
+    """[FBX][OBJECT_SELECTION] marker exists in __init__.py."""
+    assert "[FBX][OBJECT_SELECTION]" in init_py
+
+
+def test_fbx_object_selected_marker():
+    """[FBX][OBJECT_SELECTED] marker exists in __init__.py."""
+    assert "[FBX][OBJECT_SELECTED]" in init_py
+
+
+def test_fbx_collect_mesh_objects_method():
+    """_collect_mesh_objects method exists in FBX operator."""
+    assert "_collect_mesh_objects" in init_py
+
+
+def test_fbx_fallback_active_object():
+    """FBX operator falls back to active object when selected_objects empty."""
+    idx = init_py.find("_collect_mesh_objects")
+    assert idx != -1, "_collect_mesh_objects not found"
+    chunk = init_py[idx:idx + 500]
+    assert "context.view_layer.objects.active" in chunk, (
+        "_collect_mesh_objects must check context.view_layer.objects.active"
+    )
+
+
+def test_fbx_fallback_context_object():
+    """FBX operator falls back to context.object when no active mesh."""
+    idx = init_py.find("_collect_mesh_objects")
+    assert idx != -1, "_collect_mesh_objects not found"
+    chunk = init_py[idx:idx + 500]
+    assert "context.object" in chunk, (
+        "_collect_mesh_objects must check context.object as last fallback"
+    )
+
+
+def test_fbx_selection_diagnostic_shows_count_and_mode():
+    """OBJECT_SELECTION log includes selected=N selected_mesh=N active= mode=."""
+    idx = init_py.find("[FBX][OBJECT_SELECTION]")
+    assert idx != -1, "OBJECT_SELECTION not found"
+    chunk = init_py[idx:idx + 300]
+    assert "selected=" in chunk and "selected_mesh=" in chunk, (
+        "OBJECT_SELECTION must log selected= and selected_mesh="
+    )
+    assert "active=" in chunk and "mode=" in chunk, (
+        "OBJECT_SELECTION must log active= and mode="
+    )
+
+
+def test_fbx_selected_per_object_logs_name_type_slots():
+    """OBJECT_SELECTED log includes name= type=MESH materialSlots=."""
+    idx = init_py.find("[FBX][OBJECT_SELECTED]")
+    assert idx != -1, "OBJECT_SELECTED not found"
+    chunk = init_py[idx:idx + 200]
+    assert "name=" in chunk and "type=MESH" in chunk and "materialSlots=" in chunk, (
+        "OBJECT_SELECTED must log name= type=MESH materialSlots="
+    )
+
+
+def test_fbx_detailed_warning_no_mesh():
+    """Warning message includes Selected:, active:, mode: for empty selection."""
+    idx = init_py.find("No mesh objects could be FBX-synced")
+    assert idx != -1, "Warning message not found"
+    chunk = init_py[idx:idx + 300]
+    assert "Selected:" in chunk, (
+        "Warning must include Selected: with object types"
+    )
+    assert "active=" in chunk, (
+        "Warning must include active= with active object description"
+    )
+    assert "mode=" in chunk, (
+        "Warning must include mode="
+    )
+
+
+def test_fbx_texture_settings_not_regressed():
+    """Texture export settings preserved alongside selection changes."""
+    assert "path_mode='COPY'" in init_py or 'path_mode="COPY"' in init_py
+    assert "[FBX][TEXTURE_IMAGE_SCAN]" in init_py
+    idx = init_py.find("[FBX][EXPORT_SETTINGS]")
+    assert idx != -1, "EXPORT_SETTINGS not found"
+    chunk = init_py[idx:idx + 400]
+    assert "path_mode=COPY" in chunk
+    assert "embed_textures=0" in chunk
+
+
 # =====================================================================
 # PART B — CAMERA SYNC UX
 # =====================================================================

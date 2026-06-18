@@ -939,19 +939,49 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
         "Export selected MESH objects to FBX cache and " \
         "send PT_FBXImportRequest to UE for StaticMesh import"
 
-    def execute(self, context):
-
+    def _collect_mesh_objects(self, context):
         selected = [
             obj for obj in context.selected_objects
             if obj.type == 'MESH'
         ]
+        if selected:
+            return selected
+        active = context.view_layer.objects.active
+        if active and active.type == 'MESH':
+            return [active]
+        ctx_obj = context.object
+        if ctx_obj and ctx_obj.type == 'MESH':
+            return [ctx_obj]
+        return []
+
+    def execute(self, context):
+
+        mode = context.mode if context.mode else "UNKNOWN"
+        sel_names = [o.name for o in context.selected_objects]
+        active_obj = context.view_layer.objects.active
+        active_desc = f"{active_obj.name}/{active_obj.type}" if active_obj else "None"
+        print(f"[FBX][OBJECT_SELECTION] selected={len(sel_names)} "
+              f"selected_mesh={sum(1 for o in context.selected_objects if o.type == 'MESH')} "
+              f"active={active_desc} mode={mode}")
+
+        selected = self._collect_mesh_objects(context)
 
         if not selected:
+            sel_detail = ", ".join(
+                f"{o.name}:{o.type}" for o in context.selected_objects
+            ) if context.selected_objects else "(empty)"
             self.report(
                 {'WARNING'},
-                "No MESH objects selected"
+                f"No mesh objects could be FBX-synced. "
+                f"Selected: [{sel_detail}], "
+                f"active={active_desc}, mode={mode}. "
+                f"Select a mesh object in Object Mode and retry."
             )
             return {'CANCELLED'}
+
+        for obj in selected:
+            mat_slots = len(obj.material_slots) if hasattr(obj, "material_slots") else 0
+            print(f"[FBX][OBJECT_SELECTED] name={obj.name} type=MESH materialSlots={mat_slots}")
 
         if not network.is_connected():
             self.report(
