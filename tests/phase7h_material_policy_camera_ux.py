@@ -800,6 +800,26 @@ def test_fbx_no_mesh_warning_still_present():
     assert "No mesh objects could be FBX-synced" in init_py
 
 
+def test_fbx_cache_folder_list_marker():
+    """[FBX][CACHE_FOLDER_LIST] marker exists in __init__.py."""
+    assert "[FBX][CACHE_FOLDER_LIST]" in init_py
+
+
+def test_fbx_texture_ref_check_marker():
+    """[FBX][TEXTURE_REF_CHECK] marker exists in __init__.py."""
+    assert "[FBX][TEXTURE_REF_CHECK]" in init_py
+
+
+def test_fbx_sidecar_texture_scan_ue_marker():
+    """[FBX][SIDECAR_TEXTURE_SCAN] marker exists in FBX importer."""
+    assert "[FBX][SIDECAR_TEXTURE_SCAN]" in fbx_cpp
+
+
+def test_fbx_sidecar_texture_import_ok_ue_marker():
+    """[FBX][SIDECAR_TEXTURE_IMPORT_OK] marker exists in FBX importer."""
+    assert "[FBX][SIDECAR_TEXTURE_IMPORT_OK]" in fbx_cpp
+
+
 # =====================================================================
 # SUCCESS REPORT
 # =====================================================================

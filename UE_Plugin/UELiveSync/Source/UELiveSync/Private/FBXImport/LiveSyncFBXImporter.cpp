@@ -1131,6 +1131,78 @@ bool FLiveSyncFBXImporter::HandleImport(
                     *Obj->GetPathName());
             }
         }
+
+        // Phase 7H.6: sidecar texture import fallback
+        // If FBX import produced zero textures, scan the FBX directory
+        // for image files and import them directly via AssetTools.
+        if (TexCount == 0)
+        {
+            const FString FbxDir = FPaths::GetPath(FbxPathStr);
+            static const TCHAR* ImagePatterns[] = {
+                TEXT("*.png"), TEXT("*.jpg"), TEXT("*.jpeg"),
+                TEXT("*.tga"), TEXT("*.exr"), TEXT("*.bmp")
+            };
+            TArray<FString> SidecarFiles;
+            for (const TCHAR* Pattern : ImagePatterns)
+            {
+                TArray<FString> Found;
+                IFileManager::Get().FindFiles(
+                    Found, *(FbxDir / Pattern), nullptr);
+                for (FString& F : Found)
+                    SidecarFiles.Add(FbxDir / F);
+            }
+            // Also check textures/ subfolder
+            {
+                TArray<FString> Found;
+                IFileManager::Get().FindFiles(
+                    Found, *(FbxDir / TEXT("textures") / TEXT("*")), nullptr);
+                for (FString& F : Found)
+                {
+                    FString Ext = FPaths::GetExtension(F).ToLower();
+                    if (Ext == TEXT("png") || Ext == TEXT("jpg") ||
+                        Ext == TEXT("jpeg") || Ext == TEXT("tga") ||
+                        Ext == TEXT("exr") || Ext == TEXT("bmp"))
+                    {
+                        SidecarFiles.Add(FbxDir / TEXT("textures") / F);
+                    }
+                }
+            }
+
+            if (SidecarFiles.Num() > 0)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[FBX][SIDECAR_TEXTURE_SCAN] folder=%s count=%d"),
+                    *FbxDir, SidecarFiles.Num());
+
+                TArray<UObject*> ImportedTexs =
+                    AssetTools.ImportAssets(SidecarFiles, AssetBasePath);
+
+                for (UObject* Tex : ImportedTexs)
+                {
+                    if (Tex && Tex->IsA<UTexture>())
+                    {
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[FBX][SIDECAR_TEXTURE_IMPORT_OK] guid=%s texture=%s"),
+                            *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                            *Tex->GetPathName());
+                    }
+                }
+
+                if (ImportedTexs.Num() > 0)
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[FBX][IMPORTED_ASSET_SUMMARY] guid=%s meshes=%d materials=%d textures=%d (after sidecar)"),
+                        *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                        MeshCount, MatCount, TexCount + ImportedTexs.Num());
+                }
+            }
+            else
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[FBX][SIDECAR_TEXTURE_SCAN] folder=%s count=0 reason=no_image_files_found"),
+                    *FbxDir);
+            }
+        }
     }
 
     UObject* PendingAsset = nullptr;

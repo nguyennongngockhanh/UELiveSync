@@ -996,6 +996,8 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
         import time
         import math
         import struct
+        import glob as _glob
+        import re as _re
 
         # Phase 10J.5J: monotonic trace sequence for manual sync
         seq = 0
@@ -1075,6 +1077,27 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         "not created"
                     )
                     continue
+
+                # Phase 7H.6: diagnostics after successful FBX export
+                cache_files = _glob.glob(os.path.join(obj_dir, "*"))
+                _fbx_log(f"[FBX][CACHE_FOLDER_LIST] folder={obj_dir} "
+                         f"files=[{', '.join(os.path.basename(f) for f in cache_files)}]")
+                try:
+                    with open(fbx_path, "rb") as _f:
+                        _fbx_data = _f.read()
+                    _fbx_text = _fbx_data.decode("latin-1")
+                    _tex_pattern = _re.compile(
+                        r'[a-zA-Z0-9_\-\.]+\.(png|jpg|jpeg|tga|exr|bmp|tif)',
+                        _re.IGNORECASE)
+                    _texture_refs = _tex_pattern.findall(_fbx_text)
+                    if _texture_refs:
+                        _fbx_log(f"[FBX][TEXTURE_REF_CHECK] guid={guid_hex[:8]} "
+                                 f"found_in_fbx=1 refs={_texture_refs}")
+                    else:
+                        _fbx_log(f"[FBX][TEXTURE_REF_CHECK] guid={guid_hex[:8]} found_in_fbx=0")
+                except Exception as _fbx_read_err:
+                    _fbx_log(f"[FBX][TEXTURE_REF_CHECK] guid={guid_hex[:8]} "
+                             f"error={_fbx_read_err}")
 
                 # Compute mesh stats from evaluated mesh
                 # (depsgraph already obtained above)
