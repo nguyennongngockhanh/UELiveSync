@@ -150,7 +150,7 @@ def test_parse_and_apply_uses_generated_mid_for_imported():
     if idx == -1:
         idx = source_cpp.find("ParseAndApplyGeneratedMaterial(")
     assert idx != -1, "ParseAndApplyGeneratedMaterial definition not found"
-    chunk = source_cpp[idx:idx + 4000]
+    chunk = source_cpp[idx:idx + 8000]
     # Must detect imported material path
     assert "/Game/UELiveSync/Imported" in chunk, (
         "ParseAndApplyGeneratedMaterial must check for imported material path"

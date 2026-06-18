@@ -1311,11 +1311,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 finally:
                     evaluated_obj.to_mesh_clear()
 
-                # Task B: add sidecar_textures to manifest for UE deterministic discovery
-                if sidecar_info:
-                    manifest["sidecar_textures"] = sidecar_info
-
-                # Write manifest JSON
+                # Write manifest JSON (sidecar info attached inline)
                 manifest = {
                     "object_guid": guid_hex,
                     "object_name": obj.name,
@@ -1326,7 +1322,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     "mat_slot_count": mat_slot_count,
                     "timestamp": time.time(),
                     "source": "Blender FBX export",
-                    "sidecar_textures": manifest.get("sidecar_textures", []),
+                    "sidecar_textures": sidecar_info,
                 }
 
                 manifest_path = os.path.join(
@@ -1458,7 +1454,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                                 p = network.get_material_basic_properties(slot.material)
                                 if p is not None:
                                     mat_props[slot_idx] = p
-                        # Phase 10K.1A: extract texture map references
+                        # Phase 7H.6 Task B: extract texture map references with per-channel scan logs
                         tex_maps = None
                         try:
                             tex_maps_dict = {}
@@ -1467,12 +1463,29 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                                     maps = network.extract_texture_maps_for_slot(slot.material)
                                     if maps:
                                         tex_maps_dict[slot_idx] = maps
+                                        for ch, fpath, img_name, flags in maps:
+                                            abs_path = bpy.path.abspath(fpath) if fpath else ""
+                                            file_exists = os.path.isfile(abs_path) if abs_path else False
+                                            # Determine source type from flags
+                                            source = "PACKED" if (flags & network.MTEX_FLAG_IMAGE_PACKED) else "FILE"
+                                            # Map channel int to name
+                                            ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
+                                            has_tex = "1" if abs_path else "0"
+                                            exists_str = "1" if file_exists else "0"
+                                            print(f"[MATERIAL][TEXTURE_CHANNEL_SCAN] object={obj.name} slot={slot_idx} material={slot.material.name} channel={ch_name} hasTexture={has_tex} image={img_name} path={abs_path[:200] if abs_path else ''} exists={exists_str} source={source}")
                             if tex_maps_dict:
                                 tex_maps = tex_maps_dict
                         except Exception:
                             tex_maps = None
 
+                        # Log per-slot MATX value/texture send before packet dispatch
                         if tex_maps:
+                            for slot_idx, slot_maps in tex_maps.items():
+                                for ch, fpath, img_name, flags in slot_maps:
+                                    ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
+                                    abs_path = bpy.path.abspath(fpath) if fpath else ""
+                                    file_exists = "1" if (abs_path and os.path.isfile(abs_path)) else "0"
+                                    print(f"[MATERIAL][MATX_TEXTURE_SEND] guid={guid_hex[:8]} slot={slot_idx} channel={ch_name} path={abs_path[:200] if abs_path else ''} exists={file_exists}")
                             for slot_maps in tex_maps.values():
                                 total_mtex_records += len(slot_maps)
 
@@ -1494,6 +1507,11 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                                       f"roughness={pp.get('Roughness',0.5):.3f} "
                                       f"metallic={pp.get('Metallic',0):.3f} "
                                       f"alpha={pp.get('Alpha',1):.3f}")
+                                # Per-channel MATX_VALUE_SEND logs
+                                print(f"[MATERIAL][MATX_VALUE_SEND] guid={guid_hex[:8]} slot={si} channel=BaseColor value=({pp.get('BaseColorR',0):.3f},{pp.get('BaseColorG',0):.3f},{pp.get('BaseColorB',0):.3f},{pp.get('Alpha',1):.3f})")
+                                print(f"[MATERIAL][MATX_VALUE_SEND] guid={guid_hex[:8]} slot={si} channel=Roughness value={pp.get('Roughness',0.5):.3f}")
+                                print(f"[MATERIAL][MATX_VALUE_SEND] guid={guid_hex[:8]} slot={si} channel=Metallic value={pp.get('Metallic',0):.3f}")
+                                print(f"[MATERIAL][MATX_VALUE_SEND] guid={guid_hex[:8]} slot={si} channel=Alpha value={pp.get('Alpha',1):.3f}")
                                 network._append_blender_debug_log(
                                     f"[MAT][SEND] guid={guid_hex[:8]} "
                                     f"slot={si} matx=1 "

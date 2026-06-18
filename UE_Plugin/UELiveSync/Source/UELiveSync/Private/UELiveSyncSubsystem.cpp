@@ -4411,7 +4411,7 @@ ProcessBinaryPacket(
 
                                 TexMaps.Add(TexRef);
 
-                                // Phase 10K.1: MTEX parse trace
+                                // Phase 7H.6 Task C: MATX texture receive log
                                 const TCHAR* ChannelName = TEXT("Unknown");
                                 switch (TexRef.Channel)
                                 {
@@ -4421,6 +4421,14 @@ ProcessBinaryPacket(
                                     case 4: ChannelName = TEXT("Alpha"); break;
                                     case 5: ChannelName = TEXT("Normal"); break;
                                 }
+                                UE_LOG(LogLiveSync, Log,
+                                    TEXT("[MATERIAL][MATX_TEXTURE_RECV] guid=%s slot=%d channel=%s path=%s exists=%d"),
+                                    *Guid.ToString(EGuidFormats::Digits),
+                                    TexRef.SlotIndex, ChannelName,
+                                    TexRef.Path.Len() > 0 ? *TexRef.Path : TEXT("(none)"),
+                                    (TexRef.Path.Len() > 0 ? 1 : 0));
+
+                                // Phase 10K.1: MTEX parse trace
                                 UE_LOG(LogLiveSync, Log,
                                     TEXT("[MTEX][PARSE] guid=%s slot=%d channel=%s image=%s "
                                          "path=%s flags=%u"),
@@ -13897,6 +13905,59 @@ ParseAndApplyGeneratedMaterial(
             // Also apply MTEX textures from Blender if available
             ApplyImportedTexturesToGeneratedMID(Guid, SlotIdx, MID);
 
+            // Phase 7H.6: set UseXTexture=0 for channels without textures + log VALUE_PARAM_SET
+            {
+                static const TCHAR* TexParams[] = { TEXT("BaseColorTexture"), TEXT("RoughnessTexture"),
+                    TEXT("MetallicTexture"), TEXT("NormalTexture"), TEXT("AlphaTexture") };
+                static const TCHAR* ToggleParams[] = { TEXT("UseBaseColorTexture"), TEXT("UseRoughnessTexture"),
+                    TEXT("UseMetallicTexture"), TEXT("UseNormalTexture"), TEXT("UseAlphaTexture") };
+                static const TCHAR* ChannelNames[] = { TEXT("BaseColor"), TEXT("Roughness"), TEXT("Metallic"),
+                    TEXT("Normal"), TEXT("Alpha") };
+                static const TCHAR* ScalarParams[] = { TEXT("Roughness"), TEXT("Metallic"), TEXT("Alpha") };
+                static const float ScalarValues[] = { Props.Roughness, Props.Metallic, Props.Alpha };
+
+                // Default all toggles to 0
+                for (int32 c = 0; c < 5; c++)
+                {
+                    const FString ToggleName = FString(TEXT("Use")) + FString(ChannelNames[c]) + TEXT("Texture");
+                    MID->SetScalarParameterValue(FName(*ToggleName), 0.0f);
+                }
+
+                // Log VALUE_PARAM_SET for scalar values
+                for (int32 c = 0; c < 3; c++)
+                {
+                    const FString ValLog = TEXT("[MATERIAL][VALUE_PARAM_SET] guid=") + Guid.ToString(EGuidFormats::Digits) +
+                        TEXT(" slot=") + FString::FromInt(SlotIdx) +
+                        TEXT(" param=") + ScalarParams[c] +
+                        TEXT(" value=") + FString::SanitizeFloat(ScalarValues[c]);
+                    UE_LOG(LogLiveSync, Log, TEXT("%s"), *ValLog);
+                }
+
+                // Log texture/toggle readback
+                UTexture* CheckTex2 = nullptr;
+                float CheckUse2 = 0;
+                for (int32 c = 0; c < 5; c++)
+                {
+                    MID->GetTextureParameterValue(FName(TexParams[c]), CheckTex2);
+                    MID->GetScalarParameterValue(FName(ToggleParams[c]), CheckUse2);
+                    if (CheckTex2)
+                    {
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[MATERIAL][TEXTURE_PARAM_READBACK] guid=%s slot=%d param=%s bound=1 texture=%s"),
+                            *Guid.ToString(EGuidFormats::Digits), SlotIdx, TexParams[c], *CheckTex2->GetName());
+                    }
+                    else
+                    {
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[MATERIAL][TEXTURE_PARAM_READBACK] guid=%s slot=%d param=%s bound=0"),
+                            *Guid.ToString(EGuidFormats::Digits), SlotIdx, TexParams[c]);
+                    }
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MATERIAL][TEXTURE_TOGGLE_READBACK] guid=%s slot=%d param=%s value=%d"),
+                        *Guid.ToString(EGuidFormats::Digits), SlotIdx, ToggleParams[c], (int)CheckUse2);
+                }
+            }
+
             SMC->SetMaterial(SlotIdx, MID);
             AppliedCount++;
             bHadRegularGeneratedMID = true;
@@ -13918,6 +13979,50 @@ ParseAndApplyGeneratedMaterial(
 
         // Phase 10K.3: apply imported textures to generated MID
         ApplyImportedTexturesToGeneratedMID(Guid, SlotIdx, MID);
+
+        // Phase 7H.6: set UseXTexture=0 for channels without textures + log VALUE_PARAM_SET (non-imported slot)
+        {
+            static const TCHAR* ScalarParams[] = { TEXT("Roughness"), TEXT("Metallic"), TEXT("Alpha") };
+            static const float ScalarValues[] = { Props.Roughness, Props.Metallic, Props.Alpha };
+
+            // Log VALUE_PARAM_SET for scalar values
+            for (int32 c = 0; c < 3; c++)
+            {
+                const FString ValLog = TEXT("[MATERIAL][VALUE_PARAM_SET] guid=") + Guid.ToString(EGuidFormats::Digits) +
+                    TEXT(" slot=") + FString::FromInt(SlotIdx) +
+                    TEXT(" param=") + ScalarParams[c] +
+                    TEXT(" value=") + FString::SanitizeFloat(ScalarValues[c]);
+                UE_LOG(LogLiveSync, Log, TEXT("%s"), *ValLog);
+            }
+
+            // Log texture/toggle readback
+            UTexture* CheckTex2 = nullptr;
+            float CheckUse2 = 0;
+            static const TCHAR* TexParams2[] = { TEXT("BaseColorTexture"), TEXT("RoughnessTexture"),
+                TEXT("MetallicTexture"), TEXT("NormalTexture"), TEXT("AlphaTexture") };
+            static const TCHAR* ToggleParams2[] = { TEXT("UseBaseColorTexture"), TEXT("UseRoughnessTexture"),
+                TEXT("UseMetallicTexture"), TEXT("UseNormalTexture"), TEXT("UseAlphaTexture") };
+            for (int32 c = 0; c < 5; c++)
+            {
+                MID->GetTextureParameterValue(FName(TexParams2[c]), CheckTex2);
+                MID->GetScalarParameterValue(FName(ToggleParams2[c]), CheckUse2);
+                if (CheckTex2)
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MATERIAL][TEXTURE_PARAM_READBACK] guid=%s slot=%d param=%s bound=1 texture=%s"),
+                        *Guid.ToString(EGuidFormats::Digits), SlotIdx, TexParams2[c], *CheckTex2->GetName());
+                }
+                else
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MATERIAL][TEXTURE_PARAM_READBACK] guid=%s slot=%d param=%s bound=0"),
+                        *Guid.ToString(EGuidFormats::Digits), SlotIdx, TexParams2[c]);
+                }
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][TEXTURE_TOGGLE_READBACK] guid=%s slot=%d param=%s value=%d"),
+                    *Guid.ToString(EGuidFormats::Digits), SlotIdx, ToggleParams2[c], (int)CheckUse2);
+            }
+        }
 
         SMC->SetMaterial(SlotIdx, MID);
         AppliedCount++;
@@ -13993,6 +14098,11 @@ ImportTexturesFromMtexRecs(
     IAssetTools& AssetTools = FAssetToolsModule::GetModule().Get();
     const FString DestPath = TEXT("/Game/UELiveSync/Textures");
     const FString GuidStr = Guid.ToString(EGuidFormats::Digits);
+
+    // Channel name lookup for Phase 7H.6 logs
+    static const TArray<FString> ChannelNames = {
+        TEXT("BaseColor"), TEXT("Roughness"), TEXT("Metallic"), TEXT("Alpha"), TEXT("Normal")
+    };
 
     for (const FMaterialTextureMapRef& TexRef : TexMaps)
     {
@@ -14084,6 +14194,13 @@ ImportTexturesFromMtexRecs(
 
         if (Texture)
         {
+            // Phase 7H.6 Task D: import-from-MATX diagnostic logs
+            const FString ImportSrcLog = TEXT("[MATERIAL][TEXTURE_IMPORT_FROM_MATX] guid=") + GuidStr +
+                TEXT(" slot=") + FString::FromInt(TexRef.SlotIndex) +
+                TEXT(" channel=") + ChannelNames[static_cast<int32>(TexRef.Channel) - 1] +
+                TEXT(" src=") + TexRef.Path;
+            UE_LOG(LogLiveSync, Log, TEXT("%s"), *ImportSrcLog);
+
             // Set sRGB per channel policy:
             // BaseColor(1) → sRGB true; Roughness/Metallic/Alpha/Normal → sRGB false
             const bool bSRGB = (TexRef.Channel == static_cast<uint8>(EMTEXChannel::BaseColor));
@@ -14091,6 +14208,13 @@ ImportTexturesFromMtexRecs(
             Texture->PostEditChange();
 
             TextureImportCache.Add(TexRef.Path, Texture);
+
+            const FString AssetPath = Texture->GetPathName();
+            const FString ImportOkLog = TEXT("[MATERIAL][TEXTURE_IMPORT_FROM_MATX_OK] guid=") + GuidStr +
+                TEXT(" slot=") + FString::FromInt(TexRef.SlotIndex) +
+                TEXT(" channel=") + ChannelNames[static_cast<int32>(TexRef.Channel) - 1] +
+                TEXT(" texture=") + AssetPath;
+            UE_LOG(LogLiveSync, Log, TEXT("%s"), *ImportOkLog);
 
             UE_LOG(LogLiveSync, Log,
                 TEXT("[MTEX][TEX_IMPORT] guid=%s slot=%d channel=%u "
@@ -14230,13 +14354,20 @@ ApplyImportedTexturesToGeneratedMID(
         AppliedCount++;
 
         UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][TEXTURE_PARAM_SET] guid=%s slot=%d param=%s texture=%s"),
+            *GuidStr, SlotIndex, *ParamName, *TexRef.ImageName);
+
+        // Phase 7H.6 Task E: set UseXTexture=1 for each bound texture
+        const FString ToggleParamName = FString(TEXT("Use")) + FString(ChannelName) + TEXT("Texture");
+        MID->SetScalarParameterValue(FName(*ToggleParamName), 1.0f);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][TEXTURE_TOGGLE_SET] guid=%s slot=%d param=%s value=1"),
+            *GuidStr, SlotIndex, *ToggleParamName);
+
+        UE_LOG(LogLiveSync, Log,
             TEXT("[MAT][TEX_APPLY] guid=%s slot=%d channel=%s texture=%s param=%s"),
             *GuidStr, SlotIndex, *ChannelName,
             *TexRef.ImageName, *ParamName);
-
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[MAT][TEX_PARAM] guid=%s slot=%d param=%s value=%s"),
-            *GuidStr, SlotIndex, *ParamName, *TexRef.ImageName);
 
         // Phase 10K.5: log deferred channel status for Alpha/Normal
         if (static_cast<EMTEXChannel>(TexRef.Channel) == EMTEXChannel::Alpha)
@@ -14274,6 +14405,68 @@ ApplyImportedTexturesToGeneratedMID(
         UE_LOG(LogLiveSync, Log,
             TEXT("[MAT][TEX_PARENT] guid=%s parent=%s"),
             *GuidStr, *ParentPath);
+
+        // Phase 7H.6 Task C: hybrid apply summary log
+        // Build texture list and value list for HYBRID_APPLY log
+        TArray<FString> TexList;
+        TArray<FString> ValList;
+        // Check which texture params are bound
+        UTexture* CheckTex = nullptr;
+        float CheckUse = 0;
+        MID->GetTextureParameterValue(FName(TEXT("BaseColorTexture")), CheckTex);
+        MID->GetScalarParameterValue(FName(TEXT("UseBaseColorTexture")), CheckUse);
+        if (CheckTex || CheckUse > 0)
+        {
+            TexList.Add(TEXT("BaseColor"));
+        }
+        MID->GetTextureParameterValue(FName(TEXT("RoughnessTexture")), CheckTex);
+        MID->GetScalarParameterValue(FName(TEXT("UseRoughnessTexture")), CheckUse);
+        if (CheckTex || CheckUse > 0)
+        {
+            TexList.Add(TEXT("Roughness"));
+        }
+        MID->GetTextureParameterValue(FName(TEXT("MetallicTexture")), CheckTex);
+        MID->GetScalarParameterValue(FName(TEXT("UseMetallicTexture")), CheckUse);
+        if (CheckTex || CheckUse > 0)
+        {
+            TexList.Add(TEXT("Metallic"));
+        }
+        MID->GetTextureParameterValue(FName(TEXT("NormalTexture")), CheckTex);
+        MID->GetScalarParameterValue(FName(TEXT("UseNormalTexture")), CheckUse);
+        if (CheckTex || CheckUse > 0)
+        {
+            TexList.Add(TEXT("Normal"));
+        }
+        MID->GetTextureParameterValue(FName(TEXT("AlphaTexture")), CheckTex);
+        MID->GetScalarParameterValue(FName(TEXT("UseAlphaTexture")), CheckUse);
+        if (CheckTex || CheckUse > 0)
+        {
+            TexList.Add(TEXT("Alpha"));
+        }
+        // Check scalar values
+        FLinearColor BCVal;
+        MID->GetVectorParameterValue(FName(TEXT("BaseColor")), BCVal);
+        float RoughVal = 0, MetalVal = 0, AlphaVal = 0;
+        MID->GetScalarParameterValue(FName(TEXT("Roughness")), RoughVal);
+        MID->GetScalarParameterValue(FName(TEXT("Metallic")), MetalVal);
+        MID->GetScalarParameterValue(FName(TEXT("Alpha")), AlphaVal);
+        if (FMath::Abs(RoughVal) > 0.001)
+        {
+            ValList.Add(TEXT("Roughness"));
+        }
+        if (FMath::Abs(MetalVal) > 0.001)
+        {
+            ValList.Add(TEXT("Metallic"));
+        }
+        if (FMath::Abs(AlphaVal) > 0.001)
+        {
+            ValList.Add(TEXT("Alpha"));
+        }
+        FString TexStr = FString::Join(TexList, TEXT(","));
+        FString ValStr = FString::Join(ValList, TEXT(","));
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][HYBRID_APPLY] guid=%s slot=%d textures=[%s] values=[%s]"),
+            *GuidStr, SlotIndex, *TexStr, *ValStr);
 
         TextureMaterialApplySucceeded++;
         return true;
