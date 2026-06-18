@@ -10,7 +10,8 @@ Part A — Material Property Sync (visual, not assumed-inherited):
 - [MATERIAL][MID_FALLBACK_SKIP_IMPORTED] marker present for fallback skip.
 - [MATERIAL][FBX_IMPORTED_APPLY] marker present.
 - [MATERIAL][FBX_IMPORTED_KEEP] marker present.
-- [MATERIAL][MID_FALLBACK_APPLY] marker present (for no-material fallback).
+- [MATERIAL][MID_FALLBACK_APPLY] marker present in FBX importer
+  (for no-material / WorldGrid fallback).
 - Counter MaterialImportedTextureCopied exists in header.
 - IsUnsafeFBXMaterial still returns false for /Game/UELiveSync/Imported.
 - SafeMaterial fallback still applied for null/WorldGrid slots.
@@ -87,8 +88,8 @@ def test_material_fbx_imported_keep_marker():
 
 
 def test_material_mid_fallback_apply_marker():
-    """[MATERIAL][MID_FALLBACK_APPLY] marker exists in subsystem."""
-    assert "[MATERIAL][MID_FALLBACK_APPLY]" in source_cpp
+    """[MATERIAL][MID_FALLBACK_APPLY] marker exists in FBX importer fallback."""
+    assert "[MATERIAL][MID_FALLBACK_APPLY]" in fbx_cpp
 
 
 def test_material_mid_override_skip_imported_marker():

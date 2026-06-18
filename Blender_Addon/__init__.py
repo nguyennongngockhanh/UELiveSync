@@ -1456,6 +1456,12 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
             f"(spawn disabled for stability): "
             f"{camera_obj.name}"
         )
+        print(
+            f"[LiveSync][CAMERA] Primary operator sent PT_Transform + "
+            f"PT_CameraDef for {camera_obj.name} (guid={guid_obj}). "
+            f"No UE camera actor will appear unless one already exists. "
+            f"Spawn disabled for stability."
+        )
         return {'FINISHED'}
 
 

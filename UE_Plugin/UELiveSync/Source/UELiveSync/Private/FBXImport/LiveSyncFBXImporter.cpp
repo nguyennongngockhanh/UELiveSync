@@ -530,8 +530,10 @@ void FLiveSyncFBXImporter::EnsureFBXMeshRenderable(
             {
                 ++FallbackCount;
                 UE_LOG(LogLiveSync, Log,
-                    TEXT("[FBX][MAT] fallback guid=%s slot=%d reason=null_material"),
-                    *Guid.ToString(EGuidFormats::Digits), i);
+                    TEXT("[MATERIAL][MID_FALLBACK_APPLY] guid=%s slot=%d reason=null_material "
+                         "fallback=%s"),
+                    *Guid.ToString(EGuidFormats::Digits), i,
+                    *SafeMaterial->GetPathName());
             }
             else
             {
@@ -539,11 +541,11 @@ void FLiveSyncFBXImporter::EnsureFBXMeshRenderable(
                 FString Reason = Current->GetPathName().Contains(
                     TEXT("WorldGrid")) ? TEXT("worldgrid") : TEXT("unsafe_or_imported");
                 UE_LOG(LogLiveSync, Log,
-                    TEXT("[FBX][MAT] force_visible guid=%s slot=%d old=%s new=%s reason=%s"),
-                    *Guid.ToString(EGuidFormats::Digits), i,
+                    TEXT("[MATERIAL][MID_FALLBACK_APPLY] guid=%s slot=%d reason=%s "
+                         "old=%s fallback=%s"),
+                    *Guid.ToString(EGuidFormats::Digits), i, *Reason,
                     *Current->GetPathName(),
-                    *SafeMaterial->GetPathName(),
-                    *Reason);
+                    *SafeMaterial->GetPathName());
             }
         }
         // Phase 7H/7G.5: log when imported FBX material is kept

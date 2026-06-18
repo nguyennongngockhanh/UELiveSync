@@ -4803,7 +4803,7 @@ ProcessBinaryPacket(
                         SMC->SetMaterial(SlotIdx, *Found);
                         ++RestoredCount;
                         UE_LOG(LogLiveSync, Log,
-                            TEXT("[MATERIAL][MID_FALLBACK_APPLY] guid=%s slot=%d restored=MID_UELiveSync_%s_%d"),
+                            TEXT("[MATERIAL][GENERATED_PARAM_MID_APPLY] guid=%s slot=%d restored=MID_UELiveSync_%s_%d"),
                             *G.ToString(EGuidFormats::Digits), SlotIdx,
                             *GuidShort, SlotIdx);
                     }
@@ -11772,7 +11772,12 @@ HandleCameraDef(
     if (!Found)
     {
         UE_LOG(LogLiveSync, Log,
-            TEXT("[CAMERA][DEF] Camera GUID not yet spawned — storing def for later"));
+            TEXT("[CAMERA][DEF_STORED_NO_ACTOR] guid=%s — storing def for later (manual safe: no spawn)"),
+            *Payload.CameraGUID.ToString());
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[CAMERA][MANUAL_SAFE_NO_SPAWN] guid=%s — spawn disabled; "
+                 "update existing camera actors only"),
+            *Payload.CameraGUID.ToString());
         Stats.CameraDefPacketsStale.fetch_add(1, std::memory_order_relaxed);
         return;
     }
@@ -13562,28 +13567,31 @@ CopyImportedTexturesFromParent(
 
     const FString GuidStr = Guid.ToString(EGuidFormats::Digits);
 
-    // Target LiveSync texture parameter names and their aliases in imported materials
     struct FTextureChannelEntry
     {
         const TCHAR* LiveSyncParamName;
+        const TCHAR* ToggleParamName;
         const TCHAR* ImportedNameHint;
     };
     static const FTextureChannelEntry ChannelsToCopy[] = {
-        { TEXT("BaseColorTexture"),  TEXT("BaseColor") },
-        { TEXT("BaseColorTexture"),  TEXT("Albedo") },
-        { TEXT("BaseColorTexture"),  TEXT("Diffuse") },
-        { TEXT("RoughnessTexture"),  TEXT("Roughness") },
-        { TEXT("MetallicTexture"),   TEXT("Metallic") },
-        { TEXT("MetallicTexture"),   TEXT("Metalness") },
-        { TEXT("NormalTexture"),     TEXT("Normal") },
-        { TEXT("NormalTexture"),     TEXT("Bump") },
-        { TEXT("AlphaTexture"),      TEXT("Alpha") },
-        { TEXT("AlphaTexture"),      TEXT("Opacity") },
+        { TEXT("BaseColorTexture"),  TEXT("UseBaseColorTexture"),  TEXT("BaseColor") },
+        { TEXT("BaseColorTexture"),  TEXT("UseBaseColorTexture"),  TEXT("Albedo") },
+        { TEXT("BaseColorTexture"),  TEXT("UseBaseColorTexture"),  TEXT("Diffuse") },
+        { TEXT("RoughnessTexture"),  TEXT("UseRoughnessTexture"),  TEXT("Roughness") },
+        { TEXT("MetallicTexture"),   TEXT("UseMetallicTexture"),   TEXT("Metallic") },
+        { TEXT("MetallicTexture"),   TEXT("UseMetallicTexture"),   TEXT("Metalness") },
+        { TEXT("NormalTexture"),     TEXT("UseNormalTexture"),     TEXT("Normal") },
+        { TEXT("NormalTexture"),     TEXT("UseNormalTexture"),     TEXT("Bump") },
+        { TEXT("AlphaTexture"),      TEXT("UseAlphaTexture"),      TEXT("Alpha") },
+        { TEXT("AlphaTexture"),      TEXT("UseAlphaTexture"),      TEXT("Opacity") },
     };
 
-    int32 CopiedCount = 0;
-    TSet<FName> AlreadySet; // avoid setting same LiveSync param multiple times
+    TMap<FName, UTexture*> FoundTextures;
+    TSet<FName> AlreadySet;
 
+    // Try known texture parameter names via GetTextureParameterValue.
+    // This works on both UMaterialInstance (parameter overrides) and UMaterial
+    // (GetTextureParameterDefaultValue iterates the expression graph internally).
     for (const FTextureChannelEntry& Entry : ChannelsToCopy)
     {
         FName LiveSyncParam(Entry.LiveSyncParamName);
@@ -13592,46 +13600,52 @@ CopyImportedTexturesFromParent(
             continue;
         }
 
-        // Try the hint name first (e.g. "BaseColor" on imported material)
-        UTexture* FoundTexture = nullptr;
-        FName FoundParamName = NAME_None;
+        UTexture* Tex = nullptr;
         FName HintName(Entry.ImportedNameHint);
-        ImportedParentMat->GetTextureParameterValue(HintName, FoundTexture);
-        if (FoundTexture)
+        ImportedParentMat->GetTextureParameterValue(HintName, Tex);
+        if (!Tex)
         {
-            FoundParamName = HintName;
+            ImportedParentMat->GetTextureParameterValue(LiveSyncParam, Tex);
         }
-
-        // If not found by hint, try exact LiveSync name match
-        if (!FoundTexture)
+        if (Tex)
         {
-            ImportedParentMat->GetTextureParameterValue(LiveSyncParam, FoundTexture);
-            if (FoundTexture)
+            FoundTextures.Add(LiveSyncParam, Tex);
+            AlreadySet.Add(LiveSyncParam);
+        }
+    }
+
+    // Apply found textures to LiveSync MID
+    int32 CopiedCount = 0;
+    for (const auto& Kvp : FoundTextures)
+    {
+        FName LiveSyncParam = Kvp.Key;
+        UTexture* FoundTexture = Kvp.Value;
+        LiveSyncMID->SetTextureParameterValue(LiveSyncParam, FoundTexture);
+        CopiedCount++;
+
+        // Set toggle scalar so the texture lerp uses the texture
+        for (const FTextureChannelEntry& Entry : ChannelsToCopy)
+        {
+            if (LiveSyncParam == FName(Entry.LiveSyncParamName))
             {
-                FoundParamName = LiveSyncParam;
+                FName Toggle(Entry.ToggleParamName);
+                LiveSyncMID->SetScalarParameterValue(Toggle, 1.0f);
+                break;
             }
         }
 
-        if (FoundTexture)
-        {
-            LiveSyncMID->SetTextureParameterValue(LiveSyncParam, FoundTexture);
-            AlreadySet.Add(LiveSyncParam);
-            CopiedCount++;
-
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[MATERIAL][IMPORTED_TEXTURE_TO_PARAM] guid=%s slot=%d "
-                     "liveSyncParam=%s importedParam=%s texture=%s"),
-                *GuidStr, SlotIndex,
-                *LiveSyncParam.ToString(),
-                *FoundParamName.ToString(),
-                *FoundTexture->GetName());
-        }
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][IMPORTED_TEXTURE_TO_PARAM] guid=%s slot=%d "
+                 "liveSyncParam=%s texture=%s"),
+            *GuidStr, SlotIndex,
+            *LiveSyncParam.ToString(),
+            *FoundTexture->GetName());
     }
 
     if (CopiedCount == 0)
     {
         UE_LOG(LogLiveSync, Log,
-            TEXT("[MATERIAL][NO_IMPORTED_TEXTURE_FOUND] guid=%s slot=%d parent=%s reason=no_matching_texture_params"),
+            TEXT("[MATERIAL][NO_IMPORTED_TEXTURE_FOUND] guid=%s slot=%d parent=%s reason=no_texture_sample_or_dependency"),
             *GuidStr, SlotIndex,
             *ImportedParentMat->GetPathName());
     }
@@ -13763,7 +13777,7 @@ ParseAndApplyGeneratedMaterial(
 
         // Phase 10J.5M: log per-parameter detail for verification
         UE_LOG(LogLiveSync, Log,
-            TEXT("[MATERIAL][MID_FALLBACK_APPLY] guid=%s slot=%d "
+            TEXT("[MATERIAL][GENERATED_PARAM_MID_APPLY] guid=%s slot=%d "
                  "BaseColor=(%.3f,%.3f,%.3f,%.3f) "
                  "Roughness=%.3f Metallic=%.3f Alpha=%.3f"),
             *Guid.ToString(EGuidFormats::Digits), SlotIdx,
