@@ -290,6 +290,10 @@ _last_material_identity = {}
 # Maps guid -> {slot_index: (r, g, b, a, roughness, metallic)}
 _last_material_property_sig = {}
 
+# Phase 7H: transition tracker for SIG_CACHE_HIT log (one log per change→unchanged transition)
+# Maps guid -> last reason string; cleared after SIG_CACHE_HIT is logged.
+_last_material_sent_reason = {}
+
 # Phase 7C: Per-GUID last geometry version hash for change detection
 # Maps guid -> SHA-256 hex string of evaluated mesh geometry.
 # Cleared on start_sync, stop_sync, and object delete.
@@ -1796,12 +1800,18 @@ def check_updates():
                 reason_log = "slots_changed"
             elif current_prop_sig is not None:
                 prev_prop_sig = _last_material_property_sig.get(guid)
-                scalar_changed = prev_prop_sig is None or current_prop_sig != prev_prop_sig
+                scalar_changed = True
+                if prev_prop_sig is not None:
+                    _scalar_len = len(next(iter(current_prop_sig.values())))
+                    prev_scalar = {si: vals[:_scalar_len] for si, vals in prev_prop_sig.items()}
+                    scalar_changed = current_prop_sig != prev_scalar
                 tex_changed = False
                 if prev_prop_sig is not None and len(prev_prop_sig) == len(current_prop_sig):
                     prev_tex_sigs = {}
                     for si in prev_prop_sig:
-                        prev_tex_sigs[si] = prev_prop_sig[si][6:] if len(prev_prop_sig[si]) > 6 else ()
+                        prev_tex = prev_prop_sig[si][6:] if len(prev_prop_sig[si]) > 6 else ()
+                        if si in current_tex_sigs or any(v != 0 for v in prev_tex):
+                            prev_tex_sigs[si] = prev_tex
                     tex_changed = (current_tex_sigs != prev_tex_sigs)
                 if scalar_changed and tex_changed:
                     bPropertiesChanged = True
@@ -1934,6 +1944,14 @@ def check_updates():
                     tex_tuple = current_tex_sigs.get(si, (0, 0))
                     merged_sig[si] = prop_tuple + tuple(tex_tuple)
                 _last_material_property_sig[guid] = merged_sig
+                if bPropertiesChanged and current_slots:
+                    _sh, _th, _ch = compute_material_dirty_sig(current_prop_sig, current_tex_sigs)
+                    print(f"[MATERIAL][SIG_CACHE_UPDATE] guid={guid} slots={len(merged_sig)} scalarHash={_sh} textureHash={_th} combinedHash={_ch} reason={reason_log}")
+                    _last_material_sent_reason[guid] = reason_log
+                else:
+                    _prev_reason = _last_material_sent_reason.pop(guid, None)
+                    if _prev_reason is not None:
+                        print(f"[MATERIAL][SIG_CACHE_HIT] guid={guid} reason=property_unchanged")
             elif guid in _last_material_property_sig:
                 del _last_material_property_sig[guid]
         except Exception as _outer_mat_exc:
@@ -2826,6 +2844,7 @@ def start_sync():
     _last_mesh_identity.clear()
     _last_material_identity.clear()
     _last_material_property_sig.clear()  # Phase 10J.5I
+    _last_material_sent_reason.clear()  # Phase 7H
     _last_geometry_version.clear()
     _last_object_names.clear()
     _last_visibility_state.clear()

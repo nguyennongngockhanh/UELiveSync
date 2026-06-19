@@ -1460,12 +1460,18 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                           f"scalarHash={scalar_hash_val} textureHash={tex_hash_val} "
                           f"combinedHash={combined_hash_val}")
 
-                    scalar_changed = prev_prop_sig is None or current_prop_sig != prev_prop_sig
+                    scalar_changed = True
+                    if prev_prop_sig is not None:
+                        _scalar_len = len(next(iter(current_prop_sig.values())))
+                        prev_scalar = {si: vals[:_scalar_len] for si, vals in prev_prop_sig.items()}
+                        scalar_changed = current_prop_sig != prev_scalar
                     tex_changed = False
                     if prev_prop_sig is not None and len(prev_prop_sig) == len(current_prop_sig):
                         prev_tex_sigs = {}
                         for si in prev_prop_sig:
-                            prev_tex_sigs[si] = prev_prop_sig[si][6:] if len(prev_prop_sig[si]) > 6 else ()
+                            prev_tex = prev_prop_sig[si][6:] if len(prev_prop_sig[si]) > 6 else ()
+                            if si in current_tex_sigs or any(v != 0 for v in prev_tex):
+                                prev_tex_sigs[si] = prev_tex
                         tex_changed = (current_tex_sigs != prev_tex_sigs)
 
                     # Phase 7H: always extract tex_maps + mat_props so we can send
@@ -1557,13 +1563,24 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                             tex_tuple = current_tex_sigs.get(si, (0, 0))
                             merged_sig[si] = prop_tuple + tuple(tex_tuple)
                         sync._last_material_property_sig[guid_hex] = merged_sig
+                        print(f"[MATERIAL][SIG_CACHE_UPDATE] guid={guid_hex} slots={len(merged_sig)} scalarHash={scalar_hash_val} textureHash={tex_hash_val} combinedHash={combined_hash_val} reason={reason}")
+                        sync._last_material_sent_reason[guid_hex] = reason
                     else:
                         print(f"[MATERIAL][DIRTY_DECIDE] guid={guid_hex[:8]} "
                               f"property_changed=False reason=property_unchanged "
                               f"slots={list(current_prop_sig.keys())}")
                         print(f"[SYNC][DECIDE] seq={seq} guid={guid_hex[:8]} "
                               f"sendMAT=0 reason=property_unchanged")
-                        sync._last_material_property_sig[guid_hex] = current_prop_sig
+                        # Store merged sig (not scalar-only) to preserve texture info for next tick
+                        merged_sig = {}
+                        for si in current_prop_sig:
+                            prop_tuple = current_prop_sig[si]
+                            tex_tuple = current_tex_sigs.get(si, (0, 0))
+                            merged_sig[si] = prop_tuple + tuple(tex_tuple)
+                        sync._last_material_property_sig[guid_hex] = merged_sig
+                        _prev_reason = sync._last_material_sent_reason.pop(guid_hex, None)
+                        if _prev_reason is not None:
+                            print(f"[MATERIAL][SIG_CACHE_HIT] guid={guid_hex[:8]} reason=property_unchanged")
 
                 synced_count += 1
 

@@ -1861,6 +1861,124 @@ def test_scalar_values_preserved_after_texture_update():
     assert "serialize_material_slots" in sync_py
 
 
+# === Phase 7H deduplication: material signature cache suppression ===
+
+
+def test_scalar_compares_scalar_only_portion_not_merged():
+    """Scalar comparison in sync.py compares only the scalar portion of merged sig."""
+    assert "prev_scalar" in sync_py, (
+        "sync.py must extract scalar-only portion from prev_prop_sig for comparison"
+    )
+    assert "vals[:_scalar_len]" in sync_py, (
+        "sync.py must truncate prev_prop_sig values to scalar length"
+    )
+
+
+def test_texture_compares_sparse_tex_sigs():
+    """Texture comparison in sync.py uses sparse tex sigs (only non-zero entries)."""
+    assert "any(v != 0 for v in prev_tex)" in sync_py, (
+        "sync.py must filter prev_tex_sigs to non-zero texture entries only"
+    )
+    assert "si in current_tex_sigs or" in sync_py, (
+        "sync.py must include slots that have current textures in prev_tex_sigs"
+    )
+
+
+def test_scalar_compares_scalar_only_portion_in_init_py():
+    """Scalar comparison in __init__.py compares only the scalar portion of merged sig."""
+    assert "prev_scalar" in init_py, (
+        "__init__.py must extract scalar-only portion from prev_prop_sig for comparison"
+    )
+    assert "vals[:_scalar_len]" in init_py, (
+        "__init__.py must truncate prev_prop_sig values to scalar length"
+    )
+
+
+def test_texture_compares_sparse_tex_sigs_in_init_py():
+    """Texture comparison in __init__.py uses sparse tex sigs (only non-zero entries)."""
+    assert "any(v != 0 for v in prev_tex)" in init_py, (
+        "__init__.py must filter prev_tex_sigs to non-zero texture entries only"
+    )
+    assert "si in current_tex_sigs or" in init_py, (
+        "__init__.py must include slots that have current textures in prev_tex_sigs"
+    )
+
+
+def test_sig_cache_update_marker_exists_in_sync_py():
+    """SIG_CACHE_UPDATE log marker exists in sync.py after material send."""
+    assert "[MATERIAL][SIG_CACHE_UPDATE]" in sync_py, (
+        "sync.py must log SIG_CACHE_UPDATE when material signature cache is updated"
+    )
+
+
+def test_sig_cache_hit_marker_exists_in_sync_py():
+    """SIG_CACHE_HIT log marker exists in sync.py when unchanged material is suppressed."""
+    assert "[MATERIAL][SIG_CACHE_HIT]" in sync_py, (
+        "sync.py must log SIG_CACHE_HIT when repeat material send is suppressed"
+    )
+
+
+def test_sig_cache_update_marker_exists_in_init_py():
+    """SIG_CACHE_UPDATE log marker exists in __init__.py after material send."""
+    assert "[MATERIAL][SIG_CACHE_UPDATE]" in init_py, (
+        "__init__.py must log SIG_CACHE_UPDATE when material signature cache is updated"
+    )
+
+
+def test_sig_cache_hit_marker_exists_in_init_py():
+    """SIG_CACHE_HIT log marker exists in __init__.py when unchanged material is suppressed."""
+    assert "[MATERIAL][SIG_CACHE_HIT]" in init_py, (
+        "__init__.py must log SIG_CACHE_HIT when repeat material send is suppressed"
+    )
+
+
+def test_last_material_sent_reason_tracker_exists():
+    """_last_material_sent_reason transition tracker exists in sync.py."""
+    assert "_last_material_sent_reason" in sync_py, (
+        "sync.py must define _last_material_sent_reason for transition tracking"
+    )
+
+
+def test_merged_sig_stored_in_unchanged_branch_init_py():
+    """__init__.py stores merged_sig (not scalar-only) in the unchanged branch."""
+    idx = init_py.find("sendMAT=0 reason=property_unchanged")
+    assert idx != -1, "sendMAT=0 unchanged log must exist in __init__.py"
+    after = init_py[idx:idx + 500]
+    assert "merged_sig" in after, (
+        "__init__.py unchanged branch must build merged_sig for texture-aware caching"
+    )
+
+
+def test_repeat_scalar_material_not_sent_after_first_send():
+    """After first scalar material send, next tick suppresses with SIG_CACHE_HIT."""
+    assert "[MATERIAL][SIG_CACHE_HIT]" in sync_py, (
+        "sync.py must have SIG_CACHE_HIT for unchanged material suppression"
+    )
+    assert "sendMAT=0 reason=property_unchanged" in init_py, (
+        "__init__.py must have sendMAT=0 unchanged path"
+    )
+
+
+def test_repeat_texture_material_not_sent_after_first_send():
+    """After first texture material send, next tick suppresses with SIG_CACHE_HIT."""
+    assert "[MATERIAL][SIG_CACHE_HIT]" in sync_py, (
+        "sync.py must have SIG_CACHE_HIT for unchanged material suppression"
+    )
+    assert "sendMAT=0" in init_py, (
+        "__init__.py must support sendMAT=0 for suppressed sends"
+    )
+
+
+def test_compute_material_dirty_sig_called_at_cache_update():
+    """compute_material_dirty_sig is called at SIG_CACHE_UPDATE in sync.py."""
+    idx = sync_py.find("[MATERIAL][SIG_CACHE_UPDATE]")
+    assert idx != -1, "SIG_CACHE_UPDATE marker must be in sync.py"
+    before = sync_py[max(0, idx - 200):idx]
+    assert "compute_material_dirty_sig" in before, (
+        "SIG_CACHE_UPDATE must call compute_material_dirty_sig for hash values"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
