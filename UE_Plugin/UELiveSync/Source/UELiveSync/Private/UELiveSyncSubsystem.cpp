@@ -4807,13 +4807,34 @@ ProcessBinaryPacket(
                     return;
                 const FString GuidShort = G.ToString(EGuidFormats::Short);
                 const int32 NumSlots = SMC->GetNumMaterials();
-                int32 RestoredCount = 0;
+
+                // Phase 7H Task 4: Count cache entries before restore.
                 int32 CacheHits = 0;
                 for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
                 {
                     const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
                     TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
                     if (Found && *Found) ++CacheHits;
+                }
+
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][GENERATED_MID_RESTORE_CHECK] guid=%s cachedSlots=%d meshSlots=%d"),
+                    *G.ToString(EGuidFormats::Digits), CacheHits, NumSlots);
+
+                // Guard: only restore if all mesh slots have cached MIDs.
+                if (CacheHits != NumSlots)
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MATERIAL][GENERATED_MID_RESTORE_SKIP] guid=%s cachedSlots=%d meshSlots=%d reason=slot_count_mismatch"),
+                        *G.ToString(EGuidFormats::Digits), CacheHits, NumSlots);
+                    return;
+                }
+
+                int32 RestoredCount = 0;
+                for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
+                {
+                    const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
+                    TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
                     UMaterialInterface* CurrentMat = SMC->GetMaterial(SlotIdx);
                     if (Found && *Found && CurrentMat != *Found)
                     {
@@ -4825,9 +4846,11 @@ ProcessBinaryPacket(
                             *GuidShort, SlotIdx);
                     }
                 }
+
                 UE_LOG(LogLiveSync, Log,
-                    TEXT("[MATERIAL][GENERATED_CACHE_AUDIT] guid=%s cachedSlots=%d meshSlots=%d restored=%d"),
-                    *G.ToString(EGuidFormats::Digits), CacheHits, NumSlots, RestoredCount);
+                    TEXT("[MATERIAL][GENERATED_MID_RESTORE_OK] guid=%s slots=%d"),
+                    *G.ToString(EGuidFormats::Digits), RestoredCount);
+
                 if (RestoredCount > 0)
                 {
                     UE_LOG(LogLiveSync, Log,
