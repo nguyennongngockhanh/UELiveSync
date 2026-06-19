@@ -130,6 +130,15 @@ Source code fix is implemented and compiles cleanly. Runtime validation blocked 
   - 209 tests all PASS; representative regressions all PASS (E2E, Phase 8, Phase 7, FBX)
   - Audit doc at `Docs/Architecture/57-phase9-production-ecosystem-audit.md`
 - **Current State Roadmap** — Canonical consolidation document that supersedes stale scope-lock assumptions. Includes phase status table, stable tags table, packet registry truth table, implemented vs not implemented table, validation classifications, known limitations, and recommended next work options. 🔗 `Docs/Architecture/current-state-roadmap.md` ✅
+- **Phase 7H** — Material Sync Stabilization ✅:
+  - Generated MID is final LiveSync material authority.
+  - PT_Material/MATX carries scalar + texture metadata.
+  - No-material object uses fallback/default material.
+  - Scalar-only material syncs BaseColor/Roughness/Metallic/Alpha.
+  - Textured material binds BaseColorTexture and toggles UseBaseColorTexture=1.
+  - Non-textured channels remain scalar-driven.
+  - check_updates material block is fail-safe and cannot kill transform sync.
+  - Material signature cache suppresses unchanged resend spam.
 
 ## Current State
 
@@ -1845,6 +1854,20 @@ Stage 10F validates that **two** Blender objects with **independent** transform 
 | File | Change |
 |------|--------|
 | `__init__.py` | New `UELIVESYNC_OT_sync_active_camera_to_ue` operator class with `execute()` method. Button added to panel after FBX button with CAMERA_DATA icon. Registered in classes tuple. |
+
+### Phase 7H Stabilization — Material Sync Hardening
+
+Commit series: `f2d654d`, `a0912db`, `26f2d7e`, `6286705`.
+
+| Change | Description |
+|--------|-------------|
+| Fail-safe material block | `check_updates` material block wrapped in outer `try/except` — cannot kill transform sync on material serialization error. |
+| material `reason_log` fix | `UnboundLocalError` crash fixed — `reason_log` initialized before all decision branches. |
+| Material signature cache dedup | Scalar-only comparison extracts `vals[:_scalar_len]` to compare same-length tuples; texture comparison filters sparse non-zero entries. Suppresses repeat identical PT_Material sends. |
+| SIG_COMPARE diagnostic | Conditional log (`[MATERIAL][SIG_COMPARE] prevExists=1 scalarChanged=0 texChanged=0`) prints only when changed or cache missing. |
+| DECISION_INIT suppression | `[MATERIAL][DECISION_INIT]` prints once per GUID per session, not every tick. |
+
+**225 tests pass.** Blender-only changes. No UE C++ build needed.
 
 ### Invariants preserved
 

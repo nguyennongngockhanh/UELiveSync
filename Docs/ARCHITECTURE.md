@@ -49,6 +49,7 @@ ProcessQueuedPackets → InterpolateTransforms → ResolvePendingAttachments
 | Visibility | Blender (hide_viewport/hide_render) | Toggle actor visibility |
 | Collection | Blender (users_collection) | Membership registry |
 | Lifecycle | Blender (_known_guids diff) | Tombstone-gated destroy |
+| Material | Blender (node tree eval) | MID authority — generated MID is final; FBX-imported materials preserved
 
 ## Replay Architecture
 
@@ -473,3 +474,48 @@ MTEX is an optional texture metadata extension appended after MATX (material slo
 - `Docs/Architecture/57-phase9-production-ecosystem-audit.md` — Phase 9 production ecosystem audit: capability announce/response, discovery scan, reconnect/backoff, diagnostics. Classification (Stage 3B complete, Stage 3C auto-fill/connect UX added): `PASS_PHASE9_AUDIT_ONLY`.
 - `Docs/Architecture/manual-e2e-camera-crash-investigation.md` — Manual E2E.1: Camera frustum crash investigation, root cause hypothesis, fix design, runtime evidence, and validation plan. Classification: `PASS_CAMERA_FRUSTUM_CRASH_GUARD` (E2E.2 runtime validated).
 - `Docs/Architecture/manual-e2e-log-hygiene.md` — Runtime log hygiene: stale backup log avoidance, timestamp-based active log detection, GUID-based filtering, tick-blocked packet classification rules.
+
+---
+
+## Material Sync Architecture
+
+### Overview
+
+PT_Material (0x05) is the material synchronization packet. It carries material slot definitions (MATX) and optional texture metadata (MTEX) for each object. The generated MID (Material Instance Dynamic) is the authoritative LiveSync material runtime.
+
+### Packet Structure
+
+- **PT_Material (0x05)**: V3 binary packet with PerObjectData payloads
+- **MATX (Material Slot Definition)**: Carries scalar properties (BaseColor, Roughness, Metallic, Alpha) per material slot
+- **MTEX (Texture Metadata Extension)**: Optional extension appended after MATX — carries texture slot metadata (path, channel, flags)
+
+### Material Authority
+
+| Source | Behavior |
+|--------|----------|
+| Generated MID | Final LiveSync material authority — created at `/Game/UELiveSync/Materials/M_UELiveSync_Master` |
+| FBX-imported materials | Preserved — not overwritten by MID fallback (`IsUnsafeFBXMaterial` returns `false` for `/Game/UELiveSync/Imported/*`) |
+| No-material object | Fallback/default material via SafeMaterial |
+| Scalar-only material | Syncs BaseColor/Roughness/Metallic/Alpha via scalar properties |
+| Textured material | Binds BaseColorTexture from source path; toggles `UseBaseColorTexture=1` |
+
+### Stabilization Guarantees
+
+- `check_updates` material block is **fail-safe** — outer `try/except` prevents material serialization errors from killing transform sync.
+- **Material signature cache** suppresses unchanged resend spam: scalar comparison extracts `vals[:_scalar_len]` for same-length tuple comparison; texture comparison filters sparse non-zero entries.
+- `UnboundLocalError` on `reason_log` fixed — initialized before all decision branches.
+- **SIG_COMPARE** diagnostic logs conditionally (only when changed or cache missing).
+- **DECISION_INIT** prints once per GUID per session (not every tick).
+
+### Blender Extraction
+
+- Conservative node tree traversal: only direct Image Texture → Principled BSDF links extracted
+- No procedural/complex graph traversal (node groups, math, mix nodes not resolved)
+- Packed Blender images not supported
+
+### UE Material Visual Path
+
+- Generated MID uses `M_UELiveSync_Master` master material at `/Game/UELiveSync/Materials/`
+- Master material exposes texture parameters: BaseColorTexture, RoughnessTexture, MetallicTexture, AlphaTexture, NormalTexture
+- Texture on/off toggles: `UseBaseColorTexture`, `UseRoughnessTexture`, `UseMetallicTexture`, `UseAlphaTexture`, `UseNormalTexture`
+- Non-textured channels remain scalar-driven
