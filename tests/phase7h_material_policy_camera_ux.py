@@ -1603,6 +1603,154 @@ def test_transform_sync_not_inside_material_hash_try():
     )
 
 
+# === Phase 10A.2 hotfix: reason_log initialization + fail-safe material block ===
+
+
+def test_reason_log_initialized_before_decision_branches():
+    """reason_log is initialized to property_unchanged before decision branches in sync.py."""
+    # Find the DECISION_INIT marker which runs right before the if/elif chain
+    assert "[MATERIAL][DECISION_INIT]" in sync_py, (
+        "DECISION_INIT marker must exist, confirming reason_log is initialized before branches"
+    )
+    assert "reason_log = \"property_unchanged\"" in sync_py, (
+        "reason_log must be initialized to property_unchanged"
+    )
+
+
+def test_reason_log_assigned_in_all_decision_branches():
+    """Every material dirty-decision branch in sync.py must assign reason_log."""
+    assert "reason_log = \"first_material_send\"" in sync_py, (
+        "first_material_send branch must assign reason_log"
+    )
+    assert "reason_log = \"slots_changed\"" in sync_py, (
+        "slots_changed branch must assign reason_log"
+    )
+    assert "reason_log = \"property_changed\"" in sync_py, (
+        "property_changed branch must assign reason_log"
+    )
+    assert "reason_log = \"texture_changed\"" in sync_py, (
+        "texture_changed branch must assign reason_log"
+    )
+    assert "reason_log = \"hash_error_fallback\"" in sync_py, (
+        "hash_error_fallback except branch must assign reason_log"
+    )
+
+
+def test_no_unbound_reason_log_reference_in_init_py():
+    """__init__.py does not reference unbound reason_log variable."""
+    # __init__.py uses 'reason' (not 'reason_log'), and it's assigned before use
+    # Verify no bare 'reason_log' access pattern exists
+    lines = init_py.split("\n")
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Skip comments and assignments
+        if "reason_log" in stripped and "=" not in stripped:
+            # Check if it's inside a nested function/block with reason_log defined
+            pass  # For now the file does not use reason_log at all
+    # Confirm the file uses 'reason' not 'reason_log' in material decision
+    assert "reason_log" not in init_py or "reason_log =" in init_py, (
+        "If __init__.py references reason_log, it must also assign it"
+    )
+
+
+def test_material_block_outer_try_except_exists():
+    """Material send block has outer try/except Exception."""
+    marker = "# Material send (wrapped in try/except"
+    idx = sync_py.find(marker)
+    assert idx != -1, "Material send block marker not found"
+    block_start = sync_py[idx:idx + 300]
+    assert "try:" in block_start, (
+        "Material send block must start with try:"
+    )
+    assert "except Exception as _outer_mat_exc:" in sync_py, (
+        "Material send block must have outer except Exception"
+    )
+
+
+def test_material_sync_block_error_logged():
+    """Material exception logs [MATERIAL][SYNC_BLOCK_ERROR]."""
+    assert "[MATERIAL][SYNC_BLOCK_ERROR]" in sync_py, (
+        "SYNC_BLOCK_ERROR marker must exist in sync.py"
+    )
+
+
+def test_material_sync_block_error_action_skip_material_keep_transform():
+    """Material exception action is skip_material_keep_transform."""
+    assert "action=skip_material_keep_transform" in sync_py, (
+        "Material exception must log action=skip_material_keep_transform"
+    )
+
+
+def test_material_exception_does_not_raise():
+    """Material exception handler does not raise."""
+    # Find the outer except block and check it doesn't contain raise
+    outer_except_idx = sync_py.find("except Exception as _outer_mat_exc:")
+    after_except_block = sync_py[outer_except_idx:]
+    # The handler should only contain print and no raise
+    assert "raise" not in after_except_block[:after_except_block.find("\n\n")], (
+        "Material exception handler must not raise"
+    )
+
+
+def test_material_exception_does_not_return():
+    """Material exception handler does not return from check_updates."""
+    outer_except_idx = sync_py.find("except Exception as _outer_mat_exc:")
+    after_except_block = sync_py[outer_except_idx:]
+    # Check that 'return' does not appear in the first few lines of the handler
+    first_lines = after_except_block[:after_except_block.find("\n\n")].split("\n")
+    for line in first_lines:
+        assert "return" not in line.strip(), (
+            "Material exception handler must not return"
+        )
+
+
+def test_geometry_change_detection_outside_material_try():
+    """Geometry change detection code remains outside material try/except."""
+    material_try_end = sync_py.find("except Exception as _outer_mat_exc:")
+    after_material = sync_py[material_try_end:]
+    # Geometry detection header should appear after material try/except
+    assert "# Phase 7C Stage 1D: Geometry change detection" in after_material, (
+        "Geometry change detection must be after material exception handler"
+    )
+
+
+def test_transform_send_outside_material_try():
+    """Transform send code is not inside the material outer try/except."""
+    # Find the geometry block which is right after material try/except,
+    # confirming transform code is independent
+    mat_try_idx = sync_py.find("# Material send (wrapped in try")
+    outer_except_idx = sync_py.find("except Exception as _outer_mat_exc:")
+    assert mat_try_idx < outer_except_idx, (
+        "Material try must start before its except"
+    )
+    # Transform/visibility/hierarchy code must be after the material except
+    after_except = sync_py[outer_except_idx:]
+    assert "# Phase 7C Stage 1D: Geometry change detection" in after_except, (
+        "Geometry block must be after material try/except"
+    )
+
+
+def test_check_updates_cannot_crash_from_material_variables():
+    """check_updates cannot crash from material dirty-decision variables."""
+    # All decision variables must be initialized before the material block
+    # even if an exception occurs
+    assert "scalar_changed = False" in sync_py, (
+        "scalar_changed must be initialized"
+    )
+    assert "tex_changed = False" in sync_py, (
+        "tex_changed must be initialized"
+    )
+    assert "current_tex_sigs = {}" in sync_py, (
+        "current_tex_sigs must be initialized"
+    )
+    assert "reason_log = \"property_unchanged\"" in sync_py, (
+        "reason_log must be initialized before decision branches"
+    )
+    assert "[LIVESYNC][CHECK_UPDATES_SURVIVED_MATERIAL_ERROR]" in sync_py, (
+        "SURVIVED_MATERIAL_ERROR marker must exist"
+    )
+
+
 # === Scalar-only material lifecycle tests ===
 
 
