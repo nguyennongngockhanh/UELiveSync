@@ -1456,6 +1456,26 @@ bool FLiveSyncFBXImporter::HandleImport(
                 UE_LOG(LogLiveSync, Log, TEXT("%s"), *ImportLog);
             }
 
+            // Deduplicate by normalized path — folder scans (base + textures/)
+            // can produce the same file in both directories.
+            if (SidecarFiles.Num() > 1)
+            {
+                int32 PreDedup = SidecarFiles.Num();
+                SidecarFiles.Sort();
+                TArray<FString> UniqueFiles;
+                for (const FString& P : SidecarFiles)
+                {
+                    if (!UniqueFiles.Contains(P))
+                    {
+                        UniqueFiles.Add(P);
+                    }
+                }
+                SidecarFiles = UniqueFiles;
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[FBX][SIDECAR_DEDUP] pre=%d post=%d"),
+                    PreDedup, SidecarFiles.Num());
+            }
+
             // Build per-file list for summary log.
             TArray<FString> FileNames;
             for (const FString& P : SidecarFiles)

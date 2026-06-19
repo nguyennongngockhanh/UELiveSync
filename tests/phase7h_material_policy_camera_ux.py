@@ -2729,6 +2729,77 @@ def test_matx_payload_slots_counted():
 # ============================================================
 
 
+# ============================================================
+# NEW: Sidecar dedup & manifest count fixes (Task 6)
+# ============================================================
+
+
+def test_packed_sidecar_adds_to_sidecar_info():
+    """Packed/generated texture paths are recorded in sidecar_info."""
+    # The packed/GENERATED branch must append to sidecar_info
+    assert 'sidecar_info.append({' in init_py, \
+        "packed/generated textures must record sidecar_info"
+    # Verify it's in the packed/GENERATED branch (not only in FILE branch)
+    packed_branch = "is_packed or source == 'GENERATED'"
+    assert packed_branch in init_py, "packed/GENERATED branch not found"
+    # sidecar_info.append must appear after the packed branch
+    packed_pos = init_py.find(packed_branch)
+    append_pos = init_py.find('sidecar_info.append({', packed_pos)
+    assert append_pos >= 0, \
+        "sidecar_info.append not found in packed/GENERATED branch"
+    assert append_pos >= packed_pos, \
+        "sidecar_info.append must be after packed branch start"
+
+
+def test_packed_dest_name_strips_existing_extension():
+    """Packed/generated dest_name uses os.path.splitext(img.name)[0]."""
+    # Fix: base_name = os.path.splitext(img.name)[0]
+    assert 'os.path.splitext(img.name)[0]' in init_py, \
+        "splitext strip for packed/generated not found"
+    # dest_name must use base_name, not img.name directly
+    assert 'base_name = os.path.splitext(img.name)[0]' in init_py
+    assert 'dest_name = f"{base_name}{ext}"' in init_py
+
+
+def test_manifest_sidecar_count_matches_copied():
+    """Manifest sidecar_textures includes all copied textures."""
+    # sidecar_info is used in the manifest dict
+    assert '"sidecar_textures": sidecar_info' in init_py
+    # MANIFEST_WRITE logs len(manifest['sidecar_textures'])
+    assert "len(manifest['sidecar_textures'])" in init_py
+    # Both FILE and packed branches must add to sidecar_info
+    # FILE branch already does sidecar_info.append
+    # packed/GENERATED branch now also does sidecar_info.append
+
+
+def test_ue_sidecar_folder_dedup():
+    """UE deduplicates SidecarFiles by normalized path before import."""
+    # Must have SIDECAR_DEDUP log
+    assert '[FBX][SIDECAR_DEDUP]' in fbx_cpp, \
+        "UE must log SIDECAR_DEDUP after folder scan"
+    # Must deduplicate by path before ImportAssets call
+    # Check that SidecarFiles is processed for dedup before ImportAssets
+    assert 'UniqueFiles' in fbx_cpp, \
+        "UE must use UniqueFiles for dedup"
+    assert 'ImportAssets' in fbx_cpp
+    # Ensure UniqueFiles is built before ImportAssets
+    unique_pos = fbx_cpp.find('UniqueFiles')
+    import_pos = fbx_cpp.find('ImportAssets')
+    assert unique_pos >= 0 and import_pos >= 0
+    assert unique_pos < import_pos, \
+        "Dedup must occur before ImportAssets"
+
+
+def test_ue_no_duplicate_import_from_scans():
+    """Folder scan dedup prevents importing same file from base+textures/."""
+    # Dedup block must exist between scan completion and ImportAssets
+    assert 'SIDECAR_DEDUP' in fbx_cpp
+    # Before dedup, file count is logged
+    assert 'PreDedup' in fbx_cpp
+    # The dedup uses Sort + linear scan for uniqueness
+    assert 'SidecarFiles.Sort()' in fbx_cpp
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

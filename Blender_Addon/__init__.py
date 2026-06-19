@@ -1033,11 +1033,12 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
                         temp_path = tf.name
                     img.save_render(temp_path)
                     _fbx_log(f"[FBX][TEXTURE_TEMP_SAVE] dst={temp_path} source={'PACKED' if is_packed else 'GENERATED'}")
-                    dest_name = f"{img.name}{ext}"
+                    # Fix double extension: strip existing extension from img.name
+                    base_name = os.path.splitext(img.name)[0]
+                    dest_name = f"{base_name}{ext}"
                     dest_path = os.path.join(dest_dir, dest_name)
                     if os.path.exists(dest_path):
-                        base = os.path.splitext(dest_name)[0]
-                        dest_name = f"{base}_{_uuid.uuid4().hex[:8]}{ext}"
+                        dest_name = f"{base_name}_{_uuid.uuid4().hex[:8]}{ext}"
                         dest_path = os.path.join(dest_dir, dest_name)
                     shutil.move(temp_path, dest_path)
                     _fbx_log(f"[FBX][TEXTURE_COPY] guid={guid_short} "
@@ -1045,6 +1046,19 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
                              f"image={img.name} "
                              f"source={'packed' if is_packed else 'generated'} "
                              f"dst={dest_path}")
+                    # Record sidecar info for manifest (was missing — caused sidecarTextures=0)
+                    try:
+                        src_size = os.stat(dest_path).st_size
+                    except Exception:
+                        src_size = 0
+                    sidecar_info.append({
+                        "filename": os.path.basename(dest_path),
+                        "path": dest_path,
+                        "size": src_size,
+                        "source": temp_path,
+                    })
+                    _fbx_log(f"[FBX][MANIFEST_SIDECAR_TEXTURE] guid={guid_short} "
+                             f"file={os.path.basename(dest_path)} size={src_size}")
                     copied_count += 1
                 except Exception as e:
                     _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
