@@ -1562,6 +1562,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                                     f"metallic={pp.get('Metallic',0):.3f}"
                                 )
                         except Exception as _mat_exc:
+                            print(f"[MATERIAL][PACKET_BUILD_ERROR] guid={guid_hex[:8]} object={obj.name} error={_mat_exc}")
                             print(f"[MAT][ERROR] failed to build material payload for {obj.name}: {_mat_exc}")
 
                         # Phase 7H: update texture-aware property sig

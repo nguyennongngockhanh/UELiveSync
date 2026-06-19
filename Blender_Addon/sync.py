@@ -1,4 +1,5 @@
 import sys
+import os
 import bpy
 import hashlib
 import struct
@@ -1802,6 +1803,8 @@ def check_updates():
             if is_first_material:
                 bPropertiesChanged = True
                 reason_log = "first_material_send"
+                _slot_count_for_log = len(current_slots) if current_slots else 0
+                print(f"[MATERIAL][FIRST_SEND_FULL_SNAPSHOT] guid={guid[:8]} slots={_slot_count_for_log}")
             elif current_slots != prev_slots:
                 bPropertiesChanged = True
                 reason_log = "slots_changed"
@@ -1929,6 +1932,15 @@ def check_updates():
                                 tex_maps[slot_index] = maps
                 except Exception:
                     tex_maps = None
+
+                # Phase 10K.1: log MATX_TEXTURE_SEND for each slot/channel
+                if tex_maps:
+                    for slot_idx, slot_maps in tex_maps.items():
+                        for ch, fpath, img_name, flags in slot_maps:
+                            ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
+                            abs_path = bpy.path.abspath(fpath) if fpath else ""
+                            file_exists = os.path.isfile(abs_path) if abs_path else False
+                            print(f"[MATERIAL][MATX_TEXTURE_SEND] guid={guid[:8]} slot={slot_idx} channel={ch_name} path={abs_path[:200] if abs_path else ''} exists={'1' if file_exists else '0'}")
 
                 try:
                     material_payloads_to_send.append(
@@ -2861,6 +2873,9 @@ def start_sync():
     _last_material_property_sig.clear()  # Phase 10J.5I
     _last_material_sent_reason.clear()  # Phase 7H
     _last_decision_init_printed.clear()  # Phase 7H
+
+    print("[MATERIAL][SESSION_RESTART_FULL_SNAPSHOT] reason=start_sync all_guid_caches_cleared")
+
     _last_geometry_version.clear()
     _last_object_names.clear()
     _last_visibility_state.clear()

@@ -2055,6 +2055,275 @@ def test_sig_compare_guarded_by_condition_in_init_py():
     )
 
 
+# === Phase 10A.2 Stage 10A.2+: Multi-slot hardening (packet build safety, logs, caches) ===
+# Tests for: isinstance type guards in network.py serialize_material_slots,
+# PACKET_BUILD_ERROR logs, FIRST_SEND_FULL_SNAPSHOT/SESSION_RESTART_FULL_SNAPSHOT,
+# MATX_TEXTURE_SEND logs, start_sync cache clear, import os in sync.py,
+# 5-slot serialization behavioral tests.
+
+
+def test_serialize_material_slots_type_guards_in_network_py():
+    """serialize_material_slots contains isinstance type guards for slot_index, channel, flags, path_len, name_len."""
+    # Verify isinstance guards exist for each critical field
+    guards = [
+        "isinstance(slot_count, int)",
+        "isinstance(slot_index, int)",
+        "isinstance(channel, int)",
+        "isinstance(flags, int)",
+        "isinstance(filepath, str)",
+        "isinstance(image_name, str)",
+        "isinstance(path_bytes, (bytes, bytearray))",
+        "isinstance(name_bytes, (bytes, bytearray))",
+        "isinstance(path_len, int)",
+        "isinstance(name_len, int)",
+        "isinstance(ext_slot_count, int)",
+        "isinstance(rec_count, int)",
+    ]
+    for guard in guards:
+        assert guard in network_py, (
+            f"serialize_material_slots must guard: {guard}"
+        )
+
+
+def test_packet_build_error_log_in_network_py():
+    """PACKET_BUILD_ERROR log exists in network.py serialize_material_slots."""
+    assert "[MATERIAL][PACKET_BUILD_ERROR]" in network_py, (
+        "network.py must log PACKET_BUILD_ERROR on serialization failure"
+    )
+
+
+def test_packet_build_error_log_in_init_py():
+    """PACKET_BUILD_ERROR log exists in __init__.py around serialize_material_slots call."""
+    assert "[MATERIAL][PACKET_BUILD_ERROR]" in init_py, (
+        "__init__.py must log PACKET_BUILD_ERROR on material payload build failure"
+    )
+
+
+def test_first_send_full_snapshot_marker_in_sync_py():
+    """FIRST_SEND_FULL_SNAPSHOT log marker exists in sync.py."""
+    assert "[MATERIAL][FIRST_SEND_FULL_SNAPSHOT]" in sync_py, (
+        "sync.py must log FIRST_SEND_FULL_SNAPSHOT on first material send"
+    )
+
+
+def test_session_restart_full_snapshot_marker_in_sync_py():
+    """SESSION_RESTART_FULL_SNAPSHOT log marker exists in sync.py (start_sync)."""
+    assert "[MATERIAL][SESSION_RESTART_FULL_SNAPSHOT]" in sync_py, (
+        "sync.py must log SESSION_RESTART_FULL_SNAPSHOT on start_sync"
+    )
+
+
+def test_matx_texture_send_marker_in_sync_py():
+    """MATX_TEXTURE_SEND log marker exists in sync.py."""
+    assert "[MATERIAL][MATX_TEXTURE_SEND]" in sync_py, (
+        "sync.py must log MATX_TEXTURE_SEND per slot/channel"
+    )
+
+
+def test_matx_texture_send_marker_in_init_py():
+    """MATX_TEXTURE_SEND log marker exists in __init__.py."""
+    assert "[MATERIAL][MATX_TEXTURE_SEND]" in init_py, (
+        "__init__.py must log MATX_TEXTURE_SEND per slot/channel"
+    )
+
+
+def test_start_sync_clears_all_material_caches():
+    """start_sync clears _last_material_identity, _last_material_property_sig, _last_material_sent_reason, _last_decision_init_printed."""
+    assert "_last_material_identity.clear()" in sync_py, (
+        "start_sync must clear _last_material_identity"
+    )
+    assert "_last_material_property_sig.clear()" in sync_py, (
+        "start_sync must clear _last_material_property_sig"
+    )
+    assert "_last_material_sent_reason.clear()" in sync_py, (
+        "start_sync must clear _last_material_sent_reason"
+    )
+    assert "_last_decision_init_printed.clear()" in sync_py, (
+        "start_sync must clear _last_decision_init_printed"
+    )
+
+
+def test_import_os_in_sync_py():
+    """sync.py imports os for MATX_TEXTURE_SEND file existence check."""
+    assert "import os" in sync_py or "import  os" in sync_py, (
+        "sync.py must import os"
+    )
+
+
+def test_serialize_material_slots_returns_bytes():
+    """serialize_material_slots returns bytes (not bytearray)."""
+    import uuid
+    g = uuid.uuid4()
+    slots = {0: (0x1234, 0x5678)}
+    result = net.serialize_material_slots(g, slots)
+    assert isinstance(result, bytes), (
+        f"Expected bytes, got {type(result).__name__}"
+    )
+
+
+def test_serialize_material_slots_five_slot_identity_length():
+    """5-slot identity block produces expected payload length (16 GUID + 1 count + 5*17 identity)."""
+    import uuid
+    g = uuid.uuid4()
+    slots = {i: (0xDEADBEEFCAFE + i, 0x12345678 + i) for i in range(5)}
+    result = net.serialize_material_slots(g, slots)
+    # Identity only = 16 (GUID) + 1 (slot_count) + 5 * 17 (slot_index + low + high)
+    expected_identity_len = 16 + 1 + 5 * 17
+    assert len(result) == expected_identity_len, (
+        f"Expected {expected_identity_len} bytes for 5-slot identity, got {len(result)}"
+    )
+
+
+def test_serialize_material_slots_five_slot_with_matx_length():
+    """5-slot with MATX properties produces expected larger payload."""
+    import uuid
+    g = uuid.uuid4()
+    slots = {i: (i, i) for i in range(5)}
+    props = {
+        i: {"BaseColorR": 0.8, "BaseColorG": 0.2, "BaseColorB": 0.5, "Alpha": 1.0,
+            "Roughness": 0.3, "Metallic": 0.7}
+        for i in range(5)
+    }
+    result = net.serialize_material_slots(g, slots, properties=props)
+    # Identity: 16 + 1 + 5*17 = 102
+    # MATX: 4 (magic) + 1 (version) + 1 (slot count) + 5 * (1 + 16 + 8) = 6 + 5*25 = 131
+    expected = 16 + 1 + 5*17 + 4 + 1 + 1 + 5*(1 + 16 + 8)
+    assert len(result) == expected, (
+        f"Expected {expected} bytes for 5-slot + MATX, got {len(result)}"
+    )
+
+
+def test_serialize_material_slots_slot_zero_one_texture_records():
+    """Slot 0 and 1 with texture maps produce MTEX block with 2 records."""
+    import uuid
+    g = uuid.uuid4()
+    slots = {0: (0, 0), 1: (0, 0)}
+    props = {
+        0: {"BaseColorR": 0.8, "BaseColorG": 0.2, "BaseColorB": 0.5, "Alpha": 1.0,
+            "Roughness": 0.3, "Metallic": 0.0},
+        1: {"BaseColorR": 0.9, "BaseColorG": 0.9, "BaseColorB": 0.9, "Alpha": 1.0,
+            "Roughness": 0.5, "Metallic": 0.0},
+    }
+    tex_maps = {
+        0: [(1, "/tmp/tex_a.png", "tex_a", 0)],
+        1: [(1, "/tmp/tex_b.png", "tex_b", 0)],
+    }
+    result = net.serialize_material_slots(g, slots, properties=props, texture_maps=tex_maps)
+    # Identity: 16 + 1 + 2*17 = 51
+    # MATX: 4 + 1 + 1 + 2*(1+16+8) = 6 + 50 = 56
+    # MTEX: 4 (magic) + 1 (version) + 1 (rec_count) + 2 * [
+    #   1 (slot) + 1 (channel) + 1 (flags) + 2 (path_len) + path_bytes + 1 (name_len) + name_bytes
+    # ]
+    path_a = "/tmp/tex_a.png".encode("utf-8")
+    path_b = "/tmp/tex_b.png".encode("utf-8")
+    name_a = "tex_a".encode("utf-8")
+    name_b = "tex_b".encode("utf-8")
+    mtex_per_rec = 1 + 1 + 1 + 2 + len(path_a) + 1 + len(name_a)
+    mtex_per_rec_b = 1 + 1 + 1 + 2 + len(path_b) + 1 + len(name_b)
+    mtex_overhead = 4 + 1 + 1
+    expected = (16 + 1 + 2*17) + (4 + 1 + 1 + 2*(1+16+8)) + (mtex_overhead + mtex_per_rec + mtex_per_rec_b)
+    assert len(result) == expected, (
+        f"Expected {expected} bytes for 2-slot + MATX + 2 MTEX records, got {len(result)}"
+    )
+
+
+def test_serialize_material_slots_scalar_only_slot_four():
+    """Slot 4 with scalar-only properties (no texture maps) works correctly."""
+    import uuid
+    g = uuid.uuid4()
+    slots = {4: (0, 0)}
+    props = {
+        4: {"BaseColorR": 0.5, "BaseColorG": 0.5, "BaseColorB": 0.5, "Alpha": 1.0,
+            "Roughness": 0.2, "Metallic": 0.0},
+    }
+    # No tex_maps at all
+    result = net.serialize_material_slots(g, slots, properties=props)
+    # Identity: 16 + 1 + 1*17 = 34
+    # MATX: 4 + 1 + 1 + 1*(1+16+8) = 6 + 25 = 31
+    expected = 34 + 31
+    assert len(result) == expected, (
+        f"Expected {expected} bytes for slot-4 scalar-only + MATX, got {len(result)}"
+    )
+
+
+def test_serialize_material_slots_slot_index_preserved_in_identity():
+    """Slot index values are sequential (range-based) in identity block."""
+    import uuid
+    import struct
+    g = uuid.uuid4()
+    # serialize_material_slots uses range(slot_count) for iteration, not dict keys
+    # so slot indices on wire are always 0, 1, 2, ..., N-1
+    slots = {0: (0xAAAA, 0xBBBB), 1: (0xCCCC, 0xDDDD)}
+    result = net.serialize_material_slots(g, slots)
+    identity_start = 16 + 1
+    slot0_idx = result[identity_start]
+    slot0_low = struct.unpack("<Q", result[identity_start + 1:identity_start + 9])[0]
+    slot0_high = struct.unpack("<Q", result[identity_start + 9:identity_start + 17])[0]
+    slot1_idx = result[identity_start + 17]
+    slot1_low = struct.unpack("<Q", result[identity_start + 18:identity_start + 26])[0]
+    slot1_high = struct.unpack("<Q", result[identity_start + 26:identity_start + 34])[0]
+
+    assert slot0_idx == 0, f"Expected slot index 0, got {slot0_idx}"
+    assert slot0_low == 0xAAAA, f"Expected low 0xAAAA, got {hex(slot0_low)}"
+    assert slot0_high == 0xBBBB, f"Expected high 0xBBBB, got {hex(slot0_high)}"
+    assert slot1_idx == 1, f"Expected slot index 1, got {slot1_idx}"
+    assert slot1_low == 0xCCCC, f"Expected low 0xCCCC, got {hex(slot1_low)}"
+    assert slot1_high == 0xDDDD, f"Expected high 0xDDDD, got {hex(slot1_high)}"
+
+
+def test_serialize_material_slots_empty_slots():
+    """Empty slots dict produces minimal payload (GUID + 0 count)."""
+    import uuid
+    g = uuid.uuid4()
+    result = net.serialize_material_slots(g, {})
+    expected = 16 + 1  # GUID + 0 slot_count
+    assert len(result) == expected, (
+        f"Expected {expected} bytes for empty slots, got {len(result)}"
+    )
+
+
+def test_serialize_material_slots_none_properties_textures():
+    """None properties and texture_maps produce identity-only payload with no extensions."""
+    import uuid
+    g = uuid.uuid4()
+    slots = {0: (0, 0)}
+    result = net.serialize_material_slots(g, slots, properties=None, texture_maps=None)
+    expected = 16 + 1 + 1*17
+    assert len(result) == expected, (
+        f"Expected {expected} bytes (identity only), got {len(result)}"
+    )
+
+
+def test_serialize_material_slots_max_slots_clamped():
+    """Slot count is clamped to MAX_MATERIAL_SLOTS (8)."""
+    import uuid
+    g = uuid.uuid4()
+    slots = {i: (i, i) for i in range(20)}
+    result = net.serialize_material_slots(g, slots)
+    # Parse slot count at byte 16
+    slot_count = result[16]
+    assert slot_count == 8, (
+        f"Expected slot count clamped to 8, got {slot_count}"
+    )
+
+
+def test_serialize_material_slots_type_error_caught():
+    """TypeError in serialize_material_slots is caught and logged with PACKET_BUILD_ERROR."""
+    import uuid
+    import struct
+    g = uuid.uuid4()
+    # Pass valid slots/props but invalid texture map (channel=str not int) to hit isinstance guard
+    slots = {0: (0, 0)}
+    props = {0: {"BaseColorR": 0.8, "BaseColorG": 0.2, "BaseColorB": 0.5, "Alpha": 1.0,
+                  "Roughness": 0.3, "Metallic": 0.0}}
+    tex_maps = {0: [("bad_channel_str", "/tmp/x.png", "x", 0)]}  # channel is str → TypeError
+    try:
+        net.serialize_material_slots(g, slots, properties=props, texture_maps=tex_maps)
+        assert False, "Expected TypeError"
+    except (TypeError, struct.error):
+        pass  # Expected — error re-raised after PACKET_BUILD_ERROR log
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

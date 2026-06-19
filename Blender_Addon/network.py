@@ -1108,90 +1108,130 @@ def serialize_material_slots(guid_obj, slots, properties=None, texture_maps=None
         bytes payload for one object in PT_Material batch.
     """
     payload = bytearray()
+    _guid_str = guid_obj.hex[:8] if hasattr(guid_obj, 'hex') else str(guid_obj)[:8]
+    try:
+        # GUID (4 × uint32 LE)
+        a = guid_obj.time_low
+        b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
+        c = (guid_obj.clock_seq_hi_variant << 24) | (guid_obj.clock_seq_low << 16) | ((guid_obj.node >> 32) & 0xFFFF)
+        d = guid_obj.node & 0xFFFFFFFF
+        payload.extend(struct.pack("<IIII", a, b, c, d))
 
-    # GUID (4 × uint32 LE)
-    a = guid_obj.time_low
-    b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
-    c = (guid_obj.clock_seq_hi_variant << 24) | (guid_obj.clock_seq_low << 16) | ((guid_obj.node >> 32) & 0xFFFF)
-    d = guid_obj.node & 0xFFFFFFFF
-    payload.extend(struct.pack("<IIII", a, b, c, d))
+        # Slot count (clamped to MAX_MATERIAL_SLOTS)
+        slot_count = min(len(slots), MAX_MATERIAL_SLOTS)
+        if not isinstance(slot_count, int):
+            raise TypeError(f"slot_count type={type(slot_count).__name__} expected=int")
+        payload.extend(struct.pack("<B", slot_count))
 
-    # Slot count (clamped to MAX_MATERIAL_SLOTS)
-    slot_count = min(len(slots), MAX_MATERIAL_SLOTS)
-    payload.extend(struct.pack("<B", slot_count))
+        # Per-slot data: SlotIndex(1) + MaterialLow(8) + MaterialHigh(8)
+        for slot_index in range(slot_count):
+            low, high = slots.get(slot_index, (0, 0))
+            if not isinstance(slot_index, int):
+                raise TypeError(f"slot_index type={type(slot_index).__name__} expected=int field=identity_slot_index")
+            payload.extend(struct.pack("<B", slot_index & 0xFF))
+            payload.extend(struct.pack("<QQ", low & 0xFFFFFFFFFFFFFFFF, high & 0xFFFFFFFFFFFFFFFF))
 
-    # Per-slot data: SlotIndex(1) + MaterialLow(8) + MaterialHigh(8)
-    for slot_index in range(slot_count):
-        low, high = slots.get(slot_index, (0, 0))
-        payload.extend(struct.pack("<B", slot_index & 0xFF))
-        payload.extend(struct.pack("<QQ", low & 0xFFFFFFFFFFFFFFFF, high & 0xFFFFFFFFFFFFFFFF))
+        # MATX extension block (optional)
+        if properties is not None and properties:
+            ext_slot_count = min(len(properties), MAX_MATERIAL_SLOTS)
+            if not isinstance(ext_slot_count, int):
+                raise TypeError(f"ext_slot_count type={type(ext_slot_count).__name__} expected=int")
+            payload.extend(struct.pack("<I", MATX_MAGIC))
+            payload.extend(struct.pack("<B", MATX_VERSION))
+            payload.extend(struct.pack("<B", ext_slot_count))
+            for slot_index in range(ext_slot_count):
+                p = properties.get(slot_index)
+                if not isinstance(slot_index, int):
+                    raise TypeError(f"slot_index type={type(slot_index).__name__} expected=int field=matx_slot_index")
+                if p is None:
+                    payload.extend(struct.pack("<B", slot_index & 0xFF))
+                    payload.extend(struct.pack("<ffff", 0.8, 0.8, 0.8, 1.0))
+                    payload.extend(struct.pack("<ff", 0.5, 0.0))
+                else:
+                    payload.extend(struct.pack("<B", slot_index & 0xFF))
+                    payload.extend(struct.pack("<ffff",
+                        p.get("BaseColorR", 0.8),
+                        p.get("BaseColorG", 0.8),
+                        p.get("BaseColorB", 0.8),
+                        p.get("Alpha", 1.0)))
+                    payload.extend(struct.pack("<ff",
+                        p.get("Roughness", 0.5),
+                        p.get("Metallic", 0.0)))
 
-    # MATX extension block (optional)
-    if properties is not None and properties:
-        ext_slot_count = min(len(properties), MAX_MATERIAL_SLOTS)
-        payload.extend(struct.pack("<I", MATX_MAGIC))
-        payload.extend(struct.pack("<B", MATX_VERSION))
-        payload.extend(struct.pack("<B", ext_slot_count))
-        for slot_index in range(ext_slot_count):
-            p = properties.get(slot_index)
-            if p is None:
-                payload.extend(struct.pack("<B", slot_index & 0xFF))
-                payload.extend(struct.pack("<ffff", 0.8, 0.8, 0.8, 1.0))
-                payload.extend(struct.pack("<ff", 0.5, 0.0))
-            else:
-                payload.extend(struct.pack("<B", slot_index & 0xFF))
-                payload.extend(struct.pack("<ffff",
-                    p.get("BaseColorR", 0.8),
-                    p.get("BaseColorG", 0.8),
-                    p.get("BaseColorB", 0.8),
-                    p.get("Alpha", 1.0)))
-                payload.extend(struct.pack("<ff",
-                    p.get("Roughness", 0.5),
-                    p.get("Metallic", 0.0)))
+        # MTEX extension block (optional, after MATX or after identity if MATX absent)
+        if texture_maps is not None and texture_maps:
+            # Flatten all records from all slots
+            flat_records = []
+            for slot_index in sorted(texture_maps.keys()):
+                records = texture_maps[slot_index]
+                if not records:
+                    continue
+                for rec in records:
+                    channel, filepath, image_name, flags = rec
+                    if not isinstance(channel, int):
+                        raise TypeError(f"channel type={type(channel).__name__} expected=int field=mtex_channel slot={slot_index}")
+                    if not isinstance(flags, int):
+                        raise TypeError(f"flags type={type(flags).__name__} expected=int field=mtex_flags slot={slot_index} channel={channel}")
+                    if not isinstance(filepath, str):
+                        raise TypeError(f"filepath type={type(filepath).__name__} expected=str field=mtex_path slot={slot_index} channel={channel}")
+                    if not isinstance(image_name, str):
+                        raise TypeError(f"image_name type={type(image_name).__name__} expected=str field=mtex_name slot={slot_index} channel={channel}")
+                    flat_records.append((slot_index, channel, filepath, image_name, flags))
 
-    # MTEX extension block (optional, after MATX or after identity if MATX absent)
-    if texture_maps is not None and texture_maps:
-        # Flatten all records from all slots
-        flat_records = []
-        for slot_index in sorted(texture_maps.keys()):
-            records = texture_maps[slot_index]
-            if not records:
-                continue
-            for rec in records:
-                channel, filepath, image_name, flags = rec
-                flat_records.append((slot_index, channel, filepath, image_name, flags))
+            if flat_records:
+                rec_count = len(flat_records)
+                if not isinstance(rec_count, int):
+                    raise TypeError(f"rec_count type={type(rec_count).__name__} expected=int")
+                payload.extend(struct.pack("<I", MTEX_MAGIC))
+                payload.extend(struct.pack("<B", MTEX_VERSION))
+                payload.extend(struct.pack("<B", rec_count))
 
-        if flat_records:
-            rec_count = len(flat_records)
-            payload.extend(struct.pack("<I", MTEX_MAGIC))
-            payload.extend(struct.pack("<B", MTEX_VERSION))
-            payload.extend(struct.pack("<B", rec_count))
+                for slot_index, channel, filepath, image_name, flags in flat_records:
+                    if not isinstance(slot_index, int):
+                        raise TypeError(f"slot_index type={type(slot_index).__name__} expected=int field=mtex_record_slot")
+                    if not isinstance(channel, int):
+                        raise TypeError(f"channel type={type(channel).__name__} expected=int field=mtex_record_channel slot={slot_index}")
+                    if not isinstance(flags, int):
+                        raise TypeError(f"flags type={type(flags).__name__} expected=int field=mtex_record_flags slot={slot_index} channel={channel}")
+                    # Clamp string lengths
+                    path_bytes = filepath.encode("utf-8", errors="replace")
+                    if not isinstance(path_bytes, (bytes, bytearray)):
+                        raise TypeError(f"path_bytes type={type(path_bytes).__name__} expected=bytes slot={slot_index}")
+                    if len(path_bytes) > MTEX_MAX_PATH_LEN:
+                        path_bytes = path_bytes[:MTEX_MAX_PATH_LEN]
+                    name_bytes = image_name.encode("utf-8", errors="replace")
+                    if not isinstance(name_bytes, (bytes, bytearray)):
+                        raise TypeError(f"name_bytes type={type(name_bytes).__name__} expected=bytes slot={slot_index}")
+                    if len(name_bytes) > MTEX_MAX_IMAGE_NAME_LEN:
+                        name_bytes = name_bytes[:MTEX_MAX_IMAGE_NAME_LEN]
 
-            for slot_index, channel, filepath, image_name, flags in flat_records:
-                # Clamp string lengths
-                path_bytes = filepath.encode("utf-8", errors="replace")
-                if len(path_bytes) > MTEX_MAX_PATH_LEN:
-                    path_bytes = path_bytes[:MTEX_MAX_PATH_LEN]
-                name_bytes = image_name.encode("utf-8", errors="replace")
-                if len(name_bytes) > MTEX_MAX_IMAGE_NAME_LEN:
-                    name_bytes = name_bytes[:MTEX_MAX_IMAGE_NAME_LEN]
+                    path_len = len(path_bytes)
+                    name_len = len(name_bytes)
 
-                path_len = len(path_bytes)
-                name_len = len(name_bytes)
+                    payload.extend(struct.pack("<B", slot_index & 0xFF))
+                    payload.extend(struct.pack("<B", channel & 0xFF))
+                    payload.extend(struct.pack("<B", flags & 0xFF))
+                    if not isinstance(path_len, int):
+                        raise TypeError(f"path_len type={type(path_len).__name__} expected=int slot={slot_index}")
+                    payload.extend(struct.pack("<H", path_len))
+                    payload.extend(path_bytes)
+                    if not isinstance(name_len, int):
+                        raise TypeError(f"name_len type={type(name_len).__name__} expected=int slot={slot_index}")
+                    payload.extend(struct.pack("<B", name_len))
+                    payload.extend(name_bytes)
 
-                payload.extend(struct.pack("<B", slot_index & 0xFF))
-                payload.extend(struct.pack("<B", channel & 0xFF))
-                payload.extend(struct.pack("<B", flags & 0xFF))
-                payload.extend(struct.pack("<H", path_len))
-                payload.extend(path_bytes)
-                payload.extend(struct.pack("<B", name_len))
-                payload.extend(name_bytes)
+                _append_blender_debug_log(
+                    f"[MTEX][SEND] records={rec_count} bytes={len(payload)}"
+                )
 
-            _append_blender_debug_log(
-                f"[MTEX][SEND] records={rec_count} bytes={len(payload)}"
-            )
-
-    return bytes(payload)
+        return bytes(payload)
+    except (TypeError, struct.error) as _ser_exc:
+        _slot_info = f"slots={len(slots)}" if slots else "slots=0"
+        _prop_info = f"props={len(properties)}" if properties else "props=None"
+        _tex_info = f"tex={len(texture_maps)}" if texture_maps else "tex=None"
+        print(f"[MATERIAL][PACKET_BUILD_ERROR] guid={_guid_str} {_slot_info} {_prop_info} {_tex_info} error={_ser_exc}")
+        print(f"[MATERIAL][PACKET_BUILD_ERROR] guid={_guid_str} valueType={type(_ser_exc).__name__}")
+        raise
 
 
 # =========================================================
