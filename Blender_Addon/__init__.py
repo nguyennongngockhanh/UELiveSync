@@ -1591,6 +1591,9 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         if _prev_reason is not None:
                             print(f"[MATERIAL][SIG_CACHE_HIT] guid={guid_hex[:8]} reason=property_unchanged")
 
+                _audit_mat_slots = len(current_prop_sig) if current_prop_sig is not None else 0
+                _audit_cached = int(sync._last_material_property_sig.get(guid_hex) is not None)
+                print(f"[MATERIAL][FBX_SNAPSHOT_AUDIT] guid={guid_hex[:8]} sendFBX=1 cachedMaterial={_audit_cached} slots={_audit_mat_slots}")
                 synced_count += 1
 
             except Exception as e:

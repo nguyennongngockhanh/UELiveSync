@@ -4808,10 +4808,12 @@ ProcessBinaryPacket(
                 const FString GuidShort = G.ToString(EGuidFormats::Short);
                 const int32 NumSlots = SMC->GetNumMaterials();
                 int32 RestoredCount = 0;
+                int32 CacheHits = 0;
                 for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
                 {
                     const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
                     TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
+                    if (Found && *Found) ++CacheHits;
                     UMaterialInterface* CurrentMat = SMC->GetMaterial(SlotIdx);
                     if (Found && *Found && CurrentMat != *Found)
                     {
@@ -4823,6 +4825,9 @@ ProcessBinaryPacket(
                             *GuidShort, SlotIdx);
                     }
                 }
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][GENERATED_CACHE_AUDIT] guid=%s cachedSlots=%d meshSlots=%d restored=%d"),
+                    *G.ToString(EGuidFormats::Digits), CacheHits, NumSlots, RestoredCount);
                 if (RestoredCount > 0)
                 {
                     UE_LOG(LogLiveSync, Log,

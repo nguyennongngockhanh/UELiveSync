@@ -2869,6 +2869,7 @@ def start_sync():
     last_sent_transforms.clear()
     tracked_objects.clear()
     _last_mesh_identity.clear()
+    print(f"[MATERIAL][SESSION_CACHE_AUDIT] action=start materialSigCount={len(_last_material_property_sig)} identityCount={len(_last_material_identity)}")
     _last_material_identity.clear()
     _last_material_property_sig.clear()  # Phase 10J.5I
     _last_material_sent_reason.clear()  # Phase 7H
