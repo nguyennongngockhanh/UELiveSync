@@ -21,6 +21,9 @@ struct FFBXImportContext
     TFunction<void(const FGuid&)> OnScheduleRepair;
     // Phase 10J.5L: Called after EnsureFBXMeshRenderable to restore generated MIDs.
     TFunction<void(const FGuid&, UStaticMeshComponent*)> OnRestoreGeneratedMaterials;
+    // Task 9B: Called to register a sidecar texture import result.
+    TFunction<void(const FGuid&, const FString&, const TSoftObjectPtr<UTexture2D>&)>
+        OnSidecarTextureImported;
 };
 
 class FLiveSyncFBXImporter

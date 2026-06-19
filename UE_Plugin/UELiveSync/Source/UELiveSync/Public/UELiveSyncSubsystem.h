@@ -518,6 +518,25 @@ private:
      *  policy per channel, populates TextureImportCache.
      *  Does NOT apply textures to materials.
      */
+    /** Task 9B: register a sidecar import result per-GUID.
+     *  Canonical key = lowercase basename without extension.
+     */
+    void RegisterSidecarTextureImport(
+        const FGuid& Guid,
+        const FString& SourceFilename,
+        const TSoftObjectPtr<UTexture2D>& TexturePtr);
+
+    /** Task 9B: apply per-GUID sidecar textures to a persistent MIC.
+     *  Uses ImportedSidecarTexturesByGuid to resolve exact texture bindings.
+     */
+    bool ApplySidecarTexturesToPersistentMIC(
+        const FGuid& Guid,
+        class UMaterialInstanceConstant* MIC,
+        const TArray<FMaterialTextureMapRef>& TexMaps,
+        int32 EffectiveSlotCount,
+        int32& TexturesAppliedOut,
+        int32& TextureMissesOut);
+
     void ImportTexturesFromMtexRecs(
         const FGuid& Guid,
         const TArray<FMaterialTextureMapRef>& TexMaps);
@@ -1019,6 +1038,11 @@ private:
 
     // Path → imported texture cache (Phase 10K.2)
     TMap<FString, TSoftObjectPtr<UTexture2D>> TextureImportCache;
+
+    // Task 9B: per-GUID sidecar import result map.
+    // Canonical key: lowercase basename without extension.
+    // E.g. Wood.png → wood, Wood_Rough.png → wood_rough
+    TMap<FGuid, TMap<FString, TSoftObjectPtr<UTexture2D>>> ImportedSidecarTexturesByGuid;
 
     // Phase 10K.3: texture material apply counters
     int32 TextureMaterialApplyRequests = 0;

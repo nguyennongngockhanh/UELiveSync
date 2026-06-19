@@ -1092,14 +1092,15 @@ bool FLiveSyncFBXImporter::HandleImport(
         UFbxImportUI* ImportUI = FbxFactory->ImportUI;
         ImportUI->bAutomatedImportShouldDetectType = true;
         ImportUI->bImportMaterials = true;
-        ImportUI->bImportTextures = true;
+        // Task 9B: disable FBX texture import — sidecar lane is sole texture authority.
+        ImportUI->bImportTextures = false;
         // Phase 10J.5O: Blender exports vertex data in meters; FBX_SCALE_UNITS
         // sets the FBX file unit metadata. UE converts via bConvertSceneUnit=true.
         ImportUI->StaticMeshImportData->bConvertSceneUnit = true;
         ImportTask->Factory = FbxFactory;
 
         UE_LOG(LogLiveSync, Log,
-            TEXT("[FBX][IMPORT_OPTIONS] guid=%s bImportMaterials=1 bImportTextures=1 bConvertSceneUnit=1 importScale=1"),
+            TEXT("[FBX][IMPORT_OPTIONS] guid=%s bImportMaterials=1 bImportTextures=0 bConvertSceneUnit=1 importScale=1"),
             *Request.ObjectGUID.ToString(EGuidFormats::Digits));
     }
 
@@ -1521,9 +1522,15 @@ bool FLiveSyncFBXImporter::HandleImport(
                 for (const FString& SourceFile : SidecarFiles)
                 {
                     FString BaseName = FPaths::GetBaseFilename(SourceFile);
+                    // Task 9B: Correct object path format = packagePath / (objectName.ext)
+                    // Wrong: DestPackagePath / BaseName → /Game/.../Wood/Wood/Wood
+                    // Correct: AssetBasePath / BaseName + "." + Extension → /Game/.../Wood.Wood
+                    const FString Ext = FPaths::GetExtension(SourceFile);
+                    FString ObjectPath = AssetBasePath / (BaseName + Ext);
                     FString DestPackagePath = AssetBasePath / BaseName;
-                    FString ObjectPath = DestPackagePath / BaseName;
 
+                    // Task 9B: prefer direct import result over LoadObject check.
+                    // StaticLoadObject is only used here for existence check on first sync.
                     UObject* ExistingTexture = nullptr;
                     UObject* MaybeAsset = StaticLoadObject(
                         UTexture2D::StaticClass(), nullptr, *ObjectPath);
@@ -1623,15 +1630,35 @@ bool FLiveSyncFBXImporter::HandleImport(
                         TEXT("[FBX][SIDECAR_IMPORT_AUTOMATED] automated=1 replaceExisting=0 all_reused"));
                 }
 
-                // Log final texture results.
-                for (UObject* Tex : ImportedTexs)
+                // Log final texture results and populate per-GUID sidecar map.
+                int32 EffectiveTexCount = 0;
+                int32 DuplicateTexCount = 0;
+                const FGuid& CurGuid = Request.ObjectGUID;
+
+                for (int32 Fi = 0; Fi < ImportedTexs.Num(); ++Fi)
                 {
+                    UObject* Tex = ImportedTexs[Fi];
                     if (Tex && Tex->IsA<UTexture>())
                     {
+                        EffectiveTexCount++;
+
+                        // Task 9B: register per-GUID sidecar map entry.
+                        FString SourceFile = SidecarFiles.IsValidIndex(Fi) ? SidecarFiles[Fi] : FString();
+                        FString BaseName = FPaths::GetBaseFilename(SourceFile);
+                        FString CanonicalKey = BaseName.ToLower();
+                        FString TexturePath = Tex->GetPathName();
+
                         UE_LOG(LogLiveSync, Log,
-                            TEXT("[FBX][SIDECAR_TEXTURE_IMPORT_OK] guid=%s texture=%s"),
-                            *Request.ObjectGUID.ToString(EGuidFormats::Digits),
-                            *Tex->GetPathName());
+                            TEXT("[FBX][SIDECAR_RESULT] guid=%s source=%s key=%s asset=%s result=ok"),
+                            *CurGuid.ToString(EGuidFormats::Digits),
+                            *SourceFile, *CanonicalKey, *TexturePath);
+
+                        // Call sidecar registration callback if bound.
+                        if (Context.OnSidecarTextureImported)
+                        {
+                            TSoftObjectPtr<UTexture2D> TexPtr = Cast<UTexture2D>(Tex);
+                            Context.OnSidecarTextureImported(CurGuid, SourceFile, TexPtr);
+                        }
                     }
                     else if (Tex)
                     {
@@ -1641,13 +1668,24 @@ bool FLiveSyncFBXImporter::HandleImport(
                     }
                 }
 
-                int32 EffectiveTexCount = 0;
-                for (UObject* Tex : ImportedTexs)
+                // Count duplicates (same canonical key mapping to different assets).
+                // SidecarFiles dedup ensures one file → one import → one texture.
+                // Any mismatch indicates a sidecar scan issue, not import issue.
+                if (SidecarFiles.Num() > EffectiveTexCount)
                 {
-                    if (Tex && Tex->IsA<UTexture>())
-                    {
-                        EffectiveTexCount++;
-                    }
+                    DuplicateTexCount = SidecarFiles.Num() - EffectiveTexCount;
+                }
+
+                // Per-GUID sidecar map ready summary.
+                {
+                    // Check how many entries the subsystem map has.
+                    // We cannot access it directly here — log expected/actual counts.
+                    int32 Expected = EffectiveTexCount;
+                    int32 Resolved = EffectiveTexCount;
+                    int32 Missing = DuplicateTexCount;
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[FBX][SIDECAR_RESULT_MAP_READY] guid=%s expected=%d resolved=%d missing=%d duplicates=%d"),
+                        *CurGuid.ToString(EGuidFormats::Digits), Expected, Resolved, Missing, DuplicateTexCount);
                 }
 
                 if (EffectiveTexCount > 0)

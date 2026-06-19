@@ -4860,6 +4860,23 @@ ProcessBinaryPacket(
                         *G.ToString(EGuidFormats::Digits), RestoredCount);
                 }
             };
+            // Task 9B: wire sidecar texture import registration.
+            Ctx.OnSidecarTextureImported = [this](
+                const FGuid& G, const FString& SourceFilename, const TSoftObjectPtr<UTexture2D>& TexPtr)
+            {
+                if (!TexPtr.IsValid()) return;
+                // Canonical key: lowercase basename without extension.
+                FString BaseName = FPaths::GetBaseFilename(SourceFilename).ToLower();
+                if (!ImportedSidecarTexturesByGuid.Contains(G))
+                {
+                    ImportedSidecarTexturesByGuid.Add(G, TMap<FString, TSoftObjectPtr<UTexture2D>>());
+                }
+                auto& SidecarMap = ImportedSidecarTexturesByGuid[G];
+                if (!SidecarMap.Contains(BaseName))
+                {
+                    SidecarMap.Add(BaseName, TexPtr);
+                }
+            };
             FLiveSyncFBXImporter::HandleImport(Ptr, ObjSize, Ctx);
         }
 
@@ -13891,38 +13908,14 @@ ApplyMaterialSnapshotPerSlot(
 
     const FString GuidStr = Guid.ToString(EGuidFormats::Digits);
 
-    // Resolve MTEX textures.
-    const TArray<FMaterialTextureMapRef>* TexMaps = MaterialTextureMapCache.Find(Guid);
-    TMap<uint8, UTexture2D*> PerSlotTextures;
-
-    if (TexMaps)
-    {
-        for (const FMaterialTextureMapRef& TexRef : *TexMaps)
-        {
-            if (TexRef.SlotIndex < 0 || TexRef.SlotIndex >= EffectiveSlotCount) continue;
-            if (!TexRef.IsValid()) continue;
-
-            // Resolve texture by exact match.
-            UTexture2D* Resolved = ResolveTextureByExactName(TexRef.ImageName, TexRef.Path);
-
-            FString ResultStr = Resolved ? TEXT("resolved") : TEXT("missing");
-            FString AssetStr = Resolved ? Resolved->GetPathName() : TEXT("none");
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[MATERIAL][MATX_EXACT_TEXTURE_RESOLVE] guid=%s slot=%d channel=%u image=%s asset=%s result=%s"),
-                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.ImageName, *AssetStr, *ResultStr);
-
-            if (Resolved)
-            {
-                // Assign to the correct channel key.
-                uint8 ChannelKey = static_cast<uint8>(TexRef.Channel);
-                PerSlotTextures.Add(ChannelKey, Resolved);
-            }
-        }
-    }
-
     // Per-slot dispatch.
     int32 PersistentApplied = 0;
     int32 MidApplied = 0;
+    int32 TotalTexturesApplied = 0;
+    int32 TotalTextureMisses = 0;
+
+    // Resolve MTEX textures via per-GUID sidecar map.
+    const TArray<FMaterialTextureMapRef>* TexMaps = MaterialTextureMapCache.Find(Guid);
 
     for (int32 SlotIdx = 0; SlotIdx < EffectiveSlotCount; SlotIdx++)
     {
@@ -13969,14 +13962,44 @@ ApplyMaterialSnapshotPerSlot(
 
             if (PersistentMIC)
             {
-                ApplyFullMaterialSnapshotToPersistentAsset(PersistentMIC, Props, PerSlotTextures);
+                // Task 9B: apply sidecar textures for this specific slot.
+                int32 SlotTexturesApplied = 0;
+                int32 SlotTextureMisses = 0;
+
+                if (TexMaps)
+                {
+                    // Filter TexMaps for this slot and apply sidecar textures.
+                    TArray<FMaterialTextureMapRef> SlotTexMaps;
+                    for (const FMaterialTextureMapRef& TexRef : *TexMaps)
+                    {
+                        if (TexRef.SlotIndex == SlotIdx && TexRef.IsValid())
+                        {
+                            SlotTexMaps.Add(TexRef);
+                        }
+                    }
+
+                    if (SlotTexMaps.Num() > 0)
+                    {
+                        ApplySidecarTexturesToPersistentMIC(Guid, PersistentMIC, SlotTexMaps, 1, SlotTexturesApplied, SlotTextureMisses);
+                    }
+                }
+
+                // Apply scalar state (always needed for persistent MIC).
+                PersistentMIC->SetScalarParameterValueEditorOnly(FName(TEXT("Roughness")), Props.Roughness);
+                PersistentMIC->SetScalarParameterValueEditorOnly(FName(TEXT("Metallic")), Props.Metallic);
+                PersistentMIC->SetScalarParameterValueEditorOnly(FName(TEXT("Alpha")), Props.Alpha);
+                PersistentMIC->SetVectorParameterValueEditorOnly(FName(TEXT("BaseColor")), Props.BaseColor);
+                PersistentMIC->PostEditChange();
+
                 SMC->SetMaterial(SlotIdx, PersistentMIC);
                 PersistentApplied++;
+                TotalTexturesApplied += SlotTexturesApplied;
+                TotalTextureMisses += SlotTextureMisses;
 
                 UE_LOG(LogLiveSync, Log,
-                    TEXT("[MATERIAL][PERSISTENT_SLOT_OK] guid=%s slot=%d asset=%s roughness=%.3f metallic=%.3f"),
+                    TEXT("[MATERIAL][PERSISTENT_SLOT_OK] guid=%s slot=%d asset=%s roughness=%.3f metallic=%.3f textures_applied=%d misses=%d"),
                     *GuidStr, SlotIdx, *PersistentMIC->GetPathName(),
-                    Props.Roughness, Props.Metallic);
+                    Props.Roughness, Props.Metallic, SlotTexturesApplied, SlotTextureMisses);
             }
         }
         else
@@ -14008,8 +14031,8 @@ ApplyMaterialSnapshotPerSlot(
     int32 TotalApplied = PersistentApplied + MidApplied;
 
     UE_LOG(LogLiveSync, Log,
-        TEXT("[MATERIAL][MATX_FULL_SNAPSHOT_APPLY] guid=%s effectiveSlots=%d meshSlots=%d appliedSlots=%d persistent=%d mid_fallback=%d"),
-        *GuidStr, EffectiveSlotCount, SMC->GetNumMaterials(), TotalApplied, PersistentApplied, MidApplied);
+        TEXT("[MATERIAL][MATX_FULL_SNAPSHOT_APPLY] guid=%s effectiveSlots=%d meshSlots=%d appliedSlots=%d persistent=%d mid_fallback=%d texturesApplied=%d textureMisses=%d"),
+        *GuidStr, EffectiveSlotCount, SMC->GetNumMaterials(), TotalApplied, PersistentApplied, MidApplied, TotalTexturesApplied, TotalTextureMisses);
 
     if (PersistentApplied > 0)
     {
@@ -14506,6 +14529,134 @@ RegisterPersistentMaterialPath(
 }
 
 
+// =========================================================
+// TASK 9B — APPLY SIDECAR TEXTURES TO PERSISTENT MIC
+// =========================================================
+
+bool UUELiveSyncSubsystem::
+ApplySidecarTexturesToPersistentMIC(
+    const FGuid& Guid,
+    class UMaterialInstanceConstant* MIC,
+    const TArray<FMaterialTextureMapRef>& TexMaps,
+    int32 EffectiveSlotCount,
+    int32& TexturesAppliedOut,
+    int32& TextureMissesOut)
+{
+    TexturesAppliedOut = 0;
+    TextureMissesOut = 0;
+
+    if (!MIC) return false;
+
+    const FString GuidStr = Guid.ToString(EGuidFormats::Digits);
+    const TCHAR* const ChannelNameArr[] = {
+        TEXT("BaseColor"), TEXT("Roughness"), TEXT("Metallic"),
+        TEXT("Alpha"), TEXT("Normal")
+    };
+    const int32 ChannelNameArrCount = 5;
+
+    // Look up per-GUID sidecar map.
+    const TMap<FString, TSoftObjectPtr<UTexture2D>>* SidecarMap = ImportedSidecarTexturesByGuid.Find(Guid);
+
+    for (const FMaterialTextureMapRef& TexRef : TexMaps)
+    {
+        if (TexRef.SlotIndex < 0 || TexRef.SlotIndex >= EffectiveSlotCount) continue;
+        if (!TexRef.IsValid()) continue;
+
+        const uint8 Channel = static_cast<uint8>(TexRef.Channel);
+        const int32 ChannelIdx = (Channel > 0 && Channel <= ChannelNameArrCount - 1)
+            ? Channel - 1 : 0;
+        const TCHAR* ChannelNameTchar = ChannelNameArr[ChannelIdx];
+        const FString ChannelName = FString(ChannelNameArr[ChannelIdx]);
+
+        // Task 9B: canonicalize ImageName for sidecar lookup.
+        FString ImageNameKey = TexRef.ImageName.ToLower();
+        // Strip extension.
+        int32 DotIdx = INDEX_NONE;
+        ImageNameKey.FindLastChar(TEXT('.'), DotIdx);
+        if (DotIdx != INDEX_NONE)
+        {
+            ImageNameKey = ImageNameKey.Left(DotIdx);
+        }
+
+        // Also check normalized basename from Path.
+        FString PathBase = FPaths::GetBaseFilename(TexRef.Path).ToLower();
+        int32 PathDotIdx = INDEX_NONE;
+        PathBase.FindLastChar(TEXT('.'), PathDotIdx);
+        if (PathDotIdx != INDEX_NONE)
+        {
+            PathBase = PathBase.Left(PathDotIdx);
+        }
+
+        // Resolve from sidecar map by canonical key.
+        TSoftObjectPtr<UTexture2D> ResolvedPtr;
+        if (SidecarMap && SidecarMap->Contains(ImageNameKey))
+        {
+            ResolvedPtr = (*SidecarMap)[ImageNameKey];
+        }
+        else if (SidecarMap && SidecarMap->Contains(PathBase))
+        {
+            ResolvedPtr = (*SidecarMap)[PathBase];
+        }
+        else
+        {
+            // FBX _ncl1_1 alias fallback: try stripping _ncl1_1 from sidecar keys.
+            if (SidecarMap)
+            {
+                for (const TPair<FString, TSoftObjectPtr<UTexture2D>>& Entry : *SidecarMap)
+                {
+                    FString AliasCandidate = Entry.Key;
+                    const FString AliasSuffix = TEXT("_ncl1_1");
+                    if (AliasCandidate.EndsWith(AliasSuffix))
+                    {
+                        AliasCandidate = AliasCandidate.Left(AliasCandidate.Len() - AliasSuffix.Len());
+                    }
+                    if (AliasCandidate == ImageNameKey || AliasCandidate == PathBase)
+                    {
+                        ResolvedPtr = Entry.Value;
+                        break;
+                    }
+                }
+            }
+        }
+
+        UTexture2D* ResolvedTex = ResolvedPtr.IsValid() ? Cast<UTexture2D>(ResolvedPtr.Get()) : nullptr;
+
+        if (ResolvedTex)
+        {
+            // Set the texture parameter on MIC.
+            const FString ParamName = ChannelName + TEXT("Texture");
+            MIC->SetTextureParameterValueEditorOnly(FName(*ParamName), ResolvedTex);
+
+            // Enable corresponding Use*Texture toggle.
+            FString ToggleName = TEXT("Use") + ChannelName + TEXT("Texture");
+            MIC->SetScalarParameterValueEditorOnly(FName(*ToggleName), 1.0f);
+
+            const FString AssetPath = ResolvedTex->GetPathName();
+            UE_LOG(LogLiveSync, Log, TEXT("[MATERIAL][PERSISTENT_MIC_CHANNEL] guid=%s slot=%d channel=[%s] action=set_texture texture=%s"),
+                *GuidStr, TexRef.SlotIndex, ChannelNameArr[ChannelIdx], *AssetPath);
+
+            TexturesAppliedOut++;
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][PERSISTENT_MIC_CHANNEL] guid=%s slot=%d channel=[%s] action=texture_miss image=%s key=%s path=%s"),
+                *GuidStr, TexRef.SlotIndex, ChannelNameArr[ChannelIdx], *TexRef.ImageName, *ImageNameKey, *TexRef.Path);
+
+            // Clear stale texture reference + disable toggle.
+            const FString ClearParamName = ChannelName + TEXT("Texture");
+            MIC->SetTextureParameterValueEditorOnly(FName(*ClearParamName), nullptr);
+            FString ToggleName = TEXT("Use") + ChannelName + TEXT("Texture");
+            MIC->SetScalarParameterValueEditorOnly(FName(*ToggleName), 0.0f);
+
+            TextureMissesOut++;
+        }
+    }
+
+    return true;
+}
+
+
 UMaterialInstanceConstant* UUELiveSyncSubsystem::
 ResolvePersistentMaterialAsset(
     const FMaterialIdentityRef& MaterialIdentity) const
@@ -14564,25 +14715,36 @@ ImportTexturesFromMtexRecs(
                 *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.ImageName);
         }
 
-        // Skip non-absolute or empty paths
-        if (!(TexRef.Flags & MTEX_FLAG_PATH_ABSOLUTE) || TexRef.Path.IsEmpty())
+        // Task 9B: accept Blender-relative paths (//Wood.png) — strip prefix.
+        // Do not reject // paths; use ImageName as canonical key for sidecar map.
+        FString EffectivePath = TexRef.Path;
+        if (!EffectivePath.IsEmpty() && EffectivePath.StartsWith(TEXT("//")))
+        {
+            EffectivePath = EffectivePath.Mid(2);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MTEX][PATH_NORMALIZE] guid=%s slot=%d channel=%u original=%s normalized=%s"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel,
+                *TexRef.Path, *EffectivePath);
+        }
+
+        // Still reject if path is empty after normalization.
+        if (EffectivePath.IsEmpty())
         {
             UE_LOG(LogLiveSync, Log,
-                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=non_absolute_or_empty "
-                     "channel=%u path=%s"),
-                *GuidStr, TexRef.SlotIndex, TexRef.Channel,
-                TexRef.Path.IsEmpty() ? TEXT("(empty)") : *TexRef.Path);
+                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=empty_path_after_normalize "
+                     "channel=%u image=%s"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.ImageName);
             TextureImportSkipped++;
             continue;
         }
 
-        // Check file exists on disk
-        if (!FPaths::FileExists(TexRef.Path))
+        // Check file exists on disk (use normalized path).
+        if (!FPaths::FileExists(*EffectivePath))
         {
             UE_LOG(LogLiveSync, Log,
                 TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=file_not_found "
                      "channel=%u path=%s"),
-                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.Path);
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *EffectivePath);
             TextureImportSkipped++;
             continue;
         }
@@ -14592,7 +14754,7 @@ ImportTexturesFromMtexRecs(
             TEXT(".png"), TEXT(".jpg"), TEXT(".jpeg"),
             TEXT(".tga"), TEXT(".bmp"),
         };
-        const FString LowerPath = TexRef.Path.ToLower();
+        const FString LowerPath = EffectivePath.ToLower();
         bool bSupportedExt = false;
         for (const FString& Ext : SupportedExtensions)
         {
@@ -14612,12 +14774,12 @@ ImportTexturesFromMtexRecs(
             continue;
         }
 
-        // Check import cache
-        if (TextureImportCache.Contains(TexRef.Path))
+        // Check import cache (use normalized path).
+        if (TextureImportCache.Contains(EffectivePath))
         {
             UE_LOG(LogLiveSync, Log,
                 TEXT("[MTEX][TEX_CACHE_HIT] guid=%s slot=%d channel=%u path=%s"),
-                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.Path);
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *EffectivePath);
             TextureCacheHit++;
             TextureResolveSkipped++;
             continue;
@@ -14626,7 +14788,7 @@ ImportTexturesFromMtexRecs(
         // Import texture
         TextureImportRequested++;
 
-        TArray<FString> Files = { TexRef.Path };
+        TArray<FString> Files = { EffectivePath };
         TArray<UObject*> ImportedAssets = AssetTools.ImportAssets(Files, DestPath);
 
         UTexture2D* Texture = nullptr;
@@ -14641,7 +14803,7 @@ ImportTexturesFromMtexRecs(
             const FString ImportSrcLog = TEXT("[MATERIAL][TEXTURE_IMPORT_FROM_MATX] guid=") + GuidStr +
                 TEXT(" slot=") + FString::FromInt(TexRef.SlotIndex) +
                 TEXT(" channel=") + ChannelNames[static_cast<int32>(TexRef.Channel) - 1] +
-                TEXT(" src=") + TexRef.Path;
+                TEXT(" src=") + EffectivePath;
             UE_LOG(LogLiveSync, Log, TEXT("%s"), *ImportSrcLog);
 
             // Set sRGB per channel policy:
@@ -14650,7 +14812,7 @@ ImportTexturesFromMtexRecs(
             Texture->SRGB = bSRGB;
             Texture->PostEditChange();
 
-            TextureImportCache.Add(TexRef.Path, Texture);
+            TextureImportCache.Add(EffectivePath, Texture);
 
             const FString AssetPath = Texture->GetPathName();
             const FString ImportOkLog = TEXT("[MATERIAL][TEXTURE_IMPORT_FROM_MATX_OK] guid=") + GuidStr +
@@ -14663,7 +14825,7 @@ ImportTexturesFromMtexRecs(
                 TEXT("[MTEX][TEX_IMPORT] guid=%s slot=%d channel=%u "
                      "path=%s sRGB=%d"),
                 *GuidStr, TexRef.SlotIndex, TexRef.Channel,
-                *TexRef.Path, bSRGB ? 1 : 0);
+                *EffectivePath, bSRGB ? 1 : 0);
 
             // Phase 10K.5: cache size diagnostic
             const int32 CacheSize = TextureImportCache.Num();
@@ -14680,7 +14842,7 @@ ImportTexturesFromMtexRecs(
             UE_LOG(LogLiveSync, Warning,
                 TEXT("[MTEX][TEX_FAIL] guid=%s slot=%d channel=%u "
                      "reason=import_failed path=%s"),
-                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.Path);
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *EffectivePath);
             TextureImportFailed++;
             continue;
         }
