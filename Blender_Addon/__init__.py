@@ -1461,7 +1461,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     current_tex_sigs = {}
                     for slot_idx, slot in enumerate(obj.material_slots):
                         if slot and slot.material:
-                            maps = network.extract_texture_maps_for_slot(slot.material)
+                            maps = network.extract_texture_maps_for_slot(slot.material, slot.material.name, slot_idx)
                             if maps:
                                 tex_hash = network.compute_material_texture_hash(slot_idx, maps)
                                 current_tex_sigs[slot_idx] = tex_hash
@@ -1510,7 +1510,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         tex_maps_dict = {}
                         for slot_idx, slot in enumerate(obj.material_slots):
                             if slot and slot.material:
-                                maps = network.extract_texture_maps_for_slot(slot.material)
+                                maps = network.extract_texture_maps_for_slot(slot.material, slot.material.name, slot_idx)
                                 if maps:
                                     tex_maps_dict[slot_idx] = maps
                                     for ch, fpath, img_name, flags in maps:

@@ -1797,7 +1797,7 @@ def check_updates():
                 current_tex_maps = {}
                 for slot_index, slot in enumerate(obj.material_slots):
                     if slot and slot.material:
-                        maps = extract_texture_maps_for_slot(slot.material)
+                        maps = extract_texture_maps_for_slot(slot.material, slot.material.name, slot_index)
                         if maps:
                             current_tex_maps[slot_index] = maps
                             tex_hash = compute_material_texture_hash(slot_index, maps)
@@ -1936,7 +1936,7 @@ def check_updates():
                     tex_maps = {}
                     for slot_index, slot in enumerate(obj.material_slots):
                         if slot and slot.material:
-                            maps = extract_texture_maps_for_slot(slot.material)
+                            maps = extract_texture_maps_for_slot(slot.material, slot.material.name, slot_index)
                             if maps:
                                 tex_maps[slot_index] = maps
                 except Exception:

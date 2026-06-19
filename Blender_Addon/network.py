@@ -903,11 +903,12 @@ def _get_image_colorspace_flag(image):
     return 0
 
 
-def extract_texture_maps_for_slot(material):
+def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
     """Extract texture map references from a Blender material node tree.
 
     Phase 10K.1: diagnostic-only. Supports direct links from Image Texture
-    nodes to Principled BSDF inputs. Does not traverse complex node graphs.
+    nodes to Principled BSDF inputs, and one hop of indirect connections
+    (e.g. Image Texture → MixRGB/ColorRamp → Principled input).
 
     Supported channels:
         BaseColor: Image Texture Color → Principled Base Color
@@ -918,6 +919,11 @@ def extract_texture_maps_for_slot(material):
 
     For each channel, only the first connected Image Texture is reported.
     Procedural nodes are not evaluated.
+
+    Args:
+        material: Blender material object.
+        material_name: Display name for diagnostic logging.
+        slot_index: Display slot index for diagnostic logging.
 
     Returns:
         list of (channel, filepath, image_name, flags) or empty list
@@ -968,7 +974,22 @@ def extract_texture_maps_for_slot(material):
             if nm_color is not None and nm_color.is_linked:
                 from_node = nm_color.links[0].from_node
 
-        # Must be an Image Texture node
+        # If not directly an Image Texture, try one hop of indirect color connections
+        # for Roughness / Metallic / Alpha channels (e.g. Image Texture → MixRGB → Principled).
+        if getattr(from_node, "type", None) != "TEX_IMAGE":
+            # Supported indirect node types that pass a color through
+            indirect_types = {"MIX_RGB", "COLOR_RAMP", "INVERT", "GAMMA", "CURVES", "HUE_SATURATION"}
+            if getattr(from_node, "type", None) in indirect_types:
+                # Check Color input (or Fac/Z for non-color nodes like Gamma)
+                color_input = from_node.inputs.get("Color")
+                if color_input is None:
+                    color_input = from_node.inputs.get("Fac")
+                if color_input is None:
+                    color_input = from_node.inputs.get("Value")
+                if color_input is not None and color_input.is_linked:
+                    from_node = color_input.links[0].from_node
+
+        # Must be an Image Texture node (direct or after one indirect hop)
         if getattr(from_node, "type", None) != "TEX_IMAGE":
             continue
 
@@ -1001,10 +1022,15 @@ def extract_texture_maps_for_slot(material):
         results.append((channel, filepath, image_name, flags))
 
         _append_blender_debug_log(
-            f"[MTEX][EXTRACT] slot=NA channel={channel} "
+            f"[MTEX][EXTRACT] slot={slot_index} material={material_name} channel={channel} "
             f"image={image_name} path={filepath[:80] if filepath else '(none)'} "
             f"packed={int(is_packed)} cs_flags={flags}"
         )
+
+    # Diagnostic: per-slot/channel extraction summary
+    ch_names = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}
+    detected = [ch_names.get(r[0], f"chan{r[0]}") for r in results]
+    print(f"[MATERIAL][CHANNEL_EXTRACT_SUMMARY] slot={slot_index} material={material_name} channels={detected}")
 
     return results
 
