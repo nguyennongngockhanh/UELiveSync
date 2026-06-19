@@ -2040,6 +2040,21 @@ def test_decision_init_printed_once_per_guid():
     )
 
 
+def test_sig_compare_guarded_by_condition_in_sync_py():
+    """SIG_COMPARE log is guarded by condition to avoid noise on unchanged ticks in sync.py."""
+    # The print must be inside if scalar_changed or tex_changed or prev_prop_sig is None
+    assert "if scalar_changed or tex_changed or prev_prop_sig is None:" in sync_py, (
+        "sync.py must guard SIG_COMPARE print with a condition that suppresses unchanged ticks"
+    )
+
+
+def test_sig_compare_guarded_by_condition_in_init_py():
+    """SIG_COMPARE log is guarded by condition to avoid noise on unchanged ticks in __init__.py."""
+    assert "if scalar_changed or tex_changed or prev_prop_sig is None:" in init_py, (
+        "__init__.py must guard SIG_COMPARE print with a condition that suppresses unchanged ticks"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

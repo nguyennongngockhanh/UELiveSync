@@ -1821,10 +1821,12 @@ def check_updates():
                             prev_tex_sigs[si] = prev_tex
                     tex_changed = (current_tex_sigs != prev_tex_sigs)
                 # Phase 7H: log signature comparison outcome for diagnostics
-                print(f"[MATERIAL][SIG_COMPARE] guid={guid[:8]} "
-                      f"prevExists={int(prev_prop_sig is not None)} "
-                      f"scalarChanged={int(scalar_changed)} "
-                      f"texChanged={int(tex_changed)}")
+                # Only log when something changed or cache missing (suppress noise on unchanged ticks)
+                if scalar_changed or tex_changed or prev_prop_sig is None:
+                    print(f"[MATERIAL][SIG_COMPARE] guid={guid[:8]} "
+                          f"prevExists={int(prev_prop_sig is not None)} "
+                          f"scalarChanged={int(scalar_changed)} "
+                          f"texChanged={int(tex_changed)}")
                 if scalar_changed and tex_changed:
                     bPropertiesChanged = True
                     reason_log = "property_and_texture_changed"
