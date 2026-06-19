@@ -103,20 +103,56 @@ def _get_image_colorspace_flag(image):
 
 
 def simulate_extract_texture_maps_for_slot(material):
-    """Simulated version of extract_texture_maps_for_slot from network.py."""
+    """Simulated version of extract_texture_maps_for_slot from network.py.
+
+    Includes Task 8A.2 Coat fallback: if base Roughness/Normal is unlinked,
+    Coat Roughness/Coat Normal textures are mapped as fallback.
+    """
     if material is None:
         return []
-    # material is a dict with node info
     principled = material.get("principled")
     if principled is None:
         return []
 
+    ch_names = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}
+    emitted_channels = set()
+
     results = []
+    target_sockets = {}
+
     for sock_name, channel in (("Base Color", MTEX_CHANNEL_BASECOLOR),
                                 ("Roughness", MTEX_CHANNEL_ROUGHNESS),
                                 ("Metallic", MTEX_CHANNEL_METALLIC),
                                 ("Alpha", MTEX_CHANNEL_ALPHA),
                                 ("Normal", MTEX_CHANNEL_NORMAL)):
+        sock_info = principled.get(sock_name)
+        if sock_info is None:
+            continue
+        if sock_info.get("linked"):
+            target_sockets[sock_name] = channel
+
+    # Task 8A.2: Coat fallback for Roughness and Normal.
+    roughness_socket = principled.get("Roughness")
+    coat_roughness_socket = principled.get("Coat Roughness")
+    if "Roughness" not in target_sockets and roughness_socket is not None \
+            and coat_roughness_socket is not None and coat_roughness_socket.get("linked"):
+        target_sockets["Coat Roughness"] = MTEX_CHANNEL_ROUGHNESS
+
+    normal_socket = principled.get("Normal")
+    coat_normal_socket = principled.get("Coat Normal")
+    if "Normal" not in target_sockets and normal_socket is not None and normal_socket.get("linked"):
+        pass
+    elif "Normal" not in target_sockets and normal_socket is not None and not normal_socket.get("linked"):
+        if coat_normal_socket is not None and coat_normal_socket.get("linked"):
+            target_sockets["Coat Normal"] = MTEX_CHANNEL_NORMAL
+    elif "Normal" not in target_sockets and normal_socket is None:
+        if coat_normal_socket is not None and coat_normal_socket.get("linked"):
+            target_sockets["Coat Normal"] = MTEX_CHANNEL_NORMAL
+
+    if not target_sockets:
+        return []
+
+    for sock_name, channel in target_sockets.items():
         sock_info = principled.get(sock_name)
         if sock_info is None:
             continue
@@ -127,13 +163,11 @@ def simulate_extract_texture_maps_for_slot(material):
         from_image = sock_info.get("from_image")
         actual_image = from_image
 
-        # Handle Normal Map chain: Image Texture → Normal Map → Principled Normal
         if channel == MTEX_CHANNEL_NORMAL and from_node_type == "NORMAL_MAP":
             nm_color = sock_info.get("nm_color_input")
             if nm_color and nm_color.get("linked"):
                 actual_image = nm_color.get("from_image")
 
-        # Handle indirect connections (one hop): Image Texture → MixRGB/ColorRamp → Principled input
         if actual_image is None:
             indirect_types = {"MIX_RGB", "COLOR_RAMP", "INVERT", "GAMMA", "CURVES", "HUE_SATURATION"}
             if from_node_type in indirect_types:
@@ -141,7 +175,6 @@ def simulate_extract_texture_maps_for_slot(material):
                 if color_input and color_input.get("linked"):
                     indirect_from_type = color_input.get("from_type", "")
                     indirect_image = color_input.get("from_image")
-                    # If indirect node is also a Normal Map, follow NM chain
                     if channel == MTEX_CHANNEL_NORMAL and indirect_from_type == "NORMAL_MAP":
                         nm_color2 = color_input.get("nm_color_input")
                         if nm_color2 and nm_color2.get("linked"):
@@ -151,6 +184,10 @@ def simulate_extract_texture_maps_for_slot(material):
 
         if actual_image is None:
             continue
+
+        if channel in emitted_channels:
+            continue
+        emitted_channels.add(channel)
 
         filepath = actual_image.get("filepath", "")
         image_name = actual_image.get("name", "")
@@ -506,7 +543,7 @@ def run_tests():
     _test("Task 8A.1: Wood slot 0 detects Normal",
           any(r[0] == MTEX_CHANNEL_NORMAL for r in result_wood))
 
-    # Test 17: Synthetic slot 1 Marble independently detects BaseColor/Roughness/Normal
+    # Test 17: Marble slot 1 with Coat fallback (base Roughness/Normal unlinked).
     result_marble = simulate_extract_texture_maps_for_slot({
         "principled": {
             "Base Color": {
@@ -519,34 +556,282 @@ def run_tests():
                     "colorspace": "sRGB"
                 }
             },
-            "Roughness": {
+            "Roughness": {"linked": False},
+            "Coat Roughness": {
                 "linked": True,
                 "from_type": "TEX_IMAGE",
                 "from_image": {
-                    "filepath": "/textures/marble_roughness.png",
-                    "name": "marble_roughness.png",
+                    "filepath": "/textures/marble_coat_rough.png",
+                    "name": "marble_coat_rough.png",
                     "packed": False,
                     "colorspace": "Non-Color"
                 }
             },
-            "Normal": {
+            "Normal": {"linked": False},
+            "Coat Normal": {
                 "linked": True,
-                "from_type": "TEX_IMAGE",
-                "from_image": {
-                    "filepath": "/textures/marble_normal.png",
-                    "name": "marble_normal.png",
-                    "packed": False,
-                    "colorspace": "Non-Color"
+                "from_type": "NORMAL_MAP",
+                "nm_color_input": {
+                    "linked": True,
+                    "from_image": {
+                        "filepath": "/textures/marble_coat_normal.png",
+                        "name": "marble_coat_normal.png",
+                        "packed": False,
+                        "colorspace": "Non-Color"
+                    }
                 }
             }
         }
     })
     _test("Task 8A.2: Marble slot 1 detects BaseColor",
           any(r[0] == MTEX_CHANNEL_BASECOLOR for r in result_marble))
-    _test("Task 8A.2: Marble slot 1 detects Roughness",
+    _test("Task 8A.2: Marble slot 1 detects Roughness via Coat fallback",
           any(r[0] == MTEX_CHANNEL_ROUGHNESS for r in result_marble))
-    _test("Task 8A.2: Marble slot 1 detects Normal",
+    _test("Task 8A.2: Marble slot 1 detects Normal via Coat fallback",
           any(r[0] == MTEX_CHANNEL_NORMAL for r in result_marble))
+    _test("Task 8A.2: Marble Roughness from Coat Roughness (3 total)",
+          len(result_marble) == 3)
+
+    # Test 18: Base Roughness direct texture remains preferred over Coat.
+    result_prefer = simulate_extract_texture_maps_for_slot({
+        "principled": {
+            "Roughness": {
+                "linked": True,
+                "from_type": "TEX_IMAGE",
+                "from_image": {
+                    "filepath": "/textures/rough_base.png",
+                    "name": "rough_base.png",
+                    "packed": False,
+                    "colorspace": "Non-Color"
+                }
+            },
+            "Coat Roughness": {
+                "linked": True,
+                "from_type": "TEX_IMAGE",
+                "from_image": {
+                    "filepath": "/textures/rough_coat.png",
+                    "name": "rough_coat.png",
+                    "packed": False,
+                    "colorspace": "Non-Color"
+                }
+            }
+        }
+    })
+    _test("Task 8A.2: Base Roughness preferred over Coat Roughness",
+          any(r[1] == "/textures/rough_base.png" for r in result_prefer))
+    _test("Task 8A.2: No duplicate Roughness record",
+          sum(1 for r in result_prefer if r[0] == MTEX_CHANNEL_ROUGHNESS) == 1)
+
+    # Test 19: Base Normal preferred over Coat Normal.
+    result_normal_prefer = simulate_extract_texture_maps_for_slot({
+        "principled": {
+            "Normal": {
+                "linked": True,
+                "from_type": "NORMAL_MAP",
+                "nm_color_input": {
+                    "linked": True,
+                    "from_image": {
+                        "filepath": "/textures/normal_base.png",
+                        "name": "normal_base.png",
+                        "packed": False,
+                        "colorspace": "Non-Color"
+                    }
+                }
+            },
+            "Coat Normal": {
+                "linked": True,
+                "from_type": "NORMAL_MAP",
+                "nm_color_input": {
+                    "linked": True,
+                    "from_image": {
+                        "filepath": "/textures/normal_coat.png",
+                        "name": "normal_coat.png",
+                        "packed": False,
+                        "colorspace": "Non-Color"
+                    }
+                }
+            }
+        }
+    })
+    _test("Task 8A.2: Base Normal preferred over Coat Normal",
+          any(r[1] == "/textures/normal_base.png" for r in result_normal_prefer))
+    _test("Task 8A.2: No duplicate Normal record",
+          sum(1 for r in result_normal_prefer if r[0] == MTEX_CHANNEL_NORMAL) == 1)
+
+    # Test 20: (was old Test 18) Traversal state is reset per material.
+    input_wood = {
+        "principled": {
+            "Base Color": {
+                "linked": True,
+                "from_type": "TEX_IMAGE",
+                "from_image": {
+                    "filepath": "/textures/wood_basecolor.png",
+                    "name": "wood_basecolor.png",
+                    "packed": False,
+                    "colorspace": "sRGB"
+                }
+            },
+            "Roughness": {
+                "linked": True,
+                "from_type": "TEX_IMAGE",
+                "from_image": {
+                    "filepath": "/textures/wood_roughness.png",
+                    "name": "wood_roughness.png",
+                    "packed": False,
+                    "colorspace": "Non-Color"
+                }
+            },
+            "Normal": {
+                "linked": True,
+                "from_type": "NORMAL_MAP",
+                "nm_color_input": {
+                    "linked": True,
+                    "from_image": {
+                        "filepath": "/textures/wood_normal.png",
+                        "name": "wood_normal.png",
+                        "packed": False,
+                        "colorspace": "Non-Color"
+                    }
+                }
+            }
+        }
+    }
+    input_marble = {
+        "principled": {
+            "Base Color": {
+                "linked": True,
+                "from_type": "TEX_IMAGE",
+                "from_image": {
+                    "filepath": "/textures/marble_basecolor.png",
+                    "name": "marble_basecolor.png",
+                    "packed": False,
+                    "colorspace": "sRGB"
+                }
+            },
+            "Roughness": {"linked": False},
+            "Coat Roughness": {
+                "linked": True,
+                "from_type": "TEX_IMAGE",
+                "from_image": {
+                    "filepath": "/textures/marble_coat_rough.png",
+                    "name": "marble_coat_rough.png",
+                    "packed": False,
+                    "colorspace": "Non-Color"
+                }
+            },
+            "Normal": {"linked": False},
+            "Coat Normal": {
+                "linked": True,
+                "from_type": "NORMAL_MAP",
+                "nm_color_input": {
+                    "linked": True,
+                    "from_image": {
+                        "filepath": "/textures/marble_coat_normal.png",
+                        "name": "marble_coat_normal.png",
+                        "packed": False,
+                        "colorspace": "Non-Color"
+                    }
+                }
+            }
+        }
+    }
+    result1 = simulate_extract_texture_maps_for_slot(input_wood)
+    result2 = simulate_extract_texture_maps_for_slot(input_marble)
+    _test("Task 8A.3: Traversal state reset per material",
+          len(result1) == 3 and len(result2) == 3)
+
+    # Test 21: (was old Test 19) Indirect connection — Image Texture → MixRGB → Principled Roughness
+    result_indirect = simulate_extract_texture_maps_for_slot({
+        "principled": {
+            "Roughness": {
+                "linked": True,
+                "from_type": "MIX_RGB",
+                "color_input": {
+                    "linked": True,
+                    "from_type": "TEX_IMAGE",
+                    "from_image": {
+                        "filepath": "/textures/indirect_roughness.png",
+                        "name": "indirect_roughness.png",
+                        "packed": False,
+                        "colorspace": "Non-Color"
+                    }
+                }
+            }
+        }
+    })
+    _test("Task 8A.4: Indirect MixRGB connection detected",
+          len(result_indirect) == 1 and result_indirect[0][0] == MTEX_CHANNEL_ROUGHNESS)
+
+    # Test 22: (was old Test 20) Indirect connection — Image Texture → ColorRamp → Principled Roughness
+    result_indirect2 = simulate_extract_texture_maps_for_slot({
+        "principled": {
+            "Roughness": {
+                "linked": True,
+                "from_type": "COLOR_RAMP",
+                "color_input": {
+                    "linked": True,
+                    "from_type": "TEX_IMAGE",
+                    "from_image": {
+                        "filepath": "/textures/indirect_roughness2.png",
+                        "name": "indirect_roughness2.png",
+                        "packed": False,
+                        "colorspace": "Non-Color"
+                    }
+                }
+            }
+        }
+    })
+    _test("Task 8A.5: Indirect ColorRamp connection detected",
+          len(result_indirect2) == 1 and result_indirect2[0][0] == MTEX_CHANNEL_ROUGHNESS)
+
+    # Test 23: (was old Test 21) Six total records serialize (Wood 3 + Marble 3).
+    total = len(result_wood) + len(result_marble)
+    _test("Task 8A.6: Six total texture records (Wood 3 + Marble 3)",
+          total == 6)
+
+    # Test 24: (was old Test 22) Scalar-only material returns empty list.
+    result_scalar = simulate_extract_texture_maps_for_slot({
+        "principled": {
+            "Base Color": {"linked": False},
+            "Roughness": {"linked": False},
+            "Coat Roughness": {"linked": False},
+            "Metallic": {"linked": False},
+            "Alpha": {"linked": False},
+            "Normal": {"linked": False},
+            "Coat Normal": {"linked": False}
+        }
+    })
+    _test("Task 8A.7: Scalar-only material returns empty list",
+          result_scalar == [])
+
+    # Test 25: (was old Test 23) Static analysis — new diagnostic markers.
+    if os.path.exists(network_path):
+        with open(network_path, "r") as f:
+            net_content = f.read()
+        _test("Task 8A.8: CHANNEL_EXTRACT_SUMMARY log marker in network.py",
+              "CHANNEL_EXTRACT_SUMMARY" in net_content)
+        _test("Task 8A.9: CHANNEL_SOURCE log marker in network.py",
+              "CHANNEL_SOURCE" in net_content)
+        _test("Task 8A.10: COAT_FALLBACK log marker in network.py",
+              "COAT_FALLBACK" in net_content)
+    _test("Task 8A.11: extract_texture_maps_for_slot has material_name param",
+          "material_name" in open(network_path).read())
+    _test("Task 8A.12: extract_texture_maps_for_slot has slot_index param",
+          "slot_index" in open(network_path).read())
+
+    # Test 26: (was old Test 24) Static analysis — protocol IDs unchanged.
+    if os.path.exists(network_path):
+        with open(network_path, "r") as f:
+            net_content = f.read()
+        _test("Task 8A.13: PT_Material constant unchanged",
+              "PT_Material = 0x05" in net_content)
+        _test("Task 8A.14: MTEX_MAGIC constant unchanged",
+              "MTEX_MAGIC" in net_content)
+        _test("Task 8A.15: MTEX_VERSION constant unchanged",
+              "MTEX_VERSION" in net_content)
+        _test("Task 8A.16: No new MTEX channel constants for Coat",
+              "MTEX_CHANNEL_COAT_ROUGHNESS" not in net_content and
+              "MTEX_CHANNEL_COAT_NORMAL" not in net_content)
 
     # Test 18: Traversal state is reset per material (independent calls)
     # Re-define the input dicts to pass them again

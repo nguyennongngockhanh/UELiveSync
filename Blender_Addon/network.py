@@ -944,7 +944,8 @@ def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
     if principled is None:
         return []
 
-    # Map Principled input names to MTEX channels
+    # Map Principled input names to MTEX channels.
+    # Base channels are checked first; if unlinked, Coat fallback is considered.
     target_sockets = {}
     for sock_name, channel in (("Base Color", MTEX_CHANNEL_BASECOLOR),
                                 ("Roughness", MTEX_CHANNEL_ROUGHNESS),
@@ -955,10 +956,35 @@ def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
         if sock is not None and sock.is_linked:
             target_sockets[sock_name] = channel
 
+    # Task 8A.2: Coat fallback for Roughness and Normal.
+    # If base Roughness is unlinked, try Coat Roughness as fallback.
+    # If base Normal is unlinked, try Coat Normal as fallback.
+    roughness_socket = principled.inputs.get("Roughness")
+    coat_roughness_socket = principled.inputs.get("Coat Roughness")
+    if "Roughness" not in target_sockets and roughness_socket is not None \
+            and coat_roughness_socket is not None and coat_roughness_socket.is_linked:
+        target_sockets["Coat Roughness"] = MTEX_CHANNEL_ROUGHNESS
+
+    normal_socket = principled.inputs.get("Normal")
+    coat_normal_socket = principled.inputs.get("Coat Normal")
+    if "Normal" not in target_sockets and normal_socket is not None and normal_socket.is_linked:
+        # base Normal IS linked — no coat fallback needed
+        pass
+    elif "Normal" not in target_sockets and normal_socket is not None and not normal_socket.is_linked:
+        if coat_normal_socket is not None and coat_normal_socket.is_linked:
+            target_sockets["Coat Normal"] = MTEX_CHANNEL_NORMAL
+    elif "Normal" not in target_sockets and normal_socket is None:
+        if coat_normal_socket is not None and coat_normal_socket.is_linked:
+            target_sockets["Coat Normal"] = MTEX_CHANNEL_NORMAL
+
     if not target_sockets:
         return []
 
     results = []
+    # Track which MTEX channels have been emitted to prevent duplicates.
+    emitted_channels = set()
+    # Channel name lookup for diagnostics.
+    ch_names = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}
 
     for sock_name, channel in target_sockets.items():
         sock = principled.inputs.get(sock_name)
@@ -1019,7 +1045,26 @@ def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
         if len(image_name) > MTEX_MAX_IMAGE_NAME_LEN:
             image_name = image_name[:MTEX_MAX_IMAGE_NAME_LEN]
 
+        # Prevent duplicate channel records (task 8A.2 policy #5).
+        if channel in emitted_channels:
+            continue
+        emitted_channels.add(channel)
+
         results.append((channel, filepath, image_name, flags))
+
+        # Diagnostic: channel source tracking.
+        is_coat_fallback = sock_name in ("Coat Roughness", "Coat Normal")
+        print(
+            f"[MATERIAL][CHANNEL_SOURCE] slot={slot_index} material={material_name} "
+            f"outputChannel={ch_names.get(channel, str(channel))} "
+            f"principledInput={sock_name} fallback={int(is_coat_fallback)}"
+        )
+
+        if is_coat_fallback:
+            print(
+                f"[MATERIAL][COAT_FALLBACK] slot={slot_index} material={material_name} "
+                f"coatInput={sock_name} mappedChannel={ch_names.get(channel, str(channel))}"
+            )
 
         _append_blender_debug_log(
             f"[MTEX][EXTRACT] slot={slot_index} material={material_name} channel={channel} "
@@ -1028,7 +1073,6 @@ def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
         )
 
     # Diagnostic: per-slot/channel extraction summary
-    ch_names = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}
     detected = [ch_names.get(r[0], f"chan{r[0]}") for r in results]
     print(f"[MATERIAL][CHANNEL_EXTRACT_SUMMARY] slot={slot_index} material={material_name} channels={detected}")
 
