@@ -1255,11 +1255,20 @@ def check_updates():
         global _collection_anti_loop_guids
         global _last_active_camera_guid
         global _last_keyframe_action
+        global _last_material_identity
+        global _last_material_property_sig
+        global _last_material_sent_reason
+        global _last_decision_init_printed
         _known_guids.clear()
         _last_collection_state.clear()
         _collection_anti_loop_guids.clear()
         _last_active_camera_guid = b''  # Phase 7D: resend on next tick
         _last_keyframe_action.clear()  # Phase 7E Stage 8: resend keyframes on reconnect
+        # Phase 7H Task 3: clear material caches on reconnect to force full snapshot
+        _last_material_identity.clear()
+        _last_material_property_sig.clear()
+        _last_material_sent_reason.clear()
+        _last_decision_init_printed.clear()
 
         if _verbose_logging:
             print(
@@ -1958,6 +1967,9 @@ def check_updates():
                     print(f"[MATERIAL][DIAG] Slots={current_slots}")
                 # MATSTALL: track for transform diagnostics
                 _mat_stall_guids.add(guid)
+                if is_first_material:
+                    _sn_complete_slots = len(current_slots) if current_slots else 0
+                    print(f"[MATERIAL][SESSION_SNAPSHOT_COMPLETE] guid={guid[:8]} slots={_sn_complete_slots}")
 
             _last_material_identity[guid] = current_slots
 
@@ -2851,6 +2863,8 @@ def start_sync():
     global _last_collection_state
     global _last_mesh_identity
     global _last_material_identity
+    global _last_material_property_sig  # Phase 10J.5I
+    global _last_material_sent_reason  # Phase 7H
     global _last_geometry_version
     global _last_playback_state
     global _last_timeline_state
@@ -2866,16 +2880,17 @@ def start_sync():
 
     # Reset runtime state
     timer_running = False
+    _tracked_before_clear = len(tracked_objects)
+    print(f"[MATERIAL][SESSION_RESTART] action=start_sync tracked={_tracked_before_clear}")
     last_sent_transforms.clear()
     tracked_objects.clear()
     _last_mesh_identity.clear()
-    print(f"[MATERIAL][SESSION_CACHE_AUDIT] action=start materialSigCount={len(_last_material_property_sig)} identityCount={len(_last_material_identity)}")
     _last_material_identity.clear()
     _last_material_property_sig.clear()  # Phase 10J.5I
     _last_material_sent_reason.clear()  # Phase 7H
     _last_decision_init_printed.clear()  # Phase 7H
 
-    print("[MATERIAL][SESSION_RESTART_FULL_SNAPSHOT] reason=start_sync all_guid_caches_cleared")
+    print(f"[MATERIAL][SESSION_RESTART_FULL_SNAPSHOT] reason=start_sync material_identity_cleared=1 material_sig_cleared=1")
 
     _last_geometry_version.clear()
     _last_object_names.clear()

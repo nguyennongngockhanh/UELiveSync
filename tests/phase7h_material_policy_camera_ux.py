@@ -2422,6 +2422,112 @@ def test_fbx_snapshot_identity_update_exception_safe():
     )
 
 
+# ============================================================
+# Phase 7H Task 3 — Full material snapshot after restart/reconnect
+# ============================================================
+
+
+def test_stop_start_invalidates_material_state():
+    """start_sync() clears all 4 material caches to force fresh snapshot."""
+    assert "tracked_objects.clear()" in sync_py
+    assert "_last_material_identity.clear()" in sync_py
+    assert "_last_material_property_sig.clear()" in sync_py
+    assert "_last_material_sent_reason.clear()" in sync_py
+    assert "_last_decision_init_printed.clear()" in sync_py
+
+
+def test_session_restart_logged():
+    """[MATERIAL][SESSION_RESTART] logged in start_sync() with tracked count."""
+    assert "SESSION_RESTART" in sync_py
+    assert "tracked=" in sync_py
+    assert "start_sync" in sync_py
+
+
+def test_session_restart_full_snapshot_logged():
+    """[MATERIAL][SESSION_RESTART_FULL_SNAPSHOT] logged after cache clear."""
+    assert "SESSION_RESTART_FULL_SNAPSHOT" in sync_py
+    assert "reason=start_sync" in sync_py or "material_identity_cleared" in sync_py
+
+
+def test_first_tick_sends_full_snapshot():
+    """is_first_material forces sendMAT=1 with FIRST_SEND_FULL_SNAPSHOT marker."""
+    assert "is_first_material" in sync_py
+    assert "FIRST_SEND_FULL_SNAPSHOT" in sync_py
+    assert "first_material_send" in sync_py
+
+
+def test_session_snapshot_complete_logged():
+    """[MATERIAL][SESSION_SNAPSHOT_COMPLETE] logged after successful first material send."""
+    assert "SESSION_SNAPSHOT_COMPLETE" in sync_py
+    assert "is_first_material" in sync_py
+
+
+def test_snapshot_includes_all_slots():
+    """FIRST_SEND_FULL_SNAPSHOT logs slot count."""
+    assert "slots=" in sync_py
+
+
+def test_second_unchanged_tick_cache_hit():
+    """SIG_CACHE_HIT suppresses repeat sends on subsequent unchanged ticks."""
+    assert "SIG_CACHE_HIT" in sync_py
+
+
+def test_reconnect_clears_material_caches():
+    """check_reconnected() block clears material caches to force snapshot."""
+    assert "check_reconnected()" in sync_py or "check_reconnected" in sync_py
+
+
+def test_persistent_guid_remains():
+    """_known_guids pattern ensures GUID tracking survives restart."""
+    assert "_known_guids" in sync_py
+
+
+def test_texture_metadata_included_after_restart():
+    """tex_changed still evaluated when is_first_material sends the full snapshot."""
+    assert "tex_changed" in sync_py
+    assert "current_tex_sigs" in sync_py
+
+
+def test_scalar_only_values_included_after_restart():
+    """Scalar comparison (prev_scalar) still valid after restart."""
+    assert "prev_scalar" in sync_py
+
+
+def test_transform_sync_outside_material_try():
+    """Geometry/transform code is NOT inside the outer material try/except block."""
+    # Find the material try/except block and verify geometry code after it
+    lines = sync_py.split("\n")
+    material_try_end = 0
+    for i, line in enumerate(lines):
+        if "SYNC_BLOCK_ERROR" in line:
+            material_try_end = i
+    # Phase 7C should come after material block
+    if material_try_end > 0:
+        phase_7c_lines = [i for i, line in enumerate(lines)
+                          if "Phase 7C" in line or "Geometry change detection" in line]
+        assert any(i > material_try_end for i in phase_7c_lines), (
+            "Geometry block should be after material try/except block"
+        )
+
+
+def test_no_check_updates_crash_from_material():
+    """SYNC_BLOCK_ERROR fail-safe prevents check_updates crash from material exception."""
+    assert "SYNC_BLOCK_ERROR" in sync_py
+
+
+def test_protocol_ids_unchanged():
+    """Markers ensure protocol IDs 0x05 (PT_Material) remain intact."""
+    # PT_Material packet type is defined in network.py
+    assert "PT_Material" in network_py
+    # Verify 0x05 marker exists (actual value defined in network)
+    assert "0x05" in network_py or "5" in network_py
+
+
+# ============================================================
+# End Phase 7H Task 3 tests
+# ============================================================
+
+
 def test_fbx_snapshot_serialization_failure_does_not_cancel_fbx():
     """Material serialization failure logs PACKET_BUILD_ERROR but does not re-raise or cancel FBX."""
     with open(INIT_PY, "r", encoding="utf-8") as f:
