@@ -4452,15 +4452,9 @@ ProcessBinaryPacket(
             // Store MTEX in cache (Phase 10K.1: diagnostic only)
             if (TexMaps.Num() > 0)
             {
-                // Task 8B.2: snapshot replaces previous — log mode.
-                int32 PrevCount = MaterialTextureMapCache.Contains(Guid) ? MaterialTextureMapCache.Find(Guid)->Num() : 0;
                 MaterialTextureMapCache.Add(Guid, TexMaps);
                 MtexBlocksParsed++;
                 MtexRecordsParsed += TexMaps.Num();
-
-                UE_LOG(LogLiveSync, Log,
-                    TEXT("[MATERIAL][MATX_TEXTURE_CACHE_STORE] guid=%s incoming=%d stored=%d mode=replace prev=%d"),
-                    *Guid.ToString(EGuidFormats::Digits), TexMaps.Num(), TexMaps.Num(), PrevCount);
             }
 
             // Phase 7H: log texture record count for all PT_Material packets
@@ -13817,45 +13811,26 @@ ResolveTextureByExactName(
     const FString& ImageName,
     const FString& Path) const
 {
-    // Normalize Path for matching (strip Blender // prefix).
-    FString NormPath = Path;
-    if (NormPath.Len() >= 2 && NormPath[0] == TEXT('/') && NormPath[1] == TEXT('/'))
+    // 1. Check TextureImportCache by path (exact path match).
+    if (Path.Len() > 0)
     {
-        NormPath = NormPath.RightChop(2);
-    }
-
-    // 1. Check TextureImportCache by normalized path (exact match).
-    if (NormPath.Len() > 0)
-    {
-        if (const TSoftObjectPtr<UTexture2D>* Cached = TextureImportCache.Find(NormPath))
+        if (const TSoftObjectPtr<UTexture2D>* Cached = TextureImportCache.Find(Path))
         {
             if (Cached->IsValid()) return Cast<UTexture2D>(Cached->Get());
         }
     }
 
-    // 2. Canonical basename from ImageName.
-    FString TargetBase = TEXT("");
+    // 2. Exact normalized basename match: "Wood.png" → "Wood".
     if (ImageName.Len() > 0)
     {
-        TargetBase = FPaths::GetBaseFilename(ImageName);
-    }
-
-    // If ImageName is empty, fall back to normalized Path basename.
-    if (TargetBase.IsEmpty() && NormPath.Len() > 0)
-    {
-        TargetBase = FPaths::GetBaseFilename(NormPath);
-    }
-
-    // 3. Exact normalized basename match.
-    if (!TargetBase.IsEmpty())
-    {
+        FString BaseName = FPaths::GetBaseFilename(ImageName);
         for (const auto& Kvp : TextureImportCache)
         {
             // Check by full path basename
             if (Kvp.Key.Len() > 0)
             {
                 FString CachedBaseName = FPaths::GetBaseFilename(Kvp.Key);
-                if (CachedBaseName == TargetBase)
+                if (CachedBaseName == BaseName)
                 {
                     if (Kvp.Value.IsValid()) return Cast<UTexture2D>(Kvp.Value.Get());
                 }
@@ -13864,26 +13839,9 @@ ResolveTextureByExactName(
             if (Kvp.Value.IsValid())
             {
                 UTexture2D* Loaded = Cast<UTexture2D>(Kvp.Value.Get());
-                if (Loaded && Loaded->GetName() == TargetBase)
+                if (Loaded && Loaded->GetName() == BaseName)
                 {
                     return Loaded;
-                }
-            }
-            // 4. FBX clash alias check: e.g. Wood → Wood_ncl1_1
-            if (Kvp.Value.IsValid())
-            {
-                UTexture2D* Loaded = Cast<UTexture2D>(Kvp.Value.Get());
-                if (Loaded)
-                {
-                    const FString AssetName = Loaded->GetName();
-                    if (AssetName.Len() > 8 && AssetName.EndsWith(TEXT("_ncl1_1")))
-                    {
-                        FString AliasBase = AssetName.LeftChop(7); // strip _ncl1_1
-                        if (AliasBase == TargetBase)
-                        {
-                            return Loaded;
-                        }
-                    }
                 }
             }
         }
@@ -13932,25 +13890,13 @@ ApplyGeneratedMaterialFromResolvedState(
         if (BP.bHasProperties) MatxPropertySlots++;
     }
 
-    // Task 8B.2: log texture records from current MTEX snapshot, not global counter.
-    const TArray<FMaterialTextureMapRef>* CurTexMaps = MaterialTextureMapCache.Find(Guid);
-    int32 CurTexCount = CurTexMaps ? CurTexMaps->Num() : 0;
-
     UE_LOG(LogLiveSync, Log,
         TEXT("[MATERIAL][MATX_FULL_SNAPSHOT_RECV] guid=%s legacySlotCount=%d matxPropertySlots=%d effectiveSlots=%d textureRecords=%d"),
         *GuidStr,
         SMC->GetNumMaterials(),
         MatxPropertySlots,
         EffectiveSlotCount,
-        CurTexCount);
-
-    // Task 8B.2: log cache replay diagnostics.
-    if (CurTexCount > 0)
-    {
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[MATERIAL][MATX_TEXTURE_CACHE_REPLAY] guid=%s stored=%d"),
-            *GuidStr, CurTexCount);
-    }
+        MtexRecordsParsed);
 
     // Build resolved state per slot.
     TArray<FResolvedMaterialSlotState> ResolvedSlots;
@@ -14200,44 +14146,39 @@ ImportTexturesFromMtexRecs(
                 *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.ImageName);
         }
 
-        // Task 8B.2: Do not reject Blender-relative paths (// prefix).
-        // Blender-relative paths mean the texture data is already materialized
-        // as FBX sidecar files imported through the sidecar manifest.
-        // Use ImageName (canonical basename) for exact resolution.
-        FString NormPath = TexRef.Path;
-        bool bIsBlenderRelative = false;
-        if (NormPath.Len() >= 2 && NormPath[0] == TEXT('/') && NormPath[1] == TEXT('/'))
+        // Skip non-absolute or empty paths
+        if (!(TexRef.Flags & MTEX_FLAG_PATH_ABSOLUTE) || TexRef.Path.IsEmpty())
         {
-            bIsBlenderRelative = true;
-            NormPath = NormPath.RightChop(2);
             UE_LOG(LogLiveSync, Log,
-                TEXT("[MTEX][PATH_NORMALIZE] guid=%s slot=%d channel=%u "
-                     "original=%s normalized=%s source=blender_relative"),
+                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=non_absolute_or_empty "
+                     "channel=%u path=%s"),
                 *GuidStr, TexRef.SlotIndex, TexRef.Channel,
-                *TexRef.Path, *NormPath);
-        }
-
-        // Empty path + empty ImageName means truly unlinked texture.
-        if (TexRef.Path.IsEmpty() && TexRef.ImageName.IsEmpty())
-        {
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=unlinked_texture "
-                     "channel=%u"),
-                *GuidStr, TexRef.SlotIndex, TexRef.Channel);
+                TexRef.Path.IsEmpty() ? TEXT("(empty)") : *TexRef.Path);
             TextureImportSkipped++;
             continue;
         }
 
-        // Phase 10K.5: validate supported texture extension from normalized path.
+        // Check file exists on disk
+        if (!FPaths::FileExists(TexRef.Path))
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=file_not_found "
+                     "channel=%u path=%s"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.Path);
+            TextureImportSkipped++;
+            continue;
+        }
+
+        // Phase 10K.5: validate supported texture extension
         static const TArray<FString> SupportedExtensions = {
             TEXT(".png"), TEXT(".jpg"), TEXT(".jpeg"),
             TEXT(".tga"), TEXT(".bmp"),
         };
-        const FString LowerNormPath = NormPath.ToLower();
+        const FString LowerPath = TexRef.Path.ToLower();
         bool bSupportedExt = false;
         for (const FString& Ext : SupportedExtensions)
         {
-            if (LowerNormPath.EndsWith(Ext))
+            if (LowerPath.EndsWith(Ext))
             {
                 bSupportedExt = true;
                 break;
@@ -14248,17 +14189,17 @@ ImportTexturesFromMtexRecs(
             UE_LOG(LogLiveSync, Log,
                 TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=unsupported_extension "
                      "channel=%u path=%s"),
-                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *NormPath);
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.Path);
             TextureImportSkipped++;
             continue;
         }
 
-        // Check import cache by normalized path.
-        if (TextureImportCache.Contains(NormPath))
+        // Check import cache
+        if (TextureImportCache.Contains(TexRef.Path))
         {
             UE_LOG(LogLiveSync, Log,
                 TEXT("[MTEX][TEX_CACHE_HIT] guid=%s slot=%d channel=%u path=%s"),
-                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *NormPath);
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.Path);
             TextureCacheHit++;
             TextureResolveSkipped++;
             continue;
