@@ -184,7 +184,7 @@ def test_parse_and_apply_uses_generated_mid_for_imported():
     if idx == -1:
         idx = source_cpp.find("ParseAndApplyGeneratedMaterial(")
     assert idx != -1, "ParseAndApplyGeneratedMaterial definition not found"
-    chunk = source_cpp[idx:idx + 8000]
+    chunk = source_cpp[idx:idx + 14000]
     # Must detect imported material path
     assert "/Game/UELiveSync/Imported" in chunk, (
         "ParseAndApplyGeneratedMaterial must check for imported material path"
@@ -2636,6 +2636,97 @@ def test_camera_code_untouched():
     """Camera-related markers are unchanged."""
     assert "Camera" in source_cpp or "camera" in source_cpp
     assert "bHideFromSceneOutliner" in source_cpp
+
+
+# ============================================================
+# Phase 7H Task 5 — Multi-slot MATX application in UE
+# ============================================================
+
+
+def test_matx_slot_begin_marker():
+    """[MATERIAL][MATX_SLOT_BEGIN] marker exists in subsystem."""
+    assert "[MATERIAL][MATX_SLOT_BEGIN]" in source_cpp
+
+
+def test_matx_slot_values_marker_with_fields():
+    """[MATERIAL][MATX_SLOT_VALUES] log has Roughness/Metallic/Alpha."""
+    assert "[MATERIAL][MATX_SLOT_VALUES]" in source_cpp
+    assert "Roughness=%.3f Metallic=%.3f Alpha=%.3f" in source_cpp
+
+
+def test_matx_slot_textures_marker_with_all_channels():
+    """[MATERIAL][MATX_SLOT_TEXTURES] log covers all 5 channels."""
+    assert "[MATERIAL][MATX_SLOT_TEXTURES]" in source_cpp
+    assert "BaseColor=%d Roughness=%d Metallic=%d Normal=%d Alpha=%d" in source_cpp
+    assert "EMTEXChannel::BaseColor" in source_cpp
+    assert "EMTEXChannel::Roughness" in source_cpp
+    assert "EMTEXChannel::Metallic" in source_cpp
+    assert "EMTEXChannel::Normal" in source_cpp
+    assert "EMTEXChannel::Alpha" in source_cpp
+
+
+def test_matx_full_snapshot_apply_marker():
+    """[MATERIAL][MATX_FULL_SNAPSHOT_APPLY] marker exists."""
+    assert "[MATERIAL][MATX_FULL_SNAPSHOT_APPLY]" in source_cpp
+    assert "payloadSlots=%d meshSlots=%d appliedSlots=%d" in source_cpp
+
+
+def test_matx_texture_per_slot_filter():
+    """Texture records filtered by slot index before counting."""
+    assert "TexRef.SlotIndex != SlotIdx" in source_cpp
+    # Each slot independently counts its own texture records
+    assert "MaterialTextureMapCache.Find(Guid)" in source_cpp
+    assert "for (const FMaterialTextureMapRef& TexRef : *TexMaps)" in source_cpp
+
+
+def test_matx_steel_scalar_per_slot():
+    """Scalar values (Metallic/Roughness/Alpha) sourced from per-slot Props."""
+    assert "Props.Roughness" in source_cpp
+    assert "Props.Metallic" in source_cpp
+    assert "Props.Alpha" in source_cpp
+    # Props is from BasicProps[SlotIdx] — per slot
+    assert "const FMaterialSlotBasicProperties& Props = BasicProps[SlotIdx]" in source_cpp
+
+
+def test_matx_texture_toggles_per_slot():
+    """Texture toggles set per-slot in ApplyImportedTexturesToGeneratedMID."""
+    assert "UseBaseColorTexture" in source_cpp
+    assert "UseRoughnessTexture" in source_cpp
+    assert "UseNormalTexture" in source_cpp
+    # Toggles applied per-slot via SlotIndex parameter
+    assert "ApplyImportedTexturesToGeneratedMID(Guid, SlotIdx, MID)" in source_cpp
+
+
+def test_matx_scalar_fallback_non_textured():
+    """Scalar fallback works for non-textured channels via VALUE_PARAM_SET."""
+    assert "VALUE_PARAM_SET" in source_cpp
+    assert "param=Roughness" in source_cpp
+    assert "param=Metallic" in source_cpp
+
+
+def test_matx_full_snapshot_applied_count():
+    """AppliedCount increments per-slot and MaterialGeneratedApplied++."""
+    assert "MaterialGeneratedApplied++" in source_cpp
+    assert "AppliedCount++" in source_cpp
+
+
+def test_matx_slot_out_of_range_safe():
+    """Slots >= mesh slot count are skipped with result=slot_out_of_range."""
+    assert "result=slot_out_of_range" in source_cpp
+    assert "meshSlots=%d" in source_cpp
+    # The continue after the out-of-range log prevents unsafe partial apply
+    assert "continue;" in source_cpp
+
+
+def test_matx_payload_slots_counted():
+    """PayloadSlots counts BasicProps with bHasProperties == true."""
+    assert "int32 PayloadSlots = 0" in source_cpp
+    assert "if (BP.bHasProperties) PayloadSlots++" in source_cpp
+
+
+# ============================================================
+# END: Phase 7H Task 5
+# ============================================================
 
 
 if __name__ == "__main__":

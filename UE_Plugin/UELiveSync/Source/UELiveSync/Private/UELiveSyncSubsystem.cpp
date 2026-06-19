@@ -13892,6 +13892,12 @@ ParseAndApplyGeneratedMaterial(
         return false;
     }
 
+    int32 PayloadSlots = 0;
+    for (const FMaterialSlotBasicProperties& BP : BasicProps)
+    {
+        if (BP.bHasProperties) PayloadSlots++;
+    }
+
     int32 AppliedCount = 0;
     bool bHadRegularGeneratedMID = false;
     int32 SkipImportedCount = 0;
@@ -13901,11 +13907,15 @@ ParseAndApplyGeneratedMaterial(
         if (!Props.bHasProperties)
             continue;
 
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][MATX_SLOT_BEGIN] guid=%s slot=%d"),
+            *Guid.ToString(EGuidFormats::Digits), SlotIdx);
+
         if (SlotIdx >= SMC->GetNumMaterials())
         {
-            UE_LOG(LogLiveSync, Verbose,
-                TEXT("[MATERIAL] Generated material: slot %d out of range (%d materials)"),
-                SlotIdx, SMC->GetNumMaterials());
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_SLOT_BEGIN] guid=%s slot=%d result=slot_out_of_range meshSlots=%d"),
+                *Guid.ToString(EGuidFormats::Digits), SlotIdx, SMC->GetNumMaterials());
             continue;
         }
 
@@ -14012,6 +14022,37 @@ ParseAndApplyGeneratedMaterial(
                 }
             }
 
+            // Phase 7H Task 5: per-slot MATX diagnostic
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][MATX_SLOT_VALUES] guid=%s slot=%d Roughness=%.3f Metallic=%.3f Alpha=%.3f"),
+                    *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+                    Props.Roughness, Props.Metallic, Props.Alpha);
+
+                int32 HasBaseColorTex = 0, HasRoughnessTex = 0, HasMetallicTex = 0, HasNormalTex = 0, HasAlphaTex = 0;
+                const TArray<FMaterialTextureMapRef>* TexMaps = MaterialTextureMapCache.Find(Guid);
+                if (TexMaps)
+                {
+                    for (const FMaterialTextureMapRef& TexRef : *TexMaps)
+                    {
+                        if (TexRef.SlotIndex != SlotIdx) continue;
+                        switch (static_cast<EMTEXChannel>(TexRef.Channel))
+                        {
+                        case EMTEXChannel::BaseColor: HasBaseColorTex = 1; break;
+                        case EMTEXChannel::Roughness: HasRoughnessTex = 1; break;
+                        case EMTEXChannel::Metallic:  HasMetallicTex = 1; break;
+                        case EMTEXChannel::Normal:   HasNormalTex = 1; break;
+                        case EMTEXChannel::Alpha:    HasAlphaTex = 1; break;
+                        default: break;
+                        }
+                    }
+                }
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][MATX_SLOT_TEXTURES] guid=%s slot=%d BaseColor=%d Roughness=%d Metallic=%d Normal=%d Alpha=%d"),
+                    *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+                    HasBaseColorTex, HasRoughnessTex, HasMetallicTex, HasNormalTex, HasAlphaTex);
+            }
+
             SMC->SetMaterial(SlotIdx, MID);
             AppliedCount++;
             bHadRegularGeneratedMID = true;
@@ -14086,6 +14127,37 @@ ParseAndApplyGeneratedMaterial(
             }
         }
 
+        // Phase 7H Task 5: per-slot MATX diagnostic
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_SLOT_VALUES] guid=%s slot=%d Roughness=%.3f Metallic=%.3f Alpha=%.3f"),
+                *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+                Props.Roughness, Props.Metallic, Props.Alpha);
+
+            int32 HasBaseColorTex = 0, HasRoughnessTex = 0, HasMetallicTex = 0, HasNormalTex = 0, HasAlphaTex = 0;
+            const TArray<FMaterialTextureMapRef>* TexMaps = MaterialTextureMapCache.Find(Guid);
+            if (TexMaps)
+            {
+                for (const FMaterialTextureMapRef& TexRef : *TexMaps)
+                {
+                    if (TexRef.SlotIndex != SlotIdx) continue;
+                    switch (static_cast<EMTEXChannel>(TexRef.Channel))
+                    {
+                    case EMTEXChannel::BaseColor: HasBaseColorTex = 1; break;
+                    case EMTEXChannel::Roughness: HasRoughnessTex = 1; break;
+                    case EMTEXChannel::Metallic:  HasMetallicTex = 1; break;
+                    case EMTEXChannel::Normal:   HasNormalTex = 1; break;
+                    case EMTEXChannel::Alpha:    HasAlphaTex = 1; break;
+                    default: break;
+                    }
+                }
+            }
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_SLOT_TEXTURES] guid=%s slot=%d BaseColor=%d Roughness=%d Metallic=%d Normal=%d Alpha=%d"),
+                *Guid.ToString(EGuidFormats::Digits), SlotIdx,
+                HasBaseColorTex, HasRoughnessTex, HasMetallicTex, HasNormalTex, HasAlphaTex);
+        }
+
         SMC->SetMaterial(SlotIdx, MID);
         AppliedCount++;
         bHadRegularGeneratedMID = true;
@@ -14110,6 +14182,12 @@ ParseAndApplyGeneratedMaterial(
                 MeshExtent.X, MeshExtent.Y, MeshExtent.Z);
         }
     }
+
+    // Phase 7H Task 5: full snapshot summary
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MATERIAL][MATX_FULL_SNAPSHOT_APPLY] guid=%s payloadSlots=%d meshSlots=%d appliedSlots=%d"),
+        *Guid.ToString(EGuidFormats::Digits), PayloadSlots,
+        SMC->GetNumMaterials(), AppliedCount);
 
     if (AppliedCount > 0)
     {

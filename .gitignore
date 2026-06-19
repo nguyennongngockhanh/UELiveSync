@@ -21,6 +21,8 @@ Desktop.ini
 # UE Plugin Build Artifacts
 Binaries/
 Intermediate/
+UE_Plugin/UELiveSync/Binaries/
+UE_Plugin/UELiveSync/Intermediate/
 *.sln
 *.vcxproj*
 *.suo
