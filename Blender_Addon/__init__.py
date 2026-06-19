@@ -1474,6 +1474,12 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                                 prev_tex_sigs[si] = prev_tex
                         tex_changed = (current_tex_sigs != prev_tex_sigs)
 
+                    # Phase 7H: log signature comparison outcome for diagnostics
+                    print(f"[MATERIAL][SIG_COMPARE] guid={guid_hex[:8]} "
+                          f"prevExists={int(prev_prop_sig is not None)} "
+                          f"scalarChanged={int(scalar_changed)} "
+                          f"texChanged={int(tex_changed)}")
+
                     # Phase 7H: always extract tex_maps + mat_props so we can send
                     # even when only texture changed (scalars unchanged).
                     mat_props = {}

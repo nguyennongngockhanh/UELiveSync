@@ -294,6 +294,10 @@ _last_material_property_sig = {}
 # Maps guid -> last reason string; cleared after SIG_CACHE_HIT is logged.
 _last_material_sent_reason = {}
 
+# Phase 7H: set of GUIDs that have already printed the initial decision log.
+# Prevents [MATERIAL][DECISION_INIT] from spamming every tick.
+_last_decision_init_printed = set()
+
 # Phase 7C: Per-GUID last geometry version hash for change detection
 # Maps guid -> SHA-256 hex string of evaluated mesh geometry.
 # Cleared on start_sync, stop_sync, and object delete.
@@ -1791,7 +1795,10 @@ def check_updates():
 
             # Phase 10A.2: defensive initialize reason_log before decision branches
             reason_log = "property_unchanged"
-            print(f"[MATERIAL][DECISION_INIT] guid={guid} reason_log=property_unchanged")
+            # Print DECISION_INIT only once per GUID session to avoid tick-spam.
+            if guid not in _last_decision_init_printed:
+                _last_decision_init_printed.add(guid)
+                print(f"[MATERIAL][DECISION_INIT] guid={guid} reason_log=property_unchanged")
             if is_first_material:
                 bPropertiesChanged = True
                 reason_log = "first_material_send"
@@ -1813,6 +1820,11 @@ def check_updates():
                         if si in current_tex_sigs or any(v != 0 for v in prev_tex):
                             prev_tex_sigs[si] = prev_tex
                     tex_changed = (current_tex_sigs != prev_tex_sigs)
+                # Phase 7H: log signature comparison outcome for diagnostics
+                print(f"[MATERIAL][SIG_COMPARE] guid={guid[:8]} "
+                      f"prevExists={int(prev_prop_sig is not None)} "
+                      f"scalarChanged={int(scalar_changed)} "
+                      f"texChanged={int(tex_changed)}")
                 if scalar_changed and tex_changed:
                     bPropertiesChanged = True
                     reason_log = "property_and_texture_changed"
@@ -2836,6 +2848,7 @@ def start_sync():
     global _active_camera_packets_sent
     global _active_camera_state_changes
     global _camera_def_packets_sent
+    global _last_decision_init_printed
 
     # Reset runtime state
     timer_running = False
@@ -2845,6 +2858,7 @@ def start_sync():
     _last_material_identity.clear()
     _last_material_property_sig.clear()  # Phase 10J.5I
     _last_material_sent_reason.clear()  # Phase 7H
+    _last_decision_init_printed.clear()  # Phase 7H
     _last_geometry_version.clear()
     _last_object_names.clear()
     _last_visibility_state.clear()

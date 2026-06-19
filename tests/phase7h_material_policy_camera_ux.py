@@ -1979,6 +1979,67 @@ def test_compute_material_dirty_sig_called_at_cache_update():
     )
 
 
+# === Phase 7H: SIG_COMPARE log + DECISION_INIT spam suppression ===
+
+
+def test_sig_compare_marker_exists_in_sync_py():
+    """SIG_COMPARE log marker exists in sync.py."""
+    assert "[MATERIAL][SIG_COMPARE]" in sync_py, (
+        "sync.py must log SIG_COMPARE for scalar/tex comparison diagnostics"
+    )
+
+
+def test_sig_compare_marker_exists_in_init_py():
+    """SIG_COMPARE log marker exists in __init__.py."""
+    assert "[MATERIAL][SIG_COMPARE]" in init_py, (
+        "__init__.py must log SIG_COMPARE for scalar/tex comparison diagnostics"
+    )
+
+
+def test_sig_compare_logs_prev_exists_scalar_changed_tex_changed():
+    """SIG_COMPARE in sync.py includes prevExists, scalarChanged, texChanged fields."""
+    idx = sync_py.find("[MATERIAL][SIG_COMPARE]")
+    assert idx != -1, "SIG_COMPARE marker must be in sync.py"
+    after_sig = sync_py[idx:idx + 400]
+    assert "prevExists" in after_sig, (
+        "SIG_COMPARE must log prevExists"
+    )
+    assert "scalarChanged" in after_sig, (
+        "SIG_COMPARE must log scalarChanged"
+    )
+    assert "texChanged" in after_sig, (
+        "SIG_COMPARE must log texChanged"
+    )
+
+
+def test_decision_init_spam_suppressed_by_guid_set_guard():
+    """DECISION_INIT log is gated by _last_decision_init_printed set to avoid tick-spam."""
+    assert "guid not in _last_decision_init_printed" in sync_py, (
+        "sync.py must gate DECISION_INIT with _last_decision_init_printed guard"
+    )
+
+
+def test_last_decision_init_printed_exists():
+    """_last_decision_init_printed set exists in sync.py."""
+    assert "_last_decision_init_printed" in sync_py, (
+        "sync.py must define _last_decision_init_printed set"
+    )
+
+
+def test_last_decision_init_printed_cleared_on_start_sync():
+    """_last_decision_init_printed is cleared on start_sync."""
+    assert "_last_decision_init_printed.clear()" in sync_py, (
+        "start_sync must clear _last_decision_init_printed"
+    )
+
+
+def test_decision_init_printed_once_per_guid():
+    """DECISION_INIT uses _last_decision_init_printed.add(guid) to print once per session."""
+    assert "_last_decision_init_printed.add(guid)" in sync_py, (
+        "sync.py must add guid to _last_decision_init_printed after first print"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
