@@ -25,6 +25,39 @@ class FRunnableThread;
 
 class FLiveSyncRunnable;
 
+// =========================================================
+// RESOLVED PER-SLOT MATERIAL STATE (Task 8B)
+// =========================================================
+// Central intermediate structure for MATX full-snapshot hydration.
+// Built from parsed MATX scalar properties + MTEX texture records,
+// then applied once to the MID per slot. Undefines all toggles
+// before the apply pass so only records with resolved textures
+// get toggles=1; scalar-only channels get toggles=0.
+
+USTRUCT()
+struct FResolvedMaterialSlotState
+{
+    GENERATED_BODY()
+
+    int32 SlotIndex = -1;
+    FLinearColor BaseColor = FLinearColor::White;
+    float Roughness = 0.5f;
+    float Metallic = 0.0f;
+    float Alpha = 1.0f;
+
+    UTexture* BaseColorTexture = nullptr;
+    UTexture* RoughnessTexture = nullptr;
+    UTexture* MetallicTexture = nullptr;
+    UTexture* NormalTexture = nullptr;
+    UTexture* AlphaTexture = nullptr;
+
+    bool bUseBaseColorTexture = false;
+    bool bUseRoughnessTexture = false;
+    bool bUseMetallicTexture = false;
+    bool bUseNormalTexture = false;
+    bool bUseAlphaTexture = false;
+};
+
 
 // =========================================================
 // LIVE SYNC SUBSYSTEM
@@ -491,6 +524,21 @@ private:
      *  Falls back to BasicShapeMaterial on failure.
      */
     UMaterialInterface* GetOrCreateLiveSyncMasterMaterial();
+
+    /** Task 8B: Resolve MTEX records to imported textures using
+     *  exact basename/path match. Returns resolved texture or nullptr.
+     */
+    UTexture2D* ResolveTextureByExactName(
+        const FString& ImageName,
+        const FString& Path) const;
+
+    /** Task 8B: Build per-slot resolved state from MATX + MTEX data
+     *  and apply once to generated MIDs. One authoritative pass.
+     */
+    bool ApplyGeneratedMaterialFromResolvedState(
+        const FGuid& Guid,
+        const TArray<FMaterialSlotBasicProperties>& BasicProps,
+        int32 EffectiveSlotCount);
 
 #if WITH_EDITOR
     /** Phase 10K.4: Create the LiveSync master material asset

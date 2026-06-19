@@ -13655,132 +13655,16 @@ CopyImportedTexturesFromParent(
         }
     }
 
-    // --- PHASE 7H.5: FOLDER SCAN FALLBACK ---
-    // If parameter-based discovery found nothing, scan the imported folder
-    // for UTexture2D assets using the AssetRegistry (editor only).
+    // Task 8B: Speculative folder-scanning heuristic removed.
+    // Folder scanning may only help resolve an exact texture record.
+    // It must never create a channel assignment.
+    // Parameter-based discovery above is the sole import-source.
 #if WITH_EDITOR
     if (FoundTextures.Num() == 0)
     {
-        FString ImportedFolder = TEXT("/Game/UELiveSync/Imported");
-        {
-            UPackage* MatPkg = ImportedParentMat->GetPackage();
-            if (MatPkg)
-            {
-                FString PkgName = MatPkg->GetName();
-                int32 LastSlash = INDEX_NONE;
-                if (PkgName.FindLastChar(TCHAR('/'), LastSlash))
-                {
-                    ImportedFolder = PkgName.Left(LastSlash);
-                }
-            }
-        }
-
-        IAssetRegistry* AssetReg = IAssetRegistry::Get();
-        if (AssetReg)
-        {
-            FARFilter Filter;
-            Filter.PackagePaths.Add(FName(*ImportedFolder));
-            Filter.ClassPaths.Add(UTexture2D::StaticClass()->GetClassPathName());
-            Filter.bRecursivePaths = true;
-
-            TArray<FAssetData> TextureAssets;
-            AssetReg->GetAssets(Filter, TextureAssets);
-
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[MATERIAL][IMPORTED_TEXTURE_FOLDER_SCAN] folder=%s recursive=1 textureCount=%d"),
-                *ImportedFolder, TextureAssets.Num());
-
-            if (TextureAssets.Num() > 0)
-            {
-                FString MatName = ImportedParentMat->GetName();
-                if (MatName.StartsWith(TEXT("M_")))
-                    MatName.RightChopInline(2);
-
-                struct FScanChannel {
-                    FName ParamName;
-                    FName ToggleName;
-                    TArray<FString> Keywords;
-                };
-                FScanChannel ScanChannels[] = {
-                    { FName("BaseColorTexture"), FName("UseBaseColorTexture"),
-                      { TEXT("BaseColor"), TEXT("Base_Color"), TEXT("Albedo"), TEXT("Diffuse"), TEXT("Color"), TEXT("Col") } },
-                    { FName("RoughnessTexture"), FName("UseRoughnessTexture"),
-                      { TEXT("Roughness"), TEXT("Rough") } },
-                    { FName("MetallicTexture"), FName("UseMetallicTexture"),
-                      { TEXT("Metallic"), TEXT("Metalness"), TEXT("Metal") } },
-                    { FName("NormalTexture"), FName("UseNormalTexture"),
-                      { TEXT("Normal"), TEXT("Bump"), TEXT("NormalMap") } },
-                    { FName("AlphaTexture"), FName("UseAlphaTexture"),
-                      { TEXT("Alpha"), TEXT("Opacity"), TEXT("Trans") } },
-                };
-
-                for (const FScanChannel& Chan : ScanChannels)
-                {
-                    if (AlreadySet.Contains(Chan.ParamName))
-                        continue;
-
-                    FAssetData* BestAsset = nullptr;
-                    int32 BestScore = 0;
-
-                    for (FAssetData& Asset : TextureAssets)
-                    {
-                        FString AssetName = Asset.AssetName.ToString();
-                        int32 Score = 0;
-
-                        if (!MatName.IsEmpty() && AssetName.Contains(MatName))
-                            Score += 3;
-
-                        for (const FString& Kw : Chan.Keywords)
-                        {
-                            if (AssetName.Contains(Kw))
-                            {
-                                Score += 2;
-                                break;
-                            }
-                        }
-
-                        if (Score > 0)
-                        {
-                            UE_LOG(LogLiveSync, Verbose,
-                                TEXT("[MATERIAL][IMPORTED_TEXTURE_CANDIDATE] path=%s score=%d"),
-                                *Asset.GetObjectPathString(), Score);
-                        }
-
-                        if (Score > BestScore)
-                        {
-                            BestScore = Score;
-                            BestAsset = &Asset;
-                        }
-                    }
-
-                    if (BestAsset && BestScore > 0)
-                    {
-                        UTexture2D* Tex = Cast<UTexture2D>(BestAsset->GetAsset());
-                        if (Tex)
-                        {
-                            FoundTextures.Add(Chan.ParamName, Tex);
-                            AlreadySet.Add(Chan.ParamName);
-                            UE_LOG(LogLiveSync, Log,
-                                TEXT("[MATERIAL][IMPORTED_TEXTURE_CANDIDATE] path=%s score=%d reason=selected"),
-                                *BestAsset->GetObjectPathString(), BestScore);
-                        }
-                    }
-                }
-
-                if (FoundTextures.Num() == 0 && TextureAssets.Num() == 1)
-                {
-                    UTexture2D* Tex = Cast<UTexture2D>(TextureAssets[0].GetAsset());
-                    if (Tex)
-                    {
-                        FoundTextures.Add(FName("BaseColorTexture"), Tex);
-                        AlreadySet.Add(FName("BaseColorTexture"));
-                        UE_LOG(LogLiveSync, Log,
-                            TEXT("[MATERIAL][IMPORTED_TEXTURE_CANDIDATE] path=%s score=0 reason=single_texture_fallback"),
-                            *TextureAssets[0].GetObjectPathString());
-                    }
-                }
-            }
-        }
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][COPY_NO_IMPORT_PARAMS] guid=%s slot=%d reason=no_matched_import_params"),
+            *GuidStr, SlotIndex);
     }
 #endif
 
@@ -13867,14 +13751,55 @@ CopyImportedTexturesFromParent(
 // =========================================================
 // PARSE AND APPLY GENERATED MATERIAL (Phase 10J.5H)
 // =========================================================
+// Task 8B: delegates to ApplyGeneratedMaterialFromResolvedState.
+// Legacy path removed. One authoritative apply per slot.
 
 bool UUELiveSyncSubsystem::
 ParseAndApplyGeneratedMaterial(
     const FGuid& Guid,
     const TArray<FMaterialSlotBasicProperties>& BasicProps)
 {
-    // Resolve actor
+    // Task 8B: Count effective slots from parsed MATX properties.
+    int32 MatxPropertySlots = 0;
+    for (const FMaterialSlotBasicProperties& BP : BasicProps)
+    {
+        if (BP.bHasProperties) MatxPropertySlots++;
+    }
+
+    // Task 8B: derive effectiveSlotCount from MATX parsed properties,
+    // not from legacy ObjectCount (which may be 1 on early packets).
+    int32 EffectiveSlotCount = MatxPropertySlots;
+    if (EffectiveSlotCount == 0) EffectiveSlotCount = BasicProps.Num();
+
+    // Task 8B: deferred replay — wait for mesh slots to be ready.
     AActor* Actor = FindActorFast(Guid);
+    if (Actor)
+    {
+        UStaticMeshComponent* SMC = Actor->FindComponentByClass<UStaticMeshComponent>();
+        if (SMC)
+        {
+            int32 MeshSlots = SMC->GetNumMaterials();
+            if (MeshSlots < EffectiveSlotCount)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][MATX_DEFER] guid=%s payloadSlots=%d meshSlots=%d reason=mesh_slot_count_not_ready"),
+                    *Guid.ToString(EGuidFormats::Digits), EffectiveSlotCount, MeshSlots);
+
+                // Phase 10J.5D: replay buffer already handles deferred re-application.
+                // Log early state for diagnostic purposes.
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][MATX_DEFER_STATE] guid=%s payloadSlots=%d meshSlots=%d appliedSlots=%d"),
+                    *Guid.ToString(EGuidFormats::Digits),
+                    EffectiveSlotCount, MeshSlots, MeshSlots > 0 ? MeshSlots : 0);
+
+                return false;
+            }
+        }
+    }
+
+    // Task 8B: apply using resolved MATX state (one authoritative pass).
+    return ApplyGeneratedMaterialFromResolvedState(Guid, BasicProps, EffectiveSlotCount);
+}
     if (!Actor)
     {
         UE_LOG(LogLiveSync, Verbose,
@@ -14224,6 +14149,308 @@ ParseAndApplyGeneratedMaterial(
 
 
 // =========================================================
+// TASK 8B — EXACT TEXTURE RESOLUTION (basename/path match)
+// =========================================================
+
+UTexture2D* UUELiveSyncSubsystem::
+ResolveTextureByExactName(
+    const FString& ImageName,
+    const FString& Path) const
+{
+    // 1. Check TextureImportCache by path (exact path match).
+    if (Path.Len() > 0)
+    {
+        if (TSoftObjectPtr<UTexture2D>* Cached = TextureImportCache.Find(Path))
+        {
+            if (Cached->IsValid()) return Cast<UTexture2D>(Cached->Get());
+        }
+    }
+
+    // 2. Exact normalized basename match: "Wood.png" → "Wood".
+    if (ImageName.Len() > 0)
+    {
+        FString BaseName = FPaths::GetBaseFilename(ImageName);
+        for (const auto& Kvp : TextureImportCache)
+        {
+            // Check by full path basename
+            if (Kvp.Key.Len() > 0)
+            {
+                FString CachedBaseName = FPaths::GetBaseFilename(Kvp.Key);
+                if (CachedBaseName == BaseName)
+                {
+                    if (Kvp.Value.IsValid()) return Cast<UTexture2D>(Kvp.Value.Get());
+                }
+            }
+            // Check by asset name
+            if (Kvp.Value.IsValid())
+            {
+                UTexture2D* Loaded = Cast<UTexture2D>(Kvp.Value.Get());
+                if (Loaded && Loaded->GetName() == BaseName)
+                {
+                    return Loaded;
+                }
+            }
+        }
+    }
+
+    return nullptr;
+}
+
+
+// =========================================================
+// TASK 8B — APPLY GENERATED MATERIAL FROM RESOLVED STATE
+// =========================================================
+// One authoritative apply pass per slot. Builds resolved state
+// from MATX + MTEX, applies once, and logs the final state.
+
+bool UUELiveSyncSubsystem::
+ApplyGeneratedMaterialFromResolvedState(
+    const FGuid& Guid,
+    const TArray<FMaterialSlotBasicProperties>& BasicProps,
+    int32 EffectiveSlotCount)
+{
+    AActor* Actor = FindActorFast(Guid);
+    if (!Actor)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MATERIAL][MATX_APPLY] guid=%s reason=no_actor"),
+            *Guid.ToString(EGuidFormats::Digits));
+        return false;
+    }
+
+    UStaticMeshComponent* SMC = Actor->FindComponentByClass<UStaticMeshComponent>();
+    if (!SMC)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MATERIAL][MATX_APPLY] guid=%s reason=no_static_mesh_component"),
+            *Guid.ToString(EGuidFormats::Digits));
+        return false;
+    }
+
+    const FString GuidStr = Guid.ToString(EGuidFormats::Digits);
+
+    // Count effective slots from parsed MATX properties.
+    int32 MatxPropertySlots = 0;
+    for (const FMaterialSlotBasicProperties& BP : BasicProps)
+    {
+        if (BP.bHasProperties) MatxPropertySlots++;
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MATERIAL][MATX_FULL_SNAPSHOT_RECV] guid=%s legacySlotCount=%d matxPropertySlots=%d effectiveSlots=%d textureRecords=%d"),
+        *GuidStr,
+        SMC->GetNumMaterials(),
+        MatxPropertySlots,
+        EffectiveSlotCount,
+        MtexRecordsParsed);
+
+    // Build resolved state per slot.
+    TArray<FResolvedMaterialSlotState> ResolvedSlots;
+    ResolvedSlots.Init(FResolvedMaterialSlotState(), EffectiveSlotCount);
+
+    for (int32 SlotIdx = 0; SlotIdx < EffectiveSlotCount; SlotIdx++)
+    {
+        ResolvedSlots[SlotIdx].SlotIndex = SlotIdx;
+
+        // Find MATX properties for this slot.
+        const FMaterialSlotBasicProperties* Props = nullptr;
+        for (const FMaterialSlotBasicProperties& BP : BasicProps)
+        {
+            if (BP.bHasProperties)
+            {
+                if (!Props) Props = &BP;
+                // If multiple slots, find by iterating BasicProps in order.
+                // BasicProps is indexed by slot position.
+            }
+        }
+
+        // Get the right properties — BasicProps is ordered by slot index.
+        if (SlotIdx < BasicProps.Num() && BasicProps[SlotIdx].bHasProperties)
+        {
+            Props = &BasicProps[SlotIdx];
+        }
+
+        if (Props)
+        {
+            ResolvedSlots[SlotIdx].BaseColor = Props->BaseColor;
+            ResolvedSlots[SlotIdx].Roughness = Props->Roughness;
+            ResolvedSlots[SlotIdx].Metallic = Props->Metallic;
+            ResolvedSlots[SlotIdx].Alpha = Props->Alpha;
+        }
+    }
+
+    // Resolve textures from MTEX records.
+    const TArray<FMaterialTextureMapRef>* TexMaps = MaterialTextureMapCache.Find(Guid);
+    if (TexMaps)
+    {
+        for (const FMaterialTextureMapRef& TexRef : *TexMaps)
+        {
+            if (TexRef.SlotIndex < 0 || TexRef.SlotIndex >= EffectiveSlotCount) continue;
+            if (!TexRef.IsValid()) continue;
+
+            int32 SlotIdx = TexRef.SlotIndex;
+            FResolvedMaterialSlotState& SlotState = ResolvedSlots[SlotIdx];
+
+            // Resolve texture by exact match.
+            UTexture2D* Resolved = ResolveTextureByExactName(TexRef.ImageName, TexRef.Path);
+
+            FString ResultStr = Resolved ? TEXT("resolved") : TEXT("missing");
+            FString AssetStr = Resolved ? Resolved->GetPathName() : TEXT("none");
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_EXACT_TEXTURE_RESOLVE] guid=%s slot=%d channel=%u image=%s asset=%s result=%s"),
+                *GuidStr, SlotIdx, TexRef.Channel, *TexRef.ImageName, *AssetStr, *ResultStr);
+
+            if (!Resolved) continue;
+
+            // Assign to the correct channel.
+            switch (static_cast<EMTEXChannel>(TexRef.Channel))
+            {
+            case EMTEXChannel::BaseColor:
+                SlotState.BaseColorTexture = Resolved;
+                SlotState.bUseBaseColorTexture = true;
+                break;
+            case EMTEXChannel::Roughness:
+                SlotState.RoughnessTexture = Resolved;
+                SlotState.bUseRoughnessTexture = true;
+                break;
+            case EMTEXChannel::Metallic:
+                SlotState.MetallicTexture = Resolved;
+                SlotState.bUseMetallicTexture = true;
+                break;
+            case EMTEXChannel::Normal:
+                SlotState.NormalTexture = Resolved;
+                SlotState.bUseNormalTexture = true;
+                break;
+            case EMTEXChannel::Alpha:
+                SlotState.AlphaTexture = Resolved;
+                SlotState.bUseAlphaTexture = true;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
+    // Apply resolved state to generated MIDs — one authoritative pass.
+    int32 AppliedCount = 0;
+    for (int32 SlotIdx = 0; SlotIdx < EffectiveSlotCount; SlotIdx++)
+    {
+        if (SlotIdx >= SMC->GetNumMaterials())
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_APPLY] guid=%s slot=%d result=slot_out_of_range meshSlots=%d"),
+                *GuidStr, SlotIdx, SMC->GetNumMaterials());
+            continue;
+        }
+
+        const FResolvedMaterialSlotState& SlotState = ResolvedSlots[SlotIdx];
+
+        // Get or create the MID.
+        UMaterialInstanceDynamic* MID = GetOrCreateGeneratedMID(Guid, SlotIdx, SlotState.BaseColor);
+        if (!MID)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[MATERIAL][MATX_APPLY] guid=%s slot=%d reason=no_generated_mid"),
+                *GuidStr, SlotIdx);
+            continue;
+        }
+
+        // Set scalar values from MATX.
+        MID->SetVectorParameterValue(FName("BaseColor"), SlotState.BaseColor);
+        MID->SetScalarParameterValue(FName("Roughness"), SlotState.Roughness);
+        MID->SetScalarParameterValue(FName("Metallic"), SlotState.Metallic);
+        MID->SetScalarParameterValue(FName("Alpha"), SlotState.Alpha);
+
+        // Set texture parameters and toggles.
+        MID->SetTextureParameterValue(FName("BaseColorTexture"), SlotState.BaseColorTexture);
+        MID->SetScalarParameterValue(FName("UseBaseColorTexture"), SlotState.bUseBaseColorTexture ? 1.0f : 0.0f);
+        MID->SetTextureParameterValue(FName("RoughnessTexture"), SlotState.RoughnessTexture);
+        MID->SetScalarParameterValue(FName("UseRoughnessTexture"), SlotState.bUseRoughnessTexture ? 1.0f : 0.0f);
+        MID->SetTextureParameterValue(FName("MetallicTexture"), SlotState.MetallicTexture);
+        MID->SetScalarParameterValue(FName("UseMetallicTexture"), SlotState.bUseMetallicTexture ? 1.0f : 0.0f);
+        MID->SetTextureParameterValue(FName("NormalTexture"), SlotState.NormalTexture);
+        MID->SetScalarParameterValue(FName("UseNormalTexture"), SlotState.bUseNormalTexture ? 1.0f : 0.0f);
+        MID->SetTextureParameterValue(FName("AlphaTexture"), SlotState.AlphaTexture);
+        MID->SetScalarParameterValue(FName("UseAlphaTexture"), SlotState.bUseAlphaTexture ? 1.0f : 0.0f);
+
+        // Log scalar values.
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][MATX_SLOT_VALUES] guid=%s slot=%d Roughness=%.3f Metallic=%.3f Alpha=%.3f"),
+            *GuidStr, SlotIdx, SlotState.Roughness, SlotState.Metallic, SlotState.Alpha);
+
+        // Log texture state.
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MATERIAL][MATX_SLOT_TEXTURES] guid=%s slot=%d BaseColor=%d Roughness=%d Metallic=%d Normal=%d Alpha=%d"),
+            *GuidStr, SlotIdx,
+            SlotState.bUseBaseColorTexture ? 1 : 0,
+            SlotState.bUseRoughnessTexture ? 1 : 0,
+            SlotState.bUseMetallicTexture ? 1 : 0,
+            SlotState.bUseNormalTexture ? 1 : 0,
+            SlotState.bUseAlphaTexture ? 1 : 0);
+
+        // Log individual texture applies.
+        if (SlotState.BaseColorTexture)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_SLOT_APPLY_OK] guid=%s slot=%d mid=%s BaseColor=%s"),
+                *GuidStr, SlotIdx, *MID->GetName(), *SlotState.BaseColorTexture->GetPathName());
+        }
+        if (SlotState.RoughnessTexture)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_SLOT_APPLY_OK] guid=%s slot=%d mid=%s Roughness=%s"),
+                *GuidStr, SlotIdx, *MID->GetName(), *SlotState.RoughnessTexture->GetPathName());
+        }
+        if (SlotState.NormalTexture)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_SLOT_APPLY_OK] guid=%s slot=%d mid=%s Normal=%s"),
+                *GuidStr, SlotIdx, *MID->GetName(), *SlotState.NormalTexture->GetPathName());
+        }
+        if (SlotState.MetallicTexture)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_SLOT_APPLY_OK] guid=%s slot=%d mid=%s Metallic=%s"),
+                *GuidStr, SlotIdx, *MID->GetName(), *SlotState.MetallicTexture->GetPathName());
+        }
+        if (SlotState.AlphaTexture)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_SLOT_APPLY_OK] guid=%s slot=%d mid=%s Alpha=%s"),
+                *GuidStr, SlotIdx, *MID->GetName(), *SlotState.AlphaTexture->GetPathName());
+        }
+
+        // Scalar-only slots: log no textures.
+        if (!SlotState.bUseBaseColorTexture && !SlotState.bUseRoughnessTexture &&
+            !SlotState.bUseMetallicTexture && !SlotState.bUseNormalTexture && !SlotState.bUseAlphaTexture)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_SLOT_SCALAR_ONLY] guid=%s slot=%d mid=%s"),
+                *GuidStr, SlotIdx, *MID->GetName());
+        }
+
+        SMC->SetMaterial(SlotIdx, MID);
+        AppliedCount++;
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MATERIAL][MATX_FULL_SNAPSHOT_APPLY] guid=%s payloadSlots=%d meshSlots=%d appliedSlots=%d"),
+        *GuidStr, MatxPropertySlots, SMC->GetNumMaterials(), AppliedCount);
+
+    if (AppliedCount > 0)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MAT][AUTH] guid=%s slot_count=%d authority=generated_mid"),
+            *GuidStr, EffectiveSlotCount);
+        MaterialGeneratedApplied += AppliedCount;
+        return true;
+    }
+
+    return false;
+}
+
+
+// =========================================================
 // PHASE 10K.2 — TEXTURE IMPORT FROM MTEX RECORDS
 // =========================================================
 
@@ -14251,14 +14478,14 @@ ImportTexturesFromMtexRecs(
             continue;
         }
 
-        // Skip packed images — no file path to import
+        // Task 8B: packed flag describes original Blender storage.
+        // Blender has already materialized packed images to sidecar PNGs.
+        // Do not suppress resolution — rely on ImageName/path to resolve.
         if (TexRef.Flags & MTEX_FLAG_IMAGE_PACKED)
         {
             UE_LOG(LogLiveSync, Log,
-                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=packed channel=%u"),
-                *GuidStr, TexRef.SlotIndex, TexRef.Channel);
-            TextureImportSkipped++;
-            continue;
+                TEXT("[MTEX][TEX_INFO] guid=%s slot=%d channel=%u image=%s reason=packed_flag_not_blocking"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.ImageName);
         }
 
         // Skip non-absolute or empty paths
