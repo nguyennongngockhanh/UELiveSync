@@ -1513,10 +1513,15 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         tex_maps = None
 
                     # Phase 7H: decide whether to send based on scalar OR texture change
-                    if scalar_changed or tex_changed:
-                        reason = "texture_changed" if (not scalar_changed and tex_changed) else "property_changed"
+                    if scalar_changed or tex_changed or send_fbx == 1:
+                        if send_fbx == 1:
+                            reason = "fbx_full_material_snapshot"
+                        else:
+                            reason = "texture_changed" if (not scalar_changed and tex_changed) else "property_changed"
+                        if send_fbx == 1:
+                            print(f"[MATERIAL][FBX_FULL_SNAPSHOT] guid={guid_hex[:8]} slots={len(current_prop_sig)} reason=manual_sync")
                         print(f"[MATERIAL][DIRTY_DECIDE] guid={guid_hex[:8]} "
-                              f"property_changed=True reason={reason} "
+                              f"property_changed={int(scalar_changed or tex_changed)} reason={reason} "
                               f"slots={list(current_prop_sig.keys())}")
                         print(f"[SYNC][DECIDE] seq={seq} guid={guid_hex[:8]} "
                               f"sendMAT=1 reason={reason} "
@@ -1542,6 +1547,8 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                                 tex_maps
                             )
                             mat_payloads_to_send.append(mat_payload)
+                            if send_fbx == 1:
+                                print(f"[MATERIAL][FBX_FULL_SNAPSHOT_SENT] guid={guid_hex[:8]} slots={len(current_prop_sig)} bytes={len(mat_payload)}")
                             for si in mat_props:
                                 pp = mat_props[si]
                                 print(f"[MAT][SEND] seq={seq} guid={guid_hex[:8]} "
@@ -1591,9 +1598,24 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         if _prev_reason is not None:
                             print(f"[MATERIAL][SIG_CACHE_HIT] guid={guid_hex[:8]} reason=property_unchanged")
 
+                if send_fbx == 1 and current_prop_sig is None:
+                    print(f"[MATERIAL][FBX_FULL_SNAPSHOT] guid={guid_hex[:8]} slots=0 reason=manual_sync skipped_no_material_data")
+
                 _audit_mat_slots = len(current_prop_sig) if current_prop_sig is not None else 0
                 _audit_cached = int(sync._last_material_property_sig.get(guid_hex) is not None)
                 print(f"[MATERIAL][FBX_SNAPSHOT_AUDIT] guid={guid_hex[:8]} sendFBX=1 cachedMaterial={_audit_cached} slots={_audit_mat_slots}")
+                if send_fbx == 1:
+                    try:
+                        fbx_identity = {}
+                        for slot_idx, slot in enumerate(obj.material_slots):
+                            if slot and slot.material:
+                                low, high = network.get_material_identity_hash(slot.material)
+                            else:
+                                low, high = (0, 0)
+                            fbx_identity[slot_idx] = (low, high)
+                        sync._last_material_identity[guid_hex] = fbx_identity
+                    except Exception:
+                        pass
                 synced_count += 1
 
             except Exception as e:

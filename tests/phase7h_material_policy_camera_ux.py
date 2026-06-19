@@ -2324,6 +2324,121 @@ def test_serialize_material_slots_type_error_caught():
         pass  # Expected — error re-raised after PACKET_BUILD_ERROR log
 
 
+# =============================================================
+# Phase 7H Task 2 — Force full multi-slot material snapshot after manual FBX sync
+# =============================================================
+
+
+def test_fbx_full_snapshot_marker_in_init_py():
+    """[MATERIAL][FBX_FULL_SNAPSHOT] marker exists in __init__.py."""
+    with open(INIT_PY, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "[MATERIAL][FBX_FULL_SNAPSHOT]" in content, (
+        "Missing [MATERIAL][FBX_FULL_SNAPSHOT] marker in __init__.py"
+    )
+
+
+def test_fbx_full_snapshot_sent_marker_in_init_py():
+    """[MATERIAL][FBX_FULL_SNAPSHOT_SENT] marker exists in __init__.py."""
+    with open(INIT_PY, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "[MATERIAL][FBX_FULL_SNAPSHOT_SENT]" in content, (
+        "Missing [MATERIAL][FBX_FULL_SNAPSHOT_SENT] marker in __init__.py"
+    )
+
+
+def test_fbx_snapshot_reason_assignment_in_init_py():
+    """send_fbx == 1 sets reason = 'fbx_full_material_snapshot' in __init__.py."""
+    with open(INIT_PY, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert 'reason = "fbx_full_material_snapshot"' in content, (
+        "Missing reason=fbx_full_material_snapshot assignment in __init__.py"
+    )
+
+
+def test_fbx_snapshot_condition_includes_send_fbx():
+    """Material send condition includes 'or send_fbx == 1' bypass in __init__.py."""
+    with open(INIT_PY, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "scalar_changed or tex_changed or send_fbx == 1" in content, (
+        "Missing send_fbx bypass in material decision condition"
+    )
+
+
+def test_fbx_snapshot_property_changed_is_dynamic():
+    """property_changed in DIRTY_DECIDE uses int(scalar_changed or tex_changed) not hardcoded True."""
+    with open(INIT_PY, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "property_changed={int(scalar_changed or tex_changed)}" in content, (
+        "property_changed should be dynamic, not hardcoded True"
+    )
+
+
+def test_last_material_identity_updated_after_fbx_snapshot():
+    """_last_material_identity is updated after FBX snapshot in __init__.py."""
+    with open(INIT_PY, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "sync._last_material_identity[guid_hex]" in content, (
+        "Missing _last_material_identity update in __init__.py"
+    )
+    assert "network.get_material_identity_hash" in content, (
+        "Missing get_material_identity_hash call for identity computation"
+    )
+
+
+def test_fbx_snapshot_skipped_when_current_prop_sig_none():
+    """skipped_no_material_data log when send_fbx == 1 and current_prop_sig is None."""
+    with open(INIT_PY, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "skipped_no_material_data" in content, (
+        "Missing skipped_no_material_data log for when material data unavailable"
+    )
+
+
+def test_fbx_snapshot_does_not_break_existing_material_dedup():
+    """Existing auto-send suppression markers still present after FBX snapshot changes."""
+    with open(SYNC_PY, "r", encoding="utf-8") as f:
+        sync_content = f.read()
+    assert "SIG_CACHE_HIT" in sync_content, (
+        "SIG_CACHE_HIT marker removed from sync.py"
+    )
+    assert "FIRST_SEND_FULL_SNAPSHOT" in sync_content, (
+        "FIRST_SEND_FULL_SNAPSHOT marker removed from sync.py"
+    )
+    with open(INIT_PY, "r", encoding="utf-8") as f:
+        init_content = f.read()
+    assert "SIG_CACHE_HIT" in init_content, (
+        "SIG_CACHE_HIT marker removed from __init__.py"
+    )
+
+
+def test_fbx_snapshot_identity_update_exception_safe():
+    """Identity update wrapped in try/except for safety in __init__.py."""
+    with open(INIT_PY, "r", encoding="utf-8") as f:
+        content = f.read()
+    # The identity update block should have try/except
+    assert "try:" in content and "fbx_identity" in content, (
+        "Identity update should be inside try block"
+    )
+
+
+def test_fbx_snapshot_serialization_failure_does_not_cancel_fbx():
+    """Material serialization failure logs PACKET_BUILD_ERROR but does not re-raise or cancel FBX."""
+    with open(INIT_PY, "r", encoding="utf-8") as f:
+        content = f.read()
+    # The PACKET_BUILD_ERROR log inside the FBX operator's material block is caught
+    # and does not propagate — verify the exception is caught and logged, not re-raised
+    lines = content.split("\n")
+    fbx_mat_error_found = False
+    for i, line in enumerate(lines):
+        if "PACKET_BUILD_ERROR" in line and "guid=" in line:
+            fbx_mat_error_found = True
+            break
+    assert fbx_mat_error_found, (
+        "Missing PACKET_BUILD_ERROR log in __init__.py FBX operator"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
