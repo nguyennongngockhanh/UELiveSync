@@ -90,6 +90,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInstanceConstant.h"
 #include "ProceduralMeshComponent.h"
 #include "KismetProceduralMeshLibrary.h"
 
@@ -4470,12 +4471,13 @@ ProcessBinaryPacket(
             }
 #endif
 
-            // Apply generated material if we have basic properties
+            // Apply material — persistent if Blender material identity present,
+            // or MID fallback if slot is empty.
             for (const FMaterialSlotBasicProperties& BP : BasicProps)
             {
                 if (BP.bHasProperties)
                 {
-                    ParseAndApplyGeneratedMaterial(Guid, BasicProps);
+                    ParseAndApplyGeneratedMaterial(Guid, BasicProps, Slots);
                     break;
                 }
             }
@@ -13757,7 +13759,8 @@ CopyImportedTexturesFromParent(
 bool UUELiveSyncSubsystem::
 ParseAndApplyGeneratedMaterial(
     const FGuid& Guid,
-    const TArray<FMaterialSlotBasicProperties>& BasicProps)
+    const TArray<FMaterialSlotBasicProperties>& BasicProps,
+    const TArray<FMaterialSlotRef>& Slots)
 {
     // Task 8B: Count effective slots from parsed MATX properties.
     int32 MatxPropertySlots = 0;
@@ -13771,7 +13774,7 @@ ParseAndApplyGeneratedMaterial(
     int32 EffectiveSlotCount = MatxPropertySlots;
     if (EffectiveSlotCount == 0) EffectiveSlotCount = BasicProps.Num();
 
-    // Task 8B: deferred replay — wait for mesh slots to be ready.
+    // Task 9A: deferred replay — wait for mesh slots to be ready.
     AActor* Actor = FindActorFast(Guid);
     if (Actor)
     {
@@ -13797,8 +13800,10 @@ ParseAndApplyGeneratedMaterial(
         }
     }
 
-    // Task 8B: apply using resolved MATX state (one authoritative pass).
-    return ApplyGeneratedMaterialFromResolvedState(Guid, BasicProps, EffectiveSlotCount);
+    // Task 9A: apply persistent material or MID fallback per slot.
+    // For each slot: if Blender material identity is present → persistent MIC.
+    // If identity is absent (empty slot) → MID fallback.
+    return ApplyMaterialSnapshotPerSlot(Guid, BasicProps, Slots, EffectiveSlotCount);
 }
 
 
@@ -13848,6 +13853,172 @@ ResolveTextureByExactName(
     }
 
     return nullptr;
+}
+
+
+// =========================================================
+// TASK 9A — APPLY MATERIAL SNAPSHOT PER SLOT
+// =========================================================
+// Task 9A: Per-slot dispatch — persistent MIC or MID fallback.
+// For each slot, checks material identity from Blender.
+// If identity present → persistent MIC.
+// If identity absent (empty slot) → MID fallback.
+
+bool UUELiveSyncSubsystem::
+ApplyMaterialSnapshotPerSlot(
+    const FGuid& Guid,
+    const TArray<FMaterialSlotBasicProperties>& BasicProps,
+    const TArray<FMaterialSlotRef>& Slots,
+    int32 EffectiveSlotCount)
+{
+    AActor* Actor = FindActorFast(Guid);
+    if (!Actor)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MATERIAL][MATX_APPLY] guid=%s reason=no_actor"),
+            *Guid.ToString(EGuidFormats::Digits));
+        return false;
+    }
+
+    UStaticMeshComponent* SMC = Actor->FindComponentByClass<UStaticMeshComponent>();
+    if (!SMC)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MATERIAL][MATX_APPLY] guid=%s reason=no_static_mesh_component"),
+            *Guid.ToString(EGuidFormats::Digits));
+        return false;
+    }
+
+    const FString GuidStr = Guid.ToString(EGuidFormats::Digits);
+
+    // Resolve MTEX textures.
+    const TArray<FMaterialTextureMapRef>* TexMaps = MaterialTextureMapCache.Find(Guid);
+    TMap<uint8, UTexture2D*> PerSlotTextures;
+
+    if (TexMaps)
+    {
+        for (const FMaterialTextureMapRef& TexRef : *TexMaps)
+        {
+            if (TexRef.SlotIndex < 0 || TexRef.SlotIndex >= EffectiveSlotCount) continue;
+            if (!TexRef.IsValid()) continue;
+
+            // Resolve texture by exact match.
+            UTexture2D* Resolved = ResolveTextureByExactName(TexRef.ImageName, TexRef.Path);
+
+            FString ResultStr = Resolved ? TEXT("resolved") : TEXT("missing");
+            FString AssetStr = Resolved ? Resolved->GetPathName() : TEXT("none");
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_EXACT_TEXTURE_RESOLVE] guid=%s slot=%d channel=%u image=%s asset=%s result=%s"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *TexRef.ImageName, *AssetStr, *ResultStr);
+
+            if (Resolved)
+            {
+                // Assign to the correct channel key.
+                uint8 ChannelKey = static_cast<uint8>(TexRef.Channel);
+                PerSlotTextures.Add(ChannelKey, Resolved);
+            }
+        }
+    }
+
+    // Per-slot dispatch.
+    int32 PersistentApplied = 0;
+    int32 MidApplied = 0;
+
+    for (int32 SlotIdx = 0; SlotIdx < EffectiveSlotCount; SlotIdx++)
+    {
+        if (SlotIdx >= SMC->GetNumMaterials())
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][MATX_APPLY] guid=%s slot=%d result=slot_out_of_range meshSlots=%d"),
+                *GuidStr, SlotIdx, SMC->GetNumMaterials());
+            continue;
+        }
+
+        // Get authoritative MATX properties for this slot.
+        const FMaterialSlotBasicProperties& Props =
+            SlotIdx < BasicProps.Num() ? BasicProps[SlotIdx] : FMaterialSlotBasicProperties();
+
+        // Check if this slot has a Blender material identity.
+        const FMaterialSlotRef* SlotRef = nullptr;
+        if (SlotIdx < Slots.Num())
+        {
+            SlotRef = &Slots[SlotIdx];
+        }
+
+        // Task 9A: persistent material or MID fallback.
+        UMaterialInterface* MatAsset = nullptr;
+        UMaterialInstanceDynamic* MID = nullptr;
+
+        if (SlotRef && SlotRef->Identity.IsValid())
+        {
+            // Persistent material authority.
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MAT][AUTH] guid=%s slot=%d authority=persistent_material"),
+                *GuidStr, SlotIdx);
+
+            // Get material name from the existing asset or use a default.
+            FString MatName = TEXT("");
+            UMaterialInstanceConstant* Existing = ResolvePersistentMaterialAsset(SlotRef->Identity);
+            if (Existing)
+            {
+                MatName = Existing->GetName();
+            }
+
+            UMaterialInstanceConstant* PersistentMIC = GetOrCreatePersistentMaterialAsset(
+                Guid, SlotIdx, SlotRef->Identity, MatName);
+
+            if (PersistentMIC)
+            {
+                ApplyFullMaterialSnapshotToPersistentAsset(PersistentMIC, Props, PerSlotTextures);
+                SMC->SetMaterial(SlotIdx, PersistentMIC);
+                PersistentApplied++;
+
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][PERSISTENT_SLOT_OK] guid=%s slot=%d asset=%s roughness=%.3f metallic=%.3f"),
+                    *GuidStr, SlotIdx, *PersistentMIC->GetPathName(),
+                    Props.Roughness, Props.Metallic);
+            }
+        }
+        else
+        {
+            // Empty slot — MID fallback.
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MAT][AUTH] guid=%s slot=%d authority=generated_mid (empty_slot)"),
+                *GuidStr, SlotIdx);
+
+            MID = GetOrCreateGeneratedMID(Guid, SlotIdx, Props);
+            if (MID)
+            {
+                // Apply scalar params (no textures for empty slot).
+                MID->SetVectorParameterValue(FName("BaseColor"), FLinearColor::White);
+                MID->SetScalarParameterValue(FName("Roughness"), Props.Roughness);
+                MID->SetScalarParameterValue(FName("Metallic"), Props.Metallic);
+                MID->SetScalarParameterValue(FName("Alpha"), Props.Alpha);
+                MID->SetScalarParameterValue(FName("UseBaseColorTexture"), 0.0f);
+                MID->SetScalarParameterValue(FName("UseRoughnessTexture"), 0.0f);
+                MID->SetScalarParameterValue(FName("UseMetallicTexture"), 0.0f);
+                MID->SetScalarParameterValue(FName("UseNormalTexture"), 0.0f);
+                MID->SetScalarParameterValue(FName("UseAlphaTexture"), 0.0f);
+                SMC->SetMaterial(SlotIdx, MID);
+                MidApplied++;
+            }
+        }
+    }
+
+    int32 TotalApplied = PersistentApplied + MidApplied;
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MATERIAL][MATX_FULL_SNAPSHOT_APPLY] guid=%s effectiveSlots=%d meshSlots=%d appliedSlots=%d persistent=%d mid_fallback=%d"),
+        *GuidStr, EffectiveSlotCount, SMC->GetNumMaterials(), TotalApplied, PersistentApplied, MidApplied);
+
+    if (PersistentApplied > 0)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MAT][AUTH] guid=%s persistent_applied=%d authority=persistent_material_assets"),
+            *GuidStr, PersistentApplied);
+    }
+
+    return TotalApplied > 0;
 }
 
 
@@ -14105,6 +14276,253 @@ ApplyGeneratedMaterialFromResolvedState(
     }
 
     return false;
+}
+
+
+// =========================================================
+// PHASE 7H TASK 9A — PERSISTENT MATERIAL AUTHORITY
+// =========================================================
+
+UMaterialInstanceConstant* UUELiveSyncSubsystem::
+GetOrCreatePersistentMaterialAsset(
+    const FGuid& ObjectGuid,
+    int32 SlotIndex,
+    const FMaterialIdentityRef& MaterialIdentity,
+    const FString& MaterialName)
+{
+    // 1. Check if we already have a persistent path for this identity.
+    UMaterialInstanceConstant* Existing = ResolvePersistentMaterialAsset(MaterialIdentity);
+    if (Existing)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MAT][PERSISTENT] guid=%s slot=%d action=reuse identity=0x%llx%llx path=%s"),
+            *ObjectGuid.ToString(EGuidFormats::Digits), SlotIndex,
+            MaterialIdentity.High, MaterialIdentity.Low,
+            *Existing->GetPathName());
+        return Existing;
+    }
+
+    // 2. Determine package path for the persistent MIC.
+    const FString AssetBasePath = TEXT("/Game/UELiveSync/Imported/Materials");
+    const FString IdentityHash = FString::Printf(TEXT("%016llx%016llx"), MaterialIdentity.High, MaterialIdentity.Low);
+    const FString AssetName = FString::Printf(TEXT("MI_UELiveSync_%s_%d"), *IdentityHash, SlotIndex);
+    const FString PackagePath = AssetBasePath / AssetName;
+
+    // 3. Try to load existing asset.
+    UMaterialInstanceConstant* MIC = Cast<UMaterialInstanceConstant>(StaticLoadObject(
+        UMaterialInstanceConstant::StaticClass(),
+        nullptr,
+        *PackagePath));
+
+    if (MIC)
+    {
+        // Reuse existing persistent MIC.
+        RegisterPersistentMaterialPath(MaterialIdentity, FSoftObjectPath(PackagePath));
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[MAT][PERSISTENT] guid=%s slot=%d action=reload identity=0x%llx%llx path=%s"),
+            *ObjectGuid.ToString(EGuidFormats::Digits), SlotIndex,
+            MaterialIdentity.High, MaterialIdentity.Low,
+            *MIC->GetPathName());
+        return MIC;
+    }
+
+    // 4. Get master material as parent.
+    UMaterialInterface* MasterMat = GetOrCreateLiveSyncMasterMaterial();
+    if (!MasterMat)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MAT][PERSISTENT] guid=%s slot=%d reason=master_material_missing"),
+            *ObjectGuid.ToString(EGuidFormats::Digits), SlotIndex);
+        return nullptr;
+    }
+
+    // 5. Create package and MIC.
+    UPackage* Package = CreatePackage(*PackagePath);
+    if (!Package)
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("[MAT][PERSISTENT] guid=%s slot=%d reason=create_package_failed"),
+            *ObjectGuid.ToString(EGuidFormats::Digits), SlotIndex);
+        return nullptr;
+    }
+
+    UMaterialInstanceConstant* NewMIC = NewObject<UMaterialInstanceConstant>(
+        Package,
+        FName(*AssetName),
+        RF_Public | RF_Standalone | RF_MarkAsRootSet);
+
+    if (!NewMIC)
+    {
+        UE_LOG(LogLiveSync, Error,
+            TEXT("[MAT][PERSISTENT] guid=%s slot=%d reason=create_mic_failed"),
+            *ObjectGuid.ToString(EGuidFormats::Digits), SlotIndex);
+        return nullptr;
+    }
+
+    NewMIC->SetParentEditorOnly(MasterMat);
+
+    // Save the new asset immediately.
+    NewMIC->PostEditChange();
+    NewMIC->MarkPackageDirty();
+
+    FString FilePath = FPackageName::LongPackageNameToFilename(
+        PackagePath, FPackageName::GetAssetPackageExtension());
+    if (!FilePath.IsEmpty())
+    {
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Standalone;
+        SaveArgs.SaveFlags = SAVE_NoError;
+        UPackage::SavePackage(Package, NewMIC, *FilePath, SaveArgs);
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MAT][PERSISTENT] guid=%s slot=%d action=create identity=0x%llx%llx name=%s path=%s"),
+        *ObjectGuid.ToString(EGuidFormats::Digits), SlotIndex,
+        MaterialIdentity.High, MaterialIdentity.Low,
+        *AssetName, *PackagePath);
+
+    // Register in path cache for future lookups.
+    RegisterPersistentMaterialPath(MaterialIdentity, FSoftObjectPath(PackagePath));
+
+    return NewMIC;
+}
+
+
+bool UUELiveSyncSubsystem::
+ApplyFullMaterialSnapshotToPersistentAsset(
+    UMaterialInstanceConstant* MaterialAsset,
+    const FMaterialSlotBasicProperties& ScalarState,
+    const TMap<uint8, UTexture2D*>& TextureState)
+{
+    if (!MaterialAsset)
+    {
+        return false;
+    }
+
+    // Apply scalar/color parameters from Blender.
+    MaterialAsset->SetScalarParameterValueEditorOnly(FName(TEXT("Roughness")), ScalarState.Roughness);
+    MaterialAsset->SetScalarParameterValueEditorOnly(FName(TEXT("Metallic")), ScalarState.Metallic);
+    MaterialAsset->SetScalarParameterValueEditorOnly(FName(TEXT("Alpha")), ScalarState.Alpha);
+
+    // Apply BaseColor vector parameter.
+    MaterialAsset->SetVectorParameterValueEditorOnly(FName(TEXT("BaseColor")), ScalarState.BaseColor);
+
+    // Apply texture-use toggles and texture parameters.
+    // UseBaseColorTexture:
+    {
+        bool bHasTex = TextureState.Contains(static_cast<uint8>(EMTEXChannel::BaseColor)) && TextureState[static_cast<uint8>(EMTEXChannel::BaseColor)];
+        MaterialAsset->SetScalarParameterValueEditorOnly(FName(TEXT("UseBaseColorTexture")), bHasTex ? 1.0f : 0.0f);
+        if (bHasTex)
+        {
+            MaterialAsset->SetTextureParameterValueEditorOnly(FName(TEXT("BaseColorTexture")), TextureState[static_cast<uint8>(EMTEXChannel::BaseColor)]);
+        }
+        else
+        {
+            // Clear stale texture reference.
+            MaterialAsset->SetTextureParameterValueEditorOnly(FName(TEXT("BaseColorTexture")), nullptr);
+        }
+    }
+
+    // UseRoughnessTexture:
+    {
+        bool bHasTex = TextureState.Contains(static_cast<uint8>(EMTEXChannel::Roughness)) && TextureState[static_cast<uint8>(EMTEXChannel::Roughness)];
+        MaterialAsset->SetScalarParameterValueEditorOnly(FName(TEXT("UseRoughnessTexture")), bHasTex ? 1.0f : 0.0f);
+        if (bHasTex)
+        {
+            MaterialAsset->SetTextureParameterValueEditorOnly(FName(TEXT("RoughnessTexture")), TextureState[static_cast<uint8>(EMTEXChannel::Roughness)]);
+        }
+        else
+        {
+            MaterialAsset->SetTextureParameterValueEditorOnly(FName(TEXT("RoughnessTexture")), nullptr);
+        }
+    }
+
+    // UseMetallicTexture:
+    {
+        bool bHasTex = TextureState.Contains(static_cast<uint8>(EMTEXChannel::Metallic)) && TextureState[static_cast<uint8>(EMTEXChannel::Metallic)];
+        MaterialAsset->SetScalarParameterValueEditorOnly(FName(TEXT("UseMetallicTexture")), bHasTex ? 1.0f : 0.0f);
+        if (bHasTex)
+        {
+            MaterialAsset->SetTextureParameterValueEditorOnly(FName(TEXT("MetallicTexture")), TextureState[static_cast<uint8>(EMTEXChannel::Metallic)]);
+        }
+        else
+        {
+            MaterialAsset->SetTextureParameterValueEditorOnly(FName(TEXT("MetallicTexture")), nullptr);
+        }
+    }
+
+    // UseNormalTexture:
+    {
+        bool bHasTex = TextureState.Contains(static_cast<uint8>(EMTEXChannel::Normal)) && TextureState[static_cast<uint8>(EMTEXChannel::Normal)];
+        MaterialAsset->SetScalarParameterValueEditorOnly(FName(TEXT("UseNormalTexture")), bHasTex ? 1.0f : 0.0f);
+        if (bHasTex)
+        {
+            MaterialAsset->SetTextureParameterValueEditorOnly(FName(TEXT("NormalTexture")), TextureState[static_cast<uint8>(EMTEXChannel::Normal)]);
+        }
+        else
+        {
+            MaterialAsset->SetTextureParameterValueEditorOnly(FName(TEXT("NormalTexture")), nullptr);
+        }
+    }
+
+    // UseAlphaTexture:
+    {
+        bool bHasTex = TextureState.Contains(static_cast<uint8>(EMTEXChannel::Alpha)) && TextureState[static_cast<uint8>(EMTEXChannel::Alpha)];
+        MaterialAsset->SetScalarParameterValueEditorOnly(FName(TEXT("UseAlphaTexture")), bHasTex ? 1.0f : 0.0f);
+        if (bHasTex)
+        {
+            MaterialAsset->SetTextureParameterValueEditorOnly(FName(TEXT("AlphaTexture")), TextureState[static_cast<uint8>(EMTEXChannel::Alpha)]);
+        }
+        else
+        {
+            MaterialAsset->SetTextureParameterValueEditorOnly(FName(TEXT("AlphaTexture")), nullptr);
+        }
+    }
+
+    // Commit all changes at once.
+    MaterialAsset->PostEditChange();
+    MaterialAsset->MarkPackageDirty();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MAT][PERSISTENT_APPLY] action=apply path=%s "
+             "roughness=%.3f metallic=%.3f alpha=%.3f textures_applied=%d"),
+        *MaterialAsset->GetPathName(),
+        ScalarState.Roughness, ScalarState.Metallic, ScalarState.Alpha,
+        TextureState.Num());
+
+    return true;
+}
+
+
+void UUELiveSyncSubsystem::
+RegisterPersistentMaterialPath(
+    const FMaterialIdentityRef& Identity,
+    const FSoftObjectPath& Path)
+{
+    CacheMaterialPath(Identity, Path);
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MAT][PERSISTENT_REG] identity=0x%llx%llx path=%s"),
+        (uint64)Identity.High, (uint64)Identity.Low, *Path.ToString());
+}
+
+
+UMaterialInstanceConstant* UUELiveSyncSubsystem::
+ResolvePersistentMaterialAsset(
+    const FMaterialIdentityRef& MaterialIdentity) const
+{
+    if (!MaterialIdentity.IsValid())
+    {
+        return nullptr;
+    }
+
+    const FSoftObjectPath* Path = MaterialPathCache.Find(MaterialIdentity);
+    if (!Path || Path->IsNull())
+    {
+        return nullptr;
+    }
+
+    UMaterialInstanceConstant* MIC = Cast<UMaterialInstanceConstant>(Path->TryLoad());
+    return MIC;
 }
 
 

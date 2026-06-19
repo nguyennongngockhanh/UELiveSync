@@ -468,11 +468,25 @@ private:
         const FSoftObjectPath& Path);
 
     /** Parse MATX extension block after old identity data and apply
-     *  generated material to the resolved FBX actor/component.
+     *  persistent or generated material to the resolved FBX actor/component.
+     *  Slots provides material identity refs for persistent asset resolution.
      */
     bool ParseAndApplyGeneratedMaterial(
         const FGuid& Guid,
-        const TArray<FMaterialSlotBasicProperties>& BasicProps);
+        const TArray<FMaterialSlotBasicProperties>& BasicProps,
+        const TArray<FMaterialSlotRef>& Slots);
+
+    /** Task 9A: Per-slot dispatch — persistent MIC or MID fallback.
+     *  Iterates BasicProps and Slots. For each slot:
+     *  - If identity valid → persistent material via GetOrCreatePersistentMaterialAsset
+     *  - If identity absent → MID fallback via GetOrCreateGeneratedMID
+     *  Then applies full snapshot (scalar + texture state).
+     */
+    bool ApplyMaterialSnapshotPerSlot(
+        const FGuid& Guid,
+        const TArray<FMaterialSlotBasicProperties>& BasicProps,
+        const TArray<FMaterialSlotRef>& Slots,
+        int32 EffectiveSlotCount);
 
     /** Create or update a UMaterialInstanceDynamic from BasicShapeMaterial
      *  with the given basic properties.
@@ -539,6 +553,44 @@ private:
         const FGuid& Guid,
         const TArray<FMaterialSlotBasicProperties>& BasicProps,
         int32 EffectiveSlotCount);
+
+    // =========================================================
+    // Phase 7H Task 9A: Persistent material authority
+    // =========================================================
+
+    /** Get or create a persistent UMaterialInstanceConstant for a
+     *  Blender material slot. Uses MaterialIdentityRef for stable
+     *  mapping. Naming: MI_UELiveSync_<IdentityHash>_<SlotIdx>
+     *  under /Game/UELiveSync/Imported/Materials/.
+     */
+    UMaterialInstanceConstant* GetOrCreatePersistentMaterialAsset(
+        const FGuid& ObjectGuid,
+        int32 SlotIndex,
+        const FMaterialIdentityRef& MaterialIdentity,
+        const FString& MaterialName);
+
+    /** Apply a complete per-slot material snapshot to a persistent MIC.
+     *  Sets scalar/color parameters, texture parameters, and texture-use
+     *  toggles. For absent channels, explicitly clears previous texture
+     *  overrides and disables texture-use parameters.
+     */
+    bool ApplyFullMaterialSnapshotToPersistentAsset(
+        UMaterialInstanceConstant* MaterialAsset,
+        const FMaterialSlotBasicProperties& ScalarState,
+        const TMap<uint8, UTexture2D*>& TextureState);
+
+    /** Register a persistent material asset in MaterialPathCache so
+     *  subsequent syncs can find it by identity.
+     */
+    void RegisterPersistentMaterialPath(
+        const FMaterialIdentityRef& Identity,
+        const FSoftObjectPath& Path);
+
+    /** Resolve persistent material asset from MaterialPathCache or
+     *  MaterialIdentityHashCache (fallback for cached identity → path).
+     */
+    UMaterialInstanceConstant* ResolvePersistentMaterialAsset(
+        const FMaterialIdentityRef& MaterialIdentity) const;
 
 #if WITH_EDITOR
     /** Phase 10K.4: Create the LiveSync master material asset
