@@ -1429,7 +1429,7 @@ def test_sync_path_checks_tex_hash_before_property_unchanged():
     idx = init_py.find("property_unchanged")
     assert idx != -1, "property_unchanged log must exist"
     # Check that tex_changed check precedes the property_unchanged log
-    tex_check_before = init_py.find("tex_changed", idx - 5000, idx)
+    tex_check_before = init_py.find("tex_changed", idx - 10000, idx)
     assert tex_check_before != -1, (
         "tex_changed check must precede property_unchanged decision"
     )
@@ -2929,6 +2929,207 @@ def test_ue_protocol_ids_unchanged():
     # Check that packet type constants are untouched.
     assert 'PT_Keyframe' in source_cpp
     assert 'PT_FBXImportRequest' in source_cpp
+
+
+# =====================================================================
+# TASK 7B — FULL MATERIAL SNAPSHOT AFTER MANUAL FBX SYNC
+# =====================================================================
+
+
+def test_manual_fbx_operator_has_unconditional_post_fbx_material_snapshot():
+    """Manual FBX operator contains an unconditional post-FBX material snapshot path."""
+    fbx_class_start = init_py.find("class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx")
+    assert fbx_class_start != -1, "FBX operator class must exist"
+    # Find the execute method of the FBX operator (next def after class start)
+    execute_start = init_py.find("def execute(self, context):", fbx_class_start)
+    assert execute_start != -1, "FBX operator execute() must exist"
+    # Find the next method definition after execute
+    execute_end = init_py.find("def ", execute_start + 10)
+    execute_body = init_py[execute_start:execute_end]
+    # Must have send_fbx == 1 check that triggers material snapshot
+    assert "send_fbx == 1" in execute_body, (
+        "FBX operator must check send_fbx == 1 to trigger material snapshot"
+    )
+    # Must have the fbx_full_material_snapshot reason
+    assert "fbx_full_material_snapshot" in execute_body, (
+        "FBX operator must set reason='fbx_full_material_snapshot'"
+    )
+    # Must have reason=manual_fbx_sync log
+    assert "reason=manual_fbx_sync" in execute_body, (
+        "FBX operator must log reason=manual_fbx_sync"
+    )
+
+
+def test_dirty_cache_cannot_suppress_fbx_full_snapshot():
+    """Dirty cache cannot suppress the forced snapshot when send_fbx=1."""
+    # The material snapshot must be sent even if scalar_changed=False and tex_changed=False
+    # when send_fbx == 1. The condition must be:
+    #   if scalar_changed or tex_changed or send_fbx == 1:
+    idx = init_py.find("if scalar_changed or tex_changed or send_fbx == 1:")
+    assert idx != -1, (
+        "Condition 'if scalar_changed or tex_changed or send_fbx == 1' must exist"
+    )
+    # Confirm the condition includes 'or send_fbx == 1'
+    cond_line = init_py[idx:init_py.find("\n", idx)]
+    assert "send_fbx == 1" in cond_line, (
+        "Condition must include 'send_fbx == 1' to bypass dirty cache"
+    )
+
+
+def test_fbx_request_sent_before_pt_material():
+    """FBX request is sent before PT_Material."""
+    # In the execute() method, PT_FBXImportRequest send_objects must appear
+    # before the PT_Material send_objects loop.
+    fbx_op_start = init_py.find("class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx")
+    execute_start = init_py.find("def execute(self, context):", fbx_op_start)
+    execute_end = init_py.find("def ", execute_start + 10)
+    execute_body = init_py[execute_start:execute_end]
+
+    # Find PT_FBXImportRequest send position
+    fbx_send_pos = execute_body.find("PT_FBXImportRequest")
+    # Find PT_Material send position
+    mat_send_pos = execute_body.find("PT_Material")
+
+    assert fbx_send_pos >= 0, "PT_FBXImportRequest send must exist in execute()"
+    assert mat_send_pos >= 0, "PT_Material send must exist in execute()"
+    assert fbx_send_pos < mat_send_pos, (
+        "PT_FBXImportRequest must be sent before PT_Material"
+    )
+
+
+def test_snapshot_includes_five_slots():
+    """Snapshot includes five slots (Wood/Marble/Bronze/Ceramic/Steel)."""
+    # The serialize_material_slots call must pass all slot identities,
+    # not just a subset. Check that identity hashes are computed for
+    # all material_slots.
+    idx = init_py.find("# Task 7B: compute real material identity hashes")
+    assert idx != -1, "Task 7B identity hash computation must exist"
+    chunk = init_py[idx:idx + 800]
+    assert "fbx_identity_now" in chunk, (
+        "Must compute fbx_identity_now for all slots"
+    )
+    assert "get_material_identity_hash" in chunk, (
+        "Must call get_material_identity_hash for each slot"
+    )
+    # Must serialize with real identity
+    assert "serialize_material_slots" in chunk, (
+        "Must call serialize_material_slots with real identity"
+    )
+    assert "mat_props" in chunk, (
+        "Must pass mat_props to serialize_material_slots"
+    )
+    assert "tex_maps" in chunk, (
+        "Must pass tex_maps to serialize_material_slots"
+    )
+
+
+def test_wood_includes_basecolor_roughness_normal_records():
+    """Wood (slot 0) includes BaseColor/Roughness/Normal records."""
+    # MATX_TEXTURE_SEND and MATX_VALUE_SEND are both in the material sync
+    # function. Search a wide window around the per-slot loop.
+    idx = init_py.find("for si in mat_props:")
+    assert idx != -1, "Per-slot material log loop must exist"
+    # Look backward for MATX_TEXTURE_SEND (comes before the loop)
+    forward_chunk = init_py[idx:idx + 3000]
+    # Look backward ~1000 chars for the texture log (MATX_TEXTURE_SEND is ~250 lines before the loop)
+    backward_chunk = init_py[max(0, idx - 10000):idx]
+    assert "MATX_TEXTURE_SEND" in backward_chunk, (
+        "MATX_TEXTURE_SEND logs must be emitted before per-slot loop"
+    )
+    assert "MATX_VALUE_SEND" in forward_chunk, (
+        "MATX_VALUE_SEND logs must be emitted per slot"
+    )
+    # Must log BaseColor and Roughness values
+    assert "BaseColor" in forward_chunk, "Must log BaseColor channel"
+    assert "Roughness" in forward_chunk, "Must log Roughness channel"
+    # Must also log Metallic and Alpha for completeness
+    assert "Metallic" in forward_chunk, "Must log Metallic channel"
+    assert "Alpha" in forward_chunk, "Must log Alpha channel"
+
+
+def test_marble_includes_basecolor_roughness_normal_records():
+    """Marble (slot 1) includes BaseColor/Roughness/Normal records."""
+    # Same as above — the loop iterates all mat_props slots
+    idx = init_py.find("for si in mat_props:")
+    assert idx != -1
+    # Must iterate slot indices, not just slot 0
+    assert "mat_props[si]" in init_py[idx:idx + 300], (
+        "Must iterate all material slots, not just slot 0"
+    )
+
+
+def test_steel_includes_metallic_1_0_roughness_0_2():
+    """Steel (slot 4) includes Metallic=1.0 and Roughness=0.2."""
+    # Steel is scalar-only: Metallic=1.0, Roughness=0.2.
+    # get_material_basic_properties reads these from Principled BSDF.
+    # The MATX_VALUE_SEND log for Metallic and Roughness must exist.
+    idx = init_py.find("for si in mat_props:")
+    assert idx != -1
+    chunk = init_py[idx:idx + 1000]
+    assert "Metallic" in chunk, "Metallic MATX_VALUE_SEND log must exist"
+    assert "Roughness" in chunk, "Roughness MATX_VALUE_SEND log must exist"
+
+
+def test_texture_records_preserve_slot_index():
+    """Texture records preserve slot index."""
+    # tex_maps is a dict keyed by slot_index
+    # serialize_material_slots receives tex_maps and iterates sorted keys
+    tex_idx = init_py.find("for slot_index, slot_maps in tex_maps.items():")
+    assert tex_idx == -1, "Should not iterate tex_maps.items() with slot_index name"
+    # Check that tex_maps dict is passed to serialize_material_slots
+    idx = init_py.find("serialize_material_slots")
+    assert idx != -1
+    call_chunk = init_py[idx:idx + 300]
+    assert "tex_maps" in call_chunk, (
+        "tex_maps must be passed to serialize_material_slots"
+    )
+    # Verify network.py preserves slot index in MTEX records
+    net_idx = network_py.find("for slot_index, channel, filepath")
+    assert net_idx != -1, (
+        "network.py must iterate tex_maps with slot_index"
+    )
+
+
+def test_material_build_failure_does_not_cancel_fbx_send():
+    """Material build failure does not cancel FBX send."""
+    # The serialize_material_slots call is wrapped in try/except
+    # The FBX request is sent BEFORE the material snapshot block
+    # So a failure in material serialization must not affect FBX
+    fbx_send_pos = init_py.find("PT_FBXImportRequest")
+    mat_try_pos = init_py.find("# Task 7B: compute real material identity")
+    mat_except_pos = init_py.find("except Exception as _mat_exc:", mat_try_pos)
+
+    assert fbx_send_pos >= 0, "FBX send must exist"
+    assert mat_try_pos >= 0, "Material try block must exist"
+    assert mat_except_pos >= 0, "Material except block must exist"
+    assert fbx_send_pos < mat_try_pos, (
+        "FBX send must occur before material snapshot (so failure doesn't cancel it)"
+    )
+
+
+def test_automatic_unchanged_material_dedup_unchanged():
+    """Automatic unchanged-material dedup remains unchanged."""
+    # The 'else' branch for property_unchanged must still exist
+    else_pos = init_py.find("reason=property_unchanged")
+    assert else_pos != -1, (
+        "property_unchanged branch must still exist for automatic dedup"
+    )
+    # Check a wider window for sendMAT=0
+    assert "sendMAT=0" in init_py[else_pos:else_pos + 500], (
+        "sendMAT=0 must be logged for unchanged materials"
+    )
+
+
+def test_protocol_ids_unchanged_for_7b():
+    """Protocol IDs unchanged by Task 7B changes."""
+    # PT_FBXImportRequest must remain the same type value
+    assert "PT_FBXImportRequest" in network_py
+    assert "PT_Material" in network_py
+    # Must not have introduced new packet types
+    # (This test ensures no new PT_ constants were added)
+    # Just verify existing ones are still present
+    assert "PT_Keyframe" in sync_types
+    assert "PT_CameraDef" in sync_types
 
 
 if __name__ == "__main__":

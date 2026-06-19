@@ -1533,7 +1533,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         else:
                             reason = "texture_changed" if (not scalar_changed and tex_changed) else "property_changed"
                         if send_fbx == 1:
-                            print(f"[MATERIAL][FBX_FULL_SNAPSHOT] guid={guid_hex[:8]} slots={len(current_prop_sig)} reason=manual_sync")
+                            print(f"[MATERIAL][FBX_FULL_SNAPSHOT] guid={guid_hex[:8]} slots={len(current_prop_sig)} reason=manual_fbx_sync")
                         print(f"[MATERIAL][DIRTY_DECIDE] guid={guid_hex[:8]} "
                               f"property_changed={int(scalar_changed or tex_changed)} reason={reason} "
                               f"slots={list(current_prop_sig.keys())}")
@@ -1554,15 +1554,25 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
 
                         # Build material packet payload
                         try:
+                            # Task 7B: compute real material identity hashes for PT_Material payload
+                            fbx_identity_now = {}
+                            for slot_idx, slot in enumerate(obj.material_slots):
+                                if slot and slot.material:
+                                    low, high = network.get_material_identity_hash(slot.material)
+                                else:
+                                    low, high = (0, 0)
+                                fbx_identity_now[slot_idx] = (low, high)
+
                             mat_payload = network.serialize_material_slots(
                                 guid_obj,
-                                {i: (0, 0) for i in range(len(mat_props))},
+                                fbx_identity_now,
                                 mat_props,
                                 tex_maps
                             )
                             mat_payloads_to_send.append(mat_payload)
                             if send_fbx == 1:
-                                print(f"[MATERIAL][FBX_FULL_SNAPSHOT_SENT] guid={guid_hex[:8]} slots={len(current_prop_sig)} bytes={len(mat_payload)}")
+                                total_tex_records = sum(len(v) for v in (tex_maps or {}).values())
+                                print(f"[MATERIAL][FBX_FULL_SNAPSHOT_SENT] guid={guid_hex[:8]} slots={len(current_prop_sig)} textureRecords={total_tex_records}")
                             for si in mat_props:
                                 pp = mat_props[si]
                                 print(f"[MAT][SEND] seq={seq} guid={guid_hex[:8]} "
@@ -1613,21 +1623,23 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                             print(f"[MATERIAL][SIG_CACHE_HIT] guid={guid_hex[:8]} reason=property_unchanged")
 
                 if send_fbx == 1 and current_prop_sig is None:
-                    print(f"[MATERIAL][FBX_FULL_SNAPSHOT] guid={guid_hex[:8]} slots=0 reason=manual_sync skipped_no_material_data")
+                    print(f"[MATERIAL][FBX_FULL_SNAPSHOT] guid={guid_hex[:8]} slots=0 reason=manual_fbx_sync skipped_no_material_data")
 
                 _audit_mat_slots = len(current_prop_sig) if current_prop_sig is not None else 0
                 _audit_cached = int(sync._last_material_property_sig.get(guid_hex) is not None)
                 print(f"[MATERIAL][FBX_SNAPSHOT_AUDIT] guid={guid_hex[:8]} sendFBX=1 cachedMaterial={_audit_cached} slots={_audit_mat_slots}")
                 if send_fbx == 1:
                     try:
-                        fbx_identity = {}
-                        for slot_idx, slot in enumerate(obj.material_slots):
-                            if slot and slot.material:
-                                low, high = network.get_material_identity_hash(slot.material)
-                            else:
-                                low, high = (0, 0)
-                            fbx_identity[slot_idx] = (low, high)
-                        sync._last_material_identity[guid_hex] = fbx_identity
+                        # Task 7B: reuse fbx_identity_now if already computed, else compute now
+                        if 'fbx_identity_now' not in dir():
+                            fbx_identity_now = {}
+                            for slot_idx, slot in enumerate(obj.material_slots):
+                                if slot and slot.material:
+                                    low, high = network.get_material_identity_hash(slot.material)
+                                else:
+                                    low, high = (0, 0)
+                                fbx_identity_now[slot_idx] = (low, high)
+                        sync._last_material_identity[guid_hex] = fbx_identity_now
                     except Exception:
                         pass
                 synced_count += 1
