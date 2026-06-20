@@ -15224,6 +15224,7 @@ static UMaterialExpression* CreateMasterExpression(
 static UMaterialExpressionTextureSampleParameter2D* CreateMasterTexParam(
     UMaterial* Material,
     const FName& ParamName,
+    EMaterialSamplerType SamplerType,
     int32 PosX,
     int32& InOutPosY)
 {
@@ -15235,6 +15236,7 @@ static UMaterialExpressionTextureSampleParameter2D* CreateMasterTexParam(
     if (Expr)
     {
         Expr->ParameterName = ParamName;
+        Expr->SamplerType = SamplerType;
     }
     InOutPosY += 220;
     return Expr;
@@ -15328,7 +15330,7 @@ UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
         FLinearColor(0.8f, 0.8f, 0.8f, 1.0f), ParamX, Y);
 
     UMaterialExpressionTextureSampleParameter2D* BaseColorTex = CreateMasterTexParam(
-        Material, FName(TEXT("BaseColorTexture")), ParamX, Y);
+        Material, FName(TEXT("BaseColorTexture")), SAMPLERTYPE_Color, ParamX, Y);
 
     UMaterialExpressionScalarParameter* UseBaseColor = CreateMasterScalarParam(
         Material, FName(TEXT("UseBaseColorTexture")), 0.0f, ParamX, Y);
@@ -15360,7 +15362,7 @@ UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
         Material, FName(TEXT("Roughness")), 0.5f, ParamX, Y);
 
     UMaterialExpressionTextureSampleParameter2D* RoughnessTex = CreateMasterTexParam(
-        Material, FName(TEXT("RoughnessTexture")), ParamX, Y);
+        Material, FName(TEXT("RoughnessTexture")), SAMPLERTYPE_Masks, ParamX, Y);
 
     UMaterialExpressionScalarParameter* UseRoughness = CreateMasterScalarParam(
         Material, FName(TEXT("UseRoughnessTexture")), 0.0f, ParamX, Y);
@@ -15392,7 +15394,7 @@ UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
         Material, FName(TEXT("Metallic")), 0.0f, ParamX, Y);
 
     UMaterialExpressionTextureSampleParameter2D* MetallicTex = CreateMasterTexParam(
-        Material, FName(TEXT("MetallicTexture")), ParamX, Y);
+        Material, FName(TEXT("MetallicTexture")), SAMPLERTYPE_Masks, ParamX, Y);
 
     UMaterialExpressionScalarParameter* UseMetallic = CreateMasterScalarParam(
         Material, FName(TEXT("UseMetallicTexture")), 0.0f, ParamX, Y);
@@ -15421,7 +15423,7 @@ UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
     // CHANNEL: Alpha (opaque default, parameter kept)
     // =====================================================
     CreateMasterScalarParam(Material, FName(TEXT("Alpha")), 1.0f, ParamX, Y);
-    CreateMasterTexParam(Material, FName(TEXT("AlphaTexture")), ParamX, Y);
+    CreateMasterTexParam(Material, FName(TEXT("AlphaTexture")), SAMPLERTYPE_Masks, ParamX, Y);
     CreateMasterScalarParam(Material, FName(TEXT("UseAlphaTexture")), 0.0f, ParamX, Y);
 
     UE_LOG(LogLiveSync, Log,
@@ -15432,7 +15434,7 @@ UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
     // CHANNEL: Normal (tangent-space contract, bTangentSpaceNormal=true)
     // =====================================================
     UMaterialExpressionTextureSampleParameter2D* NormalTex = CreateMasterTexParam(
-        Material, FName(TEXT("NormalTexture")), ParamX, Y);
+        Material, FName(TEXT("NormalTexture")), SAMPLERTYPE_Normal, ParamX, Y);
 
     UMaterialExpressionScalarParameter* UseNormal = CreateMasterScalarParam(
         Material, FName(TEXT("UseNormalTexture")), 0.0f, ParamX, Y);
@@ -15444,7 +15446,7 @@ UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
             ParamX, Y, TEXT("DefaultNormal")));
     if (DefaultNormal)
     {
-        DefaultNormal->Constant = FLinearColor(0.5f, 0.5f, 1.0f, 0.0f);
+        DefaultNormal->Constant = FLinearColor(0.0f, 0.0f, 1.0f, 0.0f);
     }
 
     // Lerp blends encoded default (0.5,0.5,1) with NormalTexture sample.
