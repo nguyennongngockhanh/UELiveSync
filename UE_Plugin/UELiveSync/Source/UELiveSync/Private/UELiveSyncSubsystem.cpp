@@ -13980,7 +13980,7 @@ ApplyMaterialSnapshotPerSlot(
 
                     if (SlotTexMaps.Num() > 0)
                     {
-                        ApplySidecarTexturesToPersistentMIC(Guid, PersistentMIC, SlotTexMaps, 1, SlotTexturesApplied, SlotTextureMisses);
+                        ApplySidecarTexturesToPersistentMIC(Guid, PersistentMIC, SlotTexMaps, SlotTexturesApplied, SlotTextureMisses);
                     }
                 }
 
@@ -14538,7 +14538,6 @@ ApplySidecarTexturesToPersistentMIC(
     const FGuid& Guid,
     class UMaterialInstanceConstant* MIC,
     const TArray<FMaterialTextureMapRef>& TexMaps,
-    int32 EffectiveSlotCount,
     int32& TexturesAppliedOut,
     int32& TextureMissesOut)
 {
@@ -14559,12 +14558,16 @@ ApplySidecarTexturesToPersistentMIC(
 
     for (const FMaterialTextureMapRef& TexRef : TexMaps)
     {
-        if (TexRef.SlotIndex < 0 || TexRef.SlotIndex >= EffectiveSlotCount) continue;
+        // Task 9B.1: The caller (ApplyMaterialSnapshotPerSlot) already pre-filters
+        // TexMaps to the current slot. Do NOT check SlotIndex/EffectiveSlotCount here.
         if (!TexRef.IsValid()) continue;
 
         const uint8 Channel = static_cast<uint8>(TexRef.Channel);
-        const int32 ChannelIdx = (Channel > 0 && Channel <= ChannelNameArrCount - 1)
-            ? Channel - 1 : 0;
+        // Task 9B.1: array has ChannelNameArrCount entries (0..4) for channels 1..5.
+        // The old condition `Channel <= ChannelNameArrCount - 1` was off-by-one,
+        // causing Normal (channel 5) to map to BaseColor (index 0).
+        const int32 ChannelIdx = (Channel > 0 && Channel <= ChannelNameArrCount)
+            ? (static_cast<int32>(Channel) - 1) : 0;
         const TCHAR* ChannelNameTchar = ChannelNameArr[ChannelIdx];
         const FString ChannelName = FString(ChannelNameArr[ChannelIdx]);
 
@@ -14738,13 +14741,37 @@ ImportTexturesFromMtexRecs(
             continue;
         }
 
-        // Check file exists on disk (use normalized path).
-        if (!FPaths::FileExists(*EffectivePath))
+        // Task 9B.1: resolve texture from per-GUID sidecar map by canonical key.
+        // Do NOT call FPaths::FileExists() on Blender-relative paths — they are
+        // not valid local filesystem paths. Use the sidecar map as the sole authority.
         {
+            FString SidecarKey = TexRef.ImageName;
+            if (SidecarKey.IsEmpty())
+            {
+                SidecarKey = FPaths::GetBaseFilename(EffectivePath);
+            }
+            int32 DotPos = INDEX_NONE;
+            if (SidecarKey.FindChar(TEXT('.'), DotPos))
+            {
+                SidecarKey = SidecarKey.Left(DotPos);
+            }
+            SidecarKey.ToLowerInline();
+
+            const TMap<FString, TSoftObjectPtr<UTexture2D>>* PerGuidSidecar = ImportedSidecarTexturesByGuid.Find(Guid);
+            if (PerGuidSidecar && PerGuidSidecar->Contains(SidecarKey))
+            {
+                TextureImportCache.Add(EffectivePath, (*PerGuidSidecar)[SidecarKey]);
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MTEX][SIDECAR_HIT] guid=%s slot=%d channel=%u key=%s path=%s"),
+                    *GuidStr, TexRef.SlotIndex, TexRef.Channel, *SidecarKey, *EffectivePath);
+                TextureCacheHit++;
+                TextureResolveSkipped++;
+                continue;
+            }
+
             UE_LOG(LogLiveSync, Log,
-                TEXT("[MTEX][TEX_SKIP] guid=%s slot=%d reason=file_not_found "
-                     "channel=%u path=%s"),
-                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *EffectivePath);
+                TEXT("[MTEX][SIDECAR_MISS] guid=%s slot=%d channel=%u key=%s path=%s"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel, *SidecarKey, *EffectivePath);
             TextureImportSkipped++;
             continue;
         }

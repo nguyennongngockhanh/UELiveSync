@@ -1135,14 +1135,10 @@ bool FLiveSyncFBXImporter::HandleImport(
             }
         }
 
-        // Phase 7H.6: sidecar texture import fallback
-        // If FBX import produced zero textures, scan the FBX directory
-        // for image files and import them directly via AssetTools.
-        // Uses explicit directory enumeration (IterateDirectory) for
-        // robustness over FindFiles extension filtering on Linux.
-        if (TexCount == 0)
-        {
-            const FString FbxDir = FPaths::GetPath(FbxPathStr);
+        // Phase 7H.6 / Task 9B.1: sidecar texture import (always runs).
+        // Even when FBX import produces textures (embedded media), sidecar
+        // lane is the sole authority — it reimports with canonical naming.
+        const FString FbxDir = FPaths::GetPath(FbxPathStr);
             TArray<FString> ManifestSidecarFiles;
 
             // Task C/D: read manifest.json for deterministic sidecar texture discovery
@@ -1522,12 +1518,10 @@ bool FLiveSyncFBXImporter::HandleImport(
                 for (const FString& SourceFile : SidecarFiles)
                 {
                     FString BaseName = FPaths::GetBaseFilename(SourceFile);
-                    // Task 9B: Correct object path format = packagePath / (objectName.ext)
-                    // Wrong: DestPackagePath / BaseName → /Game/.../Wood/Wood/Wood
-                    // Correct: AssetBasePath / BaseName + "." + Extension → /Game/.../Wood.Wood
-                    const FString Ext = FPaths::GetExtension(SourceFile);
-                    FString ObjectPath = AssetBasePath / (BaseName + Ext);
+                    // Task 9B.1: ObjectPath must be /Game/.../BaseName.BaseName
+                    // (package.object), NOT /Game/.../BaseName.Ext (file extension).
                     FString DestPackagePath = AssetBasePath / BaseName;
+                    FString ObjectPath = DestPackagePath + TEXT(".") + BaseName;
 
                     // Task 9B: prefer direct import result over LoadObject check.
                     // StaticLoadObject is only used here for existence check on first sync.
@@ -1593,34 +1587,79 @@ bool FLiveSyncFBXImporter::HandleImport(
                     }
                 }
 
-                // Perform automated import for new/changed files.
-                // ImportAssetsAutomated uses bReplaceExisting -> bForceOverrideExisting,
-                // which prevents the modal "override asset" dialog.
+                // Task 9B.1: per-source import and canonical-name matching.
+                // ImportAssetsAutomated may return results in any order;
+                // do not assume input index == returned asset index.
                 if (NewFilesForImport.Num() > 0)
                 {
-                    UAutomatedAssetImportData* ImportData =
-                        NewObject<UAutomatedAssetImportData>();
-                    ImportData->GroupName = TEXT("UELiveSync-Sidecar");
-                    ImportData->Filenames = NewFilesForImport;
-                    ImportData->DestinationPath = AssetBasePath;
-                    ImportData->bReplaceExisting = true;
-                    ImportData->bSkipReadOnly = false;
-
                     UE_LOG(LogLiveSync, Log,
                         TEXT("[FBX][SIDECAR_IMPORT_AUTOMATED] automated=1 replaceExisting=1"));
 
-                    TArray<UObject*> NewImportedTexs =
-                        AssetTools.ImportAssetsAutomated(ImportData);
+                    TArray<UObject*> NewImportedTexs;
+                    for (const FString& ImportFile : NewFilesForImport)
+                    {
+                        UAutomatedAssetImportData* SingleImport =
+                            NewObject<UAutomatedAssetImportData>();
+                        SingleImport->GroupName = TEXT("UELiveSync-Sidecar");
+                        SingleImport->Filenames = { ImportFile };
+                        SingleImport->DestinationPath = AssetBasePath;
+                        SingleImport->bReplaceExisting = true;
+                        SingleImport->bSkipReadOnly = false;
 
-                    // Merge results: reuse slots + newly imported ones.
+                        TArray<UObject*> SingleResult =
+                            AssetTools.ImportAssetsAutomated(SingleImport);
+                        if (SingleResult.Num() > 0 && SingleResult[0] &&
+                            SingleResult[0]->IsA<UTexture2D>())
+                        {
+                            NewImportedTexs.Add(SingleResult[0]);
+                        }
+                    }
+
+                    // Match each imported texture to its source by canonical name.
                     for (int32 Fi = 0; Fi < ImportedTexs.Num(); ++Fi)
                     {
-                        if (!ImportedTexs[Fi] && Fi < NewImportedTexs.Num())
+                        if (ImportedTexs[Fi] != nullptr)
+                            continue; // existing texture reuse — already set
+
+                        FString SourceFile = SidecarFiles.IsValidIndex(Fi)
+                            ? SidecarFiles[Fi] : FString();
+                        if (SourceFile.IsEmpty())
+                            continue;
+
+                        FString SourceKey = FPaths::GetBaseFilename(SourceFile).ToLower();
+
+                        for (UObject* ImportedObj : NewImportedTexs)
                         {
-                            if (NewImportedTexs[Fi] && NewImportedTexs[Fi]->IsA<UTexture2D>())
+                            if (!ImportedObj || !ImportedObj->IsA<UTexture2D>())
+                                continue;
+
+                            FString ObjName = ImportedObj->GetName();
+                            FString AssetKey = ObjName.ToLower();
+
+                            if (AssetKey == SourceKey)
                             {
-                                ImportedTexs[Fi] = NewImportedTexs[Fi];
+                                ImportedTexs[Fi] = ImportedObj;
+                                break;
                             }
+
+                            // Handle _ncl1_1 suffix from UE FBX import naming.
+                            const FString NclSuffix = TEXT("_ncl1_1");
+                            if (AssetKey.EndsWith(NclSuffix))
+                            {
+                                FString Stripped = AssetKey.LeftChop(NclSuffix.Len());
+                                if (Stripped == SourceKey)
+                                {
+                                    ImportedTexs[Fi] = ImportedObj;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!ImportedTexs[Fi])
+                        {
+                            UE_LOG(LogLiveSync, Warning,
+                                TEXT("[FBX][SIDECAR_RESULT_MISMATCH] source=%s key=%s reason=no_matching_asset"),
+                                *SourceFile, *SourceKey);
                         }
                     }
                 }
@@ -1632,6 +1671,7 @@ bool FLiveSyncFBXImporter::HandleImport(
 
                 // Log final texture results and populate per-GUID sidecar map.
                 int32 EffectiveTexCount = 0;
+                int32 MismatchCount = 0;
                 int32 DuplicateTexCount = 0;
                 const FGuid& CurGuid = Request.ObjectGUID;
 
@@ -1640,14 +1680,34 @@ bool FLiveSyncFBXImporter::HandleImport(
                     UObject* Tex = ImportedTexs[Fi];
                     if (Tex && Tex->IsA<UTexture>())
                     {
-                        EffectiveTexCount++;
-
-                        // Task 9B: register per-GUID sidecar map entry.
+                        // Task 9B.1: verify canonical source key matches canonical asset name.
                         FString SourceFile = SidecarFiles.IsValidIndex(Fi) ? SidecarFiles[Fi] : FString();
                         FString BaseName = FPaths::GetBaseFilename(SourceFile);
                         FString CanonicalKey = BaseName.ToLower();
                         FString TexturePath = Tex->GetPathName();
+                        FString AssetKey = Tex->GetName().ToLower();
 
+                        // Strip _ncl1_1 suffix for comparison.
+                        FString CompareAssetKey = AssetKey;
+                        const FString NclSuffix = TEXT("_ncl1_1");
+                        if (CompareAssetKey.EndsWith(NclSuffix))
+                        {
+                            CompareAssetKey = CompareAssetKey.LeftChop(NclSuffix.Len());
+                        }
+
+                        if (CanonicalKey != CompareAssetKey)
+                        {
+                            UE_LOG(LogLiveSync, Warning,
+                                TEXT("[FBX][SIDECAR_RESULT] guid=%s source=%s key=%s asset=%s assetKey=%s result=mismatch"),
+                                *CurGuid.ToString(EGuidFormats::Digits),
+                                *SourceFile, *CanonicalKey, *TexturePath, *AssetKey);
+                            MismatchCount++;
+                            continue; // Do not register mismatched mapping.
+                        }
+
+                        EffectiveTexCount++;
+
+                        // Task 9B: register per-GUID sidecar map entry.
                         UE_LOG(LogLiveSync, Log,
                             TEXT("[FBX][SIDECAR_RESULT] guid=%s source=%s key=%s asset=%s result=ok"),
                             *CurGuid.ToString(EGuidFormats::Digits),
@@ -1680,12 +1740,12 @@ bool FLiveSyncFBXImporter::HandleImport(
                 {
                     // Check how many entries the subsystem map has.
                     // We cannot access it directly here — log expected/actual counts.
-                    int32 Expected = EffectiveTexCount;
+                    int32 Expected = SidecarFiles.Num();
                     int32 Resolved = EffectiveTexCount;
-                    int32 Missing = DuplicateTexCount;
+                    int32 Missing = Expected - Resolved - MismatchCount;
                     UE_LOG(LogLiveSync, Log,
-                        TEXT("[FBX][SIDECAR_RESULT_MAP_READY] guid=%s expected=%d resolved=%d missing=%d duplicates=%d"),
-                        *CurGuid.ToString(EGuidFormats::Digits), Expected, Resolved, Missing, DuplicateTexCount);
+                        TEXT("[FBX][SIDECAR_RESULT_MAP_READY] guid=%s expected=%d resolved=%d missing=%d mismatched=%d duplicates=%d"),
+                        *CurGuid.ToString(EGuidFormats::Digits), Expected, Resolved, Missing, MismatchCount, DuplicateTexCount);
                 }
 
                 if (EffectiveTexCount > 0)
@@ -1707,7 +1767,6 @@ bool FLiveSyncFBXImporter::HandleImport(
                     TEXT("[FBX][SIDECAR_TEXTURE_SCAN] folder=%s count=0 reason=no_image_files_found"),
                     *FbxDir);
             }
-        }
     }
 
     UObject* PendingAsset = nullptr;

@@ -895,7 +895,7 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
         _fbx_log(f"[FBX][EXPORT_SETTINGS] guid={guid_short} "
                  f"global_scale=1.0 apply_scale_options=FBX_SCALE_UNITS "
                  f"bake_space_transform=0 use_mesh_modifiers=0 use_tspace=0 "
-                 f"path_mode=COPY embed_textures=0 "
+                 f"path_mode=STRIP embed_textures=0 "
                  f"unit_strategy=fbx_scale_units")
 
         try:
@@ -909,7 +909,7 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
                 mesh_smooth_type='FACE',
                 use_mesh_modifiers=False,
                 use_tspace=False,
-                path_mode='COPY',
+                path_mode='STRIP',
             )
         except Exception as e:
             _fbx_log(f"[FBX] Export failed: {e}")

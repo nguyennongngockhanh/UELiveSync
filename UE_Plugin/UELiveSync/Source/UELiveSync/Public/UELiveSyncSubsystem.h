@@ -533,7 +533,6 @@ private:
         const FGuid& Guid,
         class UMaterialInstanceConstant* MIC,
         const TArray<FMaterialTextureMapRef>& TexMaps,
-        int32 EffectiveSlotCount,
         int32& TexturesAppliedOut,
         int32& TextureMissesOut);
 
