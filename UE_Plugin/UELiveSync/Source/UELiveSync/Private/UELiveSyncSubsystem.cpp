@@ -63,6 +63,8 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionLinearInterpolate.h"
+#include "Materials/MaterialExpressionTransform.h"
+#include "Materials/MaterialExpressionConstant3Vector.h"
 #include "UObject/SavePackage.h"
 
 #include "AssetRegistry/IAssetRegistry.h"
@@ -13981,6 +13983,28 @@ ApplyMaterialSnapshotPerSlot(
                     if (SlotTexMaps.Num() > 0)
                     {
                         ApplySidecarTexturesToPersistentMIC(Guid, PersistentMIC, SlotTexMaps, SlotTexturesApplied, SlotTextureMisses);
+
+                        // Task 9B.3: MIC readback — verify NormalTexture/UseNormalTexture override.
+                        UTexture* ReadbackTex = nullptr;
+                        float ReadbackUse = 0.0f;
+                        PersistentMIC->GetTextureParameterValue(FName(TEXT("NormalTexture")), ReadbackTex);
+                        PersistentMIC->GetScalarParameterValue(FName(TEXT("UseNormalTexture")), ReadbackUse);
+                        FString ParentPath = PersistentMIC->Parent ? PersistentMIC->Parent->GetPathName() : TEXT("none");
+                        FString RequestedPaths;
+                        for (const FMaterialTextureMapRef& RTex : SlotTexMaps)
+                        {
+                            if (RTex.Channel == static_cast<uint8>(EMTEXChannel::Normal))
+                            {
+                                RequestedPaths = RTex.ImageName;
+                                break;
+                            }
+                        }
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[NORMAL_MIC_READBACK] guid=%s slot=%d "
+                                 "requested=%s resolved=%s useNormal=%.1f parent=%s"),
+                            *GuidStr, SlotIdx, *RequestedPaths,
+                            ReadbackTex ? *ReadbackTex->GetPathName() : TEXT("null"),
+                            ReadbackUse, *ParentPath);
                     }
                 }
 
@@ -14837,7 +14861,25 @@ ImportTexturesFromMtexRecs(
             // BaseColor(1) → sRGB true; Roughness/Metallic/Alpha/Normal → sRGB false
             const bool bSRGB = (TexRef.Channel == static_cast<uint8>(EMTEXChannel::BaseColor));
             Texture->SRGB = bSRGB;
+
+            // Task 9B.3: enforce TC_Normalmap for Normal channel textures.
+            bool bSettingsChanged = false;
+            if (TexRef.Channel == static_cast<uint8>(EMTEXChannel::Normal))
+            {
+                if (Texture->CompressionSettings != TextureCompressionSettings::TC_Normalmap)
+                {
+                    Texture->CompressionSettings = TextureCompressionSettings::TC_Normalmap;
+                    bSettingsChanged = true;
+                }
+            }
+
             Texture->PostEditChange();
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[NORMAL_TEXTURE_SETTINGS] guid=%s slot=%d channel=%u "
+                     "asset=%s compression=TC_Normalmap srgb=%d changed=%d"),
+                *GuidStr, TexRef.SlotIndex, TexRef.Channel,
+                *Texture->GetPathName(), bSRGB ? 0 : 1, bSettingsChanged ? 1 : 0);
 
             TextureImportCache.Add(EffectivePath, Texture);
 
@@ -15012,8 +15054,8 @@ ApplyImportedTexturesToGeneratedMID(
         if (static_cast<EMTEXChannel>(TexRef.Channel) == EMTEXChannel::Normal)
         {
             UE_LOG(LogLiveSync, Log,
-                TEXT("[MAT][TEX_WARN] guid=%s channel=Normal "
-                     "reason=visual_deferred_normal_transform_not_in_master"),
+                TEXT("[MAT][TEX_APPLY_NORMAL] guid=%s channel=Normal "
+                     "reason=master_normal_transform_wired_use_mic_readback"),
                 *GuidStr);
         }
     }
@@ -15387,14 +15429,46 @@ UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
              "param_alpha_kept_for_future_use"));
 
     // =====================================================
-    // CHANNEL: Normal (deferred)
+    // CHANNEL: Normal (tangent-space contract, bTangentSpaceNormal=true)
     // =====================================================
-    CreateMasterTexParam(Material, FName(TEXT("NormalTexture")), ParamX, Y);
-    CreateMasterScalarParam(Material, FName(TEXT("UseNormalTexture")), 0.0f, ParamX, Y);
+    UMaterialExpressionTextureSampleParameter2D* NormalTex = CreateMasterTexParam(
+        Material, FName(TEXT("NormalTexture")), ParamX, Y);
 
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[MAT][MASTER] deferred=Normal reason=normal_transform_required "
-             "param_normal_kept_for_future_use"));
+    UMaterialExpressionScalarParameter* UseNormal = CreateMasterScalarParam(
+        Material, FName(TEXT("UseNormalTexture")), 0.0f, ParamX, Y);
+
+    // Default encoded tangent-space normal (0.5,0.5,1) → decoded (0,0,1).
+    // UE auto-decodes MP_Normal input from [0,1] to [-1,1] when bTangentSpaceNormal=true.
+    UMaterialExpressionConstant3Vector* DefaultNormal = Cast<UMaterialExpressionConstant3Vector>(
+        CreateMasterExpression(Material, UMaterialExpressionConstant3Vector::StaticClass(),
+            ParamX, Y, TEXT("DefaultNormal")));
+    if (DefaultNormal)
+    {
+        DefaultNormal->Constant = FLinearColor(0.5f, 0.5f, 1.0f, 0.0f);
+    }
+
+    // Lerp blends encoded default (0.5,0.5,1) with NormalTexture sample.
+    // Output is in encoded tangent space → MP_Normal with bTangentSpaceNormal=true.
+    // No explicit Transform: UE auto-decodes [0,1]→[-1,1] and transforms tangent→world.
+    UMaterialExpressionLinearInterpolate* NormalLerp = CreateMasterLerp(Material, LerpX, Y);
+    if (NormalLerp && DefaultNormal && NormalTex && UseNormal)
+    {
+        NormalLerp->A.Expression = DefaultNormal;
+        NormalLerp->A.OutputIndex = 0;
+        NormalLerp->B.Expression = NormalTex;
+        NormalLerp->B.OutputIndex = 0;
+        NormalLerp->Alpha.Expression = UseNormal;
+        NormalLerp->Alpha.OutputIndex = 0;
+
+        // Connect Lerp directly to MP_Normal — no explicit Transform.
+        // bTangentSpaceNormal=true (default) expects encoded tangent-space input.
+        FExpressionInput* Input = Material->GetExpressionInputForProperty(EMaterialProperty::MP_Normal);
+        if (Input)
+        {
+            Input->Expression = NormalLerp;
+            Input->OutputIndex = 0;
+        }
+    }
 
     // =====================================================
     // Material properties
@@ -15421,7 +15495,7 @@ UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
     UE_LOG(LogLiveSync, Log,
         TEXT("[MAT][MASTER] create_complete "
              "path=/Game/UELiveSync/Materials/M_UELiveSync_Master "
-             "expressions=%d tex_params=BaseColorTexture,RoughnessTexture,MetallicTexture"),
+             "expressions=%d tex_params=BaseColorTexture,RoughnessTexture,MetallicTexture,NormalTexture"),
         Material->GetExpressions().Num());
 
     return Material;
