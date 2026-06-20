@@ -1509,6 +1509,11 @@ bool FLiveSyncFBXImporter::HandleImport(
                 // which sets bForceOverrideExisting internally, preventing the
                 // interactive dialog.
 
+                // Task 9B.2: sidecar textures import under a dedicated namespace
+                // to avoid collision with FBX material assets.
+                const FString SidecarAssetBasePath =
+                    TEXT("/Game/UELiveSync/Imported/Textures");
+
                 // Per-file lookup for existing assets.
                 TArray<UObject*> ImportedTexs;
                 ImportedTexs.Reserve(SidecarFiles.Num());
@@ -1518,16 +1523,16 @@ bool FLiveSyncFBXImporter::HandleImport(
                 for (const FString& SourceFile : SidecarFiles)
                 {
                     FString BaseName = FPaths::GetBaseFilename(SourceFile);
-                    // Task 9B.1: ObjectPath must be /Game/.../BaseName.BaseName
-                    // (package.object), NOT /Game/.../BaseName.Ext (file extension).
-                    FString DestPackagePath = AssetBasePath / BaseName;
+                    // Task 9B.2: textures go to /Game/UELiveSync/Imported/Textures/
+                    // to prevent /Game/UELiveSync/Imported/Wood.Wood (material) vs
+                    // /Game/UELiveSync/Imported/Textures/Wood.Wood (texture) collision.
+                    FString DestPackagePath = SidecarAssetBasePath / BaseName;
                     FString ObjectPath = DestPackagePath + TEXT(".") + BaseName;
 
-                    // Task 9B: prefer direct import result over LoadObject check.
-                    // StaticLoadObject is only used here for existence check on first sync.
+                    // Task 9B.2: in-memory existence check only — no StaticLoadObject probe.
                     UObject* ExistingTexture = nullptr;
-                    UObject* MaybeAsset = StaticLoadObject(
-                        UTexture2D::StaticClass(), nullptr, *ObjectPath);
+                    UObject* MaybeAsset = StaticFindObject(
+                        UTexture2D::StaticClass(), nullptr, *ObjectPath, EFindObjectFlags::ExactClass);
                     if (MaybeAsset && MaybeAsset->IsA<UTexture2D>())
                     {
                         ExistingTexture = MaybeAsset;
@@ -1602,7 +1607,7 @@ bool FLiveSyncFBXImporter::HandleImport(
                             NewObject<UAutomatedAssetImportData>();
                         SingleImport->GroupName = TEXT("UELiveSync-Sidecar");
                         SingleImport->Filenames = { ImportFile };
-                        SingleImport->DestinationPath = AssetBasePath;
+                        SingleImport->DestinationPath = SidecarAssetBasePath;
                         SingleImport->bReplaceExisting = true;
                         SingleImport->bSkipReadOnly = false;
 
