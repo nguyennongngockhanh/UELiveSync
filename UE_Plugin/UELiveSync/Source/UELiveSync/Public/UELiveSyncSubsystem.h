@@ -531,6 +531,7 @@ private:
      */
     bool ApplySidecarTexturesToPersistentMIC(
         const FGuid& Guid,
+        int32 SlotIdx,
         class UMaterialInstanceConstant* MIC,
         const TArray<FMaterialTextureMapRef>& TexMaps,
         int32& TexturesAppliedOut,

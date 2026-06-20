@@ -13980,32 +13980,7 @@ ApplyMaterialSnapshotPerSlot(
                         }
                     }
 
-                    if (SlotTexMaps.Num() > 0)
-                    {
-                        ApplySidecarTexturesToPersistentMIC(Guid, PersistentMIC, SlotTexMaps, SlotTexturesApplied, SlotTextureMisses);
-
-                        // Task 9B.3: MIC readback — verify NormalTexture/UseNormalTexture override.
-                        UTexture* ReadbackTex = nullptr;
-                        float ReadbackUse = 0.0f;
-                        PersistentMIC->GetTextureParameterValue(FName(TEXT("NormalTexture")), ReadbackTex);
-                        PersistentMIC->GetScalarParameterValue(FName(TEXT("UseNormalTexture")), ReadbackUse);
-                        FString ParentPath = PersistentMIC->Parent ? PersistentMIC->Parent->GetPathName() : TEXT("none");
-                        FString RequestedPaths;
-                        for (const FMaterialTextureMapRef& RTex : SlotTexMaps)
-                        {
-                            if (RTex.Channel == static_cast<uint8>(EMTEXChannel::Normal))
-                            {
-                                RequestedPaths = RTex.ImageName;
-                                break;
-                            }
-                        }
-                        UE_LOG(LogLiveSync, Log,
-                            TEXT("[NORMAL_MIC_READBACK] guid=%s slot=%d "
-                                 "requested=%s resolved=%s useNormal=%.1f parent=%s"),
-                            *GuidStr, SlotIdx, *RequestedPaths,
-                            ReadbackTex ? *ReadbackTex->GetPathName() : TEXT("null"),
-                            ReadbackUse, *ParentPath);
-                    }
+                    ApplySidecarTexturesToPersistentMIC(Guid, SlotIdx, PersistentMIC, SlotTexMaps, SlotTexturesApplied, SlotTextureMisses);
                 }
 
                 // Apply scalar state (always needed for persistent MIC).
@@ -14024,6 +13999,34 @@ ApplyMaterialSnapshotPerSlot(
                     TEXT("[MATERIAL][PERSISTENT_SLOT_OK] guid=%s slot=%d asset=%s roughness=%.3f metallic=%.3f textures_applied=%d misses=%d"),
                     *GuidStr, SlotIdx, *PersistentMIC->GetPathName(),
                     Props.Roughness, Props.Metallic, SlotTexturesApplied, SlotTextureMisses);
+
+                // Task 9B.4: read back final MIC state for all channels.
+                {
+                    static const TCHAR* const RBChannelNames[] = {
+                        TEXT("BaseColor"), TEXT("Roughness"), TEXT("Metallic"),
+                        TEXT("Alpha"), TEXT("Normal")
+                    };
+                    static const int32 RBChannelCount = 5;
+                    for (int32 rbi = 0; rbi < RBChannelCount; ++rbi)
+                    {
+                        const FString RBChan = FString(RBChannelNames[rbi]);
+                        const FString RBParam = RBChan + TEXT("Texture");
+                        const FString RBToggle = TEXT("Use") + RBChan + TEXT("Texture");
+
+                        UTexture* RBTex = nullptr;
+                        float RBUse = 0.0f;
+                        float RBScalar = 0.0f;
+                        PersistentMIC->GetTextureParameterValue(FName(*RBParam), RBTex);
+                        PersistentMIC->GetScalarParameterValue(FName(*RBToggle), RBUse);
+                        PersistentMIC->GetScalarParameterValue(FName(*RBChan), RBScalar);
+
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("[MATERIAL][PERSISTENT_MIC_READBACK] guid=%s slot=%d channel=[%s] resolved=%s useTexture=%.1f scalar=%.3f"),
+                            *GuidStr, SlotIdx, RBChannelNames[rbi],
+                            RBTex ? *RBTex->GetPathName() : TEXT("null"),
+                            RBUse, RBScalar);
+                    }
+                }
             }
         }
         else
@@ -14560,6 +14563,7 @@ RegisterPersistentMaterialPath(
 bool UUELiveSyncSubsystem::
 ApplySidecarTexturesToPersistentMIC(
     const FGuid& Guid,
+    int32 SlotIdx,
     class UMaterialInstanceConstant* MIC,
     const TArray<FMaterialTextureMapRef>& TexMaps,
     int32& TexturesAppliedOut,
@@ -14579,6 +14583,125 @@ ApplySidecarTexturesToPersistentMIC(
 
     // Look up per-GUID sidecar map.
     const TMap<FString, TSoftObjectPtr<UTexture2D>>* SidecarMap = ImportedSidecarTexturesByGuid.Find(Guid);
+
+    // Task 9B.4: build set of channels present in this snapshot.
+    TSet<uint8> PresentChannels;
+    for (const FMaterialTextureMapRef& TexRef : TexMaps)
+    {
+        if (TexRef.IsValid())
+        {
+            PresentChannels.Add(static_cast<uint8>(TexRef.Channel));
+        }
+    }
+
+    // Pre-clear pass: for each supported channel not in the snapshot,
+    // clear stale texture override + disable toggle.
+    // Key insight: GetTextureParameterValue/GetScalarParameterValue return
+    // inherited values from parent, not just local overrides. We must check
+    // the MIC's internal TextureParameterValues/ScalarParameterValues arrays
+    // to detect explicit local overrides.
+    for (int32 i = 0; i < ChannelNameArrCount; ++i)
+    {
+        const uint8 ChanNum = static_cast<uint8>(i) + 1;
+        if (PresentChannels.Contains(ChanNum))
+        {
+            continue;
+        }
+
+        const FString ChannelName = FString(ChannelNameArr[i]);
+        const FString ParamName = ChannelName + TEXT("Texture");
+        const FString ToggleName = TEXT("Use") + ChannelName + TEXT("Texture");
+
+        // Audit readback — resolved (inherited) values
+        UTexture* AuditCurrentTex = nullptr;
+        float AuditCurrentUse = 0.0f;
+        MIC->GetTextureParameterValue(FName(*ParamName), AuditCurrentTex);
+        MIC->GetScalarParameterValue(FName(*ToggleName), AuditCurrentUse);
+
+        // Check for EXPLICIT local overrides in MIC's internal arrays
+        bool bHasTextureOverride = false;
+        bool bHasScalarOverride = false;
+        UTexture* ExplicitOverrideTex = nullptr;
+        float ExplicitOverrideUse = 0.0f;
+
+        // TextureParameterValues: TArray<FTextureParameterValue>
+        {
+            const TArray<FTextureParameterValue>& TexParams = MIC->TextureParameterValues;
+            for (const FTextureParameterValue& TexPV : TexParams)
+            {
+                if (TexPV.ParameterInfo.Name == FName(*ParamName))
+                {
+                    bHasTextureOverride = true;
+                    ExplicitOverrideTex = TexPV.ParameterValue;
+                    break;
+                }
+            }
+        }
+
+        // ScalarParameterValues: TArray<FScalarParameterValue>
+        {
+            const TArray<FScalarParameterValue>& ScalarParams = MIC->ScalarParameterValues;
+            for (const FScalarParameterValue& ScalarPV : ScalarParams)
+            {
+                if (ScalarPV.ParameterInfo.Name == FName(*ToggleName))
+                {
+                    bHasScalarOverride = true;
+                    ExplicitOverrideUse = ScalarPV.ParameterValue;
+                    break;
+                }
+            }
+        }
+
+        // Only act if there is an explicit local override to clear
+        if (bHasTextureOverride || bHasScalarOverride)
+        {
+            const FString PreviousTexPath = ExplicitOverrideTex ? ExplicitOverrideTex->GetPathName() : TEXT("null");
+
+            // Remove override entries from the MIC's internal arrays
+            if (bHasTextureOverride)
+            {
+                TArray<FTextureParameterValue>& TexParams = MIC->TextureParameterValues;
+                for (int32 ti = TexParams.Num() - 1; ti >= 0; --ti)
+                {
+                    if (TexParams[ti].ParameterInfo.Name == FName(*ParamName))
+                    {
+                        TexParams.RemoveAt(ti);
+                        break;
+                    }
+                }
+            }
+
+            if (bHasScalarOverride)
+            {
+                TArray<FScalarParameterValue>& ScalarParams = MIC->ScalarParameterValues;
+                for (int32 si = ScalarParams.Num() - 1; si >= 0; --si)
+                {
+                    if (ScalarParams[si].ParameterInfo.Name == FName(*ToggleName))
+                    {
+                        ScalarParams.RemoveAt(si);
+                        break;
+                    }
+                }
+            }
+
+            // Also nullify via API to ensure editor refresh
+            MIC->SetTextureParameterValueEditorOnly(FName(*ParamName), nullptr);
+            MIC->SetScalarParameterValueEditorOnly(FName(*ToggleName), 0.0f);
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][PERSISTENT_MIC_CHANNEL] guid=%s slot=%d channel=[%s] action=preclear_stale previousTexture=%s previousUse=%.1f hasTextureOverride=%d hasScalarOverride=%d"),
+                *GuidStr, SlotIdx, ChannelNameArr[i], *PreviousTexPath, ExplicitOverrideUse,
+                bHasTextureOverride ? 1 : 0, bHasScalarOverride ? 1 : 0);
+        }
+        else
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][PERSISTENT_MIC_CHANNEL] guid=%s slot=%d channel=[%s] action=noop_absent_already_clear resolvedTex=%s resolvedUse=%.1f"),
+                *GuidStr, SlotIdx, ChannelNameArr[i],
+                AuditCurrentTex ? *AuditCurrentTex->GetPathName() : TEXT("null"),
+                AuditCurrentUse);
+        }
+    }
 
     for (const FMaterialTextureMapRef& TexRef : TexMaps)
     {
@@ -14658,9 +14781,17 @@ ApplySidecarTexturesToPersistentMIC(
             FString ToggleName = TEXT("Use") + ChannelName + TEXT("Texture");
             MIC->SetScalarParameterValueEditorOnly(FName(*ToggleName), 1.0f);
 
+            // Read back final state for this channel
+            UTexture* RBTexAfter = nullptr;
+            float RBUseAfter = 0.0f;
+            MIC->GetTextureParameterValue(FName(*ParamName), RBTexAfter);
+            MIC->GetScalarParameterValue(FName(*ToggleName), RBUseAfter);
+
             const FString AssetPath = ResolvedTex->GetPathName();
-            UE_LOG(LogLiveSync, Log, TEXT("[MATERIAL][PERSISTENT_MIC_CHANNEL] guid=%s slot=%d channel=[%s] action=set_texture texture=%s"),
-                *GuidStr, TexRef.SlotIndex, ChannelNameArr[ChannelIdx], *AssetPath);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][PERSISTENT_MIC_CHANNEL] guid=%s slot=%d channel=[%s] action=set_texture texture=%s resolvedTextureAfter=%s useAfter=%.1f"),
+                *GuidStr, TexRef.SlotIndex, ChannelNameArr[ChannelIdx], *AssetPath,
+                RBTexAfter ? *RBTexAfter->GetPathName() : TEXT("null"), RBUseAfter);
 
             TexturesAppliedOut++;
         }
@@ -14671,10 +14802,45 @@ ApplySidecarTexturesToPersistentMIC(
                 *GuidStr, TexRef.SlotIndex, ChannelNameArr[ChannelIdx], *TexRef.ImageName, *ImageNameKey, *TexRef.Path);
 
             // Clear stale texture reference + disable toggle.
+            // Remove override entry from MIC's internal array, not just set null.
             const FString ClearParamName = ChannelName + TEXT("Texture");
+            {
+                TArray<FTextureParameterValue>& TexParams = MIC->TextureParameterValues;
+                for (int32 ti = TexParams.Num() - 1; ti >= 0; --ti)
+                {
+                    if (TexParams[ti].ParameterInfo.Name == FName(*ClearParamName))
+                    {
+                        TexParams.RemoveAt(ti);
+                        break;
+                    }
+                }
+            }
             MIC->SetTextureParameterValueEditorOnly(FName(*ClearParamName), nullptr);
+
             FString ToggleName = TEXT("Use") + ChannelName + TEXT("Texture");
+            {
+                TArray<FScalarParameterValue>& ScalarParams = MIC->ScalarParameterValues;
+                for (int32 si = ScalarParams.Num() - 1; si >= 0; --si)
+                {
+                    if (ScalarParams[si].ParameterInfo.Name == FName(*ToggleName))
+                    {
+                        ScalarParams.RemoveAt(si);
+                        break;
+                    }
+                }
+            }
             MIC->SetScalarParameterValueEditorOnly(FName(*ToggleName), 0.0f);
+
+            // Read back final state
+            UTexture* RBTexAfter = nullptr;
+            float RBUseAfter = 0.0f;
+            MIC->GetTextureParameterValue(FName(*ClearParamName), RBTexAfter);
+            MIC->GetScalarParameterValue(FName(*ToggleName), RBUseAfter);
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][PERSISTENT_MIC_CHANNEL] guid=%s slot=%d channel=[%s] action=clear_unresolved image=%s key=%s resolvedTextureAfter=%s useAfter=%.1f"),
+                *GuidStr, TexRef.SlotIndex, ChannelNameArr[ChannelIdx], *TexRef.ImageName, *ImageNameKey,
+                RBTexAfter ? *RBTexAfter->GetPathName() : TEXT("null"), RBUseAfter);
 
             TextureMissesOut++;
         }
