@@ -903,6 +903,30 @@ def _get_image_colorspace_flag(image):
     return 0
 
 
+def get_texture_identity_name(source, is_packed, filepath, image_name):
+    """Return basename without the final extension.
+
+    FILE + unpacked:
+        normalize both slash styles and derive from filepath.
+
+    Packed/generated/other:
+        derive from image_name.
+
+    Preserve original case.
+    """
+    if source == 'FILE' and not is_packed and filepath:
+        normalised = filepath.replace("\\", "/")
+        base = os.path.basename(normalised)
+        if base:
+            return os.path.splitext(base)[0]
+    return os.path.splitext(image_name)[0]
+
+
+def get_texture_canonical_key(source, is_packed, filepath, image_name):
+    """Return lowercase lookup key derived from get_texture_identity_name()."""
+    return get_texture_identity_name(source, is_packed, filepath, image_name).lower()
+
+
 def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
     """Extract texture map references from a Blender material node tree.
 
@@ -1024,8 +1048,13 @@ def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
             continue
 
         filepath = getattr(image, "filepath", "") or ""
-        image_name = getattr(image, "name", "") or ""
         is_packed = getattr(image, "packed_file", None) is not None
+        image_name = get_texture_identity_name(
+            source=getattr(image, "source", "") or "",
+            is_packed=is_packed,
+            filepath=filepath,
+            image_name=getattr(image, "name", "") or "",
+        )
 
         flags = 0
         if filepath and not is_packed:
