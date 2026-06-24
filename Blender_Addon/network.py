@@ -930,6 +930,170 @@ def get_texture_canonical_key(source, is_packed, filepath, image_name):
     return get_texture_identity_name(source, is_packed, filepath, image_name).lower()
 
 
+# =========================================================
+# A3.1 Texture identity helpers
+# =========================================================
+
+
+def _canonical_locator_bytes(source_kind, packed_status, locator):
+    """Return domain-separated canonical locator bytes for SHA-256 suffix.
+
+    Args:
+        source_kind: 'FILE', 'PACKED', or 'GENERATED'
+        packed_status: 'packed' | 'unpacked' | 'generated'
+        locator: absolute filesystem path (FILE) or image name (packed/generated)
+
+    Returns:
+        bytes suitable for hashing.
+    """
+    return f"{source_kind}:{packed_status}:{locator}".encode("utf-8")
+
+
+def _sanitize_filename_component(component):
+    """Sanitize a filename component for safe filesystem use.
+
+    Replaces:
+        - NUL bytes and control characters (U+0000-U+001F, U+007F)
+        - Trailing dots and spaces
+        - Exact '.' and '..' → '_'
+        - Windows reserved names: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+        - Colon and slash characters
+
+    Args:
+        component: The raw filename component (before hash suffix).
+
+    Returns:
+        Sanitized component safe for use as a filename prefix.
+    """
+    if not component:
+        return "_"
+
+    # Replace NUL and control characters
+    result = []
+    for ch in component:
+        cp = ord(ch)
+        if cp == 0 or cp == 0x7F or (0x01 <= cp <= 0x1F):
+            result.append("_")
+        else:
+            result.append(ch)
+    s = "".join(result)
+
+    # Replace colon and slash with underscore
+    s = s.replace(":", "_").replace("/", "_").replace("\\", "_")
+
+    # Trim trailing dots and spaces
+    s = s.rstrip(". ")
+
+    # Replace exactly '.' or '..'
+    if s == "." or s == "..":
+        s = "_"
+
+    # Check for Windows reserved names (case-insensitive)
+    reserved = {"con", "prn", "aux", "nul"}
+    reserved |= {f"com{i}" for i in range(1, 10)}
+    reserved |= {f"lpt{i}" for i in range(1, 10)}
+    if s.lower() in reserved:
+        s = "_" + s
+
+    return s if s else "_"
+
+
+def _truncate_to_utf8_bytes(text, max_bytes):
+    """Truncate text to fit within max_bytes UTF-8 bytes.
+
+    Ensures truncation never splits a multi-byte UTF-8 character.
+
+    Args:
+        text: The string to truncate.
+        max_bytes: Maximum number of UTF-8 bytes.
+
+    Returns:
+        Truncated string guaranteed to encode to <= max_bytes bytes.
+    """
+    if max_bytes <= 0:
+        return ""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    truncated = encoded[:max_bytes]
+    return truncated.decode("utf-8", errors="ignore")
+
+
+def _get_name_max(dest_dir):
+    """Return the maximum filename byte length for the destination filesystem.
+
+    Uses os.pathconf() when available (POSIX). Fallback to 255.
+
+    Args:
+        dest_dir: Directory path on the target filesystem.
+
+    Returns:
+        Maximum filename length in bytes (NAME_MAX).
+    """
+    try:
+        return os.pathconf(dest_dir, "PC_NAME_MAX")
+    except (AttributeError, ValueError, OSError, NotImplementedError):
+        return 255
+
+
+def make_sidecar_key(display_prefix, canonical_locator, ext, dest_dir):
+    """Build a deterministic sidecar filename with collision-safe hash suffix.
+
+    U1 strategy: embed collision-safe key into the filename so UE's
+    insertion key (FPaths::GetBaseFilename(SourceFilename).ToLower())
+    and lookup key (TexRef.ImageName.ToLower()) match.
+
+    Filename format:
+        <sanitized_prefix>__<32-hex-sha256-suffix><ext>
+
+    The SHA-256 suffix is computed from domain-separated canonical locator bytes:
+        sha256(f"{source_kind}:{packed_status}:{locator}".encode("utf-8"))
+
+    Byte budgeting uses the smaller of the filesystem NAME_MAX and the
+    MTEX ImageName field limit (MTEX_MAX_IMAGE_NAME_LEN).
+
+    Args:
+        display_prefix: Human-readable prefix (e.g., image name).
+        canonical_locator: Canonical locator bytes from _canonical_locator_bytes().
+        ext: File extension including dot (e.g., '.png').
+        dest_dir: Destination directory (for NAME_MAX detection).
+
+    Returns:
+        Tuple of (sidecar_filename, sidecar_key, sha256_prefix)
+        where sidecar_key is used for collision registry.
+    """
+    import hashlib
+
+    digest = hashlib.sha256(canonical_locator).hexdigest()
+    hash_suffix = digest[:32]
+
+    safe_prefix = _sanitize_filename_component(display_prefix)
+
+    name_max = _get_name_max(dest_dir)
+    ext_bytes = ext.encode("utf-8")
+    key_budget = min(
+        name_max - len(ext_bytes),
+        MTEX_MAX_IMAGE_NAME_LEN,
+    )
+    prefix_budget = key_budget - 2 - 32
+    if prefix_budget < 1:
+        prefix_budget = 1
+    truncated_prefix = _truncate_to_utf8_bytes(safe_prefix, prefix_budget)
+    filename = f"{truncated_prefix}__{hash_suffix}{ext}"
+
+    filename_base = os.path.splitext(filename)[0]
+
+    # Postcondition assertions
+    _base_bytes = filename_base.encode("utf-8")
+    _full_bytes = filename.encode("utf-8")
+    assert len(_base_bytes) <= MTEX_MAX_IMAGE_NAME_LEN, \
+        f"ImageName {len(_base_bytes)}B exceeds MTEX limit {MTEX_MAX_IMAGE_NAME_LEN}B"
+    assert len(_full_bytes) <= name_max, \
+        f"Filename {len(_full_bytes)}B exceeds NAME_MAX {name_max}B"
+
+    return filename, filename_base, digest[:32]
+
+
 def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
     """Extract texture map references from a Blender material node tree.
 

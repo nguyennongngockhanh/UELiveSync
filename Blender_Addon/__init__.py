@@ -1077,6 +1077,422 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
     return copied_count, sidecar_info
 
 
+# =========================================================
+# A3.1 Texture identity and sidecar preparation
+# =========================================================
+
+from dataclasses import dataclass
+
+
+@dataclass
+class TextureAssetSource:
+    """One unique TEX_IMAGE node referenced by one or more usages."""
+    mat_name: str
+    node_name: str
+    image_name: str
+    source_kind: str
+    filepath_raw: str
+    filepath: str
+    is_packed: bool
+    width: int
+    height: int
+    file_format: str
+    colorspace: str
+    sidecar_filename: str = ""
+    sidecar_key: str = ""
+    sha256_prefix: str = ""
+    status: str = "pending"
+    action: str = ""
+    source_locator: str = ""
+
+
+@dataclass
+class TextureUsage:
+    """One slot+channel reference to a TextureAssetSource."""
+    slot_index: int
+    channel: int
+    source: 'TextureAssetSource'
+    flags: int
+    sock_name: str
+
+
+def _get_instance_width_height(img):
+    sz = getattr(img, "size", None)
+    if sz and len(sz) >= 2:
+        return int(sz[0]), int(sz[1])
+    return (0, 0)
+
+
+def _extract_texture_usages_and_sources(obj):
+    """Two-pass extraction of all texture usages and unique sources.
+
+    Pass 1: Every TEX_IMAGE node in each material node tree becomes a
+    TextureAssetSource (connected or not).
+
+    Pass 2: Principled BSDF socket connections create TextureUsage objects
+    referencing those existing sources, with precomputed MTEX flags.
+
+    Returns:
+        tuple (list_of_TextureAssetSource, list_of_TextureUsage)
+    """
+    from collections import OrderedDict
+
+    sources = []
+    usages = []
+    source_by_key = OrderedDict()
+
+    if not obj.material_slots:
+        return sources, usages
+
+    # Pass 1: collect all TEX_IMAGE nodes as TextureAssetSource
+    for slot in obj.material_slots:
+        mat = slot.material
+        if not mat or not mat.use_nodes or not mat.node_tree:
+            continue
+        for node in mat.node_tree.nodes:
+            if getattr(node, "type", None) != "TEX_IMAGE":
+                continue
+            image = getattr(node, "image", None)
+            if image is None:
+                continue
+            source_key = (mat.name, node.name)
+            if source_key in source_by_key:
+                continue
+            filepath_raw = getattr(image, "filepath_raw", "") or ""
+            filepath_val = getattr(image, "filepath", "") or ""
+            src_kind = getattr(image, "source", "") or ""
+            is_packed = bool(getattr(image, "packed_file", None))
+            width, height = _get_instance_width_height(image)
+            file_fmt = getattr(image, "file_format", "PNG")
+            try:
+                cs = getattr(image, "colorspace_settings", None)
+                colorspace = getattr(cs, "name", "sRGB") if cs else "sRGB"
+            except Exception:
+                colorspace = "sRGB"
+            src = TextureAssetSource(
+                mat_name=mat.name,
+                node_name=node.name,
+                image_name=getattr(image, "name", "") or "",
+                source_kind=src_kind,
+                filepath_raw=filepath_raw,
+                filepath=filepath_val,
+                is_packed=is_packed,
+                width=width,
+                height=height,
+                file_format=file_fmt,
+                colorspace=colorspace,
+            )
+            source_by_key[source_key] = len(sources)
+            sources.append(src)
+
+    # Pass 2: trace Principled socket connections to create usages
+    for slot_idx, slot in enumerate(obj.material_slots):
+        mat = slot.material
+        if not mat or not mat.use_nodes or not mat.node_tree:
+            continue
+
+        principled = None
+        for node in mat.node_tree.nodes:
+            if getattr(node, "type", None) == "BSDF_PRINCIPLED":
+                principled = node
+                break
+        if principled is None:
+            continue
+
+        target_sockets = {}
+        for sock_name, channel in (
+            ("Base Color", network.MTEX_CHANNEL_BASECOLOR),
+            ("Roughness", network.MTEX_CHANNEL_ROUGHNESS),
+            ("Metallic", network.MTEX_CHANNEL_METALLIC),
+            ("Alpha", network.MTEX_CHANNEL_ALPHA),
+            ("Normal", network.MTEX_CHANNEL_NORMAL),
+        ):
+            sock = principled.inputs.get(sock_name)
+            if sock is not None and sock.is_linked:
+                target_sockets[sock_name] = channel
+
+        # Coat fallback for Roughness
+        roughness_sock = principled.inputs.get("Roughness")
+        coat_roughness = principled.inputs.get("Coat Roughness")
+        if "Roughness" not in target_sockets and roughness_sock is not None \
+                and coat_roughness is not None and coat_roughness.is_linked:
+            target_sockets["Coat Roughness"] = network.MTEX_CHANNEL_ROUGHNESS
+
+        # Coat fallback for Normal
+        normal_sock = principled.inputs.get("Normal")
+        coat_normal = principled.inputs.get("Coat Normal")
+        if "Normal" not in target_sockets:
+            ns_linked = normal_sock is not None and normal_sock.is_linked
+            cn_linked = coat_normal is not None and coat_normal.is_linked
+            if not ns_linked and cn_linked:
+                target_sockets["Coat Normal"] = network.MTEX_CHANNEL_NORMAL
+
+        if not target_sockets:
+            continue
+
+        for sock_name, channel in target_sockets.items():
+            sock = principled.inputs.get(sock_name)
+            if sock is None or not sock.is_linked:
+                continue
+
+            from_node = sock.links[0].from_node
+
+            if channel == network.MTEX_CHANNEL_NORMAL \
+                    and getattr(from_node, "type", None) == "NORMAL_MAP":
+                nm_color = from_node.inputs.get("Color")
+                if nm_color is not None and nm_color.is_linked:
+                    from_node = nm_color.links[0].from_node
+
+            if getattr(from_node, "type", None) != "TEX_IMAGE":
+                indirect_types = {
+                    "MIX_RGB", "COLOR_RAMP", "INVERT",
+                    "GAMMA", "CURVES", "HUE_SATURATION",
+                }
+                if getattr(from_node, "type", None) in indirect_types:
+                    color_input = from_node.inputs.get("Color")
+                    if color_input is None:
+                        color_input = from_node.inputs.get("Fac")
+                    if color_input is None:
+                        color_input = from_node.inputs.get("Value")
+                    if color_input is not None and color_input.is_linked:
+                        from_node = color_input.links[0].from_node
+
+            if getattr(from_node, "type", None) != "TEX_IMAGE":
+                continue
+
+            image = getattr(from_node, "image", None)
+            if image is None:
+                continue
+
+            source_key = (mat.name, from_node.name)
+            src_idx = source_by_key.get(source_key)
+            if src_idx is None:
+                continue
+            src = sources[src_idx]
+
+            # Compute MTEX flags once during extraction
+            flags = 0
+            if src.is_packed:
+                flags |= network.MTEX_FLAG_IMAGE_PACKED
+            src_is_file = src.source_kind == 'FILE' and not src.is_packed
+            if src_is_file and src.filepath:
+                _absp = bpy.path.abspath(src.filepath_raw or src.filepath)
+                if _absp.startswith("/") or (len(_absp) > 1 and _absp[1] == ":"):
+                    flags |= network.MTEX_FLAG_PATH_ABSOLUTE
+            _csl = src.colorspace.lower()
+            if "non-color" in _csl or "noncolor" in _csl or "raw" in _csl:
+                flags |= network.MTEX_FLAG_COLORSPACE_NON_COLOR
+            elif "srgb" in _csl:
+                flags |= network.MTEX_FLAG_COLORSPACE_SRGB
+            if not (flags & (network.MTEX_FLAG_COLORSPACE_SRGB
+                             | network.MTEX_FLAG_COLORSPACE_NON_COLOR)):
+                if channel in (network.MTEX_CHANNEL_ROUGHNESS,
+                               network.MTEX_CHANNEL_METALLIC,
+                               network.MTEX_CHANNEL_NORMAL):
+                    flags |= network.MTEX_FLAG_COLORSPACE_NON_COLOR
+
+            usage = TextureUsage(
+                slot_index=slot_idx,
+                channel=channel,
+                source=src,
+                flags=flags,
+                sock_name=sock_name,
+            )
+            usages.append(usage)
+
+    return sources, usages
+
+
+def _check_destination_safe(dest_dir, dest_path):
+    """Validate that dest_path is safe to write.
+
+    Checks:
+        1. dest_path is contained within dest_dir (realpath).
+        2. dest_path is not a symlink.
+        3. If dest_path exists, it is a regular file.
+        4. dest_dir exists and is a directory.
+
+    Returns:
+        (is_safe, reason) tuple.
+    """
+    if not os.path.isdir(dest_dir):
+        return False, "dest_dir_not_found"
+
+    real_dest_dir = os.path.realpath(dest_dir)
+    real_dest_path = os.path.realpath(dest_path)
+
+    common = os.path.commonpath([real_dest_dir, real_dest_path])
+    if common != real_dest_dir:
+        return False, "path_escape_detected"
+
+    if os.path.islink(dest_path):
+        return False, "path_is_symlink"
+
+    if os.path.exists(dest_path) and not os.path.isfile(dest_path):
+        return False, "existing_not_regular_file"
+
+    return True, ""
+
+
+def _register_sidecar_key(registry, dest_dir, sidecar_key, canonical_locator):
+    """Register a sidecar key and detect same-cycle collisions.
+
+    Args:
+        registry: dict (real_dest_dir, sidecar_key) -> canonical_locator.
+        dest_dir: Destination directory.
+        sidecar_key: Filename base (without extension).
+        canonical_locator: Canonical locator bytes for comparison.
+
+    Returns:
+        (registered, existing_locator) where registered is True if new.
+    """
+    real_dir = os.path.realpath(dest_dir)
+    key = (real_dir, sidecar_key)
+
+    if key in registry:
+        existing = registry[key]
+        if existing != canonical_locator:
+            return False, existing
+        return False, None
+
+    registry[key] = canonical_locator
+    return True, None
+
+
+def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"):
+    """Prepare sidecar file for one TextureAssetSource.
+
+    Copies/exports the texture to dest_dir with a deterministic U1 filename.
+    Updates source.status and source.action.
+
+    Args:
+        source: TextureAssetSource to prepare.
+        dest_dir: Destination cache directory.
+        collision_registry: dict for _register_sidecar_key.
+        guid_short: Short GUID for logging.
+    """
+    import shutil
+
+    ext_map = {
+        "PNG": ".png", "JPEG": ".jpg", "JPEG2000": ".jp2",
+        "TARGA": ".tga", "TIFF": ".tif", "OPEN_EXR": ".exr",
+        "BMP": ".bmp", "HDR": ".hdr",
+    }
+    ext = ext_map.get(source.file_format, ".png")
+
+    if source.source_kind == 'FILE' and not source.is_packed:
+        abs_path = bpy.path.abspath(source.filepath_raw or source.filepath)
+        locator = abs_path if os.path.isfile(abs_path) else (source.filepath_raw or source.filepath)
+        packed_status = "unpacked"
+        source_kind = "FILE"
+    elif source.is_packed:
+        locator = source.image_name
+        packed_status = "packed"
+        source_kind = "PACKED"
+    else:
+        locator = source.image_name
+        packed_status = "generated"
+        source_kind = "GENERATED"
+
+    source.source_locator = locator
+
+    canonical_locator_bytes = network._canonical_locator_bytes(
+        source_kind, packed_status, locator,
+    )
+
+    display_prefix = source.image_name
+    filename, sidecar_key, sha256_prefix = network.make_sidecar_key(
+        display_prefix, canonical_locator_bytes, ext, dest_dir,
+    )
+
+    dest_path = os.path.join(dest_dir, filename)
+    dest_exists_before = os.path.isfile(dest_path)
+
+    # Order: register collision BEFORE validate destination.
+    registered, existing_locator = _register_sidecar_key(
+        collision_registry, dest_dir, sidecar_key, canonical_locator_bytes,
+    )
+    if not registered and existing_locator is not None:
+        source.status = "failed"
+        source.action = "collision"
+        _fbx_log(f"[FBX][A3.1][SIDECAR_COLLISION] guid={guid_short} "
+                 f"source=({source.mat_name}:{source.node_name}) "
+                 f"sidecar_key={sidecar_key} ")
+        return
+
+    is_safe, reason = _check_destination_safe(dest_dir, dest_path)
+    if not is_safe:
+        source.status = "failed"
+        source.action = f"unsafe:{reason}"
+        _fbx_log(f"[FBX][A3.1][SIDECAR_UNSAFE] guid={guid_short} "
+                 f"source=({source.mat_name}:{source.node_name}) "
+                 f"reason={reason} path={dest_path}")
+        return
+
+    try:
+        if source.source_kind == 'FILE' and not source.is_packed:
+            abs_path = bpy.path.abspath(source.filepath_raw or source.filepath)
+            if not os.path.isfile(abs_path):
+                source.status = "failed"
+                source.action = "file_not_found"
+                _fbx_log(f"[FBX][A3.1][SIDECAR_FILE_NOT_FOUND] guid={guid_short} "
+                         f"source=({source.mat_name}:{source.node_name}) "
+                         f"path={abs_path}")
+                return
+            shutil.copy2(abs_path, dest_path)
+            action = "overwritten" if dest_exists_before else "copied"
+
+        elif source.is_packed or source.source_kind == 'GENERATED':
+            import tempfile
+            img = bpy.data.images.get(source.image_name)
+            if img is None:
+                source.status = "failed"
+                source.action = "image_not_found"
+                _fbx_log(f"[FBX][A3.1][SIDECAR_IMAGE_NOT_FOUND] guid={guid_short} "
+                         f"source=({source.mat_name}:{source.node_name}) "
+                         f"name={source.image_name}")
+                return
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
+                temp_path = tf.name
+            try:
+                img.save_render(temp_path)
+                shutil.move(temp_path, dest_path)
+            except Exception:
+                if os.path.isfile(temp_path):
+                    os.unlink(temp_path)
+                raise
+            action = "overwritten" if dest_exists_before else "exported"
+
+        else:
+            source.status = "failed"
+            source.action = "unsupported_source"
+            _fbx_log(f"[FBX][A3.1][SIDECAR_UNSUPPORTED] guid={guid_short} "
+                     f"source=({source.mat_name}:{source.node_name}) "
+                     f"kind={source.source_kind}")
+            return
+
+        source.sidecar_filename = filename
+        source.sidecar_key = sidecar_key
+        source.sha256_prefix = sha256_prefix
+        source.status = "ready"
+        source.action = action
+
+        _fbx_log(f"[FBX][A3.1][SIDECAR_{action.upper()}] guid={guid_short} "
+                 f"source=({source.mat_name}:{source.node_name}) "
+                 f"filename={filename} image={source.image_name}")
+
+    except Exception as e:
+        source.status = "failed"
+        source.action = "exception"
+        _fbx_log(f"[FBX][A3.1][SIDECAR_EXCEPTION] guid={guid_short} "
+                 f"source=({source.mat_name}:{source.node_name}) error={e}")
+
+
+def _should_suppress_material(usages):
+    """Return True if any connected usage has a failed source (suppress PT_Material)."""
+    return any(u.source.status == "failed" for u in usages)
+
+
 class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
     bpy.types.Operator
 ):
@@ -1249,9 +1665,35 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 for p, sz, mt in source_stats_before:
                     _fbx_log(f"[FBX][TEXTURE_SOURCE_STAT_BEFORE] path={p} size={sz} mtime={mt:.6f}")
 
-                # Phase 7H.6: explicit sidecar texture copy for UE import
-                sidecar_copied, sidecar_info = _copy_textures_sidecar(obj, obj_dir, guid_hex[:8])
-                # Task A: deterministic ordering log for sidecar readiness
+                # Phase 7H.6: explicit sidecar texture copy for UE import (A3.1)
+                _a3_sources, _a3_usages = _extract_texture_usages_and_sources(obj)
+                _a3_collision_registry = {}
+                for _src in _a3_sources:
+                    _prepare_source_sidecar(_src, obj_dir, _a3_collision_registry, guid_hex[:8])
+                sidecar_copied = sum(1 for s in _a3_sources if s.status == "ready")
+                sidecar_info = []
+                for s in _a3_sources:
+                    if s.status == "ready":
+                        _s_path = os.path.join(obj_dir, s.sidecar_filename)
+                        _s_source = s.source_locator
+                        try:
+                            _s_st = os.stat(_s_path)
+                            _s_size = _s_st.st_size
+                        except Exception:
+                            _s_size = 0
+                        sidecar_info.append({
+                            "filename": s.sidecar_filename,
+                            "path": _s_path,
+                            "size": _s_size,
+                            "source": _s_source,
+                        })
+                        _fbx_log(f"[FBX][MANIFEST_SIDECAR_TEXTURE] guid={guid_hex[:8]} "
+                                 f"file={s.sidecar_filename}")
+                # Suppress PT_Material if any connected usage has a failed source
+                _suppress_material = _should_suppress_material(_a3_usages)
+                if _suppress_material:
+                    _fbx_log(f"[FBX][A3.1][MATERIAL_SUPPRESS] guid={guid_hex[:8]} "
+                             f"object={obj.name} reason=connected_texture_failed")
                 print(f"[FBX][SIDECAR_READY] guid={guid_hex[:8]} copied={sidecar_copied}")
 
                 # --- Task D: log source texture state AFTER sidecar ---
@@ -1459,12 +1901,22 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     prev_prop_sig = sync._last_material_property_sig.get(guid_hex)
                     # Phase 7H: include texture hash in dirty detection
                     current_tex_sigs = {}
-                    for slot_idx, slot in enumerate(obj.material_slots):
-                        if slot and slot.material:
-                            maps = network.extract_texture_maps_for_slot(slot.material, slot.material.name, slot_idx)
-                            if maps:
-                                tex_hash = network.compute_material_texture_hash(slot_idx, maps)
-                                current_tex_sigs[slot_idx] = tex_hash
+                    if not _suppress_material:
+                        for _si in range(len(obj.material_slots)):
+                            _slot_usages = [u for u in _a3_usages if u.slot_index == _si]
+                            if not _slot_usages:
+                                continue
+                            _a3_maps = []
+                            for _u in _slot_usages:
+                                _src = _u.source
+                                if _src.status != "ready":
+                                    continue
+                                _fp = os.path.join(obj_dir, _src.sidecar_filename)
+                                _nm = os.path.splitext(_src.sidecar_filename)[0]
+                                _a3_maps.append((_u.channel, _fp, _nm, _u.flags))
+                            if _a3_maps:
+                                _a3_tex_hash = network.compute_material_texture_hash(_si, _a3_maps)
+                                current_tex_sigs[_si] = _a3_tex_hash
 
                     # Compute dirty hashes for logging
                     scalar_hash_val, tex_hash_val, combined_hash_val = (
@@ -1508,21 +1960,27 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     tex_maps = None
                     try:
                         tex_maps_dict = {}
-                        for slot_idx, slot in enumerate(obj.material_slots):
-                            if slot and slot.material:
-                                maps = network.extract_texture_maps_for_slot(slot.material, slot.material.name, slot_idx)
-                                if maps:
-                                    tex_maps_dict[slot_idx] = maps
-                                    for ch, fpath, img_name, flags in maps:
-                                        abs_path = bpy.path.abspath(fpath) if fpath else ""
-                                        file_exists = os.path.isfile(abs_path) if abs_path else False
-                                        source = "PACKED" if (flags & network.MTEX_FLAG_IMAGE_PACKED) else "FILE"
-                                        ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
-                                        has_tex = "1" if abs_path else "0"
-                                        exists_str = "1" if file_exists else "0"
-                                        print(f"[MATERIAL][TEXTURE_CHANNEL_SCAN] object={obj.name} slot={slot_idx} material={slot.material.name} channel={ch_name} hasTexture={has_tex} image={img_name} path={abs_path[:200] if abs_path else ''} exists={exists_str} source={source}")
-                        if tex_maps_dict:
-                            tex_maps = tex_maps_dict
+                        if not _suppress_material:
+                            for _u in _a3_usages:
+                                _src = _u.source
+                                if _src.status != "ready":
+                                    continue
+                                _fp = os.path.join(obj_dir, _src.sidecar_filename)
+                                _nm = os.path.splitext(_src.sidecar_filename)[0]
+                                if _u.slot_index not in tex_maps_dict:
+                                    tex_maps_dict[_u.slot_index] = []
+                                tex_maps_dict[_u.slot_index].append((_u.channel, _fp, _nm, _u.flags))
+                                _ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic",
+                                            4: "Alpha", 5: "Normal"}.get(_u.channel, "Unknown")
+                                _fe = "1" if os.path.isfile(_fp) else "0"
+                                print(f"[MATERIAL][TEXTURE_CHANNEL_SCAN] "
+                                      f"object={obj.name} slot={_u.slot_index} "
+                                      f"material={_src.mat_name} channel={_ch_name} "
+                                      f"hasTexture=1 image={_nm} path={_fp[:200]} "
+                                      f"exists={_fe} "
+                                      f"source={'PACKED' if _src.is_packed else 'FILE'}")
+                            if tex_maps_dict:
+                                tex_maps = tex_maps_dict
                     except Exception:
                         tex_maps = None
 
