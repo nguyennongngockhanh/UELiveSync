@@ -148,7 +148,10 @@ def _send_announce():
     if _client is None or not _client.connected:
         return False
     payload = struct.pack('<I', _local_capabilities)
-    _client.send_packet(payload, packet_type=PT_CapabilityAnnounce)
+    _client.send_packet(
+        [payload],
+        packet_type=PT_CapabilityAnnounce,
+    )
     return True
 
 
@@ -3342,10 +3345,22 @@ class LiveSyncClient:
             # Set flag bit 0 to indicate sub-header is present
             flags |= COLLECTION_PACKET_FLAG_HAS_SUBHEADER
 
+        # Harden: validate objects_data type and element types.
+        if isinstance(objects_data, (bytes, bytearray, memoryview)):
+            raise TypeError(
+                f"_build_packet: objects_data must be an iterable of serialized "
+                f"records, not a raw bytes-like payload (got {type(objects_data).__name__})"
+            )
+
         object_count = len(objects_data)
 
-        for obj in objects_data:
-
+        for idx, obj in enumerate(objects_data):
+            if not isinstance(obj, (bytes, bytearray, memoryview)):
+                raise TypeError(
+                    f"_build_packet packet_type={packet_type} index={idx} "
+                    f"expected bytes/bytearray/memoryview but got "
+                    f"{type(obj).__name__} value={repr(obj)[:120]}"
+                )
             payload.extend(obj)
 
         if version >= LIVE_SYNC_VERSION_V3:
