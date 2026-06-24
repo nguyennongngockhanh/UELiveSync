@@ -33,6 +33,353 @@ static TAutoConsoleVariable<int32> CVarLiveSyncFBXVerboseLogs(
 // Game-thread only. Safe on missing actor / invalid path.
 // =========================================================
 
+// Phase 10K.6: Transaction timing decomposition infrastructure
+// =========================================================
+
+static FString PhaseKindToClassification(EFbxPhaseKind Kind)
+{
+    switch (Kind)
+    {
+        case EFbxPhaseKind::Exclusive:       return TEXT("exclusive");
+        case EFbxPhaseKind::Nested:          return TEXT("nested");
+        case EFbxPhaseKind::InclusiveParent: return TEXT("inclusive_parent");
+        case EFbxPhaseKind::Unobservable:    return TEXT("unobservable");
+        default:                             return TEXT("unknown");
+    }
+}
+
+// One authoritative phase metadata registry.
+// Exclusive phases are strictly sequential and never overlap.
+// Nested phases have a named parent; they are excluded from the exclusive sum.
+static const TMap<FString, FFbxPhaseMetadata> GPhaseMetadata = {
+    {TEXT("request_parse"),                     {EFbxPhaseKind::Exclusive,     nullptr}},
+    {TEXT("path_validation"),                   {EFbxPhaseKind::Exclusive,     nullptr}},
+    {TEXT("semantic_signature"),                {EFbxPhaseKind::Nested,        nullptr}},
+    {TEXT("fbx_factory_import"),                {EFbxPhaseKind::Exclusive,     nullptr}},
+    {TEXT("imported_asset_discovery"),          {EFbxPhaseKind::Exclusive,     nullptr}},
+    {TEXT("sidecar_processing"),                {EFbxPhaseKind::Exclusive,     nullptr}},
+    {TEXT("sidecar_manifest_read"),             {EFbxPhaseKind::Nested,        TEXT("sidecar_processing")}},
+    {TEXT("sidecar_fingerprint_classification"),{EFbxPhaseKind::Nested,        TEXT("sidecar_processing")}},
+    {TEXT("sidecar_asset_lookup"),              {EFbxPhaseKind::Nested,        TEXT("sidecar_processing")}},
+    {TEXT("sidecar_batch_import"),              {EFbxPhaseKind::Nested,        TEXT("sidecar_processing")}},
+    {TEXT("sidecar_result_mapping"),            {EFbxPhaseKind::Nested,        TEXT("sidecar_processing")}},
+    {TEXT("static_mesh_post_import"),           {EFbxPhaseKind::Exclusive,     nullptr}},
+    {TEXT("actor_lookup_or_spawn"),             {EFbxPhaseKind::Exclusive,     nullptr}},
+    {TEXT("static_mesh_assignment"),            {EFbxPhaseKind::Exclusive,     nullptr}},
+    {TEXT("material_slot_assignment"),          {EFbxPhaseKind::Exclusive,     nullptr}},
+    {TEXT("post_import_finalize"),              {EFbxPhaseKind::Nested,        TEXT("fbx_transaction")}},
+};
+
+// Derived exclusive-phase set.  Single source of truth is GPhaseMetadata.
+// Lambda initializer ensures no manually duplicated list.
+static TSet<FString> GExclusivePhases = []()
+{
+    TSet<FString> Result;
+    for (const auto& KV : GPhaseMetadata)
+    {
+        if (KV.Value.Kind == EFbxPhaseKind::Exclusive)
+        {
+            Result.Add(KV.Key);
+        }
+    }
+    return Result;
+}();
+
+static bool IsExclusivePhase(const FString& PhaseName)
+{
+    const FFbxPhaseMetadata* Meta = GPhaseMetadata.Find(PhaseName);
+    return Meta && Meta->Kind == EFbxPhaseKind::Exclusive;
+}
+
+// Deterministic phase classification for STALL_SUMMARY.
+// Returns largest/second-largest exclusive phase metadata plus the
+// classification label (UNRESOLVED / DOMINANT_*/MIXED).
+struct FFbxExclusiveClassification
+{
+    FString LargestPhase = TEXT("UNRESOLVED");
+    double LargestPhaseMs = 0.0;
+    FString SecondLargestPhase;
+    double SecondLargestPhaseMs = 0.0;
+    FString Classification = TEXT("UNRESOLVED");
+};
+
+static FFbxExclusiveClassification ComputeExclusiveClassification(
+    const TMap<FString, double>& PhaseDurations)
+{
+    FString LargestPhase = TEXT("UNRESOLVED");
+    double LargestMs = 0.0;
+    FString SecondPhase;
+    double SecondMs = 0.0;
+
+    for (const auto& KV : PhaseDurations)
+    {
+        if (!IsExclusivePhase(KV.Key))
+            continue;
+        if (KV.Value <= 0.0)
+            continue;
+        // Deterministic ranking:
+        //   1) larger duration sorts first
+        //   2) equal duration sorts by phase name lexically ascending
+        if (KV.Value > LargestMs ||
+            (KV.Value == LargestMs && KV.Key < LargestPhase))
+        {
+            // Shift current largest to second
+            if (LargestMs > 0.0)
+            {
+                SecondMs = LargestMs;
+                SecondPhase = LargestPhase;
+            }
+            LargestMs = KV.Value;
+            LargestPhase = KV.Key;
+        }
+        else if (KV.Value > SecondMs ||
+                 (KV.Value == SecondMs && KV.Key < SecondPhase))
+        {
+            SecondMs = KV.Value;
+            SecondPhase = KV.Key;
+        }
+    }
+
+    if (LargestMs <= 0.0)
+        return { TEXT("UNRESOLVED"), 0.0, FString(), 0.0, TEXT("UNRESOLVED") };
+
+    // Exactly one positive phase => DOMINANT
+    if (SecondMs <= 0.0)
+        return { LargestPhase, LargestMs, SecondPhase, SecondMs,
+                 FString::Printf(TEXT("DOMINANT_%s"), *LargestPhase) };
+
+    // Two or more positive phases: 80 % gate
+    if (SecondMs >= LargestMs * 0.8)
+        return { LargestPhase, LargestMs, SecondPhase, SecondMs,
+                 TEXT("MIXED") };
+
+    return { LargestPhase, LargestMs, SecondPhase, SecondMs,
+             FString::Printf(TEXT("DOMINANT_%s"), *LargestPhase) };
+}
+
+// Phase marker helpers.  These define the authoritative log format.
+static void FbxPhaseBegin(
+    int32 TransactionId,
+    const FGuid& Guid,
+    int32 SyncId,
+    const FString& ObjectName,
+    const FString& PhaseName,
+    EFbxPhaseKind Kind)
+{
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[FBX][PHASE_BEGIN] transactionId=%d guid=%s syncId=%d objectName=%s phase=\"%s\" classification=\"%s\""),
+        TransactionId,
+        *Guid.ToString(EGuidFormats::Digits),
+        SyncId,
+        *ObjectName,
+        *PhaseName,
+        *PhaseKindToClassification(Kind));
+}
+
+static void FbxPhaseEnd(
+    int32 TransactionId,
+    const FGuid& Guid,
+    int32 SyncId,
+    const FString& ObjectName,
+    const FString& PhaseName,
+    EFbxPhaseKind Kind,
+    double DurationMs)
+{
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[FBX][PHASE_END] transactionId=%d guid=%s syncId=%d objectName=%s phase=\"%s\" classification=\"%s\" durationMs=%.1f"),
+        TransactionId,
+        *Guid.ToString(EGuidFormats::Digits),
+        SyncId,
+        *ObjectName,
+        *PhaseName,
+        *PhaseKindToClassification(Kind),
+        DurationMs);
+}
+
+// RAII scope phase.  Emits PHASE_BEGIN in the constructor and PHASE_END in
+// the destructor.  If OutDurationMs is non-null, the measured duration is
+// written through that pointer before PHASE_END.
+struct FFbxScopePhase
+{
+    int32 TransactionId;
+    FGuid Guid;
+    int32 SyncId;
+    FString ObjectName;
+    FString PhaseName;
+    EFbxPhaseKind Kind;
+    double StartTime;
+    double* OutDurationMs;
+    TMap<FString, double>* PhaseDurations;
+
+    FFbxScopePhase(
+        int32 InTransactionId,
+        const FGuid& InGuid,
+        int32 InSyncId,
+        const FString& InObjectName,
+        const FString& InPhaseName,
+        EFbxPhaseKind InKind,
+        double* InOutDurationMs = nullptr,
+        TMap<FString, double>* InPhaseDurations = nullptr)
+        : TransactionId(InTransactionId)
+        , Guid(InGuid)
+        , SyncId(InSyncId)
+        , ObjectName(InObjectName)
+        , PhaseName(InPhaseName)
+        , Kind(InKind)
+        , StartTime(FPlatformTime::Seconds())
+        , OutDurationMs(InOutDurationMs)
+        , PhaseDurations(InPhaseDurations)
+    {
+        FbxPhaseBegin(TransactionId, Guid, SyncId, ObjectName, PhaseName, Kind);
+    }
+
+    ~FFbxScopePhase()
+    {
+        const double Ms = (FPlatformTime::Seconds() - StartTime) * 1000.0;
+        if (OutDurationMs)
+        {
+            *OutDurationMs = Ms;
+        }
+        if (PhaseDurations &&
+            Kind == EFbxPhaseKind::Exclusive)
+        {
+            PhaseDurations->FindOrAdd(PhaseName) += Ms;
+        }
+        FbxPhaseEnd(TransactionId, Guid, SyncId, ObjectName, PhaseName, Kind, Ms);
+    }
+};
+
+// Phase 10K.6: STALL_SUMMARY calculation helpers
+
+// Largest exclusive-phase info used by STALL_SUMMARY
+// RAII guard that emits exactly one STALL_SUMMARY log per HandleImport transaction.
+// Construct after HandleImportStart is captured.  The Guid must be set after
+// Request is parsed (via SetGuid), and ObjectName must be set after the
+// ObjectName conversion (via SetObjectName).
+struct FFbxTransactionSummary
+{
+    int32 TransactionId;
+    FGuid Guid;
+    int32 SyncId;
+    FString ObjectName;
+    double HandleImportStart;
+    const TMap<FString, double>* PhaseDurations;
+    FLiveSyncStats* Stats;
+
+    FFbxTransactionSummary(
+        int32 InTransactionId,
+        const FGuid& InGuid,
+        int32 InSyncId,
+        double InHandleImportStart,
+        const TMap<FString, double>* InPhaseDurations,
+        FLiveSyncStats* InStats)
+        : TransactionId(InTransactionId)
+        , Guid(InGuid)
+        , SyncId(InSyncId)
+        , HandleImportStart(InHandleImportStart)
+        , PhaseDurations(InPhaseDurations)
+        , Stats(InStats)
+    {}
+
+    void SetGuid(const FGuid& InGuid) { Guid = InGuid; }
+    void SetObjectName(const FString& InName) { ObjectName = InName; }
+
+    ~FFbxTransactionSummary()
+    {
+        if (!Stats) return;
+
+        const double Now = FPlatformTime::Seconds();
+        const double TotalMs = (Now - HandleImportStart) * 1000.0;
+
+        // Safe fallback for null PhaseDurations
+        static const TMap<FString, double> EmptyPhaseDurations;
+        const TMap<FString, double>& SafePhaseDurations =
+            PhaseDurations ? *PhaseDurations : EmptyPhaseDurations;
+
+        double MeasuredExclusiveMs = 0.0;
+        for (const auto& KV : SafePhaseDurations)
+        {
+            if (IsExclusivePhase(KV.Key))
+            {
+                MeasuredExclusiveMs += KV.Value;
+            }
+        }
+
+        const double CoveragePercent =
+            TotalMs > 0.0
+                ? (MeasuredExclusiveMs / TotalMs) * 100.0
+                : 0.0;
+        const double UnattributedMs =
+            FMath::Max(0.0, TotalMs - MeasuredExclusiveMs);
+        const double ExcessMs =
+            FMath::Max(0.0, MeasuredExclusiveMs - TotalMs);
+        const bool bTimingValid =
+            ExcessMs <= 0.5;
+
+        FString LargestPhase = TEXT("UNRESOLVED");
+        double LargestPhaseMs = 0.0;
+        FString Classification;
+
+        if (!bTimingValid)
+        {
+            Classification = TEXT("INVALID_OVERLAP");
+            LargestPhase = TEXT("UNRESOLVED");
+            LargestPhaseMs = 0.0;
+        }
+        else
+        {
+            const FFbxExclusiveClassification Result =
+                ComputeExclusiveClassification(SafePhaseDurations);
+            Classification = Result.Classification;
+            LargestPhase = Result.LargestPhase;
+            LargestPhaseMs = Result.LargestPhaseMs;
+        }
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][STALL_SUMMARY] transactionId=%d guid=%s syncId=%d objectName=%s totalMs=%.1f measuredExclusiveMs=%.1f coveragePercent=%.2f largestPhase=%s largestPhaseMs=%.1f unattributedMs=%.1f classification=%s"),
+            TransactionId,
+            *Guid.ToString(EGuidFormats::Digits),
+            SyncId,
+            *ObjectName,
+            TotalMs,
+            MeasuredExclusiveMs,
+            CoveragePercent,
+            *LargestPhase,
+            LargestPhaseMs,
+            UnattributedMs,
+            *Classification);
+    }
+};
+
+// =========================================================
+// BOUNDED FIXED-FIELD HELPERS
+// =========================================================
+// Source encoding: UTF-8 (Blender writes str.encode('utf-8')).
+// Current compatibility decode: ANSI (byte-by-byte, no decode).
+// Memory over-read fixed: YES.
+// Unicode correctness fixed: NO (a later protocol/string slice should
+// migrate to bounded UTF-8 decoding and define malformed/truncated UTF-8
+// handling).
+static FString FStringFromFixedAnsi(
+    const uint8* Data,
+    int32 Capacity)
+{
+    if (!Data || Capacity <= 0)
+    {
+        return FString();
+    }
+
+    int32 Length = 0;
+    while (Length < Capacity && Data[Length] != 0)
+    {
+        ++Length;
+    }
+
+    return FString::ConstructFromPtrSize(
+        reinterpret_cast<const ANSICHAR*>(Data),
+        Length);
+}
+
 // =========================================================
 // VALIDATION HELPERS
 // =========================================================
@@ -867,8 +1214,9 @@ static FFBXImportSemanticSignature ComputeFBXSemanticSignature(
     Sig.VertCount = Request.VertCount;
     Sig.TriCount = Request.TriCount;
     Sig.MatSlotCount = Request.MatSlotCount;
-    Sig.ObjectName = ANSI_TO_TCHAR(
-        reinterpret_cast<const ANSICHAR*>(Request.ObjectName));
+    Sig.ObjectName = FStringFromFixedAnsi(
+        Request.ObjectName,
+        UE_ARRAY_COUNT(Request.ObjectName));
     Sig.GeometryHash = Request.GeometryHash;
 
     IFileManager& FileManager = IFileManager::Get();
@@ -890,6 +1238,25 @@ bool FLiveSyncFBXImporter::HandleImport(
         return false;
     }
 
+    const int32 TransactionId =
+        Context.Stats->FBXTransactionId.fetch_add(
+            1,
+            std::memory_order_acq_rel);
+    const int32 SyncId =
+        Context.Stats->MatPktSyncId;
+    const double HandleImportStart =
+        FPlatformTime::Seconds();
+    TMap<FString, double> PhaseDurations;
+
+    // Phase 10K.6: STALL_SUMMARY — RAII guard emits one summary per transaction
+    FFbxTransactionSummary TxnSummary(
+        TransactionId,
+        FGuid(),     // updated after Request parsing
+        SyncId,
+        HandleImportStart,
+        &PhaseDurations,
+        Context.Stats);
+
     if (!ValidatePayloadSize(PayloadSize, *Context.Stats))
     {
         return false;
@@ -904,6 +1271,8 @@ bool FLiveSyncFBXImporter::HandleImport(
         const int32 CopySize = FMath::Min(PayloadSize, (int32)sizeof(FFBXImportRequestPayload));
         FMemory::Memcpy(&Request, PayloadPtr, CopySize);
     }
+
+    TxnSummary.SetGuid(Request.ObjectGUID);
 
     if (Request.GeometryHash != 0)
     {
@@ -921,21 +1290,51 @@ bool FLiveSyncFBXImporter::HandleImport(
             Request.VertCount, Request.TriCount, Request.MatSlotCount);
     }
 
-    if (!ValidateVersion(Request.Version, *Context.Stats))
+    FString FbxPathStr;
+    // request_parse exclusive phase
     {
-        return false;
+        FFbxScopePhase RequestPhase(
+            TransactionId,
+            Request.ObjectGUID,
+            SyncId,
+            FString(),
+            TEXT("request_parse"),
+            EFbxPhaseKind::Exclusive,
+            nullptr,
+            &PhaseDurations);
+        if (!ValidateVersion(Request.Version, *Context.Stats))
+        {
+            return false;
+        }
+        FbxPathStr = FStringFromFixedAnsi(
+            Request.FbxPath,
+            UE_ARRAY_COUNT(Request.FbxPath));
     }
 
-    FString FbxPathStr(
-        ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.FbxPath)));
-
-    if (!ValidatePathSecurity(FbxPathStr, *Context.Stats))
+    // path_validation exclusive phase
     {
-        return false;
+        FFbxScopePhase PathPhase(
+            TransactionId,
+            Request.ObjectGUID,
+            SyncId,
+            FString(),
+            TEXT("path_validation"),
+            EFbxPhaseKind::Exclusive,
+            nullptr,
+            &PhaseDurations);
+        if (!ValidatePathSecurity(FbxPathStr, *Context.Stats))
+        {
+            return false;
+        }
     }
 
+    // ObjectName conversion (after both validation blocks)
     FString SafeName = SanitizeObjectName(
-        ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.ObjectName)));
+        FStringFromFixedAnsi(
+            Request.ObjectName,
+            UE_ARRAY_COUNT(Request.ObjectName)));
+    const FString TxnObjNameSanitized = SafeName;
+    TxnSummary.SetObjectName(TxnObjNameSanitized);
 
     const FString GuidShort =
         Request.ObjectGUID.ToString().Left(8);

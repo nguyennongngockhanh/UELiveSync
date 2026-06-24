@@ -3,6 +3,25 @@
 #include "CoreMinimal.h"
 #include "SyncTypes.h"
 
+// Phase 10K.6: Phase metadata for timing hierarchy.
+enum class EFbxPhaseKind : uint8
+{
+    Exclusive,
+    Nested,
+    InclusiveParent,
+    Unobservable,
+};
+
+struct FFbxPhaseMetadata
+{
+    EFbxPhaseKind Kind;
+    const TCHAR* Parent;
+
+    FFbxPhaseMetadata(EFbxPhaseKind InKind, const TCHAR* InParent)
+        : Kind(InKind), Parent(InParent)
+    {}
+};
+
 class AActor;
 class UWorld;
 class AActor;

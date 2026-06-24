@@ -73,6 +73,57 @@ ProcessQueuedPackets → InterpolateTransforms → ResolvePendingAttachments
   - No actor or component scale compensation — actor scale remains `(1,1,1)`, StaticMeshComponent relative scale remains `(1,1,1)`.
   - Invalid unit imports are rejected/preserved rather than compensated.
 
+### Phase 10K.6 — FBX Transaction Stall Diagnostics
+
+Transaction timing decomposition adds RAII-scoped phase markers and a final
+STALL_SUMMARY log emission to every `HandleImport` call.
+
+**Exclusive phases** (strictly sequential, non-overlapping):
+- `request_parse` — ValidateVersion + bounded FbxPath conversion
+- `path_validation` — ValidatePathSecurity on the resolved path
+
+**Preserved order inside `request_parse`**:
+```
+ValidateVersion
+<
+bounded FStringFromFixedAnsi(Request.FbxPath, ...)
+<
+request_parse close
+<
+path_validation / ValidatePathSecurity
+<
+bounded FStringFromFixedAnsi(Request.ObjectName, ...)
+```
+
+**Timing arithmetic (raw, no clamping)**:
+- `CoveragePercent = TotalMs > 0 ? MeasuredExclusiveMs / TotalMs * 100 : 0`
+- `UnattributedMs = max(0, TotalMs - MeasuredExclusiveMs)`
+- `ExcessMs = max(0, MeasuredExclusiveMs - TotalMs)`
+
+**Timing validity**: `ExcessMs <= 0.5` ms is valid. When invalid:
+- `classification = INVALID_OVERLAP`
+- `largestPhase = UNRESOLVED`, `largestPhaseMs = 0`
+
+**Deterministic classification** (positive exclusive durations only):
+- Zero positive phases → `UNRESOLVED`
+- One positive phase → `DOMINANT_<phase>`
+- Two or more: `secondLargestMs >= largestMs * 0.8` → `MIXED`, else `DOMINANT_<largest>`
+- Equal durations: lexical ascending phase-name tie-break
+- `SINGLE` is **never** emitted
+
+**RAII contract**:
+- One `FFbxTransactionSummary` guard per `HandleImport` transaction
+- Exactly one `STALL_SUMMARY` emission on every completed exit path
+- `PhaseDurations` declared before the guard (reverse destruction order)
+- Null `PhaseDurations` uses `EmptyPhaseDurations` fallback
+
+**STALL_SUMMARY fields**: `transactionId`, `guid`, `syncId`, `objectName`,
+`totalMs`, `measuredExclusiveMs`, `coveragePercent`, `largestPhase`,
+`largestPhaseMs`, `unattributedMs`, `classification`.
+
+**Wire protocol**: unchanged. No new packet type. No PT_Keyframe format change.
+Channels 0–10 unchanged.
+
 ## Packet Types
 
 | Type | Value | Payload | Description |

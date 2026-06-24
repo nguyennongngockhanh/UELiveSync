@@ -1303,6 +1303,12 @@ struct FLiveSyncStats
     std::atomic<int32> FBXImportActorsSpawned{0};         // New StaticMeshActor spawned
     std::atomic<int32> FBXImportActorsUpdated{0};         // Existing StaticMeshActor updated
     std::atomic<int32> FBXImportSkipped{0};               // Redundant imports skipped (fingerprint match)
+
+    // Phase 10K.6 diagnostic correlation; 0 means unavailable.
+    int32 MatPktSyncId{0};
+
+    // Phase 10K.6 transaction sequence.
+    std::atomic<int32> FBXTransactionId{1};
 };
 
 // =========================================================

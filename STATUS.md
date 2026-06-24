@@ -1331,7 +1331,7 @@ All verified in regression run.
 
 ## Phase 10K — Texture Pipeline (COMPLETE)
 
-**Status**: All 5 sub-phases (10K.1–10K.5) complete. Texture metadata sync, UE import/cache, generated MID texture parameter application, master material visual path, and diagnostics/hardening tests all passing. All Phase 10K tests PASS.
+**Status**: All 6 sub-phases (10K.1–10K.6) complete. Texture metadata sync, UE import/cache, generated MID texture parameter application, master material visual path, diagnostics/hardening tests, and STALL_SUMMARY transaction timing diagnostics all passing. All Phase 10K tests PASS.
 
 ### Phase 10K.1 — MTEX Texture Metadata Sync (COMPLETE)
 
@@ -1374,6 +1374,56 @@ All verified in regression run.
 - Cache size warning tested.
 - Alpha/Normal deferred warnings documented.
 - All Phase 10K tests PASS.
+
+### Phase 10K.6 — STALL_SUMMARY FBX Transaction Timing Diagnostics (COMPLETE)
+
+**Exclusive phases**:
+- `request_parse` — version validation + bounded FbxPath conversion
+- `path_validation` — ValidatePathSecurity on resolved path
+
+**Preserved validation order**:
+```
+ValidateVersion
+<
+bounded FStringFromFixedAnsi(Request.FbxPath, ...)
+<
+request_parse close
+<
+path_validation / ValidatePathSecurity
+<
+bounded FStringFromFixedAnsi(Request.ObjectName, ...)
+```
+
+**Timing arithmetic (raw, no clamp)**:
+- `CoveragePercent = TotalMs > 0 ? MeasuredExclusiveMs / TotalMs * 100 : 0`
+- `UnattributedMs = max(0, TotalMs - MeasuredExclusiveMs)`
+- `ExcessMs = max(0, MeasuredExclusiveMs - TotalMs)`
+- Timing valid when `ExcessMs <= 0.5` ms; invalid path produces `classification=INVALID_OVERLAP`, `largestPhase=UNRESOLVED`, `largestPhaseMs=0`
+
+**Deterministic classification** (positive exclusive durations only):
+- Zero positive → `UNRESOLVED`
+- One positive → `DOMINANT_<phase>`
+- Two+: `secondLargestMs >= largestMs * 0.8` → `MIXED`, else `DOMINANT_<largest>`
+- Equal durations: lexical ascending phase-name tie-break
+- `SINGLE` is never emitted
+
+**RAII contract**:
+- One `FFbxTransactionSummary` per `HandleImport` transaction
+- Exactly one `STALL_SUMMARY` emission on every completed exit path
+- `PhaseDurations` declared before the guard so reverse destruction order keeps it alive during summary destruction
+- Null `PhaseDurations` uses `EmptyPhaseDurations` fallback
+
+**STALL_SUMMARY fields**: `transactionId`, `guid`, `syncId`, `objectName`, `totalMs`, `measuredExclusiveMs`, `coveragePercent`, `largestPhase`, `largestPhaseMs`, `unattributedMs`, `classification`
+
+**Evidence**:
+- pytest: 68/68 PASS (`tests/phase10k6_transaction_decomposition.py`)
+- authoritative Phase 10K.6 semantic runner: 511 PASS / 0 FAIL
+- valid build-after-sync compiled `LiveSyncFBXImporter.cpp`
+- production SHA unchanged: `3c94fe928bdf050f758085b09d9b01e98c76e653e720e9bc7f9ad1d08bf971a9`
+- no UE runtime validation performed
+- recovery root: `.recovery/phase10k6-20260623-075720/` (patches, reports, audits)
+
+**No protocol changes**: no new packet type, no PT_Keyframe format change, channels 0–10 unchanged.
 
 ### Known Limitations
 
