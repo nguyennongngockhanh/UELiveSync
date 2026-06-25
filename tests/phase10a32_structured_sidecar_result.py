@@ -150,10 +150,9 @@ _network_mod.MTEX_FLAG_PATH_ABSOLUTE = 2
 _network_mod.MTEX_FLAG_COLORSPACE_SRGB = 4
 _network_mod.MTEX_FLAG_COLORSPACE_NON_COLOR = 8
 
-def _make_sidecar_key(prefix, locator_bytes, ext, dest_dir):
-    import hashlib
+def _make_sidecar_key(prefix, content_hash_hex, ext, dest_dir):
     import os
-    h = hashlib.sha256(locator_bytes).hexdigest()[:32]
+    h = content_hash_hex  # 16-char xxh64 hex
     base = prefix.replace(".", "_").replace(" ", "_")
     safe_name = "".join(c for c in base if c.isalnum() or c in "._-")
     if not safe_name: safe_name = "unnamed"
@@ -176,6 +175,21 @@ _network_mod.compute_material_texture_hash = lambda slot_idx, maps: 0
 _network_mod.extract_evaluated_mesh_data = lambda obj: None
 _network_mod.compute_geometry_version_hash = lambda **kw: 0
 _network_mod.xxh64 = lambda data: 0
+
+def _xxh64_file_hex_local(path):
+    """Stub _xxh64_file_hex for A3.2 tests — uses hashlib.sha256 (not the
+    mocked xxh64) to return a deterministic 16-char hex based on file content.
+    """
+    import hashlib as _hl
+    try:
+        with open(path, "rb") as _f:
+            _data = _f.read()
+        return _hl.sha256(_data).hexdigest()[:16]
+    except Exception:
+        return ""
+
+_network_mod._xxh64_file_hex = staticmethod(_xxh64_file_hex_local)
+
 # Patch network on the addon module directly instead of sys.modules.
 # This avoids polluting sys.modules["network"] which would leak into A3.1 tests.
 # We save the real network module and restore it later.
@@ -450,8 +464,8 @@ class TestEveryBranchReturnsResult(unittest.TestCase):
             self.assertEqual(result1.status, "ready")
             result2 = _init_mod._prepare_source_sidecar(sources[0], obj_dir, reg, "abc")
             self.assertEqual(result2.status, "ready")
-            self.assertIn(result1.action, ("copied", "overwritten"))
-            self.assertIn(result2.action, ("copied", "overwritten", "exported"))
+            self.assertIn(result1.action, ("copied",))
+            self.assertIn(result2.action, ("verified",))
             self.assertEqual(result2.destination_path, result1.destination_path)
 
     def test_06b_unsupported_source_returns_result(self):
@@ -468,43 +482,31 @@ class TestEveryBranchReturnsResult(unittest.TestCase):
             self.assertEqual(result.action, "unsupported_source")
             self.assertIn("unsupported_source", result.error.lower())
 
-    def test_06c_exception_path_returns_result(self):
+    def test_06c_content_collision_returns_result(self):
+        """Different content at a content-keyed path fails with content_collision."""
         with tempfile.TemporaryDirectory() as td:
-            src_file = os.path.join(td, "src.png")
-            with open(src_file, "wb") as f: f.write(b"fake_png" * 10)
+            src_a = os.path.join(td, "src_a.png")
+            src_b = os.path.join(td, "src_b.png")
+            with open(src_a, "wb") as f: f.write(b"AAAAcontentAAAA")
+            with open(src_b, "wb") as f: f.write(b"BBBBcontentBBBB")
             obj_dir = os.path.join(td, "cache")
             os.makedirs(obj_dir, exist_ok=True)
             reg = {}
-            fake_src1 = types.SimpleNamespace(
-                source_kind="FILE", is_packed=False, image_name="Img",
-                mat_name="M", node_name="Tex", file_format="PNG",
-                filepath=src_file, filepath_raw=src_file, sidecar_filename=None,
-                sidecar_key=None, sha256_prefix=None, source_locator=None,
-                status="ready", action="", sidecar_key_value="same_key")
-            result1 = _init_mod._prepare_source_sidecar(fake_src1, obj_dir, reg, "abc")
-            self.assertEqual(result1.status, "ready")
-            # Pre-register a collision: same sidecar key but different locator.
-            src_file2 = os.path.join(td, "other.png")
-            with open(src_file2, "wb") as f: f.write(b"other_data")
-            real_obj_dir = os.path.realpath(obj_dir)
-            import hashlib
-            locator_bytes2 = b"FILE:unpacked:" + src_file2.encode("utf-8")
-            h2 = hashlib.sha256(locator_bytes2).hexdigest()[:32]
-            # The collision_key that will be looked up during the second call
-            collision_key = (real_obj_dir, "Img__" + h2)
-            reg[collision_key] = b"different_locator_bytes"
-            fake_src2 = types.SimpleNamespace(
-                source_kind="FILE", is_packed=False, image_name="Img",
-                mat_name="M2", node_name="Tex2", file_format="PNG",
-                filepath=src_file2, filepath_raw=src_file2,
-                sidecar_filename=None, sidecar_key=None, sha256_prefix=None,
-                source_locator=src_file2, status="ready", action="",
-                sidecar_key_value="Img")
-            result2 = _init_mod._prepare_source_sidecar(fake_src2, obj_dir, reg, "abc")
-            self.assertIsInstance(result2, _init_mod.SidecarPreparationResult)
-            self.assertEqual(result2.status, "failed")
-            self.assertEqual(result2.action, "collision")
-            self.assertIn("collision", result2.error.lower())
+            # Prepare source A → creates a file at a content-keyed path
+            obj_a, _ = _make_obj_with_tex("TexA", source="FILE", filepath=src_a)
+            srcs_a, _ = _init_mod._extract_texture_usages_and_sources(obj_a)
+            result_a = _init_mod._prepare_source_sidecar(srcs_a[0], obj_dir, reg, "abc")
+            self.assertEqual(result_a.status, "ready")
+            # Overwrite the destination with different content (content B)
+            dest_path = result_a.destination_path
+            import shutil
+            shutil.copy2(src_b, dest_path)
+            # Prepare source A again → detects content mismatch
+            result_a2 = _init_mod._prepare_source_sidecar(srcs_a[0], obj_dir, reg, "abc")
+            self.assertIsInstance(result_a2, _init_mod.SidecarPreparationResult)
+            self.assertEqual(result_a2.status, "failed")
+            self.assertEqual(result_a2.action, "content_collision")
+            self.assertIn("content_collision", result_a2.error.lower())
 
     def test_07_unsafe_destination_returns_result(self):
         with tempfile.TemporaryDirectory() as td:
@@ -694,7 +696,7 @@ class TestFailClosedResult(unittest.TestCase):
                 "error must contain original exception text")
 
     def test_failclosed_missing_destination_after_prepare(self):
-        """Skipped copy returns destination_missing."""
+        """Skipped atomic replace returns destination_missing."""
         with tempfile.TemporaryDirectory() as td:
             src_file = os.path.join(td, "src.png")
             with open(src_file, "wb") as f: f.write(b"fake_png" * 10)
@@ -703,17 +705,16 @@ class TestFailClosedResult(unittest.TestCase):
             obj_dir = os.path.join(td, "cache")
             os.makedirs(obj_dir, exist_ok=True)
             reg = {}
-            import shutil
-            orig_copy2 = shutil.copy2
+            orig_replace = os.replace
 
-            def _fake_copy2(src, dst):
-                pass
+            def _fake_replace(src, dst):
+                pass  # skip the move — dest never created
 
-            shutil.copy2 = _fake_copy2
+            os.replace = _fake_replace
             try:
                 result = _init_mod._prepare_source_sidecar(sources[0], obj_dir, reg, "abc")
             finally:
-                shutil.copy2 = orig_copy2
+                os.replace = orig_replace
             self.assertIsInstance(result, _init_mod.SidecarPreparationResult)
             self.assertEqual(result.status, "failed",
                 "missing destination must produce failed, not ready")
@@ -894,15 +895,11 @@ class TestA32SuiteProperties(unittest.TestCase):
                 self.assertNotIn("_copy_textures_sidecar", node.name)
                 self.assertNotIn("_should_suppress_material_legacy", node.name)
 
-    def test_24_network_unchanged(self):
-        net_py = os.path.join(os.path.dirname(__file__), "..", "Blender_Addon", "network.py")
-        import subprocess
-        r = subprocess.run([
-            "git", "diff", "HEAD", "--", net_py],
-            capture_output=True, text=True,
-            cwd=os.path.join(os.path.dirname(__file__), ".."))
-        self.assertEqual(r.stdout, "",
-            "network.py must not be modified in this phase")
+    def test_24_network_has_xxh64_file_hex(self):
+        """A3.3 adds _xxh64_file_hex to network.py."""
+        self.assertTrue(hasattr(_init_mod.network, '_xxh64_file_hex'),
+            "A3.3 must add _xxh64_file_hex to network")
+        self.assertTrue(callable(_init_mod.network._xxh64_file_hex))
 
     def test_25_ast_check_sidecar_result_frozen(self):
         init_py = os.path.join(os.path.dirname(__file__), "..", "Blender_Addon", "__init__.py")

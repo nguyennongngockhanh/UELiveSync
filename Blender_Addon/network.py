@@ -604,6 +604,132 @@ def xxh64(data, seed=0):
     return acc & 0xFFFFFFFFFFFFFFFF
 
 
+class _Xxh64Stream:
+    """Streaming (incremental) xxh64 that matches the one-shot xxh64().
+
+    Usage::
+
+        hasher = _Xxh64Stream(seed=0)
+        hasher.update(chunk1)
+        hasher.update(chunk2)
+        result = hasher.digest()      # int
+        hex_result = hasher.hexdigest()  # 16-char lowercase str
+    """
+
+    __slots__ = ('_seed', '_total', '_buf', '_v1', '_v2', '_v3', '_v4')
+
+    def __init__(self, seed=0):
+        self._seed = seed
+        self._total = 0
+        self._buf = bytearray()
+        self._v1 = None
+        self._v2 = None
+        self._v3 = None
+        self._v4 = None
+
+    def _process_stripe(self, buffer, offset):
+        if self._v1 is None:
+            self._v1 = self._seed + _XXH_PRIME64_1 + _XXH_PRIME64_2
+            self._v2 = self._seed + _XXH_PRIME64_2
+            self._v3 = self._seed
+            self._v4 = self._seed - _XXH_PRIME64_1
+        self._v1 = _xxh64_round(self._v1, struct.unpack_from("<Q", buffer, offset)[0])
+        self._v2 = _xxh64_round(self._v2, struct.unpack_from("<Q", buffer, offset + 8)[0])
+        self._v3 = _xxh64_round(self._v3, struct.unpack_from("<Q", buffer, offset + 16)[0])
+        self._v4 = _xxh64_round(self._v4, struct.unpack_from("<Q", buffer, offset + 24)[0])
+
+    def update(self, data):
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("expected bytes, bytearray, or memoryview")
+        if isinstance(data, memoryview):
+            view = data
+        else:
+            view = memoryview(data)
+        index = 0
+        self._total += len(view)
+
+        if self._buf:
+            needed = 32 - len(self._buf)
+            take = min(needed, len(view))
+            self._buf.extend(view[:take])
+            index += take
+            if len(self._buf) == 32:
+                self._process_stripe(self._buf, 0)
+                self._buf.clear()
+
+        limit = len(view) - 32
+        while index <= limit:
+            self._process_stripe(view, index)
+            index += 32
+
+        if index < len(view):
+            self._buf.extend(view[index:])
+
+    def digest(self):
+        length = self._total
+        if length >= 32:
+            if self._v1 is None:
+                acc = self._seed + _XXH_PRIME64_5 + _XXH_PRIME64_5
+            else:
+                acc = ((self._v1 << 1) | (self._v1 >> 63))
+                acc = _xxh64_merge_round(acc, self._v2)
+                acc = _xxh64_merge_round(acc, self._v3)
+                acc = _xxh64_merge_round(acc, self._v4)
+        else:
+            acc = self._seed + _XXH_PRIME64_5 + _XXH_PRIME64_5 + _XXH_PRIME64_5
+
+        remaining = bytes(self._buf)
+        offset = 0
+        rlen = len(remaining)
+        while rlen - offset >= 8:
+            val = struct.unpack_from("<Q", remaining, offset)[0]
+            acc = ((acc ^ _xxh64_round(0, val)) * _XXH_PRIME64_1 + _XXH_PRIME64_4) & 0xFFFFFFFFFFFFFFFF
+            offset += 8
+        while rlen - offset >= 4:
+            val = struct.unpack_from("<I", remaining, offset)[0]
+            acc = ((acc ^ (val * _XXH_PRIME64_1)) * _XXH_PRIME64_3 + _XXH_PRIME64_5) & 0xFFFFFFFFFFFFFFFF
+            offset += 4
+        while offset < rlen:
+            val = remaining[offset]
+            acc = ((acc ^ (val * _XXH_PRIME64_5)) * _XXH_PRIME64_3 + _XXH_PRIME64_5) & 0xFFFFFFFFFFFFFFFF
+            offset += 1
+
+        # Final avalanche (no intermediate masks — matches one-shot xxh64)
+        acc ^= acc >> 37
+        acc = (acc * _XXH_PRIME64_3) + _XXH_PRIME64_5
+        acc ^= acc >> 37
+        acc = (acc * _XXH_PRIME64_4) + _XXH_PRIME64_5
+        acc ^= acc >> 37
+
+        return acc & 0xFFFFFFFFFFFFFFFF
+
+    def hexdigest(self):
+        return '{:016x}'.format(self.digest())
+
+
+def _xxh64_file_hex(path, chunk_size=1048576):
+    """Compute xxh64 of file bytes with bounded memory, returning 16-char hex.
+
+    Reads the file in *chunk_size*-byte chunks (default 1 MiB) and feeds
+    them incrementally into the streaming xxh64 hasher.  Never loads the
+    complete file into memory.
+
+    Returns:
+        str: 16-character lowercase hex, or '' on any open/read/hash error.
+    """
+    try:
+        hasher = _Xxh64Stream(seed=0)
+        with open(path, 'rb') as stream:
+            while True:
+                chunk = stream.read(chunk_size)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+        return hasher.hexdigest()
+    except Exception:
+        return ''
+
+
 # =========================================================
 # ASSET IDENTITY HELPERS (Phase 5D)
 # =========================================================
@@ -1036,36 +1162,33 @@ def _get_name_max(dest_dir):
         return 255
 
 
-def make_sidecar_key(display_prefix, canonical_locator, ext, dest_dir):
-    """Build a deterministic sidecar filename with collision-safe hash suffix.
-
-    U1 strategy: embed collision-safe key into the filename so UE's
-    insertion key (FPaths::GetBaseFilename(SourceFilename).ToLower())
-    and lookup key (TexRef.ImageName.ToLower()) match.
+def make_sidecar_key(display_prefix, content_hash_hex, ext, dest_dir):
+    """Build a deterministic sidecar filename with content-based hash suffix.
 
     Filename format:
-        <sanitized_prefix>__<32-hex-sha256-suffix><ext>
+        <sanitized_prefix>__<16-char-content-xxh64><ext>
 
-    The SHA-256 suffix is computed from domain-separated canonical locator bytes:
-        sha256(f"{source_kind}:{packed_status}:{locator}".encode("utf-8"))
+    U1 strategy: the content hash suffix makes the basename deterministic
+    for identical file bytes, independent of filepath, locator bytes,
+    or image name.  UE's insertion key
+    (FPaths::GetBaseFilename(SourceFilename).ToLower()) and lookup key
+    (TexRef.ImageName.ToLower()) match because ImageName derives from the
+    same basename.
 
     Byte budgeting uses the smaller of the filesystem NAME_MAX and the
     MTEX ImageName field limit (MTEX_MAX_IMAGE_NAME_LEN).
 
     Args:
         display_prefix: Human-readable prefix (e.g., image name).
-        canonical_locator: Canonical locator bytes from _canonical_locator_bytes().
+        content_hash_hex: 16-character lowercase xxh64 hex of final bytes.
         ext: File extension including dot (e.g., '.png').
         dest_dir: Destination directory (for NAME_MAX detection).
 
     Returns:
-        Tuple of (sidecar_filename, sidecar_key, sha256_prefix)
-        where sidecar_key is used for collision registry.
+        Tuple of (sidecar_filename, sidecar_key, content_hash_hex)
+        where sidecar_key is the basename without extension (ImageName).
     """
-    import hashlib
-
-    digest = hashlib.sha256(canonical_locator).hexdigest()
-    hash_suffix = digest[:32]
+    hash_suffix = content_hash_hex  # 16 characters
 
     safe_prefix = _sanitize_filename_component(display_prefix)
 
@@ -1075,7 +1198,7 @@ def make_sidecar_key(display_prefix, canonical_locator, ext, dest_dir):
         name_max - len(ext_bytes),
         MTEX_MAX_IMAGE_NAME_LEN,
     )
-    prefix_budget = key_budget - 2 - 32
+    prefix_budget = key_budget - 2 - 16
     if prefix_budget < 1:
         prefix_budget = 1
     truncated_prefix = _truncate_to_utf8_bytes(safe_prefix, prefix_budget)
@@ -1091,7 +1214,7 @@ def make_sidecar_key(display_prefix, canonical_locator, ext, dest_dir):
     assert len(_full_bytes) <= name_max, \
         f"Filename {len(_full_bytes)}B exceeds NAME_MAX {name_max}B"
 
-    return filename, filename_base, digest[:32]
+    return filename, filename_base, content_hash_hex
 
 
 def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):

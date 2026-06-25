@@ -955,14 +955,18 @@ class SidecarPreparationResult:
     """
     source: 'TextureAssetSource'
     status: str           # "ready" | "failed"
-    action: str           # "copied" | "overwritten" | "exported"
-                           # | "collision" | "unsafe_*" | "file_not_found"
-                           # | "image_not_found" | "unsupported_source" | "exception"
+    action: str           # "copied" | "overwritten" | "exported" | "verified"
+                           # | "collision" | "content_collision"
+                           # | "file_not_found" | "image_not_found"
+                           # | "unsupported_source" | "exception"
+                           # | "unsafe_*"
     source_locator: str
     destination_path: str
     filename: str         # basename(destination_path)
     image_name: str
     size: int
+    asset_id: str = ""    # 16-char lowercase xxh64 hex of final bytes;
+                           # "" for failed results
     error: str = ""
 
 
@@ -1247,19 +1251,26 @@ def _register_sidecar_key(registry, dest_dir, sidecar_key, canonical_locator):
 def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"):
     """Prepare sidecar file for one TextureAssetSource.
 
-    Copies/exports the texture to dest_dir with a deterministic U1 filename.
+    Content-keyed: filename derives from xxh64 of final bytes.
+    Every ready result has a verified asset_id matching the destination bytes.
+    Never returns ready without validated destination.
     NEVER mutates source — all outcomes go through SidecarPreparationResult.
+
+    The collision_registry parameter is retained for API compatibility
+    but is no longer used — content-keyed filenames make registry-based
+    collision detection redundant.
 
     Args:
         source: TextureAssetSource to prepare.
         dest_dir: Destination cache directory.
-        collision_registry: dict for _register_sidecar_key.
+        collision_registry: Unused (retained for API compat).
         guid_short: Short GUID for logging.
 
     Returns:
         SidecarPreparationResult — always returns one result (success or failure).
     """
     import shutil
+    import tempfile as _tempfile
 
     ext_map = {
         "PNG": ".png", "JPEG": ".jpg", "JPEG2000": ".jp2",
@@ -1268,35 +1279,19 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
     }
     ext = ext_map.get(source.file_format, ".png")
 
+    # Resolve locator (for logging and failure results)
     if source.source_kind == 'FILE' and not source.is_packed:
         abs_path = bpy.path.abspath(source.filepath_raw or source.filepath)
         locator = abs_path if os.path.isfile(abs_path) else (source.filepath_raw or source.filepath)
-        packed_status = "unpacked"
-        source_kind = "FILE"
     elif source.is_packed:
         locator = source.image_name
-        packed_status = "packed"
-        source_kind = "PACKED"
     else:
         locator = source.image_name
-        packed_status = "generated"
-        source_kind = "GENERATED"
 
-    canonical_locator_bytes = network._canonical_locator_bytes(
-        source_kind, packed_status, locator,
-    )
-
-    display_prefix = source.image_name
-    filename, sidecar_key, sha256_prefix = network.make_sidecar_key(
-        display_prefix, canonical_locator_bytes, ext, dest_dir,
-    )
-
-    dest_path = os.path.join(dest_dir, filename)
-    dest_exists_before = os.path.isfile(dest_path)
-    basename_result = os.path.basename(dest_path)
+    dest_path = ""
+    basename_result = ""
 
     def _make_failure(action, error_msg):
-        """Build a failure result. No source mutation."""
         _fbx_log(f"[FBX][A3.1][SIDECAR_{action.upper()}] guid={guid_short} "
                  f"source=({source.mat_name}:{source.node_name}) error={error_msg}")
         return SidecarPreparationResult(
@@ -1308,20 +1303,14 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
             filename=basename_result,
             image_name=source.image_name,
             size=0,
+            asset_id="",
             error=error_msg,
         )
 
-    def _make_success(action):
-        """Build a success result. No source mutation.
-
-        Verifies destination exists and getsize succeeds before
-        returning status=ready.  A missing destination or stat
-        failure returns a failed result instead of fabricating
-        size=0 under a ready status.
-        """
-        _fbx_log(f"[FBX][A3.1][SIDECAR_{action.upper()}] guid={guid_short} "
+    def _make_success(action, asset_id):
+        _fbx_log(f"[FBX][A3.3][SIDECAR_{action.upper()}] guid={guid_short} "
                  f"source=({source.mat_name}:{source.node_name}) "
-                 f"filename={filename} image={source.image_name}")
+                 f"filename={filename} asset_id={asset_id} image={source.image_name}")
         try:
             if not os.path.isfile(dest_path):
                 return _make_failure(
@@ -1329,6 +1318,12 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
                     f"destination_missing_after_{action}:{dest_path}",
                 )
             actual_size = os.path.getsize(dest_path)
+            final_hex = network._xxh64_file_hex(dest_path)
+            if final_hex != asset_id:
+                return _make_failure(
+                    "destination_hash_mismatch",
+                    f"destination_hash_mismatch:{final_hex}!={asset_id}",
+                )
         except Exception as e:
             return _make_failure(
                 "destination_stat_failed",
@@ -1343,50 +1338,114 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
             filename=basename_result,
             image_name=source.image_name,
             size=actual_size,
+            asset_id=asset_id,
         )
 
-    # Order: register collision BEFORE validate destination.
-    registered, existing_locator = _register_sidecar_key(
-        collision_registry, dest_dir, sidecar_key, canonical_locator_bytes,
-    )
-    if not registered and existing_locator is not None:
-        return _make_failure("collision", "collision_with_different_locator")
-
-    is_safe, reason = _check_destination_safe(dest_dir, dest_path)
-    if not is_safe:
-        return _make_failure(f"unsafe:{reason}", f"destination_unsafe:{reason}")
+    temp_path = None
 
     try:
+        # === Phase 1: Content hash ===
+        content_hex = None
+        source_file_path = None
+
         if source.source_kind == 'FILE' and not source.is_packed:
-            abs_path = bpy.path.abspath(source.filepath_raw or source.filepath)
             if not os.path.isfile(abs_path):
                 return _make_failure("file_not_found", f"source_file_not_found:{abs_path}")
-            shutil.copy2(abs_path, dest_path)
-            action = "overwritten" if dest_exists_before else "copied"
+            content_hex = network._xxh64_file_hex(abs_path)
+            if not content_hex:
+                return _make_failure("source_hash_failed", f"xxh64_failed:{abs_path}")
+            source_file_path = abs_path
 
         elif source.is_packed or source.source_kind == 'GENERATED':
-            import tempfile
             img = bpy.data.images.get(source.image_name)
             if img is None:
                 return _make_failure("image_not_found", "blender_image_not_found")
-            with tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
+            with _tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
                 temp_path = tf.name
             try:
                 img.save_render(temp_path)
-                shutil.move(temp_path, dest_path)
             except Exception:
                 if os.path.isfile(temp_path):
                     os.unlink(temp_path)
+                    temp_path = None
                 raise
-            action = "overwritten" if dest_exists_before else "exported"
+            content_hex = network._xxh64_file_hex(temp_path)
+            if not content_hex:
+                if os.path.isfile(temp_path):
+                    os.unlink(temp_path)
+                    temp_path = None
+                return _make_failure("rendered_hash_failed", f"xxh64_failed:{temp_path}")
 
         else:
             return _make_failure("unsupported_source", f"unsupported_source_kind:{source.source_kind}")
 
-        return _make_success(action)
+        # === Phase 2: Filename from content hash ===
+        display_prefix = source.image_name
+        filename, sidecar_key, _ = network.make_sidecar_key(
+            display_prefix, content_hex, ext, dest_dir,
+        )
+        dest_path = os.path.join(dest_dir, filename)
+        basename_result = os.path.basename(dest_path)
+
+        # === Phase 3: Verify existing destination ===
+        if os.path.isfile(dest_path):
+            existing_hex = network._xxh64_file_hex(dest_path)
+            if existing_hex == content_hex:
+                return _make_success("verified", content_hex)
+            return _make_failure(
+                "content_collision",
+                f"content_collision:existing={existing_hex} new={content_hex}",
+            )
+
+        # === Phase 4: Safety check ===
+        is_safe, reason = _check_destination_safe(dest_dir, dest_path)
+        if not is_safe:
+            return _make_failure(f"unsafe:{reason}", f"destination_unsafe:{reason}")
+
+        # === Phase 5: Write via temp + atomic replace ===
+        if source.source_kind == 'FILE' and not source.is_packed:
+            with _tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
+                copy_temp = tf.name
+            try:
+                shutil.copy2(source_file_path, copy_temp)
+                temp_hex = network._xxh64_file_hex(copy_temp)
+                if temp_hex != content_hex:
+                    os.unlink(copy_temp)
+                    return _make_failure("temporary_hash_mismatch",
+                        f"temp_hash:{temp_hex}!=expected:{content_hex}")
+                os.replace(copy_temp, dest_path)
+            except Exception:
+                if os.path.isfile(copy_temp):
+                    os.unlink(copy_temp)
+                raise
+            action_str = "copied"
+
+        elif source.is_packed or source.source_kind == 'GENERATED':
+            temp_hex = network._xxh64_file_hex(temp_path)
+            if temp_hex != content_hex:
+                if os.path.isfile(temp_path):
+                    os.unlink(temp_path)
+                    temp_path = None
+                return _make_failure("temporary_hash_mismatch",
+                    f"temp_hash:{temp_hex}!=expected:{content_hex}")
+            os.replace(temp_path, dest_path)
+            temp_path = None
+            action_str = "exported"
+
+        else:
+            return _make_failure("unsupported_source", f"unsupported_source_kind:{source.source_kind}")
+
+        return _make_success(action_str, content_hex)
 
     except Exception as e:
         return _make_failure("exception", str(e))
+
+    finally:
+        if temp_path is not None and os.path.isfile(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
 
 
 def _result_by_source(results):

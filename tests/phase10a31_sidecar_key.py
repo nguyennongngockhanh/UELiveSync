@@ -433,65 +433,65 @@ class TestMakeSidecarKey(unittest.TestCase):
         self._make = network.make_sidecar_key
 
     def test_basic(self):
-        cl = b"FILE:unpacked:/path/tex.png"
+        ch = "abcd1234abcd1234"  # 16-char xxh64 hex
         with tempfile.TemporaryDirectory() as td:
-            filename, key, sha = self._make("MyTex", cl, ".png", td)
+            filename, key, sha = self._make("MyTex", ch, ".png", td)
         self.assertTrue(filename.endswith(".png"))
         self.assertTrue("__" in filename)
-        self.assertEqual(len(sha), 32)
+        self.assertEqual(len(sha), 16)
         self.assertEqual(key, os.path.splitext(filename)[0])
 
     def test_deterministic(self):
-        cl = b"FILE:unpacked:/path/tex.png"
+        ch = "abcd1234abcd1234"
         with tempfile.TemporaryDirectory() as td:
-            f1, _, _ = self._make("MyTex", cl, ".png", td)
-            f2, _, _ = self._make("MyTex", cl, ".png", td)
+            f1, _, _ = self._make("MyTex", ch, ".png", td)
+            f2, _, _ = self._make("MyTex", ch, ".png", td)
         self.assertEqual(f1, f2)
 
-    def test_different_locator_different_key(self):
-        cl1 = b"FILE:unpacked:/path/tex1.png"
-        cl2 = b"FILE:unpacked:/path/tex2.png"
+    def test_different_content_different_key(self):
+        ch1 = "1111111111111111"
+        ch2 = "2222222222222222"
         with tempfile.TemporaryDirectory() as td:
-            f1, k1, _ = self._make("MyTex", cl1, ".png", td)
-            f2, k2, _ = self._make("MyTex", cl2, ".png", td)
+            f1, k1, _ = self._make("MyTex", ch1, ".png", td)
+            f2, k2, _ = self._make("MyTex", ch2, ".png", td)
         self.assertNotEqual(k1, k2)
 
     def test_unicode_prefix(self):
-        cl = b"FILE:unpacked:/path/t\xebx.png"
+        ch = "abcd1234abcd1234"
         with tempfile.TemporaryDirectory() as td:
-            filename, key, _ = self._make("T\xebxture", cl, ".png", td)
+            filename, key, _ = self._make("T\xebxture", ch, ".png", td)
         self.assertIn("__", filename)
         self.assertEqual(key, os.path.splitext(filename)[0])
 
     def test_ext_preserved(self):
-        cl = b"FILE:unpacked:/path/tex.exr"
+        ch = "abcd1234abcd1234"
         with tempfile.TemporaryDirectory() as td:
-            filename, _, _ = self._make("Tex", cl, ".exr", td)
+            filename, _, _ = self._make("Tex", ch, ".exr", td)
         self.assertTrue(filename.endswith(".exr"))
 
     def test_key_budget_mtex_limit(self):
         """When filesystem NAME_MAX > MTEX_MAX_IMAGE_NAME_LEN, MTEX limit dominates."""
-        cl = b"FILE:unpacked:/path/tex.png"
+        ch = "abcd1234abcd1234"
         with tempfile.TemporaryDirectory() as td:
-            filename, key, _ = self._make("A" * 300, cl, ".png", td)
+            filename, key, _ = self._make("A" * 300, ch, ".png", td)
         self.assertLessEqual(len(key.encode("utf-8")), network.MTEX_MAX_IMAGE_NAME_LEN)
 
     def test_key_budget_filesystem_limit(self):
         """When MTEX limit > NAME_MAX, filesystem limit dominates."""
-        cl = b"FILE:unpacked:/path/tex.png"
+        ch = "abcd1234abcd1234"
         with tempfile.TemporaryDirectory() as td:
-            filename, key, sha = self._make("MyTex", cl, ".png", td)
+            filename, key, sha = self._make("MyTex", ch, ".png", td)
         # Both postconditions hold
         self.assertLessEqual(len(key.encode("utf-8")), network.MTEX_MAX_IMAGE_NAME_LEN)
 
     def test_long_unicode_prefix_preserves_suffix(self):
-        """Long Unicode prefix is truncated but full 32-char SHA-256 suffix is preserved."""
-        cl = b"FILE:unpacked:/path/tex.png"
+        """Long Unicode prefix is truncated but full 16-char content hash suffix is preserved."""
+        ch = "abcd1234abcd1234"
         with tempfile.TemporaryDirectory() as td:
-            filename, key, sha = self._make("\u4e16\u754c\u4f60\u597d" * 20, cl, ".png", td)
+            filename, key, sha = self._make("\u4e16\u754c\u4f60\u597d" * 20, ch, ".png", td)
         self.assertIn("__", filename)
         suffix = filename.split("__")[1].split(".")[0]
-        self.assertEqual(len(suffix), 32)
+        self.assertEqual(len(suffix), 16)
         self.assertEqual(suffix, sha)
 
 
