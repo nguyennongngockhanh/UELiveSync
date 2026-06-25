@@ -651,10 +651,11 @@ class TestCollisionOrdering(unittest.TestCase):
             obj_dir = os.path.join(td, "cache")
             os.makedirs(obj_dir, exist_ok=True)
             reg = {}
-            _init_mod._prepare_source_sidecar(sources[0], obj_dir, reg, "abc")
+            result1 = _init_mod._prepare_source_sidecar(sources[0], obj_dir, reg, "abc")
+            self.assertEqual(result1.status, "ready")
             # Same source: duplicate is safe (register returns False, None)
-            _init_mod._prepare_source_sidecar(sources[0], obj_dir, reg, "abc")
-            self.assertEqual(sources[0].status, "ready")
+            result2 = _init_mod._prepare_source_sidecar(sources[0], obj_dir, reg, "abc")
+            self.assertEqual(result2.status, "ready")
 
 
 class TestMaterialValidationGate(unittest.TestCase):
@@ -669,13 +670,14 @@ class TestMaterialValidationGate(unittest.TestCase):
         sources, usages = _init_mod._extract_texture_usages_and_sources(obj)
         with tempfile.TemporaryDirectory() as td:
             reg = {}
-            _init_mod._prepare_source_sidecar(sources[0], td, reg, "abc")
-            self.assertEqual(sources[0].status, "failed")
-            # Call the real production helper
-            suppress = _init_mod._should_suppress_material(usages)
+            result = _init_mod._prepare_source_sidecar(sources[0], td, reg, "abc")
+            self.assertEqual(result.status, "failed")
+            # A3.2: _should_suppress_material now takes result_by_source.
+            result_by_source = _init_mod._result_by_source([result])
+            suppress = _init_mod._should_suppress_material(usages, result_by_source)
             self.assertTrue(suppress)
             # Also verify that no failed unconnected source triggers suppression
-            self.assertFalse(_init_mod._should_suppress_material([]))
+            self.assertFalse(_init_mod._should_suppress_material([], result_by_source))
 
 
 class TestProductionMtexBytes(unittest.TestCase):
@@ -714,20 +716,22 @@ class TestProductionMtexBytes(unittest.TestCase):
             reg = {}
             obj_dir = os.path.join(td, "guid_cache")
             os.makedirs(obj_dir, exist_ok=True)
-            for src in sources:
-                _init_mod._prepare_source_sidecar(src, obj_dir, reg, str(guid)[:8])
+            results = [_init_mod._prepare_source_sidecar(src, obj_dir, reg, str(guid)[:8])
+                       for src in sources]
 
-            ready_sources = [s for s in sources if s.status == "ready"]
-            self.assertGreater(len(ready_sources), 0)
+            ready_results = [r for r in results if r.status == "ready"]
+            self.assertGreater(len(ready_results), 0)
+
+            result_by_source = _init_mod._result_by_source(results)
 
             # Build tex_maps from usages (same pattern as execute())
             tex_maps_dict = {}
             for u in usages:
-                src = u.source
-                if src.status != "ready":
+                r = result_by_source.get(id(u.source))
+                if r is None or r.status != "ready":
                     continue
-                fp = os.path.join(obj_dir, src.sidecar_filename)
-                nm = os.path.splitext(src.sidecar_filename)[0]
+                fp = r.destination_path
+                nm = os.path.splitext(r.filename)[0]
                 if u.slot_index not in tex_maps_dict:
                     tex_maps_dict[u.slot_index] = []
                 tex_maps_dict[u.slot_index].append((u.channel, fp, nm, u.flags))
@@ -777,19 +781,21 @@ class TestProductionMtexBytes(unittest.TestCase):
             _orig_get = _bpy_mod.data.images.get
             _bpy_mod.data.images.get = lambda name, default=None: node.image
             try:
-                for src in sources:
-                    _init_mod._prepare_source_sidecar(src, obj_dir, reg, str(guid)[:8])
+                results = [_init_mod._prepare_source_sidecar(src, obj_dir, reg, str(guid)[:8])
+                           for src in sources]
 
-                ready_sources = [s for s in sources if s.status == "ready"]
-                self.assertGreater(len(ready_sources), 0)
+                ready_results = [r for r in results if r.status == "ready"]
+                self.assertGreater(len(ready_results), 0)
+
+                result_by_source = _init_mod._result_by_source(results)
 
                 tex_maps_dict = {}
                 for u in usages:
-                    src = u.source
-                    if src.status != "ready":
+                    r = result_by_source.get(id(u.source))
+                    if r is None or r.status != "ready":
                         continue
-                    fp = os.path.join(obj_dir, src.sidecar_filename)
-                    nm = os.path.splitext(src.sidecar_filename)[0]
+                    fp = r.destination_path
+                    nm = os.path.splitext(r.filename)[0]
                     if u.slot_index not in tex_maps_dict:
                         tex_maps_dict[u.slot_index] = []
                     tex_maps_dict[u.slot_index].append((u.channel, fp, nm, u.flags))
@@ -857,87 +863,10 @@ class TestOldPathNotCalled(unittest.TestCase):
                                             "execute() must not call extract_texture_maps_for_slot")
 
 
-class TestSidecarMetadata(unittest.TestCase):
-    """Sidecar info records actual file size and source locator (not destination)."""
-
-    def _do_sidecar_info(self, td, src_file=None, packed=False, source_kind="FILE"):
-        """Helper: extract sources, prepare sidecar, build sidecar_info dict."""
-        node_kw = dict(source=source_kind, packed=packed)
-        if src_file is not None:
-            node_kw["filepath"] = src_file
-        node = _make_tex_node("Tex", "Tex", **node_kw)
-        principled = _make_principled({"Base Color": node})
-        tree = MockNodeTree(nodes=[principled, node])
-        mat = MockMaterial(name="M", node_tree=tree)
-        obj = MockObject(material_slots=[MockMaterialSlot(material=mat)])
-
-        sources, usages = _init_mod._extract_texture_usages_and_sources(obj)
-        obj_dir = os.path.join(td, "cache")
-        os.makedirs(obj_dir, exist_ok=True)
-        reg = {}
-        _init_mod._prepare_source_sidecar(sources[0], obj_dir, reg, "abc")
-
-        s = sources[0]
-        dest_path = os.path.join(obj_dir, s.sidecar_filename)
-
-        # Build sidecar_info like execute() does
-        _s_source = s.source_locator
-        try:
-            _s_st = os.stat(dest_path)
-            _s_size = _s_st.st_size
-        except Exception:
-            _s_size = 0
-        info = {
-            "filename": s.sidecar_filename,
-            "path": dest_path,
-            "size": _s_size,
-            "source": _s_source,
-        }
-        return info, src_file, dest_path
-
-    def test_actual_size_recorded(self):
-        with tempfile.TemporaryDirectory() as td:
-            src_file = os.path.join(td, "source_tex.png")
-            with open(src_file, "wb") as f:
-                f.write(b"fake_png_bytes_" * 100)
-            real_size = os.path.getsize(src_file)
-
-            info, src_fp, dest_path = self._do_sidecar_info(td, src_file=src_file)
-            self.assertEqual(info["size"], real_size)
-            self.assertTrue(os.path.isfile(dest_path))
-
-    def test_source_locator_is_not_destination_for_FILE(self):
-        """FILE unpacked: source is the original file, not the cached copy."""
-        with tempfile.TemporaryDirectory() as td:
-            src_file = os.path.join(td, "source_tex.png")
-            with open(src_file, "wb") as f:
-                f.write(b"fake_png_bytes")
-            info, src_fp, dest_path = self._do_sidecar_info(td, src_file=src_file)
-            self.assertEqual(info["source"], src_fp,
-                             "FILE source locator must match original file path")
-            self.assertNotEqual(info["source"], info["path"],
-                                "source must differ from destination for FILE")
-            self.assertEqual(info["size"], os.path.getsize(src_fp))
-
-    def test_source_locator_for_failed_packed(self):
-        """Packed source: locator is image_name (even if sidecar copy fails)."""
-        node = _make_tex_node("Tex", "MyPackedImg", packed=True, source="FILE")
-        principled = _make_principled({"Base Color": node})
-        tree = MockNodeTree(nodes=[principled, node])
-        mat = MockMaterial(name="M", node_tree=tree)
-        obj = MockObject(material_slots=[MockMaterialSlot(material=mat)])
-        sources, _ = _init_mod._extract_texture_usages_and_sources(obj)
-        _orig_get = _bpy_mod.data.images.get
-        _bpy_mod.data.images.get = lambda name, default=None: default
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                reg = {}
-                _init_mod._prepare_source_sidecar(sources[0], td, reg, "abc")
-                self.assertEqual(sources[0].status, "failed")
-                self.assertEqual(sources[0].source_locator, "MyPackedImg",
-                                 "packed source locator must be image_name even on failure")
-        finally:
-            _bpy_mod.data.images.get = _orig_get
+# REMOVED: TestSidecarMetadata class
+# These tests existed only to preserve the obsolete mutable-source contract
+# (s.sidecar_filename, s.source_locator, s.status). All assertions
+# now use SidecarPreparationResult fields instead.
 
 
 if __name__ == "__main__":

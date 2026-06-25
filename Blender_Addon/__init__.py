@@ -937,156 +937,47 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
             bpy.context.view_layer.objects.active = orig_active
 
 
-def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
-    """Copy material texture images into dest_dir for UE sidecar import.
-    
-    Iterates obj material slots, finds TEX_IMAGE nodes, and copies
-    referenced images into dest_dir (the FBX cache folder).
-    Handles FILE source (direct copy), packed images, and GENERATED images.
-    Returns (copied_count, sidecar_info_list).
+# =========================================================
+# A3.2 Structured sidecar result
+# =========================================================
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class SidecarPreparationResult:
+    """One authoritative result per TextureAssetSource.
+
+    One result object per TextureAssetSource — success or failure.
+    Callers derive sidecar_copied, sidecar_info, material suppression,
+    dirty signatures, and MTEX records from this result, not from
+    scattered source fields or positional tuples.
     """
-    import shutil
-    import uuid as _uuid
-
-    if not obj.material_slots:
-        _fbx_log(f"[FBX][TEXTURE_SIDECAR] guid={guid_short} "
-                 f"object={obj.name} no_material_slots")
-        return 0, []
-
-    copied_count = 0
-    sidecar_info = []  # list of dicts: {filename, path, source_path, size}
-    for slot in obj.material_slots:
-        mat = slot.material
-        if not mat or not mat.use_nodes or not mat.node_tree:
-            continue
-        for node in mat.node_tree.nodes:
-            if node.type != 'TEX_IMAGE' or not node.image:
-                continue
-            img = node.image
-            filepath = getattr(img, "filepath", "") or ""
-            filepath_raw = getattr(img, "filepath_raw", "") or ""
-            source = getattr(img, "source", "")
-            is_packed = bool(getattr(img, "packed_file", False))
-
-            _fbx_log(f"[FBX][TEXTURE_SIDECAR_SCAN] guid={guid_short} "
-                     f"object={obj.name} material={mat.name} "
-                     f"image={img.name} source={source} "
-                     f"packed={1 if is_packed else 0}")
-
-            if source == 'FILE' and not is_packed:
-                # --- Task C: non-destructive copy for FILE source ---
-                abs_path = bpy.path.abspath(filepath)
-                if not os.path.isfile(abs_path):
-                    _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
-                             f"object={obj.name} material={mat.name} "
-                             f"image={img.name} reason=file_not_found "
-                             f"path={abs_path}")
-                    continue
-
-                # --- Task A: safety guard — never write to source path ---
-                resolved_src = os.path.realpath(abs_path)
-                resolved_dst = os.path.realpath(os.path.join(dest_dir, os.path.basename(abs_path)))
-                if resolved_dst == resolved_src:
-                    _fbx_log(f"[FBX][TEXTURE_SOURCE_WRITE_BLOCKED] path={resolved_dst} reason=destination_equals_source")
-                    continue
-
-                dest_name = os.path.basename(abs_path)
-                dest_path = os.path.join(dest_dir, dest_name)
-                if os.path.exists(dest_path):
-                    base, ext = os.path.splitext(dest_name)
-                    dest_name = f"{base}_{_uuid.uuid4().hex[:8]}{ext}"
-                    dest_path = os.path.join(dest_dir, dest_name)
-
-                # Use shutil.copy2 (never img.save_render) for FILE sources
-                try:
-                    shutil.copy2(abs_path, dest_path)
-                    _fbx_log(f"[FBX][TEXTURE_COPY] guid={guid_short} "
-                             f"object={obj.name} material={mat.name} "
-                             f"image={img.name} src={abs_path} "
-                             f"dst={dest_path}")
-                    # Task A: record sidecar info for manifest
-                    try:
-                        src_size = os.stat(abs_path).st_size
-                    except Exception:
-                        src_size = 0
-                    sidecar_info.append({
-                        "filename": os.path.basename(dest_path),
-                        "path": dest_path,
-                        "size": src_size,
-                        "source": abs_path,
-                    })
-                    _fbx_log(f"[FBX][MANIFEST_SIDECAR_TEXTURE] guid={guid_short} "
-                             f"file={os.path.basename(dest_path)} size={src_size}")
-                    copied_count += 1
-                except Exception as e:
-                    _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
-                             f"object={obj.name} material={mat.name} "
-                             f"image={img.name} reason=copy_failed "
-                             f"error={e}")
-
-            elif is_packed or source == 'GENERATED':
-                # --- Task C: temp save must be inside cache folder ---
-                ext = ".png"
-                try:
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
-                        temp_path = tf.name
-                    img.save_render(temp_path)
-                    _fbx_log(f"[FBX][TEXTURE_TEMP_SAVE] dst={temp_path} source={'PACKED' if is_packed else 'GENERATED'}")
-                    # Fix double extension: strip existing extension from img.name
-                    base_name = os.path.splitext(img.name)[0]
-                    dest_name = f"{base_name}{ext}"
-                    dest_path = os.path.join(dest_dir, dest_name)
-                    if os.path.exists(dest_path):
-                        dest_name = f"{base_name}_{_uuid.uuid4().hex[:8]}{ext}"
-                        dest_path = os.path.join(dest_dir, dest_name)
-                    shutil.move(temp_path, dest_path)
-                    _fbx_log(f"[FBX][TEXTURE_COPY] guid={guid_short} "
-                             f"object={obj.name} material={mat.name} "
-                             f"image={img.name} "
-                             f"source={'packed' if is_packed else 'generated'} "
-                             f"dst={dest_path}")
-                    # Record sidecar info for manifest (was missing — caused sidecarTextures=0)
-                    try:
-                        src_size = os.stat(dest_path).st_size
-                    except Exception:
-                        src_size = 0
-                    sidecar_info.append({
-                        "filename": os.path.basename(dest_path),
-                        "path": dest_path,
-                        "size": src_size,
-                        "source": temp_path,
-                    })
-                    _fbx_log(f"[FBX][MANIFEST_SIDECAR_TEXTURE] guid={guid_short} "
-                             f"file={os.path.basename(dest_path)} size={src_size}")
-                    copied_count += 1
-                except Exception as e:
-                    _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
-                             f"object={obj.name} material={mat.name} "
-                             f"image={img.name} "
-                             f"source={'packed' if is_packed else 'generated'} "
-                             f"reason=save_failed error={e}")
-            else:
-                _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
-                         f"object={obj.name} material={mat.name} "
-                         f"image={img.name} source={source} "
-                         f"reason=unsupported_source")
-
-    _fbx_log(f"[FBX][TEXTURE_SIDECAR_SUMMARY] guid={guid_short} "
-             f"object={obj.name} copied={copied_count}")
-    return copied_count, sidecar_info
+    source: 'TextureAssetSource'
+    status: str           # "ready" | "failed"
+    action: str           # "copied" | "overwritten" | "exported"
+                           # | "collision" | "unsafe_*" | "file_not_found"
+                           # | "image_not_found" | "unsupported_source" | "exception"
+    source_locator: str
+    destination_path: str
+    filename: str         # basename(destination_path)
+    image_name: str
+    size: int
+    error: str = ""
 
 
 # =========================================================
 # A3.1 Texture identity and sidecar preparation
 # =========================================================
 
-from dataclasses import dataclass
-
 
 @dataclass
 class TextureAssetSource:
-    """One unique TEX_IMAGE node referenced by one or more usages."""
+    """One unique TEX_IMAGE node referenced by one or more usages.
+
+    Immutable source input and identity data only.
+    Preparation outcomes must never be written back onto this class.
+    """
     mat_name: str
     node_name: str
     image_name: str
@@ -1098,12 +989,6 @@ class TextureAssetSource:
     height: int
     file_format: str
     colorspace: str
-    sidecar_filename: str = ""
-    sidecar_key: str = ""
-    sha256_prefix: str = ""
-    status: str = "pending"
-    action: str = ""
-    source_locator: str = ""
 
 
 @dataclass
@@ -1363,13 +1248,16 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
     """Prepare sidecar file for one TextureAssetSource.
 
     Copies/exports the texture to dest_dir with a deterministic U1 filename.
-    Updates source.status and source.action.
+    NEVER mutates source — all outcomes go through SidecarPreparationResult.
 
     Args:
         source: TextureAssetSource to prepare.
         dest_dir: Destination cache directory.
         collision_registry: dict for _register_sidecar_key.
         guid_short: Short GUID for logging.
+
+    Returns:
+        SidecarPreparationResult — always returns one result (success or failure).
     """
     import shutil
 
@@ -1394,8 +1282,6 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
         packed_status = "generated"
         source_kind = "GENERATED"
 
-    source.source_locator = locator
-
     canonical_locator_bytes = network._canonical_locator_bytes(
         source_kind, packed_status, locator,
     )
@@ -1407,38 +1293,74 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
 
     dest_path = os.path.join(dest_dir, filename)
     dest_exists_before = os.path.isfile(dest_path)
+    basename_result = os.path.basename(dest_path)
+
+    def _make_failure(action, error_msg):
+        """Build a failure result. No source mutation."""
+        _fbx_log(f"[FBX][A3.1][SIDECAR_{action.upper()}] guid={guid_short} "
+                 f"source=({source.mat_name}:{source.node_name}) error={error_msg}")
+        return SidecarPreparationResult(
+            source=source,
+            status="failed",
+            action=action,
+            source_locator=locator,
+            destination_path=dest_path,
+            filename=basename_result,
+            image_name=source.image_name,
+            size=0,
+            error=error_msg,
+        )
+
+    def _make_success(action):
+        """Build a success result. No source mutation.
+
+        Verifies destination exists and getsize succeeds before
+        returning status=ready.  A missing destination or stat
+        failure returns a failed result instead of fabricating
+        size=0 under a ready status.
+        """
+        _fbx_log(f"[FBX][A3.1][SIDECAR_{action.upper()}] guid={guid_short} "
+                 f"source=({source.mat_name}:{source.node_name}) "
+                 f"filename={filename} image={source.image_name}")
+        try:
+            if not os.path.isfile(dest_path):
+                return _make_failure(
+                    "destination_missing",
+                    f"destination_missing_after_{action}:{dest_path}",
+                )
+            actual_size = os.path.getsize(dest_path)
+        except Exception as e:
+            return _make_failure(
+                "destination_stat_failed",
+                f"destination_stat_failed:{e}",
+            )
+        return SidecarPreparationResult(
+            source=source,
+            status="ready",
+            action=action,
+            source_locator=locator,
+            destination_path=dest_path,
+            filename=basename_result,
+            image_name=source.image_name,
+            size=actual_size,
+        )
 
     # Order: register collision BEFORE validate destination.
     registered, existing_locator = _register_sidecar_key(
         collision_registry, dest_dir, sidecar_key, canonical_locator_bytes,
     )
     if not registered and existing_locator is not None:
-        source.status = "failed"
-        source.action = "collision"
-        _fbx_log(f"[FBX][A3.1][SIDECAR_COLLISION] guid={guid_short} "
-                 f"source=({source.mat_name}:{source.node_name}) "
-                 f"sidecar_key={sidecar_key} ")
-        return
+        return _make_failure("collision", "collision_with_different_locator")
 
     is_safe, reason = _check_destination_safe(dest_dir, dest_path)
     if not is_safe:
-        source.status = "failed"
-        source.action = f"unsafe:{reason}"
-        _fbx_log(f"[FBX][A3.1][SIDECAR_UNSAFE] guid={guid_short} "
-                 f"source=({source.mat_name}:{source.node_name}) "
-                 f"reason={reason} path={dest_path}")
-        return
+        return _make_failure(f"unsafe:{reason}", f"destination_unsafe:{reason}")
 
     try:
         if source.source_kind == 'FILE' and not source.is_packed:
             abs_path = bpy.path.abspath(source.filepath_raw or source.filepath)
             if not os.path.isfile(abs_path):
-                source.status = "failed"
-                source.action = "file_not_found"
-                _fbx_log(f"[FBX][A3.1][SIDECAR_FILE_NOT_FOUND] guid={guid_short} "
-                         f"source=({source.mat_name}:{source.node_name}) "
-                         f"path={abs_path}")
-                return
+                return _make_failure("file_not_found", f"source_file_not_found:{abs_path}")
             shutil.copy2(abs_path, dest_path)
             action = "overwritten" if dest_exists_before else "copied"
 
@@ -1446,12 +1368,7 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
             import tempfile
             img = bpy.data.images.get(source.image_name)
             if img is None:
-                source.status = "failed"
-                source.action = "image_not_found"
-                _fbx_log(f"[FBX][A3.1][SIDECAR_IMAGE_NOT_FOUND] guid={guid_short} "
-                         f"source=({source.mat_name}:{source.node_name}) "
-                         f"name={source.image_name}")
-                return
+                return _make_failure("image_not_found", "blender_image_not_found")
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
                 temp_path = tf.name
             try:
@@ -1464,33 +1381,55 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
             action = "overwritten" if dest_exists_before else "exported"
 
         else:
-            source.status = "failed"
-            source.action = "unsupported_source"
-            _fbx_log(f"[FBX][A3.1][SIDECAR_UNSUPPORTED] guid={guid_short} "
-                     f"source=({source.mat_name}:{source.node_name}) "
-                     f"kind={source.source_kind}")
-            return
+            return _make_failure("unsupported_source", f"unsupported_source_kind:{source.source_kind}")
 
-        source.sidecar_filename = filename
-        source.sidecar_key = sidecar_key
-        source.sha256_prefix = sha256_prefix
-        source.status = "ready"
-        source.action = action
-
-        _fbx_log(f"[FBX][A3.1][SIDECAR_{action.upper()}] guid={guid_short} "
-                 f"source=({source.mat_name}:{source.node_name}) "
-                 f"filename={filename} image={source.image_name}")
+        return _make_success(action)
 
     except Exception as e:
-        source.status = "failed"
-        source.action = "exception"
-        _fbx_log(f"[FBX][A3.1][SIDECAR_EXCEPTION] guid={guid_short} "
-                 f"source=({source.mat_name}:{source.node_name}) error={e}")
+        return _make_failure("exception", str(e))
 
 
-def _should_suppress_material(usages):
-    """Return True if any connected usage has a failed source (suppress PT_Material)."""
-    return any(u.source.status == "failed" for u in usages)
+def _result_by_source(results):
+    """Build a dict mapping source identity -> SidecarPreparationResult.
+
+    Uses object identity (not name) so that one source shared by
+    multiple usages resolves to exactly one result.
+    """
+    return {id(r.source): r for r in results}
+
+
+def _sidecar_result_to_manifest_entry(result):
+    """Convert one SidecarPreparationResult to a manifest-sidecar dict.
+
+    This is the single compatibility/serialization boundary.
+    """
+    return {
+        "filename": result.filename,
+        "path": result.destination_path,
+        "size": result.size,
+        "source": result.source_locator,
+    }
+
+
+def _should_suppress_material(usages, result_by_source):
+    """Return True if any usage has a failed or missing source.
+
+    Every usage with:
+    - no result mapping;
+    - a failed result;
+    - a malformed successful result
+    suppresses PT_Material.
+    It must never be silently skipped.
+
+    Checks the result object (authoritative) rather than source.status.
+    """
+    for u in usages:
+        r = result_by_source.get(id(u.source))
+        if r is None:
+            return True  # no result mapping
+        if r.status != "ready":
+            return True  # failed or malformed result
+    return False
 
 
 class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
@@ -1665,32 +1604,22 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 for p, sz, mt in source_stats_before:
                     _fbx_log(f"[FBX][TEXTURE_SOURCE_STAT_BEFORE] path={p} size={sz} mtime={mt:.6f}")
 
-                # Phase 7H.6: explicit sidecar texture copy for UE import (A3.1)
+                # Phase 7H.6 + A3.2: structured sidecar preparation
                 _a3_sources, _a3_usages = _extract_texture_usages_and_sources(obj)
                 _a3_collision_registry = {}
-                for _src in _a3_sources:
+                _a3_results = [
                     _prepare_source_sidecar(_src, obj_dir, _a3_collision_registry, guid_hex[:8])
-                sidecar_copied = sum(1 for s in _a3_sources if s.status == "ready")
-                sidecar_info = []
-                for s in _a3_sources:
-                    if s.status == "ready":
-                        _s_path = os.path.join(obj_dir, s.sidecar_filename)
-                        _s_source = s.source_locator
-                        try:
-                            _s_st = os.stat(_s_path)
-                            _s_size = _s_st.st_size
-                        except Exception:
-                            _s_size = 0
-                        sidecar_info.append({
-                            "filename": s.sidecar_filename,
-                            "path": _s_path,
-                            "size": _s_size,
-                            "source": _s_source,
-                        })
-                        _fbx_log(f"[FBX][MANIFEST_SIDECAR_TEXTURE] guid={guid_hex[:8]} "
-                                 f"file={s.sidecar_filename}")
+                    for _src in _a3_sources
+                ]
+                sidecar_copied = sum(1 for r in _a3_results if r.status == "ready")
+                sidecar_info = [
+                    _sidecar_result_to_manifest_entry(r)
+                    for r in _a3_results
+                    if r.status == "ready"
+                ]
                 # Suppress PT_Material if any connected usage has a failed source
-                _suppress_material = _should_suppress_material(_a3_usages)
+                _results_by_source = _result_by_source(_a3_results)
+                _suppress_material = _should_suppress_material(_a3_usages, _results_by_source)
                 if _suppress_material:
                     _fbx_log(f"[FBX][A3.1][MATERIAL_SUPPRESS] guid={guid_hex[:8]} "
                              f"object={obj.name} reason=connected_texture_failed")
@@ -1900,6 +1829,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 if current_prop_sig is not None:
                     prev_prop_sig = sync._last_material_property_sig.get(guid_hex)
                     # Phase 7H: include texture hash in dirty detection
+                    # Derived from structured results (authoritative), not source.status.
                     current_tex_sigs = {}
                     if not _suppress_material:
                         for _si in range(len(obj.material_slots)):
@@ -1908,11 +1838,11 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                                 continue
                             _a3_maps = []
                             for _u in _slot_usages:
-                                _src = _u.source
-                                if _src.status != "ready":
+                                _r = _results_by_source.get(id(_u.source))
+                                if _r is None or _r.status != "ready":
                                     continue
-                                _fp = os.path.join(obj_dir, _src.sidecar_filename)
-                                _nm = os.path.splitext(_src.sidecar_filename)[0]
+                                _fp = _r.destination_path
+                                _nm = os.path.splitext(_r.filename)[0]
                                 _a3_maps.append((_u.channel, _fp, _nm, _u.flags))
                             if _a3_maps:
                                 _a3_tex_hash = network.compute_material_texture_hash(_si, _a3_maps)
@@ -1962,23 +1892,24 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         tex_maps_dict = {}
                         if not _suppress_material:
                             for _u in _a3_usages:
-                                _src = _u.source
-                                if _src.status != "ready":
+                                _r = _results_by_source.get(id(_u.source))
+                                if _r is None or _r.status != "ready":
                                     continue
-                                _fp = os.path.join(obj_dir, _src.sidecar_filename)
-                                _nm = os.path.splitext(_src.sidecar_filename)[0]
+                                _fp = _r.destination_path
+                                _nm = os.path.splitext(_r.filename)[0]
                                 if _u.slot_index not in tex_maps_dict:
                                     tex_maps_dict[_u.slot_index] = []
                                 tex_maps_dict[_u.slot_index].append((_u.channel, _fp, _nm, _u.flags))
                                 _ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic",
                                             4: "Alpha", 5: "Normal"}.get(_u.channel, "Unknown")
                                 _fe = "1" if os.path.isfile(_fp) else "0"
+                                _src_kind = "PACKED" if _r.source.is_packed else "FILE"
                                 print(f"[MATERIAL][TEXTURE_CHANNEL_SCAN] "
                                       f"object={obj.name} slot={_u.slot_index} "
-                                      f"material={_src.mat_name} channel={_ch_name} "
+                                      f"material={_r.source.mat_name} channel={_ch_name} "
                                       f"hasTexture=1 image={_nm} path={_fp[:200]} "
                                       f"exists={_fe} "
-                                      f"source={'PACKED' if _src.is_packed else 'FILE'}")
+                                      f"source={_src_kind}")
                             if tex_maps_dict:
                                 tex_maps = tex_maps_dict
                     except Exception:
