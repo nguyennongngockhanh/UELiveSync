@@ -1491,6 +1491,18 @@ def _should_suppress_material(usages, result_by_source):
     return False
 
 
+def _prepare_and_persist_manifest_v3(
+    obj_dir, guid_hex, sources, usages, collision_registry, guid_short="?",
+):
+    """Delegate to manifest_v3.run_prepare_and_persist_v3 with real production callables."""
+    import manifest_v3 as _mv3
+    return _mv3.run_prepare_and_persist_v3(
+        sources, usages, obj_dir, guid_hex,
+        collision_registry,
+        _prepare_source_sidecar, _result_by_source, guid_short,
+    )
+
+
 class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
     bpy.types.Operator
 ):
@@ -1666,10 +1678,10 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 # Phase 7H.6 + A3.2: structured sidecar preparation
                 _a3_sources, _a3_usages = _extract_texture_usages_and_sources(obj)
                 _a3_collision_registry = {}
-                _a3_results = [
-                    _prepare_source_sidecar(_src, obj_dir, _a3_collision_registry, guid_hex[:8])
-                    for _src in _a3_sources
-                ]
+                _v3_result, _a3_results = _prepare_and_persist_manifest_v3(
+                    obj_dir, guid_hex, _a3_sources, _a3_usages,
+                    _a3_collision_registry, guid_hex[:8],
+                )
                 sidecar_copied = sum(1 for r in _a3_results if r.status == "ready")
                 sidecar_info = [
                     _sidecar_result_to_manifest_entry(r)
@@ -1683,6 +1695,19 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     _fbx_log(f"[FBX][A3.1][MATERIAL_SUPPRESS] guid={guid_hex[:8]} "
                              f"object={obj.name} reason=connected_texture_failed")
                 print(f"[FBX][SIDECAR_READY] guid={guid_hex[:8]} copied={sidecar_copied}")
+
+                # ── A3.4: Early manifest gate ──────────────────
+                import manifest_v3 as _mv3
+                if not _mv3.should_send_after_pipeline(_v3_result):
+                    print(
+                        f"[MANIFEST][V3_WRITE_FAILED] "
+                        f"guid={guid_hex[:8]} error={_v3_result.error}"
+                    )
+                    continue
+                print(
+                    f"[MANIFEST][V3_WRITE] guid={guid_hex[:8]} "
+                    f"gen={_v3_result.generation}"
+                )
 
                 # --- Task D: log source texture state AFTER sidecar ---
                 source_modified = False
@@ -1755,34 +1780,6 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 finally:
                     evaluated_obj.to_mesh_clear()
 
-                # Write manifest JSON (sidecar info attached inline)
-                manifest = {
-                    "object_guid": guid_hex,
-                    "object_name": obj.name,
-                    "safe_name": safe_name,
-                    "fbx_path": fbx_path,
-                    "vert_count": vert_count,
-                    "tri_count": tri_count,
-                    "mat_slot_count": mat_slot_count,
-                    "timestamp": time.time(),
-                    "source": "Blender FBX export",
-                    "sidecar_textures": sidecar_info,
-                }
-
-                manifest_path = os.path.join(
-                    obj_dir,
-                    f"{safe_name}.manifest.json",
-                )
-                with open(
-                    manifest_path, "w"
-                ) as f:
-                    json.dump(
-                        manifest, f, indent=2
-                    )
-
-                # Task A: deterministic ordering log — manifest written before packet send
-                print(f"[FBX][MANIFEST_WRITE] guid={guid_hex[:8]} path={manifest_path} sidecarTextures={len(manifest['sidecar_textures'])}")
-
                 # Phase 10J.5L: compute mesh bounds (both meters and expected cm)
                 bounds_min_m = (0.0, 0.0, 0.0)
                 bounds_max_m = (0.0, 0.0, 0.0)
@@ -1837,27 +1834,34 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                       f"sendFBX={send_fbx} reason={'geometry_changed' if geometry_hash != prev_geom else 'unchanged'} "
                       f"oldGeomHash={prev_geom or 0} newGeomHash={geometry_hash}")
 
-                # Build and send FBX import request packet
-                payload = \
-                    network.serialize_fbx_import_request(
-                        guid_obj=guid_obj,
-                        fbx_path=fbx_path,
-                        object_name=safe_name,
-                        vert_count=vert_count,
-                        tri_count=tri_count,
-                        mat_slot_count=mat_slot_count,
-                        timestamp=time.time(),
-                        geometry_hash=geometry_hash,
-                    )
-
-                # Task A: deterministic send-ready log after all sidecar/manifest steps
-                print(f"[FBX][SEND_READY] guid={guid_hex[:8]} fbx={fbx_path} sidecarTextures={len(manifest['sidecar_textures'])}")
-
-                network.send_objects(
-                    [payload],
+                # ── A3.4: Serialize and send FBX packet via tested helper ──
+                print(
+                    f"[FBX][SEND_READY] guid={guid_hex[:8]} fbx={fbx_path} "
+                    f"sidecarTextures={sidecar_copied}"
+                )
+                tx = _mv3.serialize_and_send_fbx_request(
+                    manifest_result=_v3_result,
+                    serialize_fn=network.serialize_fbx_import_request,
+                    send_fn=network.send_objects,
+                    guid_obj=guid_obj,
+                    fbx_path=fbx_path,
+                    object_name=safe_name,
+                    vert_count=vert_count,
+                    tri_count=tri_count,
+                    mat_slot_count=mat_slot_count,
+                    timestamp=time.time(),
+                    geometry_hash=geometry_hash,
                     packet_type=network.PT_FBXImportRequest,
                     version=network.LIVE_SYNC_VERSION_V5,
                 )
+                if tx.status != "success" or not tx.sent:
+                    print(
+                        f"[FBX][SEND_FAILED] "
+                        f"guid={guid_hex[:8]} "
+                        f"action={tx.action} "
+                        f"error={tx.error}"
+                    )
+                    continue
 
                 print(
                     f"[FBX] Synced: {obj.name} → {fbx_path} "
