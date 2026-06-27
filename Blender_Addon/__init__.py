@@ -1503,6 +1503,233 @@ def _prepare_and_persist_manifest_v3(
     )
 
 
+def _evaluate_and_materialize_manifest_v3(
+    obj_dir, guid_hex, sources, usages, collision_registry, guid_short="?",
+):
+    """A3.5: manifest-informed sidecar reuse + manifest persistence.
+
+    Orchestrates:
+        1. Extract current content identities (FILE/PACKED/GENERATED).
+        2. Evaluate per-occurrence match against prior manifest.
+        3. Evaluate unique-asset reuse.
+        4. Materialize only prepare-required unique assets.
+        5. Assemble complete structured result map.
+        6. Persist new current manifest via manifest_v3.
+
+    Returns:
+        (ManifestV3IntegrationResult, list[SidecarPreparationResult])
+        Same signature as _prepare_and_persist_manifest_v3 for compatibility.
+    """
+    import manifest_v3 as _mv3
+    import manifest_reuse as _mr
+    from dataclasses import asdict
+
+    sidecar_dir = obj_dir
+    manifest_path = os.path.join(obj_dir, _mv3.MANIFEST_V3_FILENAME)
+
+    # ── Build occurrence descriptors from usages ──
+    occurrence_descriptors = []
+    for usage in usages:
+        src = usage.source
+        occ_id = _mv3.compute_occurrence_id(
+            guid=guid_hex,
+            slot_index=usage.slot_index,
+            material_identity=src.mat_name,
+            node_identity=f"{src.mat_name}/{src.node_name}",
+            channel=usage.channel,
+        )
+        # Compute current content identity without materialization
+        content_hex, _raw = _mr.compute_source_content_hex(
+            source_kind=src.source_kind,
+            source=src,
+            dest_dir=sidecar_dir,
+            guid_short=guid_short,
+        )
+        source_locator = src.filepath_raw or ""
+        colorspace = getattr(
+            getattr(usage.source, 'colorspace_settings', None), 'name', 'sRGB'
+        ) if hasattr(usage.source, 'colorspace_settings') else 'sRGB'
+        try:
+            cs = getattr(src, 'colorspace_settings', None)
+            colorspace = getattr(cs, 'name', 'sRGB') if cs else 'sRGB'
+        except Exception:
+            colorspace = 'sRGB'
+
+        occurrence_descriptors.append({
+            "occurrence_id": occ_id,
+            "slot_index": usage.slot_index,
+            "channel": usage.channel,
+            "material_identity": src.mat_name,
+            "node_identity": f"{src.mat_name}/{src.node_name}",
+            "source_kind": src.source_kind,
+            "source_locator": source_locator,
+            "colorspace": colorspace,
+            "source": src,
+            "current_content_hex": content_hex,
+        })
+
+    # ── Evaluate reuse ──
+    reuse_outcome = _mr.evaluate_manifest_reuse(
+        guid_hex=guid_hex,
+        occurrence_descriptors=occurrence_descriptors,
+        sidecar_dir=sidecar_dir,
+        manifest_path=manifest_path,
+        collision_registry=collision_registry,
+        prepare_fn=_reuse_prepare_fn,
+        guid_short=guid_short,
+    )
+
+    # ── If manifest was rejected or missing, fall through to full prepare ──
+    if not reuse_outcome.prior_manifest_eligible_for_generation:
+        # No reuse — run full prepare + persist via A3.4 path
+        return _prepare_and_persist_manifest_v3(
+            obj_dir, guid_hex, sources, usages,
+            collision_registry, guid_short,
+        )
+
+    # ── Build results list from reuse outcome ──
+    # Map source results back to usages
+    all_results = []
+    for usage in usages:
+        src_id = id(usage.source)
+        decision = reuse_outcome.decisions.get(src_id)
+        if decision is None:
+            # Fallback: prepare this source
+            result = _prepare_source_sidecar(usage.source, sidecar_dir, collision_registry, guid_short)
+            all_results.append(result)
+            continue
+
+        if decision.decision == _mr._DECISION_REUSE:
+            # Create a SidecarPreparationResult that represents a reused sidecar
+            asset_id = decision.asset_id
+            dest_path = decision.destination_path
+            # Get size from the destination file
+            try:
+                actual_size = os.path.getsize(dest_path)
+            except Exception:
+                actual_size = 0
+            result = SidecarPreparationResult(
+                source=usage.source,
+                status="ready",
+                action="reuse",
+                source_locator=decision.destination_path or "",
+                destination_path=dest_path,
+                filename=os.path.basename(dest_path) if dest_path else "",
+                image_name=usage.source.image_name,
+                size=actual_size,
+                asset_id=asset_id,
+                error="",
+            )
+            all_results.append(result)
+        else:
+            # decision is prepare or reject — call prepare_fn which materializes
+            prepare_decision, asset = _reuse_prepare_fn(
+                next(d for d in occurrence_descriptors if id(d["source"]) == src_id),
+                sidecar_dir, collision_registry, guid_short,
+            )
+            # Build SidecarPreparationResult from the prepared result
+            if asset and asset.get("status") == "ready":
+                result = SidecarPreparationResult(
+                    source=usage.source,
+                    status="ready",
+                    action=asset.get("action", "prepared"),
+                    source_locator=asset.get("source_locator", ""),
+                    destination_path=asset.get("destination_path", ""),
+                    filename=asset.get("filename", ""),
+                    image_name=usage.source.image_name,
+                    size=asset.get("size", 0),
+                    asset_id=asset.get("asset_id", ""),
+                    error=asset.get("error", ""),
+                )
+            else:
+                result = SidecarPreparationResult(
+                    source=usage.source,
+                    status="failed",
+                    action=prepare_decision.action,
+                    source_locator="",
+                    destination_path="",
+                    filename="",
+                    image_name=usage.source.image_name,
+                    size=0,
+                    asset_id="",
+                    error=prepare_decision.error,
+                )
+            all_results.append(result)
+
+    # ── Build results_by_source (A3.2 format) ──
+    results_by_source = _result_by_source(all_results)
+
+    # ── Persist new current manifest ──
+    # Build usages with sidecar results for manifest building
+    manifest_usages = []
+    for usage in usages:
+        class _UsageWrapper:
+            def __init__(self, u, result):
+                self.source = u.source
+                self.slot_index = u.slot_index
+                self.channel = u.channel
+                self.result = result
+        manifest_usages.append(_UsageWrapper(usage, None))
+
+    manifest_result = _mv3.run_manifest_pipeline(
+        guid_hex=guid_hex,
+        obj_dir=obj_dir,
+        manifest_path=manifest_path,
+        usages=manifest_usages,
+        results_by_source=results_by_source,
+    )
+
+    return manifest_result, all_results
+
+
+def _reuse_prepare_fn(source_desc, sidecar_dir, collision_registry, guid_short):
+    """Callback for prepare_fn in evaluate_manifest_reuse.
+
+    Prepares a sidecar via the existing _prepare_source_sidecar function
+    and returns (ReuseDecision, asset_dict).
+    """
+    import manifest_reuse as _mr
+    source = source_desc["source"]
+    result = _prepare_source_sidecar(source, sidecar_dir, collision_registry, guid_short)
+
+    if result.status == "ready":
+        decision = _mr.ReuseDecision(
+            decision="prepare", action=_mr._ACT_PREPARE_REQUIRED,
+            occurrence_id="", asset_id=result.asset_id,
+            source_kind=source.source_kind,
+            destination_path=result.destination_path,
+        )
+        asset = {
+            "asset_id": result.asset_id,
+            "status": "ready",
+            "action": result.action,
+            "source_locator": result.source_locator,
+            "destination_path": result.destination_path,
+            "filename": result.filename,
+            "size": result.size,
+        }
+    else:
+        decision = _mr.ReuseDecision(
+            decision="prepare", action=result.action,
+            occurrence_id="", asset_id="",
+            source_kind=source.source_kind,
+            destination_path="", error=result.error,
+        )
+        asset = {
+            "asset_id": "",
+            "status": "failed",
+            "action": result.action,
+            "source_locator": "",
+            "destination_path": "",
+            "filename": "",
+            "size": 0,
+            "error": result.error,
+        }
+
+    return decision, asset
+
+
+
 class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
     bpy.types.Operator
 ):
@@ -1675,10 +1902,10 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 for p, sz, mt in source_stats_before:
                     _fbx_log(f"[FBX][TEXTURE_SOURCE_STAT_BEFORE] path={p} size={sz} mtime={mt:.6f}")
 
-                # Phase 7H.6 + A3.2: structured sidecar preparation
+                # Phase 7H.6 + A3.2/A3.5: manifest-informed sidecar reuse + preparation
                 _a3_sources, _a3_usages = _extract_texture_usages_and_sources(obj)
                 _a3_collision_registry = {}
-                _v3_result, _a3_results = _prepare_and_persist_manifest_v3(
+                _v3_result, _a3_results = _evaluate_and_materialize_manifest_v3(
                     obj_dir, guid_hex, _a3_sources, _a3_usages,
                     _a3_collision_registry, guid_hex[:8],
                 )
