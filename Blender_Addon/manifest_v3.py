@@ -70,6 +70,7 @@ directory fsync, with full cleanup in finally.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -117,6 +118,8 @@ class ManifestV3IntegrationResult:
     manifest_path: str
     generation: int
     semantic_digest: str
+    prior_manifest: dict
+    current_manifest: dict
     error: str = ""
     """
     status: str
@@ -124,6 +127,8 @@ class ManifestV3IntegrationResult:
     manifest_path: str
     generation: int
     semantic_digest: str
+    prior_manifest: dict = field(default_factory=dict)
+    current_manifest: dict = field(default_factory=dict)
     error: str = ""
 
 
@@ -976,6 +981,11 @@ def persist_manifest_v3(
     """
     # 1. Read valid prior v3
     prior = read_manifest_v3(manifest_path, expected_guid=guid_hex)
+    prior_manifest = (
+        copy.deepcopy(prior.manifest)
+        if prior.status == "valid" and prior.manifest is not None
+        else {}
+    )
 
     # 2. Build occurrences and assets
     occurrences: dict = {}
@@ -1003,6 +1013,8 @@ def persist_manifest_v3(
                 manifest_path=manifest_path,
                 generation=0,
                 semantic_digest="",
+                prior_manifest=prior_manifest,
+                current_manifest={},
                 error=f"unknown preparation status: {result.status!r}",
             )
 
@@ -1018,6 +1030,8 @@ def persist_manifest_v3(
                     manifest_path=manifest_path,
                     generation=0,
                     semantic_digest="",
+                    prior_manifest=prior_manifest,
+                    current_manifest={},
                     error=f"unsafe destination filename in ready result: {result.filename!r}",
                 )
 
@@ -1068,6 +1082,8 @@ def persist_manifest_v3(
             manifest_path=manifest_path,
             generation=0,
             semantic_digest="",
+            prior_manifest=prior_manifest,
+            current_manifest={},
             error=conflict_details,
         )
 
@@ -1085,6 +1101,7 @@ def persist_manifest_v3(
         occurrences=occurrences,
         assets=assets,
     )
+    manifest_snapshot = copy.deepcopy(manifest)
 
     # 7. Atomic write
     write_result = write_manifest_v3(manifest_path, obj_dir, manifest)
@@ -1096,6 +1113,8 @@ def persist_manifest_v3(
             manifest_path=write_result.manifest_path,
             generation=generation,
             semantic_digest=semantic_digest,
+            prior_manifest=prior_manifest,
+            current_manifest=manifest_snapshot,
         )
     elif write_result.status == "durability_uncertain":
         # Post-replace fsync failed — manifest may be visible but
@@ -1106,6 +1125,8 @@ def persist_manifest_v3(
             manifest_path=write_result.manifest_path,
             generation=generation,
             semantic_digest=semantic_digest,
+            prior_manifest=prior_manifest,
+            current_manifest=manifest_snapshot,
             error=write_result.error,
         )
     else:
@@ -1116,6 +1137,8 @@ def persist_manifest_v3(
             manifest_path=write_result.manifest_path,
             generation=generation,
             semantic_digest=semantic_digest,
+            prior_manifest=prior_manifest,
+            current_manifest=manifest_snapshot,
             error=write_result.error,
         )
 

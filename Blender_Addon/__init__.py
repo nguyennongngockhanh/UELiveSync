@@ -2096,6 +2096,40 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     f"{vert_count} vert)"
                 )
 
+                # ── A3.6: Safe orphan sidecar pruning (after successful send) ──
+                import manifest_prune as _mp
+                _prune_result = _mp.prune_after_successful_send(
+                    manifest_result=_v3_result,
+                    send_succeeded=True,
+                    obj_dir=obj_dir,
+                )
+                _prune_status = _prune_result.status
+                _prune_deleted = sum(
+                    1 for it in _prune_result.items
+                    if it.action == _mp.ACTION_DELETED
+                )
+                _prune_errors = [
+                    it for it in _prune_result.items
+                    if it.action in (
+                        _mp.ACTION_SKIPPED_IDENTITY_MISMATCH,
+                        _mp.ACTION_SKIPPED_CHANGED_BEFORE_DELETE,
+                        _mp.ACTION_UNLINK_FAILED,
+                    ) and it.error
+                ]
+                if _prune_status in (_mp.STATUS_SUCCESS, _mp.STATUS_PARTIAL):
+                    _fbx_log(f"[PRUNE][SUMMARY] guid={guid_hex[:8]} "
+                             f"status={_prune_status} "
+                             f"deleted={_prune_deleted} "
+                             f"items={len(_prune_result.items)}")
+                if _prune_result.error:
+                    _fbx_log(f"[PRUNE][SKIPPED] guid={guid_hex[:8]} "
+                             f"reason={_prune_result.error}")
+                if _prune_errors:
+                    for _e in _prune_errors:
+                        _fbx_log(f"[PRUNE][ITEM_ERROR] guid={guid_hex[:8]} "
+                                 f"asset={_e.asset_id} action={_e.action} "
+                                 f"error={_e.error}")
+
                 # Phase 10J.5J: material property dirty detection for Sync FBX
                 # Collect current material property signature
                 current_prop_sig = None
