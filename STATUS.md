@@ -140,6 +140,44 @@ Source code fix is implemented and compiles cleanly. Runtime validation blocked 
   - check_updates material block is fail-safe and cannot kill transform sync.
   - Material signature cache suppresses unchanged resend spam.
 
+## Phase 10A.3.x — Texture Sidecar Lifecycle (A3.1–A3.6 COMPLETE)
+
+| Stage | Scope | Commit | Status |
+|-------|-------|--------|--------|
+| A3.1 | Collision-safe texture sidecar identity | `bb765f5` | ✅ COMPLETE |
+| A3.2 | Structured sidecar preparation result | `61d6b15` | ✅ COMPLETE |
+| A3.3 | Content-based sidecar asset identity | `d0f5b8e` | ✅ COMPLETE |
+| A3.4 | Deterministic manifest v3 persistence | `b9d1c2a` | ✅ COMPLETE |
+| A3.5 | Manifest-informed sidecar reuse | `e0967c7` | ✅ COMPLETE |
+| A3.6 | Safe orphan sidecar pruning | `2288508` | ✅ COMPLETE |
+| A3.7 | Not defined | — | ❌ NOT DEFINED |
+
+**A3.6 validation:**
+
+- Focused A3.6: 58/58 PASS
+- A3.1–A3.6 combined: 614 passed, 15 subtests passed
+- Canonical texture identity: 45/45 PASS
+- Serialization (phase10k): 19/19 PASS
+- Phase10K6: 68/68 PASS
+- `py_compile`: RC=0
+- Standalone `manifest_prune` import: RC=0
+
+**Safety guarantees:**
+
+- Pruning requires durable manifest write (`ManifestV3IntegrationResult.status == "success"`, `action == "written"`) and successful packet send.
+- Candidate authority comes only from prior/current manifest snapshots — no arbitrary directory scanning.
+- Unsafe basenames, path escapes, symlinks, and non-regular files are rejected before any deletion attempt.
+- File size and canonical xxHash64 identity are verified before unlink.
+- File fingerprint (inode, size, mtime) is rechecked immediately before deletion.
+- One candidate failure does not stop later candidates from being processed.
+- Pruning exceptions are caught and returned as `STATUS_PARTIAL` — they cannot alter a successful send result.
+- `manifest_prune.py` has no `bpy` dependency.
+- Prior and current manifest snapshots are deep-copied at capture time.
+
+**Full commit SHAs:** A3.5: `e0967c78d0492156af8b48b40a529bf34b6ffb28`, A3.6: `22885085fd8a6950f8a335b998e253bf155846f3`.
+
+**Remote push:** `origin/main` and `origin/phase10a36-safe-orphan-pruning` both at `2288508`. Source and promotion-review worktrees removed.
+
 ## Current State
 
 ## Manual E2E.6B — Hierarchy Guard C++ Diagnostic Logging Revert (COMPLETED)

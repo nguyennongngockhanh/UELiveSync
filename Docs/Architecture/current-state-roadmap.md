@@ -1,7 +1,7 @@
 # UELiveSync — Current State Roadmap
 
 **Canonical reference.** Supersedes stale scope-lock assumptions from earlier phase docs.
-Last updated: 2026-06-18 (Phase 7H/7G.5 material policy + camera UX). Tag: `current-state-roadmap-stable`.
+Last updated: 2026-06-28 (Phase 10A.3.x documentation closeout). Tag: `current-state-roadmap-stable`.
 
 ---
 
@@ -42,6 +42,13 @@ Last updated: 2026-06-18 (Phase 7H/7G.5 material policy + camera UX). Tag: `curr
 | 5A–5E | Protocol evolution, asset identity, stress testing | COMPLETE | — |
 | 6I.1 | Transport hardening (bounds, observability, lifecycle) | COMPLETE | — |
 | 6 | Visibility, rename, hierarchy, delete, collection | COMPLETE | — |
+| 10A.3.1 | Collision-safe texture sidecar identity | COMPLETE | `bb765f5` |
+| 10A.3.2 | Structured sidecar preparation result | COMPLETE | `61d6b15` |
+| 10A.3.3 | Content-based sidecar asset identity | COMPLETE | `d0f5b8e` |
+| 10A.3.4 | Deterministic manifest v3 persistence | COMPLETE | `b9d1c2a` |
+| 10A.3.5 | Manifest-informed sidecar reuse | COMPLETE | `e0967c7` |
+| 10A.3.6 | Safe orphan sidecar pruning | COMPLETE | `2288508` |
+| 10A.3.7 | Not defined | NOT DEFINED | — |
 | 7A | Scope Lock / Identity Hygiene | COMPLETE | — |
 | 7B | Timeline Sync (0x13) + Material Pipeline (0x05) | COMPLETE | — |
 | 7C | Playback Sync (0x14) + Mesh Pipeline (0x06) + FBX Handoff (0x16) | COMPLETE | — |
@@ -182,6 +189,20 @@ Last updated: 2026-06-18 (Phase 7H/7G.5 material policy + camera UX). Tag: `curr
 | Phase 7C Stage 1 Wire | 42 | ✅ PASS |
 | Phase FBX test suites (10J, 10K) | 18 + 9 | ✅ PASS |
 | Phase 5d reconnect | 11 | ✅ PASS |
+| Phase 10A.3.1–A3.6 Texture Sidecar Lifecycle (6 stages) | 614 + 15 subtests | ✅ PASS |
+| — A3.6 focused tests | 58 | ✅ PASS |
+| — Canonical texture identity | 45 | ✅ PASS |
+| — Serialization (phase10k) | 19 | ✅ PASS |
+| — Phase10K6 | 68 | ✅ PASS |
+
+## Post-A3.x Scope Selection
+
+A3.1–A3.6 are complete. A3.7 is not defined.
+
+This documentation closeout does not select the next production stage.
+Any next production work requires a new evidence-based scope lock.
+
+Existing roadmap candidates remain options only and are not active work.
 
 ---
 
