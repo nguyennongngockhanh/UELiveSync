@@ -720,6 +720,14 @@ static TAutoConsoleVariable<int32>
         ECVF_Cheat
     );
 
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncMaxMeshBuildsPerTick(
+        TEXT("UE.LiveSync.MaxMeshBuildsPerTick"),
+        10,
+        TEXT("Max ProceduralMesh section builds per tick (spreads mesh rebuild work across frames, preventing game-thread stalls during snapshot replay)"),
+        ECVF_Default
+    );
+
 // =====================================================
 // SUBSYSTEM ISOLATION CVARS
 // Temporarily disable subsystems to narrow freeze root cause.
@@ -8306,24 +8314,16 @@ HandleCreateObject(
 
     if (PrimitiveType == LSP_Camera)
     {
-        // Camera: ACameraActor already has a UCameraComponent.
-        // Use it as root component. The camera's own properties
-        // (FOV, clip planes, sensor size) are set separately
-        // via PT_CameraDef packets.
+        // Camera: ACameraActor already has UCameraComponent as root
+        // with Movable mobility (set in constructor). Frustum guard
+        // was applied right after SpawnActor (L8043).
+        // All component setup is complete — no redundant calls needed.
+        // Skipping redundant SetRootComponent / RegisterComponent
+        // avoids the "Already registered" engine warning and prevents
+        // any re-entrant notifications during end-of-frame processing.
         ACameraActor* CamActor = Cast<ACameraActor>(NewActor);
         if (CamActor && CamActor->GetCameraComponent())
         {
-            CamActor->GetCameraComponent()->SetMobility(
-                EComponentMobility::Movable);
-            CamActor->SetRootComponent(
-                CamActor->GetCameraComponent());
-            CamActor->GetCameraComponent()->RegisterComponent();
-
-            // Manual E2E.1: Suppress frustum renderer for LiveSync cameras
-            ConfigureLiveSyncCameraActor(CamActor);
-
-            // E2E.9: Camera successfully spawned and configured.
-            // Frustum guard is already applied (pre-FinishSpawning).
             UE_LOG(LogLiveSync, Log,
                 TEXT("[CAMERA][SAFE_SPAWN_READY] ACameraActor ready guid=%s"),
                 *Guid.ToString(EGuidFormats::Digits));
@@ -16374,6 +16374,9 @@ ReconstructCompletedMeshes()
         (long long)GFrameCounter);
 
     int32 DiagBuildCount = 0;
+    int32 BuildsThisTick = 0;
+    const int32 MaxBuildsPerTick =
+        CVarLiveSyncMaxMeshBuildsPerTick.GetValueOnGameThread();
     TArray<FGuid> Reconstructed;
 
     for (auto& Pair : PendingMeshReassembly)
@@ -16398,6 +16401,19 @@ ReconstructCompletedMeshes()
             State.bReconstructed = true;
             Reconstructed.Add(Guid);
             continue;
+        }
+
+        // Per-tick build limit: time-slice mesh rebuilds across frames
+        // to prevent game-thread stalls during snapshot replay.
+        if (BuildsThisTick >= MaxBuildsPerTick)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH] Tick mesh build limit reached (%d/%d) for GUID=%s"
+                     " \u2014 deferring remaining %d rebuilds"),
+                BuildsThisTick, MaxBuildsPerTick,
+                *Guid.ToString(EGuidFormats::Digits),
+                PendingMeshReassembly.Num());
+            break;
         }
 
         AActor* Actor = FindActorFast(Guid);
@@ -16684,15 +16700,28 @@ ReconstructCompletedMeshes()
                     SectionNormals,
                     SectionTangents);
 
-                ProcMesh->CreateMeshSection(
-                    SectionIndex,
-                    SectionVerts,
-                    SectionTris,
-                    SectionNormals,
-                    SectionUVs,
-                    SectionColors,
-                    SectionTangents,
-                    true);
+                {
+                    const FProcMeshSection* ExistingSection = ProcMesh->GetProcMeshSection(SectionIndex);
+                    const int32 NewVerts = SectionVerts.Num();
+                    if (ExistingSection && ExistingSection->ProcVertexBuffer.Num() == NewVerts)
+                    {
+                        ProcMesh->UpdateMeshSection(SectionIndex, SectionVerts, SectionNormals,
+                            SectionUVs, TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+                            SectionColors, SectionTangents);
+                    }
+                    else
+                    {
+                        ProcMesh->CreateMeshSection(
+                            SectionIndex,
+                            SectionVerts,
+                            SectionTris,
+                            SectionNormals,
+                            SectionUVs,
+                            SectionColors,
+                            SectionTangents,
+                            true);
+                    }
+                }
 
                 NumSections++;
 
@@ -16726,15 +16755,28 @@ ReconstructCompletedMeshes()
                 SectionNormals,
                 SectionTangents);
 
-            ProcMesh->CreateMeshSection(
-                0,
-                SectionVerts,
-                SectionTris,
-                SectionNormals,
-                SectionUVs,
-                SectionColors,
-                SectionTangents,
-                true);
+            {
+                const FProcMeshSection* ExistingSection = ProcMesh->GetProcMeshSection(0);
+                const int32 NewVerts = SectionVerts.Num();
+                if (ExistingSection && ExistingSection->ProcVertexBuffer.Num() == NewVerts)
+                {
+                    ProcMesh->UpdateMeshSection(0, SectionVerts, SectionNormals,
+                        SectionUVs, TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+                        SectionColors, SectionTangents);
+                }
+                else
+                {
+                    ProcMesh->CreateMeshSection(
+                        0,
+                        SectionVerts,
+                        SectionTris,
+                        SectionNormals,
+                        SectionUVs,
+                        SectionColors,
+                        SectionTangents,
+                        true);
+                }
+            }
 
             NumSections = 1;
 
@@ -16783,8 +16825,6 @@ ReconstructCompletedMeshes()
             NumSections,
             MeshSectionsBuilt);
 
-        DiagBuildCount++;
-
         bool bMultiRootChanged = (Actor->GetRootComponent() != ProcMesh);
 
         UE_LOG(LogLiveSync, Log,
@@ -16826,7 +16866,6 @@ ReconstructCompletedMeshes()
             ProcMesh->SetVisibility(true, true);
             ProcMesh->SetHiddenInGame(false, true);
             ProcMesh->UpdateBounds();
-            ProcMesh->MarkRenderStateDirty();
             if (GEnableVerboseSyncLogs)
             {
                 // STEP2: after SetRootComponent(ProcMesh)
@@ -16855,14 +16894,18 @@ ReconstructCompletedMeshes()
             }
         }
 
+        DiagBuildCount++;
+        BuildsThisTick++;
         State.bReconstructed = true;
         Reconstructed.Add(Guid);
     }
 
     UE_LOG(LogLiveSync, Log,
-        TEXT("[DIAG][MESH_BUILD_OLD] Exit with %d builds frame=%lld"),
+        TEXT("[DIAG][MESH_BUILD_OLD] Exit with %d builds frame=%lld (tick progress %d/%d)"),
         DiagBuildCount,
-        (long long)GFrameCounter);
+        (long long)GFrameCounter,
+        BuildsThisTick,
+        CVarLiveSyncMaxMeshBuildsPerTick.GetValueOnGameThread());
 
     for (const FGuid& Guid : Reconstructed)
     {
@@ -16897,6 +16940,9 @@ BuildV1MeshFromReassembly()
         (long long)GFrameCounter);
 
     int32 DiagBuildCount = 0;
+    int32 BuildsThisTick = 0;
+    const int32 MaxBuildsPerTick =
+        CVarLiveSyncMaxMeshBuildsPerTick.GetValueOnGameThread();
 
     TArray<FV1MeshReassemblyKey> Reconstructed;
 
@@ -16931,6 +16977,20 @@ BuildV1MeshFromReassembly()
             State.bReconstructed = true;
             Reconstructed.Add(Key);
             continue;
+        }
+
+        // Per-tick build limit: time-slice mesh rebuilds across frames
+        // to prevent game-thread stalls during snapshot replay.
+        if (BuildsThisTick >= MaxBuildsPerTick)
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH][V1] Tick mesh build limit reached (%d/%d)"
+                     " for GUID=%s vhash=%s \u2014 deferring remaining %d rebuilds"),
+                BuildsThisTick, MaxBuildsPerTick,
+                *Guid.ToString(EGuidFormats::Digits),
+                *Key.VersionHash,
+                PendingV1MeshReassembly.Num());
+            break;
         }
 
         // Resolve actor from GUID
@@ -17739,15 +17799,32 @@ BuildV1MeshFromReassembly()
 
         // === T12: Collision disabled for v1 ===
         // Stage 2C.5: collision disabled to avoid Chaos NaN checks.
-        ProcMesh->CreateMeshSection(
-            0,
-            Positions,
-            ValidIndices,
-            PreservedNormals,
-            UV0,
-            SectionColors,
-            DebugTangents,
-            false);
+        // Stage 10A.2B: reuse existing component — use UpdateMeshSection
+        // when vertex count matches to avoid MarkRenderStateDirty and
+        // the deferred scene-proxy rebuild stall in SendAllEndOfFrameUpdatesInternal.
+        {
+            const FProcMeshSection* ExistingSection = ProcMesh->GetProcMeshSection(0);
+            const int32 NewVerts = Positions.Num();
+            if (ExistingSection && ExistingSection->ProcVertexBuffer.Num() == NewVerts)
+            {
+                ProcMesh->UpdateMeshSection(0, Positions, PreservedNormals,
+                    UV0, TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+                    SectionColors, DebugTangents);
+                ProcMesh->UpdateBounds();
+            }
+            else
+            {
+                ProcMesh->CreateMeshSection(
+                    0,
+                    Positions,
+                    ValidIndices,
+                    PreservedNormals,
+                    UV0,
+                    SectionColors,
+                    DebugTangents,
+                    false);
+            }
+        }
 
         // === STAGE 2C.10: V1 DEBUG — ASSIGN DEBUG MATERIAL ===
         // If CVar UE.LiveSync.V1DebugMaterialMode != 0, create or
@@ -17903,14 +17980,17 @@ BuildV1MeshFromReassembly()
             bSingleProcMeshNew ? 1 : 0);
 
         // Mark completed and remove from pending
+        BuildsThisTick++;
         State.bReconstructed = true;
         Reconstructed.Add(Key);
     }
 
     UE_LOG(LogLiveSync, Log,
-        TEXT("[DIAG][MESH_BUILD] Exit with %d builds frame=%lld"),
+        TEXT("[DIAG][MESH_BUILD] Exit with %d builds frame=%lld (tick progress %d/%d)"),
         DiagBuildCount,
-        (long long)GFrameCounter);
+        (long long)GFrameCounter,
+        BuildsThisTick,
+        CVarLiveSyncMaxMeshBuildsPerTick.GetValueOnGameThread());
 
     for (const FV1MeshReassemblyKey& Key : Reconstructed)
     {
