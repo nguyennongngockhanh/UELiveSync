@@ -43,7 +43,21 @@ struct FFBXImportContext
     // Task 9B: Called to register a sidecar texture import result.
     TFunction<void(const FGuid&, const FString&, const TSoftObjectPtr<UTexture2D>&)>
         OnSidecarTextureImported;
+    // Task 9B.6B.8: Called when FBX import is skipped (geomHash dedup) to
+    // ensure the sidecar result map is updated even without a new import.
+    // Called before the early-return. FbxDir is the directory containing the
+    // FBX file and its manifest.json.
+    TFunction<void(const FGuid&, const FString&, const FString&)> OnSkipFbxImport;
+    // Task 10K.3: Called when the active sidecar map is ready for the current
+    // sync. Contains only current manifest entries — separate from the
+    // persistent ImportedSidecarTexturesByGuid cache.
+    TFunction<void(const FGuid&, const TMap<FString, TSoftObjectPtr<UTexture2D>>&)> OnActiveSidecarMapReady;
+    // Task 9B.5B: FBX timing output (set by HandleImport)
+    double* FbxImportMsOut = nullptr;
 };
+
+// Phase 10K.6: Exclusive phase registry for timing hierarchy.
+// (defined internally in LiveSyncFBXImporter.cpp)
 
 class FLiveSyncFBXImporter
 {
