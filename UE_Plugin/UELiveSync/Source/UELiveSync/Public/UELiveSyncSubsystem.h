@@ -4,8 +4,6 @@
 
 #include "Subsystems/WorldSubsystem.h"
 
-#include "Containers/Ticker.h"
-
 #include "Misc/Guid.h"
 
 #include "SyncTypes.h"
@@ -807,12 +805,12 @@ private:
 
         TransformStates;
 
-    // =====================================================
-    // TICK HANDLE
-    // =====================================================
+    void OnEngineTick();
 
-    FTSTicker::FDelegateHandle
-        TickHandle;
+    double LastTickRealTime = 0.0;
+
+    FDelegateHandle
+        OnBeginFrameHandle;
 
     // =====================================================
     // PROTOCOL STATE
@@ -838,6 +836,11 @@ private:
 
     FDelegateHandle
         OnActorDestroyedHandle;
+
+#if WITH_EDITOR
+    // ImportSubsystem delegate handle for per-file texture import diagnostics
+    FDelegateHandle OnAssetPostImportHandle;
+#endif
 
     // =====================================================
     // HEARTBEAT
@@ -922,6 +925,10 @@ private:
     void ConsoleDumpReplayTimeline();
 
     void ConsoleExportWorldSnapshot();
+
+    // Disposable texture import probe for cold-import diagnostics
+    void ConsoleRunImportProbe(const TArray<FString>& Args);
+    void OnAssetPostImport(UFactory* Factory, UObject* CreatedObject);
 
     // =====================================================
     // PHASE 6H — SEMANTIC CONSISTENCY HARDENING
@@ -1039,10 +1046,15 @@ private:
     // Path → imported texture cache (Phase 10K.2)
     TMap<FString, TSoftObjectPtr<UTexture2D>> TextureImportCache;
 
-    // Task 9B: per-GUID sidecar import result map.
+    // Task 9B: per-GUID sidecar import result map (persistent cache).
     // Canonical key: lowercase basename without extension.
     // E.g. Wood.png → wood, Wood_Rough.png → wood_rough
     TMap<FGuid, TMap<FString, TSoftObjectPtr<UTexture2D>>> ImportedSidecarTexturesByGuid;
+
+    // Task 10K.3: active transaction sidecar map for current sync.
+    // Contains only current manifest entries — separate from persistent cache.
+    // Cleared at start of each sync, populated during FBX sidecar scan.
+    TMap<FGuid, TMap<FString, TSoftObjectPtr<UTexture2D>>> ActiveSidecarMapByGuid;
 
     // Phase 10K.3: texture material apply counters
     int32 TextureMaterialApplyRequests = 0;
@@ -1067,6 +1079,10 @@ private:
     // PT_Mesh for that GUID is rejected to prevent race between
     // PT_FBXImportRequest and PT_Mesh.
     TSet<FGuid> FBXPendingGuids;
+
+    // Task 9B.5: per-GUID syncId correlation for FBX → MATX transaction tracking.
+    // Generated on FBX request receipt; consumed by MATX handler to share syncId.
+    TMap<FGuid, int32> FBXSyncIdMap;
 
     // =====================================================
     // DEFERRED FBX REPAIR (Phase 10J.5D.5)
@@ -1281,6 +1297,9 @@ private:
 
     // LiveSync object GUID → MovieScene binding GUID mapping
     TMap<FGuid, FGuid> LiveSyncGuidToSequencerBinding;
+
+    // Phase 7E Stage 12: LiveSync camera GUID → component binding GUID mapping
+    TMap<FGuid, FGuid> CameraComponentBindingMap;
 
     // Pending bindings for ADD_POSSESSABLE where actor was not yet in ActorCache
     struct FPendingSequencerBinding

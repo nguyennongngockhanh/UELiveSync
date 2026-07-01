@@ -1062,18 +1062,14 @@ void UUELiveSyncSubsystem::Initialize(
             );
     }
 
-    TickHandle =
-        FTSTicker::GetCoreTicker().
-        AddTicker(
+    OnBeginFrameHandle =
+        FCoreDelegates::OnBeginFrame.
+        AddUObject(
+            this,
+            &UUELiveSyncSubsystem::OnEngineTick);
 
-            FTickerDelegate::
-            CreateUObject(
-
-                this,
-                &UUELiveSyncSubsystem::Tick),
-
-            0.0f
-        );
+    LastTickRealTime =
+        FPlatformTime::Seconds();
 
     UE_LOG(
         LogLiveSync,
@@ -1396,11 +1392,11 @@ void UUELiveSyncSubsystem::Initialize(
 
 void UUELiveSyncSubsystem::Deinitialize()
 {
-    // Remove ticker first to prevent any re-entrant
+    // Remove OnBeginFrame first to prevent any re-entrant
     // Tick() call during teardown
-    FTSTicker::GetCoreTicker().
-        RemoveTicker(
-            TickHandle);
+    FCoreDelegates::OnBeginFrame.
+        Remove(
+            OnBeginFrameHandle);
 
     // Shutdown network thread (closes connection socket)
     StopNetworkThread();
@@ -1526,7 +1522,34 @@ void UUELiveSyncSubsystem::StartServer()
 
 
 // =========================================================
-// MAIN TICK
+// ON ENGINE TICK (OnBeginFrame wrapper)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnEngineTick()
+{
+    double Now = FPlatformTime::Seconds();
+    static double LastAlwaysOnLog = 0.0;
+    if (Now - LastAlwaysOnLog >= 5.0)
+    {
+        LastAlwaysOnLog = Now;
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("[TICK][ALIVE] OnEngineTick executing "
+                 "(vfc=%lld gfc=%lld realtime=%.3f)"),
+            (long long)VerboseFrameCounter,
+            (long long)GFrameCounter,
+            Now);
+    }
+
+    float DeltaTime = static_cast<float>(Now - LastTickRealTime);
+    LastTickRealTime = Now;
+    Tick(DeltaTime);
+}
+
+
+// =========================================================
+// TICK
 // =========================================================
 
 bool UUELiveSyncSubsystem::Tick(
@@ -1535,6 +1558,12 @@ bool UUELiveSyncSubsystem::Tick(
     CHECK_GAME_THREAD();
     VerboseFrameCounter++;
     LastTickExecutionTime = FPlatformTime::Seconds();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[DIAG][FRAME] Tick start vfc=%lld gfc=%lld delta=%.4f"),
+        (long long)VerboseFrameCounter,
+        (long long)GFrameCounter,
+        DeltaTime);
 
     // =====================================================
     // SYNC CVARS
@@ -1607,6 +1636,25 @@ bool UUELiveSyncSubsystem::Tick(
             TEXT("[TICK][HEARTBEAT] Tick is executing "
                  "(frame=%d)"),
             VerboseFrameCounter);
+    }
+
+    // =====================================================
+    // Phase 10A.3: always-on tick proof-of-life (every 10s)
+    // Always logs to prove FTicker is running, regardless of
+    // verbose mode.  This is the critical diagnostic for
+    // confirming the game thread is processing packets.
+    static double LastTickProofLogTime = 0.0;
+    double NowTickProof = FPlatformTime::Seconds();
+    if (NowTickProof - LastTickProofLogTime >= 10.0)
+    {
+        LastTickProofLogTime = NowTickProof;
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("[TICK] frame=%lld delta=%.4f queue=%d"),
+            (long long)VerboseFrameCounter,
+            DeltaTime,
+            PacketQueue.Size());
     }
 
     // =====================================================
@@ -1864,6 +1912,31 @@ bool UUELiveSyncSubsystem::Tick(
                 StopNetworkThread();
             }
         }
+    }
+
+    // Phase 10A.3: auto-reconnect when NetworkThread has exited
+    // but ListenerSocket is still alive.  Blender must initiate
+    // a fresh TCP connection; ListenerSocket will accept it.
+    if (ListenerSocket &&
+        !ConnectionSocket &&
+        !NetworkRunnable)
+    {
+        // Throttle: log at most once every 2s to avoid flooding
+        {
+            static double LastReconnectLog = 0.0;
+            double NowLog = FPlatformTime::Seconds();
+            if (NowLog - LastReconnectLog >= 2.0)
+            {
+                LastReconnectLog = NowLog;
+                UE_LOG(
+                    LogLiveSync,
+                    Log,
+                    TEXT("[RECONNECT] NetworkThread dead, "
+                         "ListenerSocket waiting for peer"));
+            }
+        }
+
+        StartNetworkThread();
     }
 
     // =====================================================
@@ -2220,10 +2293,10 @@ StartNetworkThread()
     }
 
     // =====================================================
-    // GUARD: no socket
+    // GUARD: no socket (Phase 10A.3: accept from ListenerSocket)
     // =====================================================
 
-    if (!ConnectionSocket)
+    if (!ConnectionSocket && !ListenerSocket)
     {
         bNetworkThreadStarting = false;
         UE_LOG(
@@ -2232,6 +2305,47 @@ StartNetworkThread()
             TEXT("StartNetworkThread: no socket"));
 
         return;
+    }
+
+    // Phase 10A.3: if no active ConnectionSocket, accept from
+    // ListenerSocket so the thread has a socket to read from.
+    if (!ConnectionSocket && ListenerSocket)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("StartNetworkThread: accepting from ListenerSocket"));
+
+        // Non-blocking accept — if no connection is pending, return
+        // immediately. The caller (auto-reconnect path in Tick) will
+        // retry on the next frame, keeping the game thread responsive.
+        bool bPending = false;
+        if (ListenerSocket->HasPendingConnection(bPending) && bPending)
+        {
+            ConnectionSocket = ListenerSocket->Accept(TEXT("LiveSyncConnection"));
+            if (ConnectionSocket)
+            {
+                ConnectionSocket->SetNonBlocking(true);
+            }
+            else
+            {
+                UE_LOG(
+                    LogLiveSync,
+                    Warning,
+                    TEXT("StartNetworkThread: accept failed"));
+                bNetworkThreadStarting = false;
+                return;
+            }
+        }
+        else
+        {
+            UE_LOG(
+                LogLiveSync,
+                Verbose,
+                TEXT("StartNetworkThread: no pending connection, deferring"));
+            bNetworkThreadStarting = false;
+            return;
+        }
     }
 
     // =====================================================
@@ -6869,7 +6983,6 @@ InterpolateTransforms(
         UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
     }
 
-    if (ShouldLogVerbose())
     {
         int Total = TransformStates.Num();
 
@@ -6877,7 +6990,8 @@ InterpolateTransforms(
             LogLiveSync,
             Log,
             TEXT(
-                "Transform states: total=%d missing=%d converged=%d snap=%d interp=%d interpMode=%d"),
+                "[DIAG][TRANSFORM] frame=%lld total=%d missing=%d converged=%d snap=%d interp=%d interpMode=%d"),
+            (long long)GFrameCounter,
             Total,
             MissingCount,
             ConvergedCount,
@@ -16254,6 +16368,12 @@ ReconstructCompletedMeshes()
 {
     CHECK_GAME_THREAD();
 
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[DIAG][MESH_BUILD_OLD] Enter with %d pending reassemblies frame=%lld"),
+        PendingMeshReassembly.Num(),
+        (long long)GFrameCounter);
+
+    int32 DiagBuildCount = 0;
     TArray<FGuid> Reconstructed;
 
     for (auto& Pair : PendingMeshReassembly)
@@ -16290,8 +16410,12 @@ ReconstructCompletedMeshes()
             Actor->FindComponentByClass<
                 UProceduralMeshComponent>();
 
+        bool bMultiProcMeshNew = false;
+
         if (!ProcMesh)
         {
+            bMultiProcMeshNew = true;
+
             ProcMesh =
                 NewObject<UProceduralMeshComponent>(
                     Actor);
@@ -16659,6 +16783,23 @@ ReconstructCompletedMeshes()
             NumSections,
             MeshSectionsBuilt);
 
+        DiagBuildCount++;
+
+        bool bMultiRootChanged = (Actor->GetRootComponent() != ProcMesh);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[DIAG][MESH_BUILD] guid=%s actor=%s frame=%lld verts=%d tris=%d sections=%d newProc=%d rootChanged=%d registerCalled=%d markDirty=%d"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *Actor->GetName(),
+            (long long)GFrameCounter,
+            TotalVertices,
+            TotalTriangles,
+            NumSections,
+            bMultiProcMeshNew ? 1 : 0,
+            bMultiRootChanged ? 1 : 0,
+            1,
+            1);
+
         {
             UStaticMeshComponent* PlaceholderSMC =
                 Actor->FindComponentByClass<UStaticMeshComponent>();
@@ -16671,7 +16812,8 @@ ReconstructCompletedMeshes()
                     *Guid.ToString(EGuidFormats::Digits));
             }
 
-            if (Actor->GetRootComponent() != ProcMesh)
+            // (bMultiRootChanged already declared above)
+            if (bMultiRootChanged)
             {
                 ProcMesh->DetachFromComponent(
                     FDetachmentTransformRules::KeepWorldTransform);
@@ -16717,6 +16859,11 @@ ReconstructCompletedMeshes()
         Reconstructed.Add(Guid);
     }
 
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[DIAG][MESH_BUILD_OLD] Exit with %d builds frame=%lld"),
+        DiagBuildCount,
+        (long long)GFrameCounter);
+
     for (const FGuid& Guid : Reconstructed)
     {
         PendingMeshReassembly.Remove(Guid);
@@ -16743,6 +16890,13 @@ void UUELiveSyncSubsystem::
 BuildV1MeshFromReassembly()
 {
     CHECK_GAME_THREAD();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[DIAG][MESH_BUILD] Enter with %d pending reassemblies frame=%lld"),
+        PendingV1MeshReassembly.Num(),
+        (long long)GFrameCounter);
+
+    int32 DiagBuildCount = 0;
 
     TArray<FV1MeshReassemblyKey> Reconstructed;
 
@@ -17240,8 +17394,12 @@ BuildV1MeshFromReassembly()
         UProceduralMeshComponent* ProcMesh =
             Actor->FindComponentByClass<UProceduralMeshComponent>();
 
+        bool bSingleProcMeshNew = false;
+
         if (!ProcMesh)
         {
+            bSingleProcMeshNew = true;
+
             ProcMesh = NewObject<UProceduralMeshComponent>(Actor);
 
             if (Actor->GetRootComponent())
@@ -17723,6 +17881,8 @@ BuildV1MeshFromReassembly()
 
         Stats.MeshSchemaV1SectionsBuilt.fetch_add(1, std::memory_order_relaxed);
 
+        DiagBuildCount++;
+
         UE_LOG(LogLiveSync, Log,
             TEXT("[MESH][V1] Built section for GUID=%s vhash=%s: "
                  "%d verts, %d tris, stride=%d, hasColor=%d"),
@@ -17733,10 +17893,24 @@ BuildV1MeshFromReassembly()
             State.VertexStride,
             bHasColor0 ? 1 : 0);
 
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[DIAG][MESH_BUILD] guid=%s actor=%s frame=%lld verts=%d tris=%d newProc=%d"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *Actor->GetName(),
+            (long long)GFrameCounter,
+            Positions.Num(),
+            ValidIndices.Num() / 3,
+            bSingleProcMeshNew ? 1 : 0);
+
         // Mark completed and remove from pending
         State.bReconstructed = true;
         Reconstructed.Add(Key);
     }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[DIAG][MESH_BUILD] Exit with %d builds frame=%lld"),
+        DiagBuildCount,
+        (long long)GFrameCounter);
 
     for (const FV1MeshReassemblyKey& Key : Reconstructed)
     {
