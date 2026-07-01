@@ -195,6 +195,150 @@ _test("T3 get_texture_canonical_key calls identity",
       "get_texture_identity_name" in src_canon)
 
 
+# =========================================================
+# A2a: Shared canonical-key wrapper (extracted from __init__.py)
+# =========================================================
+
+import ast
+
+# Ensure the network module is available for A2a wrapper extraction
+import network
+
+_init_path = os.path.join(
+    os.path.dirname(__file__), "..", "Blender_Addon", "__init__.py")
+_init_src = open(_init_path).read()
+_init_tree = ast.parse(_init_src)
+
+_wrapper_node = None
+for _node in ast.walk(_init_tree):
+    if isinstance(_node, ast.FunctionDef) and \
+       _node.name == "_get_texture_canonical_key":
+        _wrapper_node = _node
+        break
+
+_wrapper_mod = ast.Module([_wrapper_node], type_ignores=[])
+_wrapper_code = compile(_wrapper_mod, "<a2a_wrapper>", "exec")
+_ns = {"network": network}
+exec(_wrapper_code, _ns)
+_get_texture_canonical_key = _ns["_get_texture_canonical_key"]
+
+_wrapper_source = ast.get_source_segment(_init_src, _wrapper_node)
+
+
+class _FakeImage:
+    """Minimal stand-in for a Blender bpy.types.Image."""
+    def __init__(self, name):
+        self.name = name
+
+
+# A2a-A: Unix path
+_img = _FakeImage("DataBlock")
+result = _get_texture_canonical_key(_img, "/textures/MyTex.png", "FILE", False)
+_test("A2a-A Unix path", result == "mytex", f"got={result!r}")
+
+# A2a-B: Windows backslash
+result = _get_texture_canonical_key(_img, "C:\\textures\\MyTex.png", "FILE", False)
+_test("A2a-B Windows backslash", result == "mytex", f"got={result!r}")
+
+# A2a-C: Windows UNC
+result = _get_texture_canonical_key(_img, "\\\\server\\share\\MyTex.png", "FILE", False)
+_test("A2a-C Windows UNC", result == "mytex", f"got={result!r}")
+
+# A2a-D: Blender relative
+_img2 = _FakeImage("DataBlock")
+result = _get_texture_canonical_key(_img2, "//textures/MyTex.png", "FILE", False)
+_test("A2a-D Blender relative", result == "mytex", f"got={result!r}")
+
+# A2a-E: Packed with non-empty filepath
+_img3 = _FakeImage("WoodColor")
+result = _get_texture_canonical_key(_img3, "//old/LegacyName.png", "FILE", True)
+_test("A2a-E Packed nonempty fp", result == "woodcolor", f"got={result!r}")
+
+# A2a-F: Generated
+_img4 = _FakeImage("Generated.Image.png")
+result = _get_texture_canonical_key(_img4, "", "GENERATED", False)
+_test("A2a-F Generated", result == "generated.image", f"got={result!r}")
+
+# A2a-G: Empty filepath fallback
+_img5 = _FakeImage("FallbackTex")
+result = _get_texture_canonical_key(_img5, "", "FILE", False)
+_test("A2a-G Empty filepath", result == "fallbacktex", f"got={result!r}")
+
+# A2a-H: Multiple dots
+_img6 = _FakeImage("DataBlock")
+result = _get_texture_canonical_key(_img6, "/textures/my.texture.v2.png", "FILE", False)
+_test("A2a-H Multiple dots", result == "my.texture.v2", f"got={result!r}")
+
+# A2a-I: Delegation spy — prove all args forwarded and return propagated
+class _NetworkSpy:
+    def __init__(self):
+        self.source = None
+        self.is_packed = None
+        self.filepath = None
+        self.image_name = None
+        self.return_value = "SPY_RETURN_VALUE"
+    def get_texture_canonical_key(self, source, is_packed, filepath, image_name):
+        self.source = source
+        self.is_packed = is_packed
+        self.filepath = filepath
+        self.image_name = image_name
+        return self.return_value
+
+_spy_ns = {"network": _NetworkSpy()}
+exec(_wrapper_code, _spy_ns)
+_spy_func = _spy_ns["_get_texture_canonical_key"]
+_spy_img = _FakeImage("ForwardedImg")
+_spy_result = _spy_func(_spy_img, "/actual/path/tex.png", "FILE", True)
+_spy = _spy_ns["network"]
+
+_test("A2a-I spy source forwarded", _spy.source == "FILE",
+      f"got={_spy.source!r}")
+_test("A2a-I spy is_packed forwarded", _spy.is_packed == True,
+      f"got={_spy.is_packed!r}")
+_test("A2a-I spy filepath forwarded", _spy.filepath == "/actual/path/tex.png",
+      f"got={_spy.filepath!r}")
+_test("A2a-I spy image_name forwarded",
+      _spy.image_name == "ForwardedImg", f"got={_spy.image_name!r}")
+_test("A2a-I spy return propagated",
+      _spy_result == "SPY_RETURN_VALUE", f"got={_spy_result!r}")
+
+# A2a-J: Scope invariants — verify wrapper body has no A2b+ code
+_fobidden_patterns = [
+    "fingerprint_map",
+    "_compute_texture_fingerprints",
+    "_compute_fingerprint_metadata_digest",
+    "texture_manifest",
+    "TEXTURE_MANIFEST_FILENAME",
+    "sidecar_state",
+    "SIDECAR_STATE_FILENAME",
+    "mtex",
+    "mt_basic",
+    "SYNC_TIMING_BLENDER",
+    "_collect=False",
+    "_suppress_summary",
+]
+_scope_issues = []
+for _pat in _fobidden_patterns:
+    if _pat in _wrapper_source:
+        _scope_issues.append(_pat)
+_test("A2a-J No A2b+ code in wrapper body", len(_scope_issues) == 0,
+      f"forbidden_in_wrapper={_scope_issues}")
+
+# A2a-K: Production reachability invariant.
+# At least one production call-site must exist in the candidate tree.
+# If zero, the wrapper would be dead code.
+_init_callers = 0
+for _node in ast.walk(_init_tree):
+    if isinstance(_node, ast.Call):
+        _func = _node.func
+        if isinstance(_func, ast.Name) and _func.id == '_get_texture_canonical_key':
+            _init_callers += 1
+        elif isinstance(_func, ast.Attribute) and _func.attr == '_get_texture_canonical_key':
+            _init_callers += 1
+_test("A2a-K production callers >= 1", _init_callers >= 1,
+      f"callers={_init_callers}")
+
+
 if __name__ == "__main__":
     print(f"Canonical Texture Identity: {PASS} passed, {FAIL} failed")
     for r in RESULTS:
