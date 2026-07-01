@@ -510,6 +510,24 @@ MTEX is an optional texture metadata extension appended after MATX (material slo
   - `UseAlphaTexture`
   - `UseNormalTexture`
 
+### Texture Sidecar Lifecycle (A3.1–A3.6)
+
+Sidecar textures are copied from source paths to the FBX object cache directory alongside each FBX export. Their lifecycle follows a six-stage pipeline:
+
+1. **Identity (A3.1)** — `get_texture_identity_name()` normalizes file paths, strips extensions, and resolves packed/generated image names. `get_texture_canonical_key()` lowercases for collision-safe dedup.
+
+2. **Structured preparation (A3.2)** — `prepare_sidecar_texture()` returns `SidecarPrepResult` with typed fields (status, path, error, copied) instead of raw boolean tuples.
+
+3. **Content asset identity (A3.3)** — Sidecar files are identified by content hash (xxHash64), not just filename. Collision-safe via `ensure_unique_sidecar_path()`.
+
+4. **Manifest v3 persistence (A3.4)** — `persist_manifest_v3()` atomically writes a schema-validated V3 manifest JSON file describing all sidecar assets per object. The manifest captures `prior_manifest` and `current_manifest` as deep-copied defensive snapshots in `ManifestV3IntegrationResult`.
+
+5. **Manifest-informed reuse (A3.5)** — Prior manifest records are read and matched to current asset records by basename and content hash. Matching sidecars are skipped instead of recopied.
+
+6. **Orphan pruning (A3.6)** — After a successful FBX send, `prune_after_successful_send()` delegates to `prune_orphan_sidecars()` which deletes sidecar files present in the prior manifest but absent from the current manifest. See `Blender_Addon/manifest_prune.py` for the authorization gate, TOCTOU-safe deletion checks, and exception isolation.
+
+All six stages are implemented in `Blender_Addon/`. No UE plugin or protocol changes were required. The orphan pruning module (`manifest_prune.py`) imports `manifest_v3` and `network` directly and has no `bpy` dependency.
+
 ### Limitations
 
 - Alpha visual support is limited/deferred if the master material uses an opaque blend mode.
