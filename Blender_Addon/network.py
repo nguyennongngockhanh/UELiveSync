@@ -104,6 +104,7 @@ _timeline_enabled = False
 
 def set_timeline_enabled(enabled):
     global _timeline_enabled, _last_timeline_sent, _timeline_sequence
+    _append_blender_debug_log(f"[DIAG][TL] set_timeline_enabled({enabled})")
     _timeline_enabled = enabled
     _last_timeline_sent = None
     _timeline_sequence = 0
@@ -111,16 +112,23 @@ def set_timeline_enabled(enabled):
 
 def is_timeline_effective():
     global _client
+    _append_blender_debug_log(f"[DIAG][TL] is_timeline_effective: _timeline_enabled={_timeline_enabled}")
     if not _timeline_enabled:
+        _append_blender_debug_log("[DIAG][TL]  FAIL: _timeline_enabled=False")
         return False
     if _client is None:
+        _append_blender_debug_log("[DIAG][TL]  FAIL: _client=None")
         return False
     if not getattr(_client, 'connected', False):
+        _append_blender_debug_log("[DIAG][TL]  FAIL: not connected")
         return False
     if not getattr(_client, '_capability_response_received', False):
+        _append_blender_debug_log("[DIAG][TL]  FAIL: no cap response")
         return False
     remote = getattr(_client, '_remote_capabilities', 0)
-    return bool(remote & CAP_SUPPORTS_TIMELINE_SYNC)
+    ok = bool(remote & CAP_SUPPORTS_TIMELINE_SYNC)
+    _append_blender_debug_log(f"[DIAG][TL]  remote=0x{remote:x} TIMELINE_SYNC=0x{CAP_SUPPORTS_TIMELINE_SYNC:x} bit4={bool(remote & CAP_SUPPORTS_TIMELINE_SYNC)} => {ok}")
+    return ok
 
 
 # Phase 7B: timeline sync state globals
@@ -138,20 +146,28 @@ def set_active_camera_enabled(enabled):
     _active_camera_enabled = enabled
 
 
-def _send_announce():
+def _send_announce(client_obj=None):
     """Send a PT_CapabilityAnnounce packet with _local_capabilities.
 
     Designed to be called after connect/reconnect. Returns True if the
     packet was enqueued successfully, False if no client is connected.
+    Accepts an optional client_obj parameter; falls back to global _client.
     """
     global _client
-    if _client is None or not _client.connected:
+    c = client_obj if client_obj is not None else _client
+    if c is None or not c.connected:
+        if client_obj is not None:
+            print("[LiveSync][CAP] _send_announce: client_obj NOT connected")
         return False
-    payload = struct.pack('<I', _local_capabilities)
-    _client.send_packet(
+    raw = struct.pack('<I', _local_capabilities)
+    # Pad to 16 bytes so ObjectCount=1 passes UE's V3+ payload
+    # validation (PayloadSize >= ObjectCount * LIVE_SYNC_V3_DELETE_SIZE).
+    payload = raw + b'\x00' * (16 - len(raw))
+    c.send_packet(
         [payload],
         packet_type=PT_CapabilityAnnounce,
     )
+    print("[LiveSync][CAP] Sent PT_CapabilityAnnounce mask=0x%08X" % _local_capabilities, flush=True)
     return True
 
 
@@ -189,6 +205,9 @@ def _try_recv_capability_response():
                 _capability_response_received = True
                 _client._remote_capabilities = _remote_capabilities
                 _client._capability_response_received = True
+        if _capability_response_received:
+            print("[LiveSync][CAP] Received PT_CapabilityResponse mask=0x%08X" % _remote_capabilities, flush=True)
+            _append_blender_debug_log("[DIAG][CAP] CapabilityResponse received mask=0x%08X" % _remote_capabilities)
     except (BlockingIOError, ConnectionResetError, BrokenPipeError):
         try:
             sock.setblocking(True)
@@ -307,6 +326,24 @@ def is_keyframe_effective():
         _keyframe_cap_ready_logged = True
         print(f"[KEYFRAME][CAPABILITY_READY] remote_capabilities={remote} "
               f"supports_keyframes={has_cap}")
+    return has_cap
+
+
+def is_camera_fov_keyframe_effective():
+    """True if remote peer advertised CAP_SUPPORTS_CAMERA_FOV_KEYFRAME
+    and general keyframe sync is effective without debug logging.
+
+    Does not access private capability state directly from callers.
+    """
+    global _client
+    if _client is None:
+        return False
+    if not getattr(_client, 'connected', False):
+        return False
+    if not getattr(_client, '_capability_response_received', False):
+        return False
+    remote = getattr(_client, '_remote_capabilities', 0)
+    has_cap = bool(remote & CAP_SUPPORTS_CAMERA_FOV_KEYFRAME)
     return has_cap
 
 
@@ -485,9 +522,10 @@ CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20  # Bit 5: PT_Keyframe (0x17) supported
 CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40  # Bit 6: PT_ActiveCamera (0x15) supported
 CAP_SUPPORTS_SEQUENCER_OPS       = 0x80  # Bit 7: PT_SequencerOp (0x18) supported
 CAP_SUPPORTS_CAMERA_DEF_SYNC     = 0x100 # Bit 8: PT_CameraDef (0x1B) supported
+CAP_SUPPORTS_CAMERA_FOV_KEYFRAME = 0x400 # Bit 10: Camera FOV keyframe (channel 11)
 
 # Local capabilities bitmask — sent to UE during capability announce.
-_local_capabilities = CAP_SUPPORTS_TIMELINE_SYNC | CAP_SUPPORTS_KEYFRAME_REPLICATION | CAP_SUPPORTS_ACTIVE_CAMERA_SYNC | CAP_SUPPORTS_SEQUENCER_OPS | CAP_SUPPORTS_CAMERA_DEF_SYNC
+_local_capabilities = CAP_SUPPORTS_TIMELINE_SYNC | CAP_SUPPORTS_KEYFRAME_REPLICATION | CAP_SUPPORTS_ACTIVE_CAMERA_SYNC | CAP_SUPPORTS_SEQUENCER_OPS | CAP_SUPPORTS_CAMERA_DEF_SYNC | CAP_SUPPORTS_CAMERA_FOV_KEYFRAME
 
 # Remote capabilities received from UE via PT_CapabilityResponse.
 _remote_capabilities = 0
@@ -849,16 +887,6 @@ def get_material_basic_properties(material):
         props["Metallic"] = 0.0
         source = "diffuse_color_no_nodes"
 
-    # Phase 10J.5L: log extraction to debug file
-    _append_blender_debug_log(
-        f"[MAT][EXTRACT] mat={mat_name} "
-        f"use_nodes={material.use_nodes if material else 'N/A'} "
-        f"source={source} "
-        f"color=({props.get('BaseColorR', 0):.3f},{props.get('BaseColorG', 0):.3f},{props.get('BaseColorB', 0):.3f},{props.get('Alpha', 1):.3f}) "
-        f"roughness={props.get('Roughness', 0.5):.3f} "
-        f"metallic={props.get('Metallic', 0):.3f}"
-    )
-
     return props
 
 
@@ -886,6 +914,102 @@ MTEX_FLAG_COLORSPACE_NON_COLOR = 0x08
 # Clamp limits
 MTEX_MAX_PATH_LEN = 2048
 MTEX_MAX_IMAGE_NAME_LEN = 255
+
+# =========================================================
+# Material texture extraction logging controls (Task 9B.6B.13)
+# =========================================================
+
+# Global verbose flag: when false, only summaries/errors are logged.
+# Set via addon preferences or diagnostic operator.
+material_verbose_logging = False
+
+# Deduplication set for MTEX extraction records.
+# Key: (sync_id, guid, slot_index, channel, canonical_image_key)
+# Cleared on Stop Sync, reconnect, addon reload, or new explicit sync.
+_mtex_extract_dedup_set = set()
+
+# Per-sync collector: list of (slot_index, channel, image_name, filepath, flags, is_packed)
+# Populated when _mtex_collecting is True, cleared when _mtex_collecting is False.
+_mtex_collect_records = []
+_mtex_collecting = False
+
+
+def _mtex_clear_dedup_state():
+    """Clear the MTEX extraction dedup set. Call on Stop Sync, reconnect, reload."""
+    global _mtex_extract_dedup_set, _mtex_collecting, _mtex_collect_records
+    _mtex_extract_dedup_set = set()
+    _mtex_collecting = False
+    _mtex_collect_records = []
+
+
+def _mtex_start_collecting(sync_id, guid):
+    """Enable MTEX record collection for one sync. Call before extract_texture_maps_for_slot()."""
+    global _mtex_collecting, _mtex_collect_records
+    _mtex_collecting = True
+    _mtex_collect_sync_id = sync_id
+    _mtex_collect_guid = guid
+    _mtex_collect_records = []
+
+
+def _mtex_collect_channel(slot_index, channel, image_name, filepath, flags, is_packed):
+    """Append a channel record to the current collection."""
+    global _mtex_collecting, _mtex_collect_records
+    if _mtex_collecting:
+        _mtex_collect_records.append((slot_index, channel, image_name, filepath, flags, is_packed))
+
+
+# =========================================================
+# Phase 10J.5L: Material basic property extraction collection
+# =========================================================
+# Replaces [MAT][EXTRACT] per-call log spam (Task 9B.6B.14).
+# Transaction-scoped summaries only on actual material sends or
+# explicit FBX syncs.
+
+_mat_basic_collecting = False
+_mat_basic_collect_sync_id = 0
+_mat_basic_collect_guid = ""
+_mat_basic_collect_records = []  # list of (slot_index, props_dict)
+
+
+def _mt_basic_clear_state():
+    """Clear material basic property collection state."""
+    global _mat_basic_collecting, _mat_basic_collect_records
+    _mat_basic_collecting = False
+    _mat_basic_collect_records = []
+
+
+def _mt_basic_start_collecting(sync_id, guid):
+    """Enable material basic property collection for one sync."""
+    global _mat_basic_collecting, _mat_basic_collect_sync_id, _mat_basic_collect_guid, _mat_basic_collect_records
+    _mat_basic_collecting = True
+    _mat_basic_collect_sync_id = sync_id
+    _mat_basic_collect_guid = guid
+    _mat_basic_collect_records = []
+
+
+def _mt_basic_collect_slot(slot_index, props):
+    """Append a material slot's basic properties to the current collection."""
+    global _mat_basic_collecting, _mat_basic_collect_records
+    if _mat_basic_collecting and props is not None:
+        _mat_basic_collect_records.append((slot_index, props))
+
+
+# Exposed for sync.py / __init__.py access
+mat_basic_collect_records = _mat_basic_collect_records
+
+
+def compute_material_basic_changed_fields(prev_props, cur_props):
+    """Return a list of field names that changed between prev and cur.
+
+    Only keys present in both dicts are compared.
+    """
+    if prev_props is None or cur_props is None:
+        return []
+    changed = []
+    for key in cur_props:
+        if key in prev_props and prev_props[key] != cur_props[key]:
+            changed.append(key)
+    return changed
 
 
 def _get_image_colorspace_flag(image):
@@ -930,7 +1054,7 @@ def get_texture_canonical_key(source, is_packed, filepath, image_name):
     return get_texture_identity_name(source, is_packed, filepath, image_name).lower()
 
 
-def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
+def extract_texture_maps_for_slot(material, material_name="", slot_index=-1, _collect=False, _suppress_summary=False):
     """Extract texture map references from a Blender material node tree.
 
     Phase 10K.1: diagnostic-only. Supports direct links from Image Texture
@@ -1084,29 +1208,24 @@ def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
 
         results.append((channel, filepath, image_name, flags))
 
-        # Diagnostic: channel source tracking.
+        # Diagnostic: channel source tracking (suppress on every tick).
         is_coat_fallback = sock_name in ("Coat Roughness", "Coat Normal")
-        print(
-            f"[MATERIAL][CHANNEL_SOURCE] slot={slot_index} material={material_name} "
-            f"outputChannel={ch_names.get(channel, str(channel))} "
-            f"principledInput={sock_name} fallback={int(is_coat_fallback)}"
-        )
-
         if is_coat_fallback:
             print(
                 f"[MATERIAL][COAT_FALLBACK] slot={slot_index} material={material_name} "
                 f"coatInput={sock_name} mappedChannel={ch_names.get(channel, str(channel))}"
             )
 
-        _append_blender_debug_log(
-            f"[MTEX][EXTRACT] slot={slot_index} material={material_name} channel={channel} "
-            f"image={image_name} path={filepath[:80] if filepath else '(none)'} "
-            f"packed={int(is_packed)} cs_flags={flags}"
-        )
+        # Task 9B.6B.13: collect channel for transaction-scoped summary (only when _collect=True).
+        # The hot path (timer tick) must never emit per-channel debug lines.
+        if _collect:
+            _mtex_collect_channel(slot_index, channel, image_name, filepath, flags, is_packed)
 
-    # Diagnostic: per-slot/channel extraction summary
-    detected = [ch_names.get(r[0], f"chan{r[0]}") for r in results]
-    print(f"[MATERIAL][CHANNEL_EXTRACT_SUMMARY] slot={slot_index} material={material_name} channels={detected}")
+    # Task 9B.6B.13: per-slot/channel extraction summary suppressed on timer ticks.
+    # When _suppress_summary=False (explicit FBX sync), emit for diagnostic visibility.
+    if not _suppress_summary:
+        detected = [ch_names.get(r[0], f"chan{r[0]}") for r in results]
+        print(f"[MATERIAL][CHANNEL_EXTRACT_SUMMARY] slot={slot_index} material={material_name} channels={detected}")
 
     return results
 
@@ -1694,6 +1813,9 @@ KEYFRAME_MAX_CHANNEL = 255
 # Phase 7E Stage 10A: Visibility keyframe channels (within PT_Keyframe)
 KEYFRAME_CHANNEL_VISIBILITY_VIEWPORT = 9   # hide_viewport → bool visible/hidden
 KEYFRAME_CHANNEL_VISIBILITY_RENDER = 10    # hide_render → bool renderable/not
+
+# Phase 7E Stage 12: Camera FOV keyframe channel (within PT_Keyframe)
+KEYFRAME_CHANNEL_CAMERA_FOV = 11           # FOV degrees → float track
 
 
 def serialize_keyframe(sequence, timestamp, entries, flags=0):
@@ -2854,6 +2976,7 @@ class LiveSyncClient:
 
         self._capability_response_received = False
         self._remote_capabilities = 0
+        self._last_capability_announce_time = 0.0
 
         self._reconnect_attempts = 0
         self._reconnect_max_delay = 10.0
@@ -2915,9 +3038,14 @@ class LiveSyncClient:
 
                 data_len = len(data)
 
-                if _network_verbose:
+                if _network_verbose or True:
+                    magic_hex = " ".join(f"{b:02x}" for b in data[:24]) if data_len >= 24 else (" ".join(f"{b:02x}" for b in data))
+                    _append_blender_debug_log(
+                        f"WIRE HEADER: len={data_len} first24=[{magic_hex}]"
+                    )
                     print(
-                        f"[SYNC-DBG] 4 Sender dequeued: {data_len} bytes",
+                        f"[SYNC-DBG] 4 Sender dequeued: {data_len} bytes "
+                        f"first24=[{magic_hex}]",
                         flush=True
                     )
 
@@ -2972,6 +3100,15 @@ class LiveSyncClient:
 
                 # Phase 9: try to receive capability response
                 _try_recv_capability_response()
+
+                # Phase 9: re-send capability announce periodically until
+                # response received. This handles the case where the
+                # initial announce is lost during UE's connection startup.
+                if self.connected and not self._capability_response_received:
+                    now = time.time()
+                    if now - self._last_capability_announce_time >= 5.0:
+                        self._last_capability_announce_time = now
+                        _send_announce(self)
 
                 continue
 
@@ -3051,7 +3188,8 @@ class LiveSyncClient:
             # Phase 9: reset capability state and send announce on connect
             self._capability_response_received = False
             self._remote_capabilities = 0
-            _send_announce()
+            self._last_capability_announce_time = time.time()
+            _send_announce(self)
 
         except ConnectionRefusedError:
 
@@ -3266,6 +3404,7 @@ class LiveSyncClient:
         _capability_response_received = False
         self._remote_capabilities = 0
         self._capability_response_received = False
+        self._last_capability_announce_time = 0.0
 
         # Phase 6I.1 Stage 2: drain send queue on reconnect
         # to avoid sending stale packets from the previous

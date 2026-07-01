@@ -78,6 +78,15 @@ try:
         PT_Mesh,
         extract_evaluated_mesh_data,
         compute_geometry_version_hash,
+        _mtex_start_collecting,
+        _mtex_collect_records,
+        _mtex_collecting,
+        _mtex_clear_dedup_state,
+        material_verbose_logging,
+        _mt_basic_clear_state,
+        _mt_basic_start_collecting,
+        _mt_basic_collect_slot,
+        mat_basic_collect_records,
         serialize_mesh_chunk,
         MESH_CHUNK_FLAG_FIRST_CHUNK,
         MESH_CHUNK_FLAG_LAST_CHUNK,
@@ -144,6 +153,7 @@ try:
         KEYFRAME_MAX_CHANNEL,
         KEYFRAME_CHANNEL_VISIBILITY_VIEWPORT,
         KEYFRAME_CHANNEL_VISIBILITY_RENDER,
+        KEYFRAME_CHANNEL_CAMERA_FOV,
         _keyframe_sequence as _net_keyframe_sequence,
         _keyframe_packets_sent as _net_keyframe_packets_sent,
         _keyframes_sent as _net_keyframes_sent,
@@ -155,6 +165,8 @@ try:
         CAMERA_DEF_FLAG_IS_ORTHO,
         CAMERA_DEF_FLAG_HAS_CAMERA_DEF,
         CAP_SUPPORTS_CAMERA_DEF_SYNC,
+        CAP_SUPPORTS_CAMERA_FOV_KEYFRAME,
+        is_camera_fov_keyframe_effective,
         compute_material_texture_hash,
         compute_material_dirty_sig,
         _append_blender_debug_log,
@@ -260,11 +272,14 @@ except ImportError:
         KEYFRAME_MAX_CHANNEL,
         KEYFRAME_CHANNEL_VISIBILITY_VIEWPORT,
         KEYFRAME_CHANNEL_VISIBILITY_RENDER,
+        KEYFRAME_CHANNEL_CAMERA_FOV,
         _keyframe_sequence as _net_keyframe_sequence,
         _keyframe_packets_sent as _net_keyframe_packets_sent,
         _keyframes_sent as _net_keyframes_sent,
         _animated_objects_scanned as _net_animated_objects_scanned,
         pack_ue_fguid,
+        CAP_SUPPORTS_CAMERA_FOV_KEYFRAME,
+        is_camera_fov_keyframe_effective,
         compute_material_texture_hash,
         compute_material_dirty_sig,
         _append_blender_debug_log,
@@ -304,6 +319,13 @@ _last_decision_init_printed = set()
 # Cleared on start_sync, stop_sync, and object delete.
 # None means "not yet evaluated".
 _last_geometry_version = {}
+
+# Phase 9B.6: Per-GUID last sidecar texture digest for skip-on-unchanged optimization
+# Maps guid -> int hash of current texture state (filepaths + sizes + mtimes)
+_last_sidecar_digest = {}
+
+# Phase 9B.6: Per-GUID last sidecar info list (reused on texture-unchanged skip)
+_last_sidecar_info = {}
 
 # Phase 6: Per-GUID last object name for rename detection
 _last_object_names = {}
@@ -413,7 +435,7 @@ _runtime_config = {
     "threshold_location": 0.01,
     "threshold_rotation": 0.0001,
     "threshold_scale": 0.001,
-    "heartbeat_interval": 5.0,
+    "heartbeat_interval": 10.0,
     "scan_interval": 300,
     "server_port": 57000,
     "verbose_logging": False,
@@ -936,6 +958,13 @@ _KEYFRAME_CHANNEL_MAP = {
     ("hide_render", 0): 10,    # render visibility (bool: 0=renderable, 1=not)
 }
 
+# Supported Blender object types for live sync tracking.
+# Add new types here as support is implemented downstream.
+# All downstream consumers must be audited before adding a new type.
+SUPPORTED_TRACKED_TYPES = {
+    'MESH',
+    'CAMERA',
+}
 
 # Phase 7E Stage 10A.4: Blender 5.1+ slotted action fcurve iterator
 # -------------------------------------------------------------------
@@ -1074,7 +1103,8 @@ def _extract_keyframes(obj, guid_obj):
                     float(kp.co.y),
                     channel,
                 ))
-        return entries
+    _append_blender_debug_log("[DIAG][FOV] returning %d keyframe entries for %s" % (len(entries), obj.name))
+    return entries
 
     # Legacy path (Blender < 5.0) — kept as fallback for test compat
     if hasattr(action, 'fcurves'):
@@ -1090,6 +1120,152 @@ def _extract_keyframes(obj, guid_obj):
                     float(kp.co.y),
                     channel,
                 ))
+    return entries
+
+
+def _extract_camera_fov_keyframes(obj, guid_obj):
+    """Extract camera FOV keyframes from camera datablock animation.
+
+    Reads camera.data.animation_data.action (not obj.animation_data).
+    Supports legacy fcurves and Blender 5.1 slotted/layered actions with
+    CAMERA datablock slot.
+
+    Returns list of (guid_obj, frame, fov_degrees, 11) tuples.
+    Returns empty list if obj is not a CAMERA, no animation data,
+    orthographic camera, or no valid FOV keyframes.
+    """
+    if obj.type != 'CAMERA':
+        return []
+
+    camera = obj.data
+    if getattr(camera, 'type', 'PERSP') == 'ORTHO':
+        _append_blender_debug_log("[DIAG][FOV] ortho camera")
+        return []
+
+    if not camera.animation_data or not camera.animation_data.action:
+        _append_blender_debug_log("[DIAG][FOV] no camera.data animation_data/action")
+        return []
+
+    _append_blender_debug_log("[DIAG][FOV] has animation data, checking fcurves")
+
+    action = camera.animation_data.action
+
+    # Collect lens and sensor_width fcurves
+    lens_fcurves = []
+    sensor_fcurves = []
+
+    if getattr(action, 'is_action_layered', False):
+        _append_blender_debug_log("[DIAG][FOV] action is layered")
+        # Blender 5.1+ slotted action — locate CAMERA slot
+        import bpy
+        target_handle = None
+        try:
+            for slot in action.slots:
+                _append_blender_debug_log("[DIAG][FOV]  slot id_type=%s handle=%s" % (
+                    getattr(slot, 'target_id_type', '?'),
+                    getattr(slot, 'handle', '?'),
+                ))
+                if getattr(slot, 'target_id_type', None) == 'CAMERA':
+                    target_handle = getattr(slot, 'handle', None)
+                    break
+        except Exception as e:
+            _append_blender_debug_log("[DIAG][FOV] slot scan exception: %s" % e)
+            return []
+
+        if target_handle is None:
+            _append_blender_debug_log("[DIAG][FOV] no CAMERA slot found in layered action")
+            return []
+
+        _append_blender_debug_log("[DIAG][FOV] target_handle=%s" % target_handle)
+        try:
+            for layer in action.layers:
+                for strip in getattr(layer, 'strips', []):
+                    if getattr(strip, 'type', '') != 'KEYFRAME':
+                        continue
+                    for cbag in getattr(strip, 'channelbags', []):
+                        if getattr(cbag, 'slot_handle', None) != target_handle:
+                            continue
+                        for fcurve in getattr(cbag, 'fcurves', []):
+                            dp = getattr(fcurve, 'data_path', '')
+                            _append_blender_debug_log("[DIAG][FOV]  layered fcurve dp=%s" % dp)
+                            if dp == 'lens':
+                                lens_fcurves.append(fcurve)
+                            elif dp == 'sensor_width':
+                                sensor_fcurves.append(fcurve)
+        except Exception as e:
+            _append_blender_debug_log("[DIAG][FOV] layered fcurve scan exception: %s" % e)
+            pass
+    else:
+        # Legacy path (Blender < 5.0)
+        _append_blender_debug_log("[DIAG][FOV] action is NOT layered (legacy path)")
+        if hasattr(action, 'fcurves'):
+            _append_blender_debug_log("[DIAG][FOV] action has %d fcurves" % len(action.fcurves))
+            for fcurve in action.fcurves:
+                dp = getattr(fcurve, 'data_path', '')
+                _append_blender_debug_log("[DIAG][FOV]  fcurve dp=%s" % dp)
+                if dp == 'lens':
+                    lens_fcurves.append(fcurve)
+                elif dp == 'sensor_width':
+                    sensor_fcurves.append(fcurve)
+        else:
+            _append_blender_debug_log("[DIAG][FOV] action has no fcurves attribute")
+
+    if not lens_fcurves and not sensor_fcurves:
+        _append_blender_debug_log("[DIAG][FOV] no lens/sensor_width fcurves found")
+        return []
+
+    _append_blender_debug_log("[DIAG][FOV] found %d lens + %d sensor_width fcurves" % (len(lens_fcurves), len(sensor_fcurves)))
+
+    from math import degrees, atan
+
+    # Collect all keyframe times (union)
+    times = set()
+    for fc in lens_fcurves:
+        for kp in fc.keyframe_points:
+            times.add(int(kp.co.x))
+    for fc in sensor_fcurves:
+        for kp in fc.keyframe_points:
+            times.add(int(kp.co.x))
+
+    sorted_times = sorted(times)
+
+    # Build evaluators
+    def _eval_first(curves, frame, fallback):
+        for fc in curves:
+            try:
+                return fc.evaluate(frame)
+            except Exception:
+                continue
+        return fallback
+
+    lens_fallback = getattr(camera, 'lens', 50.0)
+    sensor_fallback = getattr(camera, 'sensor_width', 36.0)
+
+    import math
+
+    entries = []
+    for frame in sorted_times:
+        lens_val = _eval_first(lens_fcurves, frame, lens_fallback)
+        sensor_val = _eval_first(sensor_fcurves, frame, sensor_fallback)
+
+        if not math.isfinite(lens_val) or not math.isfinite(sensor_val):
+            continue
+        if lens_val <= 0.0 or sensor_val <= 0.0:
+            continue
+
+        fov_deg = degrees(2.0 * atan(sensor_val / (2.0 * lens_val)))
+
+        if not math.isfinite(fov_deg) or fov_deg <= 0.0:
+            continue
+
+        entries.append((
+            guid_obj,
+            frame,
+            round(fov_deg, 4),
+            11,
+        ))
+
+    _append_blender_debug_log("[DIAG][FOV] returning %d keyframe entries" % len(entries))
     return entries
 
 
@@ -1150,14 +1326,14 @@ def scan_scene():
             stale_handled += 1
 
     # =====================================================
-    # DETECT NEW MESH OBJECTS
+    # DETECT NEW TRACKED OBJECTS
     # =====================================================
 
     new_count = 0
 
     for obj in bpy.data.objects:
 
-        if obj.type != 'MESH':
+        if obj.type not in SUPPORTED_TRACKED_TYPES:
             continue
 
         guid = ensure_unique_guid(obj, tracked_objects)
@@ -1167,6 +1343,10 @@ def scan_scene():
             tracked_objects[guid] = (
                 obj,
                 UUID(guid)
+            )
+
+            _append_blender_debug_log(
+                f"[DISCOVER] guid={guid} type={obj.type} name={obj.name}"
             )
 
             new_count += 1
@@ -1184,6 +1364,8 @@ def scan_scene():
 
 @persistent
 def check_updates():
+
+    _append_blender_debug_log("[DIAG][TICK] check_updates called")
 
     global timer_running
     global last_sent_transforms
@@ -1204,6 +1386,14 @@ def check_updates():
     global _keyframes_sent
     global _animated_objects_scanned
     global _last_keyframe_action
+    global _last_playback_state
+    global _last_timeline_state
+    global _net_playback_sequence
+    global _net_playback_packets_sent
+    global _net_playback_state_changes
+    global _timeline_sequence
+    global _timeline_packets_sent
+    global _timeline_state_changes
 
     if not timer_running:
         return 0.016
@@ -1269,6 +1459,8 @@ def check_updates():
         _last_material_property_sig.clear()
         _last_material_sent_reason.clear()
         _last_decision_init_printed.clear()
+        _last_sidecar_digest.clear()
+        _last_sidecar_info.clear()
 
         if _verbose_logging:
             print(
@@ -1786,6 +1978,12 @@ def check_updates():
         except Exception:
             current_prop_sig = None
 
+        # Task 9B.6B.14: collect material basic properties for transaction summary
+        _mt_basic_start_collecting(_network_mod._sequence_id, guid)
+
+        # Task 9B.6B.13: start collecting MTEX records for timer tick summary
+        _mtex_start_collecting(_network_mod._sequence_id, guid)
+
         # Phase 7H: compute per-slot texture hash (exception-isolated)
         current_tex_maps = None
         current_tex_sigs = {}
@@ -1797,7 +1995,8 @@ def check_updates():
                 current_tex_maps = {}
                 for slot_index, slot in enumerate(obj.material_slots):
                     if slot and slot.material:
-                        maps = extract_texture_maps_for_slot(slot.material, slot.material.name, slot_index)
+                        # Task 9B.6B.13: suppress per-call summary on timer ticks
+                        maps = extract_texture_maps_for_slot(slot.material, slot.material.name, slot_index, _suppress_summary=True, _collect=True)
                         if maps:
                             current_tex_maps[slot_index] = maps
                             tex_hash = compute_material_texture_hash(slot_index, maps)
@@ -1817,7 +2016,7 @@ def check_updates():
             elif current_slots != prev_slots:
                 bPropertiesChanged = True
                 reason_log = "slots_changed"
-            elif current_prop_sig is not None:
+            elif current_prop_sig:
                 prev_prop_sig = _last_material_property_sig.get(guid)
                 scalar_changed = True
                 if prev_prop_sig is not None:
@@ -1918,6 +2117,8 @@ def check_updates():
                             p = get_material_basic_properties(slot.material)
                             if p is not None:
                                 mat_props[slot_index] = p
+                                # Task 9B.6B.14: collect for transaction summary
+                                _mt_basic_collect_slot(slot_index, p)
                 except Exception:
                     mat_props = None
 
@@ -1936,7 +2137,8 @@ def check_updates():
                     tex_maps = {}
                     for slot_index, slot in enumerate(obj.material_slots):
                         if slot and slot.material:
-                            maps = extract_texture_maps_for_slot(slot.material, slot.material.name, slot_index)
+                            # Task 9B.6B.13: suppress per-call summary on timer ticks
+                            maps = extract_texture_maps_for_slot(slot.material, slot.material.name, slot_index, _suppress_summary=True, _collect=True)
                             if maps:
                                 tex_maps[slot_index] = maps
                 except Exception:
@@ -2124,19 +2326,42 @@ def check_updates():
         # duplicates via action/key hash.
         # =================================================
 
-        if is_keyframe_effective() and not is_first_send:
+        try:
+            _diag_keyframe_skipped
+        except NameError:
+            _diag_keyframe_skipped = set()
+        _kf_effective = is_keyframe_effective()
+        if not _kf_effective:
+            if obj.type == 'CAMERA' and obj.name not in _diag_keyframe_skipped:
+                _diag_keyframe_skipped.add(obj.name)
+                _append_blender_debug_log("[DIAG][FOV] keyframe NOT effective for %s (first_send=%s)" % (obj.name, is_first_send))
+        if _kf_effective and not is_first_send:
             try:
-                kf_entries = _extract_keyframes(obj, guid_obj)
+                object_entries = _extract_keyframes(obj, guid_obj)
             except Exception:
-                kf_entries = []
+                object_entries = []
 
+            camera_entries = []
+            if obj.type == 'CAMERA' and is_camera_fov_keyframe_effective():
+                try:
+                    camera_entries = _extract_camera_fov_keyframes(obj, guid_obj)
+                except Exception:
+                    camera_entries = []
+                if not camera_entries:
+                    _append_blender_debug_log("[DIAG][FOV] _extract_camera_fov_keyframes returned empty for %s" % obj.name)
+
+            kf_entries = object_entries + camera_entries
             if kf_entries:
+                kf_entries.sort(key=lambda e: (e[1], e[3]))
                 _animated_objects_scanned += 1
                 kf_hash = _hash_keyframes(kf_entries)
                 prev_hash = _last_keyframe_action.get(guid)
 
                 if prev_hash is None or kf_hash != prev_hash:
                     _last_keyframe_action[guid] = kf_hash
+                    _append_blender_debug_log("[DIAG][FOV] SENDING %d keyframes for %s (prev_hash=%s new_hash=%s)" % (
+                        len(kf_entries), obj.name, prev_hash, kf_hash,
+                    ))
 
                     # Batch into PT_Keyframe packets (max KEYFRAME_MAX_KEYS per packet)
                     for batch_start in range(0, len(kf_entries), KEYFRAME_MAX_KEYS):
@@ -2166,6 +2391,8 @@ def check_updates():
                                     f"batch_start={batch_start}",
                                     flush=True,
                                 )
+
+    _append_blender_debug_log("[DIAG][FLOW] after per-object loop")
 
     # =====================================================
     # SEND DELETE PACKETS (Phase 6E V5 — identity-destruction)
@@ -2307,6 +2534,50 @@ def check_updates():
         )
         _burst_packet_count += 1
 
+        # Task 9B.6B.13: emit MTEX timer tick summary (auto-sync path).
+        _mtex_records = _mtex_collect_records
+        if _mtex_records and _mtex_collecting:
+            unique_keys = set()
+            for slot_idx, ch, img_name, fpath, flags, is_packed in _mtex_records:
+                unique_keys.add((img_name, ch))
+            print(
+                f"[MTEX][EXTRACT_SUMMARY] syncId={_network_mod._sequence_id} "
+                f"object=_auto_sync slots={len(_mtex_records)} records={len(_mtex_records)} "
+                f"uniqueRecords={len(unique_keys)}"
+            )
+        _mtex_clear_dedup_state()
+
+        # Task 9B.6B.14: emit material basic property summary (auto-sync path)
+        _mat_records = mat_basic_collect_records
+        if _mat_records and _mat_basic_collecting:
+            total_slots = len(_mat_records)
+            # Count changed fields by comparing with stored property signatures
+            total_changed = 0
+            all_changed = []
+            for si, props in _mat_records:
+                # _last_material_property_sig is keyed by slot_index
+                prev = sync._last_material_property_sig.get(si)
+                if prev:
+                    for field in props:
+                        if field in prev and prev[field] != props[field]:
+                            total_changed += 1
+                            all_changed.append(f"slot{si}+{field}")
+            _mat_collect_guid = _mat_basic_collect_guid[:8] if _mat_basic_collect_guid else "NONE"
+            _mt_basic_changed_fields_str = ",".join(all_changed[:5]) if all_changed else ""
+            _append_blender_debug_log(
+                f"[MATERIAL][BASIC_EXTRACT_SUMMARY] syncId={_network_mod._sequence_id} "
+                f"guid={_mat_collect_guid} object=_auto_sync "
+                f"materialSlots={total_slots} materialsExamined={total_slots} "
+                f"materialsChanged={total_changed} fields={_mt_basic_changed_fields_str}"
+            )
+            # Emit changed-record lines only when changes exist (one per changed field, limited)
+            for _ch in all_changed[:5]:
+                _append_blender_debug_log(
+                    f"[MATERIAL][BASIC_CHANGED] syncId={_network_mod._sequence_id} "
+                    f"guid={_mat_collect_guid} {_ch}"
+                )
+        _mt_basic_clear_state()
+
     # =====================================================
     # SEND MESH CHUNK PACKETS (Phase 7C Stage 1D — PT_Mesh)
     # =====================================================
@@ -2347,6 +2618,17 @@ def check_updates():
         _burst_packet_count += 1
 
     # =====================================================
+    # PHASE 10A.3: transform packet count diagnostic
+    # Log transform sends to debug file for monitoring.
+    # =====================================================
+    if objects_to_send or children_to_send:
+        try:
+            with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _tf:
+                _tf.write(f"[DIAG][TXFR] sent transform_count={len(objects_to_send)} children={len(children_to_send)}\n")
+        except Exception:
+            pass
+
+    # =====================================================
     # HEARTBEAT (every 5 seconds)
     # =====================================================
 
@@ -2361,15 +2643,13 @@ def check_updates():
 
         # MATSTALL: log network send for material and transform.
         if _verbose_logging or (material_payloads_to_send and "Suzanne" in str(material_payloads_to_send)):
-            import network as _net_mod
-            _connected = _net_mod.is_connected() if _net_mod else False
+            _connected = is_connected()
             print(
                 f"[MATSTALL][BLENDER] net_send mat_count={len(material_payloads_to_send)} "
                 f"connected={_connected}"
             )
         if _verbose_logging and objects_to_send:
-            import network as _net_mod
-            _connected = _net_mod.is_connected() if _net_mod else False
+            _connected = is_connected()
             print(
                 f"[MATSTALL][BLENDER] net_send transform_count={len(objects_to_send)} "
                 f"children={len(children_to_send)} connected={_connected}"
@@ -2386,13 +2666,32 @@ def check_updates():
         )
         _burst_packet_count += 1
 
+        # Phase 10A.3: log heartbeat to debug file for monitoring
+        try:
+            _hb_connected = is_connected()
+            _hb_client = getattr(_client, '_runtime_stats', {}) if _client else {}
+            _hb_queue = _hb_client.get('queue_depth', -1) if _hb_client else -1
+            _hb_sent = _hb_client.get('packets_sent', 0) if _hb_client else 0
+            with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _hb_f:
+                _hb_f.write(f"[DIAG][HB] sent queue_depth={_hb_queue} total_sent={_hb_sent} connected={_hb_connected}\n")
+        except Exception:
+            pass
+
         _last_heartbeat_time = now
+
+    try:
+        with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _f:
+            _f.write("[DIAG][FLOW] at Phase 7C (playback) tick_n=%s\n" % (time.time() % 1000,))
+    except Exception as _e:
+        print("[CHECK_UPDATES] CANNOT WRITE Phase 7C log: %s" % _e, flush=True)
 
     # =====================================================
     # PLAYBACK STATE DETECTION (Phase 7C)
     # =====================================================
 
-    if is_playback_effective():
+    _pb_eff = is_playback_effective()
+    _append_blender_debug_log(f"[DIAG][FLOW] is_playback_effective={_pb_eff}")
+    if _pb_eff:
 
         try:
             screen = bpy.context.screen
@@ -2418,6 +2717,8 @@ def check_updates():
 
         _last_playback_state = current_state
 
+    _append_blender_debug_log("[DIAG][FLOW] at Phase 7B (timeline) tick_n=%s" % (time.time() % 1000,))
+
     # =====================================================
     # TIMELINE DETECTION (Phase 7B)
     # =====================================================
@@ -2425,11 +2726,11 @@ def check_updates():
     if is_timeline_effective():
         try:
             scene = bpy.context.scene
-            fc = scene.frame_current
-            fs = scene.frame_start
-            fe = scene.frame_end
-            fps_num = scene.render.fps
-            fps_den = scene.render.fps_base
+            fc = int(scene.frame_current)
+            fs = int(scene.frame_start)
+            fe = int(scene.frame_end)
+            fps_num = int(scene.render.fps)
+            fps_den = int(scene.render.fps_base)
         except (AttributeError, RuntimeError, TypeError):
             fc = fs = fe = fps_num = 0
             fps_den = 1
@@ -2437,7 +2738,23 @@ def check_updates():
         current_tl = (fc, fs, fe, fps_num, fps_den)
 
         if _last_timeline_state is None:
-            pass
+            # Send initial timeline sync on first tick
+            _timeline_sequence += 1
+            payload = serialize_timeline(
+                fc, fs, fe, fps_num, fps_den,
+                _timeline_sequence, time.time(),
+            )
+            send_objects([payload], packet_type=PT_Timeline, version=5)
+            _burst_packet_count += 1
+            _timeline_packets_sent += 1
+            _timeline_state_changes += 1
+            _runtime_stats["timeline_packets_sent"] = _timeline_packets_sent
+            _runtime_stats["timeline_state_changes"] = _timeline_state_changes
+            tl_state_payload = serialize_timeline_state(fs, fe, fc, fps_num, fps_den)
+            send_objects([tl_state_payload], packet_type=PT_TimelineState, version=5)
+            # Invalidate keyframe hash cache so keyframes are re-sent after
+            # the UE LevelSequence is established by the Timeline/TimelineState.
+            _last_keyframe_action.clear()
         elif current_tl != _last_timeline_state:
             _timeline_sequence += 1
             payload = serialize_timeline(
@@ -2578,6 +2895,12 @@ def _check_updates_wrapped():
     try:
         return check_updates()
     except Exception as _e:
+        import traceback
+        _tb = traceback.format_exc()
+        _append_blender_debug_log("[DIAG][EXC] check_updates exception: %s" % _e)
+        for _line in _tb.split("\n"):
+            if _line.strip():
+                _append_blender_debug_log("[DIAG][EXC] %s" % _line)
         print(
             f"[LIVESYNC][ERROR] check_updates exception: {_e}"
         )
@@ -2844,6 +3167,13 @@ def stop_sync():
 
     disconnect()
 
+    # Task 9B.6B.13/14: clear MTEX dedup and material basic property collection on stop
+    import importlib
+    _addon_pkg = __name__.split('.')[0]
+    _net_mod = importlib.import_module(".network", _addon_pkg)
+    _net_mod._mtex_clear_dedup_state()
+    _net_mod._mt_basic_clear_state()
+
     print("UE Live Sync Stopped")
 
 
@@ -2889,6 +3219,8 @@ def start_sync():
     _last_material_property_sig.clear()  # Phase 10J.5I
     _last_material_sent_reason.clear()  # Phase 7H
     _last_decision_init_printed.clear()  # Phase 7H
+    _last_sidecar_digest.clear()  # Phase 9B.6
+    _last_sidecar_info.clear()  # Phase 9B.6
 
     print(f"[MATERIAL][SESSION_RESTART_FULL_SNAPSHOT] reason=start_sync material_identity_cleared=1 material_sig_cleared=1")
 
@@ -2927,6 +3259,13 @@ def start_sync():
 
     # Disconnect existing connection
     disconnect()
+
+    # Task 9B.6B.13/14: clear MTEX dedup and material basic property collection on restart
+    import importlib
+    _addon_pkg = __name__.split('.')[0]
+    _net_mod = importlib.import_module(".network", _addon_pkg)
+    _net_mod._mtex_clear_dedup_state()
+    _net_mod._mt_basic_clear_state()
 
     # Read host/port from preferences
     _sync_runtime_config()
