@@ -5,9 +5,11 @@
 // =========================================================
 // PHASE 5 COMPLETE — RUNTIME CORE FROZEN
 //
-// Bounded (128 entry) multi-producer single-consumer queue
+// Bounded (512 entry) multi-producer single-consumer queue
 // bridging network receive thread → game thread.  Drop-oldest
-// on overflow.  STABLE and FROZEN as of v0.5.0-stabilized.
+// on overflow.  Increased from 128 to 512 (Phase 10A.3) to
+// accommodate UE editor idle periods where the game thread
+// stops ticking but heartbeats keep arriving.
 //
 // Thread ownership: Enqueue from network thread; DequeueBatch
 // from game thread only.  Queue size and overflow behaviour are
@@ -28,7 +30,7 @@ class FLiveSyncQueue
 {
 public:
 
-    static constexpr int32 MaxQueueSize = 128;
+    static constexpr int32 MaxQueueSize = 512;
 
     void SetStats(
         FLiveSyncStats* InStats)

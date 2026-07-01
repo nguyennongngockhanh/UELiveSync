@@ -459,6 +459,7 @@ static constexpr int32 KEYFRAME_MIN_KEYS   = 1;
 static constexpr int32 KEYFRAME_MAX_KEYS   = 255;
 static constexpr int32 KEYFRAME_MIN_CHANNEL = 0;
 static constexpr int32 KEYFRAME_MAX_CHANNEL = 255;
+static constexpr int32 KEYFRAME_CHANNEL_CAMERA_FOV = 11;  // Phase 7E Stage 12: Camera FOV float key
 
 static_assert(
     sizeof(FKeyframeHeader) == KEYFRAME_HEADER_SIZE,
@@ -1279,6 +1280,15 @@ struct FLiveSyncStats
     std::atomic<int32> KeyframeVisibilitySectionCreated{0}; // New bool sections created
     std::atomic<int32> KeyframeVisibilityUnsupported{0};   // Channels > 10 rejected
 
+    // --- Phase 7E Stage 12: Camera FOV keyframe counters ---
+    std::atomic<int32> KeyframeFOVKeysApplied{0};          // FOV keys inserted into float tracks
+    std::atomic<int32> KeyframeFOVTrackCreated{0};          // New FOV float tracks created
+    std::atomic<int32> KeyframeFOVSectionCreated{0};        // New FOV float sections created
+    std::atomic<int32> KeyframeFOVMissingComponent{0};      // Channel 11 but no UCameraComponent
+    std::atomic<int32> KeyframeFOVPossessableRollback{0};   // Orphan component possessable cleaned up
+    std::atomic<int32> KeyframeFOVCapMismatch{0};           // Channel 11 received without remote cap
+    std::atomic<int32> KeyframeFOVStaleBinding{0};          // Stale component binding detected and recreated
+
     // --- Phase 7C Stage 2C.2: Mesh schema v1 reassembly counters ---
     std::atomic<int32> MeshSchemaV1ChunksStored{0};         // Chunks stored in reassembly state
     std::atomic<int32> MeshSchemaV1MeshesCompleted{0};      // Full reassemblies completed
@@ -1303,12 +1313,127 @@ struct FLiveSyncStats
     std::atomic<int32> FBXImportActorsSpawned{0};         // New StaticMeshActor spawned
     std::atomic<int32> FBXImportActorsUpdated{0};         // Existing StaticMeshActor updated
     std::atomic<int32> FBXImportSkipped{0};               // Redundant imports skipped (fingerprint match)
+    // Task 9B.5B: material sync performance tracking
+    std::atomic<int32> MatPackagesSaved{0};                 // MIC/material packages saved during sync
+    double MatPackageSaveMsTotal{0.0};                       // Cumulative package save time (ms)
+    std::atomic<int32> MatMicParametersChanged{0};           // MIC parameters actually changed
+    // Task 9B.5B: per-packet material timing (reset per PT_Material packet)
+    double MatPktFbxImportMs{0.0};                           // FBX import time for current MAT packet
+    double MatPktSidecarImportMs{0.0};                       // Sidecar import time
+    double MatPktSnapshotParseMs{0.0};                       // MATX/MTEX parse time
+    double MatPktMicLookupMs{0.0};                           // MIC lookup time
+    double MatPktMicApplyMs{0.0};                            // MIC apply time
+    double MatPktSidecarsImported{0.0};                      // Sidecar textures imported
+    double MatPktSidecarsReused{0.0};                        // Sidecar textures reused
+    double MatPktMicParametersChanged{0.0};                  // MIC params changed
+    double MatPktPackagesSaved{0.0};                         // Packages saved
+    double MatPktFbxImportSkipped{0.0};                      // FBX import skipped (semantic dedup)
+    double MatPktResultMapMs{0.0};                           // Sidecar result-map construction time
+    double MatPktMeshAssignMs{0.0};                          // Material slot-to-mesh assignment time
+    int32 MatPktSyncId{0};                                   // Per-transaction sync ID (shared across FBX+MATX)
+    int32 MatPktPackageSaveMs{0};                            // per-packet package save ms (int to avoid format string issues)
+    FGuid MatPktFirstGuid;                                   // First GUID in current MATX packet (for correlation)
+    int32 MatPktCurrentSyncId{0};                              // Current MATX packet syncId (for per-save logs)
+    // Task 9B.5B: FBX pre-count for unchanged detection
+    int32 FbxImportSkippedBefore{0};                          // FBXImportSkipped before import
 
-    // Phase 10K.6 diagnostic correlation; 0 means unavailable.
-    int32 MatPktSyncId{0};
+    // --- Phase 10K.5: Diagnostic probe counters ---
+    // FBX sidecar transaction counters (set by sidecar import path)
+    std::atomic<int32> FbxSidecarImported{0};                 // New textures imported during FBX sync
+    std::atomic<int32> FbxSidecarReused{0};                   // Existing textures reused (manifest unchanged)
+    std::atomic<int32> FbxSidecarReimported{0};               // Textures reimported (content changed)
+    std::atomic<int32> FbxSidecarFailed{0};                   // Textures that failed to import
+    // MATX texture apply counters (set by MATX texture resolution phase)
+    std::atomic<int32> MatTexturesResolved{0};                // Textures resolved from active/persistent map
+    std::atomic<int32> MatTexturesApplied{0};                 // Textures applied to MIC
+    std::atomic<int32> MatTextureMisses{0};                   // Textures not found in any map
+    // Cache diagnostics
+    std::atomic<int32> ActiveResultMapEntries{0};             // Active sidecar map size (current sync)
+    std::atomic<int32> PersistentCacheEntries{0};             // Persistent sidecar cache size (all prior syncs)
+    // Disposable probe transaction ID (diagnostic imports)
+    std::atomic<int32> DisposableProbeTransactionId{0};       // Auto-incrementing ID for disposable import tests
 
-    // Phase 10K.6 transaction sequence.
-    std::atomic<int32> FBXTransactionId{1};
+    // --- Phase 10K.6: Production FBX Transaction Decomposition ---
+    std::atomic<int32> FBXTransactionId{1};                    // Auto-incrementing ID for each FBX transaction (starts at 1)
+};
+
+// =========================================================
+// SIDECAR IMPORT PROBE — Diagnostic-only correlation
+// =========================================================
+// Records per-file timing and settings observations for
+// texture import diagnostics.  Used only in non-production
+// disposable import tests and log correlation.
+// =========================================================
+struct FSidecarImportProbe
+{
+    // Identity
+    int32 TransactionId;
+    int32 ProbeId;
+    FString CanonicalKey;
+    FString SourceFilename;
+    FString Channel;
+    FString Guid;
+
+    // Source file info
+    int64 SourceBytes;
+    int32 Width;
+    int32 Height;
+
+    // Timing
+    double BatchBeginSeconds;
+    double BatchReturnSeconds;
+
+    // Asset observation
+    FString AssetPath;
+    int32 CompressionBefore;
+    int32 CompressionAfter;
+    bool bSRGBBefore;
+    bool bSRGBAfter;
+    int32 LODGroupBefore;
+    int32 LODGroupAfter;
+    bool bNormalDetected;
+    bool bTextureCompilationPending;
+    double AssetPostImportSeconds;
+
+    void LogEvent(const TCHAR* EventName, double Timestamp) const
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[PROBE] probeId=%d transactionId=%d canonicalKey=%s "
+                 "sourceFilename=%s channel=%s sourceBytes=%lld "
+                 "resolution=%dx%d assetPath=%s event=%s timestamp=%.6f"),
+            ProbeId, TransactionId, *CanonicalKey,
+            *SourceFilename, *Channel, SourceBytes,
+            Width, Height, *AssetPath,
+            EventName, Timestamp);
+    }
+
+    void LogSummary() const
+    {
+        double BatchElapsed = (BatchReturnSeconds > 0.0 && BatchBeginSeconds > 0.0)
+            ? (BatchReturnSeconds - BatchBeginSeconds) * 1000.0
+            : 0.0;
+        double PostImportElapsed = (AssetPostImportSeconds > 0.0 && BatchBeginSeconds > 0.0)
+            ? (AssetPostImportSeconds - BatchBeginSeconds) * 1000.0
+            : 0.0;
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[PROBE][SUMMARY] probeId=%d transactionId=%d canonicalKey=%s "
+                 "channel=%s sourceBytes=%lld resolution=%dx%d "
+                 "batchElapsedMs=%.2f postImportCumulativeMs=%.2f "
+                 "compressionBefore=%d compressionAfter=%d "
+                 "sRGBBefore=%d sRGBAfter=%d "
+                 "LODGroupBefore=%d LODGroupAfter=%d "
+                 "normalDetected=%d compilePending=%d "
+                 "assetPath=%s"),
+            ProbeId, TransactionId, *CanonicalKey,
+            *Channel, SourceBytes, Width, Height,
+            BatchElapsed, PostImportElapsed,
+            CompressionBefore, CompressionAfter,
+            bSRGBBefore ? 1 : 0, bSRGBAfter ? 1 : 0,
+            LODGroupBefore, LODGroupAfter,
+            bNormalDetected ? 1 : 0, bTextureCompilationPending ? 1 : 0,
+            *AssetPath);
+    }
 };
 
 // =========================================================
@@ -2169,6 +2294,7 @@ constexpr uint32 CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40;  // Bit 6: PT_ActiveCa
 constexpr uint32 CAP_SUPPORTS_SEQUENCER_OPS       = 0x80;  // Bit 7: PT_SequencerOp (0x18) supported
 constexpr uint32 CAP_SUPPORTS_CAMERA_DEF_SYNC      = 0x100; // Bit 8: PT_CameraDef (0x1B) supported
 constexpr uint32 CAP_SUPPORTS_CAMERA_SEQ_BIND       = 0x200; // Bit 9: Camera → Sequencer binding (Phase 7G.5)
+constexpr uint32 CAP_SUPPORTS_CAMERA_FOV_KEYFRAME   = 0x400; // Bit 10: Camera FOV keyframe (Phase 7E St 12)
 
 // UE's local capability mask — sent in PT_CapabilityResponse.
 // OR together all bits this UE plugin version supports.
@@ -2178,4 +2304,5 @@ constexpr uint32 UE_LOCAL_CAPABILITIES =
     CAP_SUPPORTS_ACTIVE_CAMERA_SYNC |
     CAP_SUPPORTS_SEQUENCER_OPS |
     CAP_SUPPORTS_CAMERA_DEF_SYNC |
-    CAP_SUPPORTS_CAMERA_SEQ_BIND;
+    CAP_SUPPORTS_CAMERA_SEQ_BIND |
+    CAP_SUPPORTS_CAMERA_FOV_KEYFRAME;
