@@ -12,6 +12,9 @@
 
 #include "Containers/Set.h"
 
+#include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
+
 #include "UELiveSyncSubsystem.generated.h"
 
 
@@ -54,6 +57,44 @@ struct FResolvedMaterialSlotState
     bool bUseMetallicTexture = false;
     bool bUseNormalTexture = false;
     bool bUseAlphaTexture = false;
+};
+
+
+// =========================================================
+// LIVE SYNC CAMERA COMPONENT (Basis-Corrected)
+// =========================================================
+// Blender camera forward = -Z (local).
+// UE ACameraActor forward = +X (local).
+// ULiveSyncCameraComponent overrides GetCameraView to apply
+// the forward-axis basis correction to the view rotation only.
+// The Actor transform stays clean (UE Details = Blender).
+// =========================================================
+
+UCLASS()
+class ULiveSyncCameraComponent : public UCameraComponent
+{
+    GENERATED_BODY()
+public:
+    virtual void GetCameraView(
+        float DeltaTime,
+        FMinimalViewInfo& DesiredView) override;
+};
+
+
+// =========================================================
+// LIVE SYNC CAMERA ACTOR (Component-Substituted)
+// =========================================================
+// ALiveSyncCameraActor spawns with ULiveSyncCameraComponent
+// instead of UCameraComponent so the basis correction is
+// applied transparently at the view level.
+// =========================================================
+
+UCLASS()
+class ALiveSyncCameraActor : public ACameraActor
+{
+    GENERATED_BODY()
+public:
+    ALiveSyncCameraActor(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 };
 
 

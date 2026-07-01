@@ -881,6 +881,69 @@ bool UUELiveSyncSubsystem::
 bool GEnableVerboseSyncLogs =
     false;
 
+// =============================================================
+// STAGE 10A.2 — CameraComponent basis diagnostic helper
+// Logs RootComponent / CameraComponent axes, quaternions, and
+// deltaQuat = Root⁻¹ * Cam once per camera GUID.
+// Called after spawn and after first SetActorTransform.
+// =============================================================
+static void DiagBasis_CameraOneShot(
+    AActor* Actor,
+    const FGuid& Guid)
+{
+    if (!Actor || !Guid.IsValid())
+        return;
+
+    ACameraActor* CamActor = Cast<ACameraActor>(Actor);
+    if (!CamActor)
+        return;
+
+    // One-shot per GUID
+    static TSet<FGuid> LoggedGuids;
+    if (LoggedGuids.Contains(Guid))
+        return;
+    LoggedGuids.Add(Guid);
+
+    USceneComponent* RootComp = CamActor->GetRootComponent();
+    UCameraComponent* CamComp = CamActor->GetCameraComponent();
+    if (!RootComp || !CamComp)
+        return;
+
+    const FVector RootFwd  = RootComp->GetForwardVector();
+    const FVector RootRgt  = RootComp->GetRightVector();
+    const FVector RootUp   = RootComp->GetUpVector();
+
+    const FVector CamFwd   = CamComp->GetForwardVector();
+    const FVector CamRgt   = CamComp->GetRightVector();
+    const FVector CamUp    = CamComp->GetUpVector();
+
+    const FQuat   RootQuat = RootComp->GetComponentQuat();
+    const FQuat   CamQuat  = CamComp->GetComponentQuat();
+    const FQuat   DeltaQuat = RootQuat.Inverse() * CamQuat;
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA][DIAG_BASIS] guid=%s"
+             " rootQ=(%.4f,%.4f,%.4f,%.4f)"
+             " rootFwd=(%.4f,%.4f,%.4f)"
+             " rootRgt=(%.4f,%.4f,%.4f)"
+             " rootUp=(%.4f,%.4f,%.4f)"
+             " camQ=(%.4f,%.4f,%.4f,%.4f)"
+             " camFwd=(%.4f,%.4f,%.4f)"
+             " camRgt=(%.4f,%.4f,%.4f)"
+             " camUp=(%.4f,%.4f,%.4f)"
+             " deltaQ=(%.4f,%.4f,%.4f,%.4f)"),
+        *Guid.ToString(EGuidFormats::Digits),
+        RootQuat.X, RootQuat.Y, RootQuat.Z, RootQuat.W,
+        RootFwd.X, RootFwd.Y, RootFwd.Z,
+        RootRgt.X, RootRgt.Y, RootRgt.Z,
+        RootUp.X,  RootUp.Y,  RootUp.Z,
+        CamQuat.X, CamQuat.Y, CamQuat.Z, CamQuat.W,
+        CamFwd.X,  CamFwd.Y,  CamFwd.Z,
+        CamRgt.X,  CamRgt.Y,  CamRgt.Z,
+        CamUp.X,   CamUp.Y,   CamUp.Z,
+        DeltaQuat.X, DeltaQuat.Y, DeltaQuat.Z, DeltaQuat.W);
+}
+
 // =========================================================
 // STAGE 10B.1 — ASSET-BACKED LEVELSEQUENCE HELPER
 // =========================================================
@@ -6525,7 +6588,27 @@ InterpolateTransforms(
                             *Guid.ToString(EGuidFormats::Digits));
                         if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
                         {
+                            // Diagnostic: rotation pipeline before SetActorTransform
+                            const FQuat TargetWorldRot = State.LocalTargetRotation * Parent->GetActorQuat();
+                            const FQuat BeforeActorQuat = Actor->GetActorQuat();
+                            const double DeltaAngleRad = TargetWorldRot.AngularDistance(WorldXForm.GetRotation());
+                            UE_LOG(LogLiveSync, Log,
+                                TEXT("[SAT_DIAG][child] frame=%llu guid=%s"
+                                     " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
+                                     " netTargetRot=(%.1f,%.1f,%.1f)"
+                                     " actorQuatBefore=(%.4f,%.4f,%.4f,%.4f)"
+                                     " appliedQuat=(%.4f,%.4f,%.4f,%.4f)"
+                                     " deltaAngleDeg=%.2f"),
+                                GFrameCounter,
+                                *Guid.ToString(EGuidFormats::Digits),
+                                State.LocalTargetRotation.X, State.LocalTargetRotation.Y, State.LocalTargetRotation.Z, State.LocalTargetRotation.W,
+                                State.LocalTargetRotation.Rotator().Pitch, State.LocalTargetRotation.Rotator().Yaw, State.LocalTargetRotation.Rotator().Roll,
+                                BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
+                                WorldXForm.GetRotation().X, WorldXForm.GetRotation().Y, WorldXForm.GetRotation().Z, WorldXForm.GetRotation().W,
+                                FMath::RadiansToDegrees(DeltaAngleRad));
+
                             Actor->SetActorTransform(WorldXForm);
+                            DiagBasis_CameraOneShot(Actor, Guid);
                             // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
                             if (FBXAuthoritativeGuids.Contains(Guid))
                             {
@@ -6698,7 +6781,26 @@ InterpolateTransforms(
                 }
                 if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
                 {
+                    // Diagnostic: rotation pipeline before SetActorTransform
+                    const FQuat BeforeActorQuat = Actor->GetActorQuat();
+                    const double DeltaAngleRad = State.TargetRotation.AngularDistance(RootDirectXForm.GetRotation());
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[SAT_DIAG][direct] frame=%llu guid=%s"
+                             " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
+                             " netTargetRot=(%.1f,%.1f,%.1f)"
+                             " actorQuatBefore=(%.4f,%.4f,%.4f,%.4f)"
+                             " appliedQuat=(%.4f,%.4f,%.4f,%.4f)"
+                             " deltaAngleDeg=%.2f"),
+                        GFrameCounter,
+                        *Guid.ToString(EGuidFormats::Digits),
+                        State.TargetRotation.X, State.TargetRotation.Y, State.TargetRotation.Z, State.TargetRotation.W,
+                        State.TargetRotation.Rotator().Pitch, State.TargetRotation.Rotator().Yaw, State.TargetRotation.Rotator().Roll,
+                        BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
+                        RootDirectXForm.GetRotation().X, RootDirectXForm.GetRotation().Y, RootDirectXForm.GetRotation().Z, RootDirectXForm.GetRotation().W,
+                        FMath::RadiansToDegrees(DeltaAngleRad));
+
                     Actor->SetActorTransform(RootDirectXForm);
+                    DiagBasis_CameraOneShot(Actor, Guid);
                     // Stage 7G.4: camera diagnostic marker
                     if (Actor->IsA(ACameraActor::StaticClass()))
                     {
@@ -6801,7 +6903,26 @@ InterpolateTransforms(
                 }
                 if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
                 {
+                    // Diagnostic: rotation pipeline before SetActorTransform
+                    const FQuat BeforeActorQuat = Actor->GetActorQuat();
+                    const double DeltaAngleRad = State.TargetRotation.AngularDistance(RootSnapXForm.GetRotation());
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[SAT_DIAG][snap] frame=%llu guid=%s"
+                             " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
+                             " netTargetRot=(%.1f,%.1f,%.1f)"
+                             " actorQuatBefore=(%.4f,%.4f,%.4f,%.4f)"
+                             " appliedQuat=(%.4f,%.4f,%.4f,%.4f)"
+                             " deltaAngleDeg=%.2f"),
+                        GFrameCounter,
+                        *Guid.ToString(EGuidFormats::Digits),
+                        State.TargetRotation.X, State.TargetRotation.Y, State.TargetRotation.Z, State.TargetRotation.W,
+                        State.TargetRotation.Rotator().Pitch, State.TargetRotation.Rotator().Yaw, State.TargetRotation.Rotator().Roll,
+                        BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
+                        RootSnapXForm.GetRotation().X, RootSnapXForm.GetRotation().Y, RootSnapXForm.GetRotation().Z, RootSnapXForm.GetRotation().W,
+                        FMath::RadiansToDegrees(DeltaAngleRad));
+
                     Actor->SetActorTransform(RootSnapXForm);
+                    DiagBasis_CameraOneShot(Actor, Guid);
                     // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
                     if (FBXAuthoritativeGuids.Contains(Guid))
                     {
@@ -6938,7 +7059,26 @@ InterpolateTransforms(
             }
             if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
             {
+                // Diagnostic: rotation pipeline before SetActorTransform
+                const FQuat BeforeActorQuat = Actor->GetActorQuat();
+                const double DeltaAngleRad = State.TargetRotation.AngularDistance(RootSmoothXForm.GetRotation());
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[SAT_DIAG][smooth] frame=%llu guid=%s"
+                         " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
+                         " netTargetRot=(%.1f,%.1f,%.1f)"
+                         " actorQuatBefore=(%.4f,%.4f,%.4f,%.4f)"
+                         " appliedQuat=(%.4f,%.4f,%.4f,%.4f)"
+                         " deltaAngleDeg=%.2f"),
+                    GFrameCounter,
+                    *Guid.ToString(EGuidFormats::Digits),
+                    State.TargetRotation.X, State.TargetRotation.Y, State.TargetRotation.Z, State.TargetRotation.W,
+                    State.TargetRotation.Rotator().Pitch, State.TargetRotation.Rotator().Yaw, State.TargetRotation.Rotator().Roll,
+                    BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
+                    RootSmoothXForm.GetRotation().X, RootSmoothXForm.GetRotation().Y, RootSmoothXForm.GetRotation().Z, RootSmoothXForm.GetRotation().W,
+                    FMath::RadiansToDegrees(DeltaAngleRad));
+
                 Actor->SetActorTransform(RootSmoothXForm);
+                DiagBasis_CameraOneShot(Actor, Guid);
                 // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
                 if (FBXAuthoritativeGuids.Contains(Guid))
                 {
@@ -8019,19 +8159,21 @@ HandleCreateObject(
         CamSpawnParams.bHideFromSceneOutliner = true;
 
         UE_LOG(LogLiveSync, Log,
-            TEXT("[CAMERA][SAFE_SPAWN_BEGIN] Spawning ACameraActor (hide-outliner) guid=%s"),
+            TEXT("[CAMERA][SAFE_SPAWN_BEGIN] Spawning ALiveSyncCameraActor (hide-outliner) guid=%s"),
             *Guid.ToString(EGuidFormats::Digits));
 
-        ACameraActor* Cam =
+        FTransform CamSpawnXForm(
+            Rotation,
+            Location,
+            Scale);
 
-            World->SpawnActor<ACameraActor>(
+        ALiveSyncCameraActor* Cam =
 
-                ACameraActor::StaticClass(),
+            World->SpawnActor<ALiveSyncCameraActor>(
 
-                FTransform(
-                    Rotation,
-                    Location,
-                    Scale),
+                ALiveSyncCameraActor::StaticClass(),
+
+                CamSpawnXForm,
 
                 CamSpawnParams);
 
@@ -8048,6 +8190,8 @@ HandleCreateObject(
             UE_LOG(LogLiveSync, Log,
                 TEXT("[CAMERA][E2E10_OUTLINER_HIDE] guid=%s"),
                 *Guid.ToString(EGuidFormats::Digits));
+
+            DiagBasis_CameraOneShot(Cam, Guid);
 
             NewActor = Cam;
         }
@@ -8321,15 +8465,15 @@ HandleCreateObject(
         // Skipping redundant SetRootComponent / RegisterComponent
         // avoids the "Already registered" engine warning and prevents
         // any re-entrant notifications during end-of-frame processing.
-        ACameraActor* CamActor = Cast<ACameraActor>(NewActor);
+        ALiveSyncCameraActor* CamActor = Cast<ALiveSyncCameraActor>(NewActor);
         if (CamActor && CamActor->GetCameraComponent())
         {
             UE_LOG(LogLiveSync, Log,
-                TEXT("[CAMERA][SAFE_SPAWN_READY] ACameraActor ready guid=%s"),
+                TEXT("[CAMERA][SAFE_SPAWN_READY] ALiveSyncCameraActor ready guid=%s"),
                 *Guid.ToString(EGuidFormats::Digits));
 
             UE_LOG(LogLiveSync, Log,
-                TEXT("[CAMERA][CREATE] Spawned ACameraActor guid=%s"),
+                TEXT("[CAMERA][CREATE] Spawned ALiveSyncCameraActor guid=%s"),
                 *Guid.ToString(EGuidFormats::Digits));
         }
     }
@@ -11386,6 +11530,79 @@ AbortSnapshot()
 // Null GUID (all-zero) clears stored state without touching the
 // viewport. Missing or non-camera GUIDs are logged and counted.
 // =========================================================
+// ULiveSyncCameraComponent::GetCameraView — Basis Correction
+// =========================================================
+// Blender camera forward = -Z (local).
+// UE ACameraActor forward = +X (local).
+// Apply +90° Y rotation to the view rotation so the camera
+// viewport matches Blender. The Actor transform is untouched.
+// =========================================================
+
+void
+ULiveSyncCameraComponent::GetCameraView(
+    float DeltaTime,
+    FMinimalViewInfo& DesiredView)
+{
+    // Diagnostics: capture state before Super call
+    static uint64 FrameCounter = 0;
+    ++FrameCounter;
+
+    const FRotator ComponentRotBefore = GetComponentRotation();
+    const AActor* OwnerActor = GetOwner();
+
+    Super::GetCameraView(DeltaTime, DesiredView);
+
+    // Diagnostics: check that Super did not modify component/actor transform
+    const FRotator ComponentRotAfter  = GetComponentRotation();
+    const bool bComponentRotChanged   = !ComponentRotBefore.Equals(ComponentRotAfter, 0.01f);
+    const FRotator DesiredViewBefore  = DesiredView.Rotation;
+
+    // === DISABLED FOR STAGE 10A.2 AUDIT ===
+    // R_y(90°) correction removed — proven confound (feedback loop).
+    // The viewport roll is now the raw CameraComponent output,
+    // which will be compared against spawn-time [DIAG_BASIS] data.
+    // const FQuat Correction(
+    //     FVector(0.0f, 1.0f, 0.0f),
+    //     FMath::DegreesToRadians(90.0f));
+    // DesiredView.Rotation = FRotator(
+    //     DesiredView.Rotation.Quaternion() * Correction);
+
+    // Diagnostics: verify actor/component transform was NOT modified
+    const FRotator ActorRotAfter =
+        OwnerActor ? OwnerActor->GetActorRotation() : FRotator::ZeroRotator;
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA][DIAG_GCV] frame=%llu"
+             " compRotBefore=(%.2f,%.2f,%.2f)"
+             " compRotAfter=(%.2f,%.2f,%.2f)"
+             " compRotChanged=%d"
+             " actorRotAfter=(%.2f,%.2f,%.2f)"
+             " desiredViewBefore=(%.2f,%.2f,%.2f)"
+             " desiredViewAfter=(%.2f,%.2f,%.2f)"),
+        FrameCounter,
+        ComponentRotBefore.Pitch, ComponentRotBefore.Yaw, ComponentRotBefore.Roll,
+        ComponentRotAfter.Pitch,  ComponentRotAfter.Yaw,  ComponentRotAfter.Roll,
+        bComponentRotChanged ? 1 : 0,
+        ActorRotAfter.Pitch, ActorRotAfter.Yaw, ActorRotAfter.Roll,
+        DesiredViewBefore.Pitch, DesiredViewBefore.Yaw, DesiredViewBefore.Roll,
+        DesiredView.Rotation.Pitch, DesiredView.Rotation.Yaw, DesiredView.Rotation.Roll);
+}
+
+
+// =========================================================
+// ALiveSyncCameraActor constructor
+// =========================================================
+// Uses SetDefaultSubobjectClass to replace UCameraComponent
+// with ULiveSyncCameraComponent.
+// =========================================================
+
+ALiveSyncCameraActor::ALiveSyncCameraActor(const FObjectInitializer& ObjectInitializer)
+    : Super(ObjectInitializer.SetDefaultSubobjectClass<ULiveSyncCameraComponent>(TEXT("CameraComponent")))
+{
+}
+
+
+// =========================================================
 // MANUAL E2E.1: Camera frustum guard
 // =========================================================
 // Suppress frustum/editor-visualization on LiveSync-spawned
@@ -11639,11 +11856,11 @@ void UUELiveSyncSubsystem::ProcessDeferredCameras()
             continue;
         }
 
-        ACameraActor* Camera = Cast<ACameraActor>(Found);
+        ALiveSyncCameraActor* Camera = Cast<ALiveSyncCameraActor>(Found);
         if (!Camera)
         {
             UE_LOG(LogLiveSync, Log,
-                TEXT("[CAMERA][E2E10_DEFERRED_SKIP] guid=%s — not a CameraActor"),
+                TEXT("[CAMERA][E2E10_DEFERRED_SKIP] guid=%s — not a LiveSyncCameraActor"),
                 *GUID.ToString());
             PendingActiveCameraData.Remove(GUID);
             continue;
@@ -11718,7 +11935,7 @@ HandleActiveCamera(
 
     // Phase 7G Stage 5: Sequencer binding is independent of viewport CVar.
     // Resolve camera actor first (find or auto-spawn), then ensure binding.
-    ACameraActor* ResolvedCamera = nullptr;
+    ALiveSyncCameraActor* ResolvedCamera = nullptr;
 
     if (Payload.CameraGUID != FGuid())
     {
@@ -11726,7 +11943,7 @@ HandleActiveCamera(
         AActor* Found = FindActorFast(Payload.CameraGUID);
         if (!Found)
         {
-            // Auto-spawn ACameraActor for this camera GUID
+            // Auto-spawn ALiveSyncCameraActor for this camera GUID
             UWorld* World = GetWorld();
             if (World)
             {
@@ -11740,8 +11957,8 @@ HandleActiveCamera(
                     ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
                 AutoSpawnParams.bHideFromSceneOutliner = true;
 
-                ACameraActor* NewCamera = World->SpawnActor<ACameraActor>(
-                    ACameraActor::StaticClass(), CamTransform,
+                ALiveSyncCameraActor* NewCamera = World->SpawnActor<ALiveSyncCameraActor>(
+                    ALiveSyncCameraActor::StaticClass(), CamTransform,
                     AutoSpawnParams);
                 if (NewCamera)
                 {
@@ -11757,6 +11974,8 @@ HandleActiveCamera(
                         TEXT("[CAMERA][E2E10_OUTLINER_HIDE] auto-spawn guid=%s"),
                         *Payload.CameraGUID.ToString());
 
+                    DiagBasis_CameraOneShot(NewCamera, Payload.CameraGUID);
+
                     UE_LOG(LogLiveSync, Log,
                         TEXT("[CAMERA][SAFE_SPAWN_READY] HandleActiveCamera auto-spawn guid=%s"),
                         *Payload.CameraGUID.ToString());
@@ -11770,7 +11989,7 @@ HandleActiveCamera(
                     Stats.ActiveCameraPacketsSpawned.fetch_add(1, std::memory_order_relaxed);
 
                     UE_LOG(LogLiveSync, Log,
-                        TEXT("[CAMERA][SPAWN] Spawned ACameraActor for GUID=%s"),
+                        TEXT("[CAMERA][SPAWN] Spawned ALiveSyncCameraActor for GUID=%s"),
                         *Payload.CameraGUID.ToString());
 
                     Found = NewCamera;
@@ -11778,7 +11997,7 @@ HandleActiveCamera(
                 else
                 {
                     UE_LOG(LogLiveSync, Warning,
-                        TEXT("[CAMERA][SPAWN_FAIL] Could not spawn ACameraActor for GUID=%s"),
+                        TEXT("[CAMERA][SPAWN_FAIL] Could not spawn ALiveSyncCameraActor for GUID=%s"),
                         *Payload.CameraGUID.ToString());
                 }
             }
@@ -11792,7 +12011,7 @@ HandleActiveCamera(
 
         if (Found)
         {
-            ResolvedCamera = Cast<ACameraActor>(Found);
+            ResolvedCamera = Cast<ALiveSyncCameraActor>(Found);
             if (!ResolvedCamera)
             {
                 Stats.ActiveCameraPacketsNotCamera.fetch_add(1, std::memory_order_relaxed);
@@ -11960,12 +12179,12 @@ HandleCameraDef(
         return;
     }
 
-    ACameraActor* Camera = Cast<ACameraActor>(Found);
+    ALiveSyncCameraActor* Camera = Cast<ALiveSyncCameraActor>(Found);
     if (!Camera)
     {
         Stats.ActiveCameraPacketsNotCamera.fetch_add(1, std::memory_order_relaxed);
         UE_LOG(LogLiveSync, Warning,
-            TEXT("[CAMERA][DEF] Actor %s is not a CameraActor"),
+            TEXT("[CAMERA][DEF] Actor %s is not a LiveSyncCameraActor"),
             *Found->GetName());
         Stats.CameraDefPacketsStale.fetch_add(1, std::memory_order_relaxed);
         return;
