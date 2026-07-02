@@ -11530,16 +11530,15 @@ AbortSnapshot()
 // Null GUID (all-zero) clears stored state without touching the
 // viewport. Missing or non-camera GUIDs are logged and counted.
 // =========================================================
-// ULiveSyncCameraComponent::GetCameraView
+// ULiveSyncCameraComponent::GetCameraView — Basis Correction
 // =========================================================
-// Clean pass-through. The camera actor transform is driven by
-// the shared transform pipeline via LiveSync transform packets.
-// No viewport basis correction is applied here — incorrect
-// viewport rotation will be investigated on a separate branch.
-//
-// The disabled R_y(90°) workaround and diagnostic logging have
-// been removed. The old approach caused a feedback loop between
-// the CameraComponent's GetCameraView and the transform sync.
+// Blender camera forward = -Z (local), up = +Y (local).
+// UE ACameraActor forward = +X (local), up = +Z (local).
+// get_transform() converts the object orientation via F@mw@F.
+// We reconstruct the view rotation from Blender camera axes:
+//   DesiredForward = ComponentQuat * (0,0,-1)  -- -Z
+//   DesiredUp      = ComponentQuat * (0,1,0)   -- +Y
+// Blender LH -> UE RH: negate Right (= -(Up x Forward)).
 // =========================================================
 
 void
@@ -11548,6 +11547,17 @@ ULiveSyncCameraComponent::GetCameraView(
     FMinimalViewInfo& DesiredView)
 {
     Super::GetCameraView(DeltaTime, DesiredView);
+
+    const FQuat ComponentQuat = GetComponentQuat();
+    const FVector DesiredForward = ComponentQuat * FVector(0.0f, 0.0f, -1.0f);
+    const FVector DesiredUp      = ComponentQuat * FVector(0.0f, 1.0f, 0.0f);
+
+    FVector Right = FVector::CrossProduct(DesiredUp, DesiredForward).GetSafeNormal();
+    Right = -Right;
+    const FVector OrthoUp = FVector::CrossProduct(DesiredForward, Right).GetSafeNormal();
+
+    DesiredView.Rotation =
+        FMatrix(DesiredForward, Right, OrthoUp, FVector::ZeroVector).ToQuat().Rotator();
 }
 
 

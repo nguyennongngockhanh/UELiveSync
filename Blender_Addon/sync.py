@@ -82,7 +82,7 @@ try:
         _mtex_collect_records,
         _mtex_collecting,
         _mtex_clear_dedup_state,
-        material_verbose_logging,
+        material_verbose_logging_fn,
         _mt_basic_clear_state,
         _mt_basic_start_collecting,
         _mt_basic_collect_slot,
@@ -1499,6 +1499,25 @@ def check_updates():
                 continue
 
             transform = get_transform(obj)
+
+            # Diagnostic: camera basis vectors (Y-flipped, in UE world space)
+            if obj.type == 'CAMERA':
+                from mathutils import Quaternion, Vector
+                rot_data = transform["rotation"]  # [x, y, z, w]
+                q = Quaternion((rot_data[3], rot_data[0], rot_data[1], rot_data[2]))
+                fwd = q @ Vector((0.0, 0.0, -1.0))
+                rgt = q @ Vector((1.0, 0.0, 0.0))
+                upv = q @ Vector((0.0, 1.0, 0.0))
+                _append_blender_debug_log(
+                    "[CAMERA][BASIS_BLENDER] obj=%s"
+                    " fwd=(%.4f,%.4f,%.4f)"
+                    " rgt=(%.4f,%.4f,%.4f)"
+                    " up=(%.4f,%.4f,%.4f)" % (
+                        obj.name,
+                        fwd.x, fwd.y, fwd.z,
+                        rgt.x, rgt.y, rgt.z,
+                        upv.x, upv.y, upv.z
+                    ))
 
             parent_guid = get_parent_guid(obj)
 
