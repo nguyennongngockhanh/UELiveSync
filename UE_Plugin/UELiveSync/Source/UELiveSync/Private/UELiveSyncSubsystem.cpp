@@ -11530,12 +11530,16 @@ AbortSnapshot()
 // Null GUID (all-zero) clears stored state without touching the
 // viewport. Missing or non-camera GUIDs are logged and counted.
 // =========================================================
-// ULiveSyncCameraComponent::GetCameraView — Basis Correction
+// ULiveSyncCameraComponent::GetCameraView
 // =========================================================
-// Blender camera forward = -Z (local).
-// UE ACameraActor forward = +X (local).
-// Apply +90° Y rotation to the view rotation so the camera
-// viewport matches Blender. The Actor transform is untouched.
+// Clean pass-through. The camera actor transform is driven by
+// the shared transform pipeline via LiveSync transform packets.
+// No viewport basis correction is applied here — incorrect
+// viewport rotation will be investigated on a separate branch.
+//
+// The disabled R_y(90°) workaround and diagnostic logging have
+// been removed. The old approach caused a feedback loop between
+// the CameraComponent's GetCameraView and the transform sync.
 // =========================================================
 
 void
@@ -11543,49 +11547,7 @@ ULiveSyncCameraComponent::GetCameraView(
     float DeltaTime,
     FMinimalViewInfo& DesiredView)
 {
-    // Diagnostics: capture state before Super call
-    static uint64 FrameCounter = 0;
-    ++FrameCounter;
-
-    const FRotator ComponentRotBefore = GetComponentRotation();
-    const AActor* OwnerActor = GetOwner();
-
     Super::GetCameraView(DeltaTime, DesiredView);
-
-    // Diagnostics: check that Super did not modify component/actor transform
-    const FRotator ComponentRotAfter  = GetComponentRotation();
-    const bool bComponentRotChanged   = !ComponentRotBefore.Equals(ComponentRotAfter, 0.01f);
-    const FRotator DesiredViewBefore  = DesiredView.Rotation;
-
-    // === DISABLED FOR STAGE 10A.2 AUDIT ===
-    // R_y(90°) correction removed — proven confound (feedback loop).
-    // The viewport roll is now the raw CameraComponent output,
-    // which will be compared against spawn-time [DIAG_BASIS] data.
-    // const FQuat Correction(
-    //     FVector(0.0f, 1.0f, 0.0f),
-    //     FMath::DegreesToRadians(90.0f));
-    // DesiredView.Rotation = FRotator(
-    //     DesiredView.Rotation.Quaternion() * Correction);
-
-    // Diagnostics: verify actor/component transform was NOT modified
-    const FRotator ActorRotAfter =
-        OwnerActor ? OwnerActor->GetActorRotation() : FRotator::ZeroRotator;
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[CAMERA][DIAG_GCV] frame=%llu"
-             " compRotBefore=(%.2f,%.2f,%.2f)"
-             " compRotAfter=(%.2f,%.2f,%.2f)"
-             " compRotChanged=%d"
-             " actorRotAfter=(%.2f,%.2f,%.2f)"
-             " desiredViewBefore=(%.2f,%.2f,%.2f)"
-             " desiredViewAfter=(%.2f,%.2f,%.2f)"),
-        FrameCounter,
-        ComponentRotBefore.Pitch, ComponentRotBefore.Yaw, ComponentRotBefore.Roll,
-        ComponentRotAfter.Pitch,  ComponentRotAfter.Yaw,  ComponentRotAfter.Roll,
-        bComponentRotChanged ? 1 : 0,
-        ActorRotAfter.Pitch, ActorRotAfter.Yaw, ActorRotAfter.Roll,
-        DesiredViewBefore.Pitch, DesiredViewBefore.Yaw, DesiredViewBefore.Roll,
-        DesiredView.Rotation.Pitch, DesiredView.Rotation.Yaw, DesiredView.Rotation.Roll);
 }
 
 
