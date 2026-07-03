@@ -1365,7 +1365,7 @@ def scan_scene():
 @persistent
 def check_updates():
 
-    _append_blender_debug_log("[DIAG][TICK] check_updates called")
+
 
     global timer_running
     global last_sent_transforms
@@ -1398,11 +1398,7 @@ def check_updates():
     if not timer_running:
         return 0.016
 
-    # DIAG: print internal state each tick
-    print(
-        f"[DIAG] tick: timer_running={timer_running} tracked={len(tracked_objects)}",
-        flush=True
-    )
+
 
     # First-tick diagnostic
     if _sync_start_time > 0 and time.time() - _sync_start_time < 0.1:
@@ -2332,9 +2328,7 @@ def check_updates():
             _diag_keyframe_skipped = set()
         _kf_effective = is_keyframe_effective()
         if not _kf_effective:
-            if obj.type == 'CAMERA' and obj.name not in _diag_keyframe_skipped:
-                _diag_keyframe_skipped.add(obj.name)
-                _append_blender_debug_log("[DIAG][FOV] keyframe NOT effective for %s (first_send=%s)" % (obj.name, is_first_send))
+            pass
         if _kf_effective and not is_first_send:
             try:
                 object_entries = _extract_keyframes(obj, guid_obj)
@@ -2391,8 +2385,6 @@ def check_updates():
                                     f"batch_start={batch_start}",
                                     flush=True,
                                 )
-
-    _append_blender_debug_log("[DIAG][FLOW] after per-object loop")
 
     # =====================================================
     # SEND DELETE PACKETS (Phase 6E V5 — identity-destruction)
@@ -2618,17 +2610,6 @@ def check_updates():
         _burst_packet_count += 1
 
     # =====================================================
-    # PHASE 10A.3: transform packet count diagnostic
-    # Log transform sends to debug file for monitoring.
-    # =====================================================
-    if objects_to_send or children_to_send:
-        try:
-            with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _tf:
-                _tf.write(f"[DIAG][TXFR] sent transform_count={len(objects_to_send)} children={len(children_to_send)}\n")
-        except Exception:
-            pass
-
-    # =====================================================
     # HEARTBEAT (every 5 seconds)
     # =====================================================
 
@@ -2636,10 +2617,7 @@ def check_updates():
 
     if now - _last_heartbeat_time >= _heartbeat_interval:
 
-        print(
-            "[HEARTBEAT][DIAG] heartbeat queued",
-            flush=True
-        )
+
 
         # MATSTALL: log network send for material and transform.
         if _verbose_logging or (material_payloads_to_send and "Suzanne" in str(material_payloads_to_send)):
@@ -2690,7 +2668,7 @@ def check_updates():
     # =====================================================
 
     _pb_eff = is_playback_effective()
-    _append_blender_debug_log(f"[DIAG][FLOW] is_playback_effective={_pb_eff}")
+
     if _pb_eff:
 
         try:
@@ -2716,8 +2694,6 @@ def check_updates():
             _runtime_stats["playback_state_changes"] = _net_playback_state_changes
 
         _last_playback_state = current_state
-
-    _append_blender_debug_log("[DIAG][FLOW] at Phase 7B (timeline) tick_n=%s" % (time.time() % 1000,))
 
     # =====================================================
     # TIMELINE DETECTION (Phase 7B)
@@ -3236,7 +3212,7 @@ def start_sync():
     _timeline_sequence = 0
     _timeline_packets_sent = 0
     _timeline_state_changes = 0
-    _last_active_camera_guid = None
+    _last_active_camera_guid = b''  # Phase 7D: trigger initial PT_ActiveCamera + PT_CameraDef on first tick
     _active_camera_sequence = 0
     _active_camera_packets_sent = 0
     _active_camera_state_changes = 0

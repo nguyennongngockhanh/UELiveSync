@@ -1630,12 +1630,6 @@ bool UUELiveSyncSubsystem::Tick(
     VerboseFrameCounter++;
     LastTickExecutionTime = FPlatformTime::Seconds();
 
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[DIAG][FRAME] Tick start vfc=%lld gfc=%lld delta=%.4f"),
-        (long long)VerboseFrameCounter,
-        (long long)GFrameCounter,
-        DeltaTime);
-
     // =====================================================
     // SYNC CVARS
     // =====================================================
@@ -7129,24 +7123,6 @@ InterpolateTransforms(
     if (bEnableVerboseSyncLogs)
     {
         UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
-    }
-
-    {
-        int Total = TransformStates.Num();
-
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT(
-                "[DIAG][TRANSFORM] frame=%lld total=%d missing=%d converged=%d snap=%d interp=%d interpMode=%d"),
-            (long long)GFrameCounter,
-            Total,
-            MissingCount,
-            ConvergedCount,
-            SnapCount,
-            InterpCount,
-            InterpMode
-        );
     }
 }
 
@@ -16549,11 +16525,6 @@ ReconstructCompletedMeshes()
 {
     CHECK_GAME_THREAD();
 
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[DIAG][MESH_BUILD_OLD] Enter with %d pending reassemblies frame=%lld"),
-        PendingMeshReassembly.Num(),
-        (long long)GFrameCounter);
-
     int32 DiagBuildCount = 0;
     int32 BuildsThisTick = 0;
     const int32 MaxBuildsPerTick =
@@ -17008,19 +16979,6 @@ ReconstructCompletedMeshes()
 
         bool bMultiRootChanged = (Actor->GetRootComponent() != ProcMesh);
 
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[DIAG][MESH_BUILD] guid=%s actor=%s frame=%lld verts=%d tris=%d sections=%d newProc=%d rootChanged=%d registerCalled=%d markDirty=%d"),
-            *Guid.ToString(EGuidFormats::Digits),
-            *Actor->GetName(),
-            (long long)GFrameCounter,
-            TotalVertices,
-            TotalTriangles,
-            NumSections,
-            bMultiProcMeshNew ? 1 : 0,
-            bMultiRootChanged ? 1 : 0,
-            1,
-            1);
-
         {
             UStaticMeshComponent* PlaceholderSMC =
                 Actor->FindComponentByClass<UStaticMeshComponent>();
@@ -17081,13 +17039,6 @@ ReconstructCompletedMeshes()
         Reconstructed.Add(Guid);
     }
 
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[DIAG][MESH_BUILD_OLD] Exit with %d builds frame=%lld (tick progress %d/%d)"),
-        DiagBuildCount,
-        (long long)GFrameCounter,
-        BuildsThisTick,
-        CVarLiveSyncMaxMeshBuildsPerTick.GetValueOnGameThread());
-
     for (const FGuid& Guid : Reconstructed)
     {
         PendingMeshReassembly.Remove(Guid);
@@ -17114,11 +17065,6 @@ void UUELiveSyncSubsystem::
 BuildV1MeshFromReassembly()
 {
     CHECK_GAME_THREAD();
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[DIAG][MESH_BUILD] Enter with %d pending reassemblies frame=%lld"),
-        PendingV1MeshReassembly.Num(),
-        (long long)GFrameCounter);
 
     int32 DiagBuildCount = 0;
     int32 BuildsThisTick = 0;
@@ -18151,27 +18097,11 @@ BuildV1MeshFromReassembly()
             State.VertexStride,
             bHasColor0 ? 1 : 0);
 
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[DIAG][MESH_BUILD] guid=%s actor=%s frame=%lld verts=%d tris=%d newProc=%d"),
-            *Guid.ToString(EGuidFormats::Digits),
-            *Actor->GetName(),
-            (long long)GFrameCounter,
-            Positions.Num(),
-            ValidIndices.Num() / 3,
-            bSingleProcMeshNew ? 1 : 0);
-
         // Mark completed and remove from pending
         BuildsThisTick++;
         State.bReconstructed = true;
         Reconstructed.Add(Key);
     }
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[DIAG][MESH_BUILD] Exit with %d builds frame=%lld (tick progress %d/%d)"),
-        DiagBuildCount,
-        (long long)GFrameCounter,
-        BuildsThisTick,
-        CVarLiveSyncMaxMeshBuildsPerTick.GetValueOnGameThread());
 
     for (const FV1MeshReassemblyKey& Key : Reconstructed)
     {

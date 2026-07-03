@@ -3044,17 +3044,6 @@ class LiveSyncClient:
 
                 data_len = len(data)
 
-                if _network_verbose or True:
-                    magic_hex = " ".join(f"{b:02x}" for b in data[:24]) if data_len >= 24 else (" ".join(f"{b:02x}" for b in data))
-                    _append_blender_debug_log(
-                        f"WIRE HEADER: len={data_len} first24=[{magic_hex}]"
-                    )
-                    print(
-                        f"[SYNC-DBG] 4 Sender dequeued: {data_len} bytes "
-                        f"first24=[{magic_hex}]",
-                        flush=True
-                    )
-
                 with self._lock:
 
                     if not self.connected or not self.sock:
