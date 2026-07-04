@@ -7273,9 +7273,6 @@ EvictStaleTransformStates()
     {
         TransformStates.Remove(
             Guid);
-
-        ActorCache.Remove(
-            Guid);
     }
 
     if (ShouldLogVerbose())
