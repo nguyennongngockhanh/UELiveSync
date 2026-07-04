@@ -921,27 +921,30 @@ static void DiagBasis_CameraOneShot(
     const FQuat   CamQuat  = CamComp->GetComponentQuat();
     const FQuat   DeltaQuat = RootQuat.Inverse() * CamQuat;
 
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[CAMERA][DIAG_BASIS] guid=%s"
-             " rootQ=(%.4f,%.4f,%.4f,%.4f)"
-             " rootFwd=(%.4f,%.4f,%.4f)"
-             " rootRgt=(%.4f,%.4f,%.4f)"
-             " rootUp=(%.4f,%.4f,%.4f)"
-             " camQ=(%.4f,%.4f,%.4f,%.4f)"
-             " camFwd=(%.4f,%.4f,%.4f)"
-             " camRgt=(%.4f,%.4f,%.4f)"
-             " camUp=(%.4f,%.4f,%.4f)"
-             " deltaQ=(%.4f,%.4f,%.4f,%.4f)"),
-        *Guid.ToString(EGuidFormats::Digits),
-        RootQuat.X, RootQuat.Y, RootQuat.Z, RootQuat.W,
-        RootFwd.X, RootFwd.Y, RootFwd.Z,
-        RootRgt.X, RootRgt.Y, RootRgt.Z,
-        RootUp.X,  RootUp.Y,  RootUp.Z,
-        CamQuat.X, CamQuat.Y, CamQuat.Z, CamQuat.W,
-        CamFwd.X,  CamFwd.Y,  CamFwd.Z,
-        CamRgt.X,  CamRgt.Y,  CamRgt.Z,
-        CamUp.X,   CamUp.Y,   CamUp.Z,
-        DeltaQuat.X, DeltaQuat.Y, DeltaQuat.Z, DeltaQuat.W);
+    if (GEnableVerboseSyncLogs)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][DIAG_BASIS] guid=%s"
+                 " rootQ=(%.4f,%.4f,%.4f,%.4f)"
+                 " rootFwd=(%.4f,%.4f,%.4f)"
+                 " rootRgt=(%.4f,%.4f,%.4f)"
+                 " rootUp=(%.4f,%.4f,%.4f)"
+                 " camQ=(%.4f,%.4f,%.4f,%.4f)"
+                 " camFwd=(%.4f,%.4f,%.4f)"
+                 " camRgt=(%.4f,%.4f,%.4f)"
+                 " camUp=(%.4f,%.4f,%.4f)"
+                 " deltaQ=(%.4f,%.4f,%.4f,%.4f)"),
+            *Guid.ToString(EGuidFormats::Digits),
+            RootQuat.X, RootQuat.Y, RootQuat.Z, RootQuat.W,
+            RootFwd.X, RootFwd.Y, RootFwd.Z,
+            RootRgt.X, RootRgt.Y, RootRgt.Z,
+            RootUp.X,  RootUp.Y,  RootUp.Z,
+            CamQuat.X, CamQuat.Y, CamQuat.Z, CamQuat.W,
+            CamFwd.X,  CamFwd.Y,  CamFwd.Z,
+            CamRgt.X,  CamRgt.Y,  CamRgt.Z,
+            CamUp.X,   CamUp.Y,   CamUp.Z,
+            DeltaQuat.X, DeltaQuat.Y, DeltaQuat.Z, DeltaQuat.W);
+    }
 }
 
 // =========================================================
@@ -1599,18 +1602,21 @@ void UUELiveSyncSubsystem::StartServer()
 void UUELiveSyncSubsystem::OnEngineTick()
 {
     double Now = FPlatformTime::Seconds();
-    static double LastAlwaysOnLog = 0.0;
-    if (Now - LastAlwaysOnLog >= 5.0)
+    if (ShouldLogVerbose())
     {
-        LastAlwaysOnLog = Now;
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT("[TICK][ALIVE] OnEngineTick executing "
-                 "(vfc=%lld gfc=%lld realtime=%.3f)"),
-            (long long)VerboseFrameCounter,
-            (long long)GFrameCounter,
-            Now);
+        static double LastAlwaysOnLog = 0.0;
+        if (Now - LastAlwaysOnLog >= 5.0)
+        {
+            LastAlwaysOnLog = Now;
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("[TICK][ALIVE] OnEngineTick executing "
+                     "(vfc=%lld gfc=%lld realtime=%.3f)"),
+                (long long)VerboseFrameCounter,
+                (long long)GFrameCounter,
+                Now);
+        }
     }
 
     float DeltaTime = static_cast<float>(Now - LastTickRealTime);
@@ -1693,7 +1699,7 @@ bool UUELiveSyncSubsystem::Tick(
     // If this never appears in the log, Tick is not
     // executing (e.g. -NullRHI mode, scheduler stall).
     // Fires every ~300 ticks (~5s at 60fps).
-    if (VerboseFrameCounter % 300 == 1)
+    if (ShouldLogVerbose())
     {
         UE_LOG(
             LogLiveSync,
@@ -1704,22 +1710,23 @@ bool UUELiveSyncSubsystem::Tick(
     }
 
     // =====================================================
-    // Phase 10A.3: always-on tick proof-of-life (every 10s)
-    // Always logs to prove FTicker is running, regardless of
-    // verbose mode.  This is the critical diagnostic for
-    // confirming the game thread is processing packets.
-    static double LastTickProofLogTime = 0.0;
-    double NowTickProof = FPlatformTime::Seconds();
-    if (NowTickProof - LastTickProofLogTime >= 10.0)
+    // Phase 10A.3: tick proof-of-life (every 10s)
+    // =====================================================
+    if (ShouldLogVerbose())
     {
-        LastTickProofLogTime = NowTickProof;
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT("[TICK] frame=%lld delta=%.4f queue=%d"),
-            (long long)VerboseFrameCounter,
-            DeltaTime,
-            PacketQueue.Size());
+        static double LastTickProofLogTime = 0.0;
+        double NowTickProof = FPlatformTime::Seconds();
+        if (NowTickProof - LastTickProofLogTime >= 10.0)
+        {
+            LastTickProofLogTime = NowTickProof;
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("[TICK] frame=%lld delta=%.4f queue=%d"),
+                (long long)VerboseFrameCounter,
+                DeltaTime,
+                PacketQueue.Size());
+        }
     }
 
     // =====================================================
@@ -1733,6 +1740,7 @@ bool UUELiveSyncSubsystem::Tick(
             false;
 
         // Log periodic "waiting" status every ~600 ticks (10s)
+        if (ShouldLogVerbose())
         {
             static int32 AcceptPollCounter = 0;
 
@@ -1986,8 +1994,9 @@ bool UUELiveSyncSubsystem::Tick(
         !ConnectionSocket &&
         !NetworkRunnable)
     {
-        // Throttle: log at most once every 2s to avoid flooding
+        if (ShouldLogVerbose())
         {
+            // Throttle: log at most once every 2s to avoid flooding
             static double LastReconnectLog = 0.0;
             double NowLog = FPlatformTime::Seconds();
             if (NowLog - LastReconnectLog >= 2.0)
@@ -2104,7 +2113,7 @@ bool UUELiveSyncSubsystem::Tick(
                 UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: InterpolateTransforms"));
             }
         }
-        else
+        else if (bEnableVerboseSyncLogs)
         {
             UE_LOG(LogLiveSync, Log, TEXT("SKIP  Pipeline: InterpolateTransforms (disabled by CVar)"));
         }
@@ -2124,7 +2133,7 @@ bool UUELiveSyncSubsystem::Tick(
                 UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ResolvePendingAttachments"));
             }
         }
-        else
+        else if (bEnableVerboseSyncLogs)
         {
             UE_LOG(LogLiveSync, Log, TEXT("SKIP  Pipeline: ResolvePendingAttachments (disabled by CVar)"));
         }
@@ -2164,7 +2173,7 @@ bool UUELiveSyncSubsystem::Tick(
                 UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: RecoverMissingActors"));
             }
         }
-        else
+        else if (bEnableVerboseSyncLogs)
         {
             UE_LOG(LogLiveSync, Log, TEXT("SKIP  Pipeline: RecoverMissingActors (disabled by CVar)"));
         }
@@ -2210,7 +2219,7 @@ bool UUELiveSyncSubsystem::Tick(
                 UE_LOG(LogLiveSync, Log, TEXT("END   Pipeline: ReconstructCompletedMeshes"));
             }
         }
-        else
+        else if (bEnableVerboseSyncLogs)
         {
             UE_LOG(LogLiveSync, Log, TEXT("SKIP  Pipeline: ResolvePendingAssets (disabled by CVar)"));
         }
@@ -2225,12 +2234,18 @@ bool UUELiveSyncSubsystem::Tick(
 
     if (ConnectionSocket && VerboseFrameCounter % 300 == 0)
     {
-        UE_LOG(LogLiveSync, Log, TEXT("BEGIN Periodic: ValidateHierarchy"));
+        if (ShouldLogVerbose())
+        {
+            UE_LOG(LogLiveSync, Log, TEXT("BEGIN Periodic: ValidateHierarchy"));
+        }
         {
             TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ValidateHierarchy);
             ValidateHierarchy();
         }
-        UE_LOG(LogLiveSync, Log, TEXT("END   Periodic: ValidateHierarchy"));
+        if (ShouldLogVerbose())
+        {
+            UE_LOG(LogLiveSync, Log, TEXT("END   Periodic: ValidateHierarchy"));
+        }
     }
 
     // =====================================================
@@ -2376,10 +2391,13 @@ StartNetworkThread()
     // ListenerSocket so the thread has a socket to read from.
     if (!ConnectionSocket && ListenerSocket)
     {
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT("StartNetworkThread: accepting from ListenerSocket"));
+        if (ShouldLogVerbose())
+        {
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("StartNetworkThread: accepting from ListenerSocket"));
+        }
 
         // Non-blocking accept — if no connection is pending, return
         // immediately. The caller (auto-reconnect path in Tick) will
@@ -2420,11 +2438,14 @@ StartNetworkThread()
     if (NetworkThread ||
         NetworkRunnable)
     {
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT("StartNetworkThread: already running, "
-                 "stopping old thread"));
+        if (ShouldLogVerbose())
+        {
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("StartNetworkThread: already running, "
+                     "stopping old thread"));
+        }
 
         // Save socket before StopNetworkThread destroys it
         FSocket* SavedSocket =
@@ -2691,15 +2712,18 @@ StopNetworkThread()
             EndCycles -
             AfterJoinCycles);
 
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT("StopNetworkThread: stop=%.2fms close=%.2fms join=%.2fms cleanup=%.2fms total=%.2fms"),
-        StopMs2,
-        CloseMs,
-        JoinMs,
-        CleanupMs,
-        StopMs);
+    if (ShouldLogVerbose())
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("StopNetworkThread: stop=%.2fms close=%.2fms join=%.2fms cleanup=%.2fms total=%.2fms"),
+            StopMs2,
+            CloseMs,
+            JoinMs,
+            CleanupMs,
+            StopMs);
+    }
 }
 
 
@@ -2855,17 +2879,20 @@ ProcessQueuedPackets()
         uint64 PktBeginCycles =
             FPlatformTime::Cycles64();
 
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT("BEGIN packet #%llu: magic=0x%08X "
-                 "ver=%u type=0x%02X objs=%d size=%d"),
-            PacketProcessCounter,
-            PktMagic,
-            PktVersion,
-            PktType,
-            PktObjCount,
-            PktSize);
+        if (ShouldLogVerbose())
+        {
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("BEGIN packet #%llu: magic=0x%08X "
+                     "ver=%u type=0x%02X objs=%d size=%d"),
+                PacketProcessCounter,
+                PktMagic,
+                PktVersion,
+                PktType,
+                PktObjCount,
+                PktSize);
+        }
 
         ProcessBinaryPacket(
             Pkt,
@@ -2887,7 +2914,7 @@ ProcessQueuedPackets()
                 PktElapsedMs,
                 PacketProcessCounter);
         }
-        else
+        else if (ShouldLogVerbose())
         {
             UE_LOG(
                 LogLiveSync,
@@ -5809,15 +5836,18 @@ UpdateTargetTransform(
     CHECK_GAME_THREAD();
     TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_UpdateTargetTransform);
 
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT("BEGIN TRACE: UpdateTargetTransform guid=%s loc=(%s) rot=(%s) scl=(%s) local=%d"),
-        *Guid.ToString(EGuidFormats::Digits),
-        *Location.ToString(),
-        *Rotation.ToString(),
-        *Scale.ToString(),
-        bIsLocalTransform);
+    if (bEnableVerboseSyncLogs)
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("BEGIN TRACE: UpdateTargetTransform guid=%s loc=(%s) rot=(%s) scl=(%s) local=%d"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *Location.ToString(),
+            *Rotation.ToString(),
+            *Scale.ToString(),
+            bIsLocalTransform);
+    }
 
     if (GEnableVerboseSyncLogs)
     {
@@ -6072,12 +6102,15 @@ UpdateTargetTransform(
                 true;
         }
 
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT("END TRACE: UpdateTargetTransform guid=%s (unchanged)"),
-            *Guid.ToString(
-                EGuidFormats::Digits));
+        if (ShouldLogVerbose())
+        {
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("END TRACE: UpdateTargetTransform guid=%s (unchanged)"),
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+        }
 
         return;
     }
@@ -6251,12 +6284,15 @@ UpdateTargetTransform(
         }
     }
 
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT("END TRACE: UpdateTargetTransform guid=%s"),
-        *Guid.ToString(
-            EGuidFormats::Digits));
+    if (ShouldLogVerbose())
+    {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("END TRACE: UpdateTargetTransform guid=%s"),
+            *Guid.ToString(
+                EGuidFormats::Digits));
+    }
 }
 
 
@@ -6283,7 +6319,10 @@ InterpolateTransforms(
     // will be bulk-applied when EndSnapshot is received
     if (bInSnapshotBuild)
     {
-        UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms (snapshot build, skip)"));
+        if (bEnableVerboseSyncLogs)
+        {
+            UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms (snapshot build, skip)"));
+        }
         return;
     }
 
@@ -6293,7 +6332,10 @@ InterpolateTransforms(
 
     if (CVarLiveSyncDisableTransformApply.GetValueOnGameThread())
     {
-        UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms (disabled by CVar)"));
+        if (bEnableVerboseSyncLogs)
+        {
+            UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms (disabled by CVar)"));
+        }
         return;
     }
 
@@ -6409,12 +6451,15 @@ InterpolateTransforms(
         // PER-ACTOR TRACE
         // =====================================================
 
-        UE_LOG(LogLiveSync, Log,
-            TEXT("BEGIN transform apply guid=%s actor=%p iter=%d total=%d"),
-            *Guid.ToString(EGuidFormats::Digits),
-            (void*)Actor,
-            InterpIterationIndex,
-            TransformStates.Num());
+        if (ShouldLogVerbose())
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("BEGIN transform apply guid=%s actor=%p iter=%d total=%d"),
+                *Guid.ToString(EGuidFormats::Digits),
+                (void*)Actor,
+                InterpIterationIndex,
+                TransformStates.Num());
+        }
 
         // ---------------------------------------------------
         // CONVERGENCE CHECK
@@ -6472,16 +6517,19 @@ InterpolateTransforms(
             bScaleConverged)
         {
             // Stage 7G.4: camera diagnostic marker for converged state
-            if (Actor->IsA(ACameraActor::StaticClass()))
+            if (bEnableVerboseSyncLogs)
             {
+                if (Actor->IsA(ACameraActor::StaticClass()))
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[CAMERA][TRANSFORM_CONVERGED] guid=%s actor=%s"),
+                        *Guid.ToString(EGuidFormats::Digits),
+                        *Actor->GetName());
+                }
                 UE_LOG(LogLiveSync, Log,
-                    TEXT("[CAMERA][TRANSFORM_CONVERGED] guid=%s actor=%s"),
-                    *Guid.ToString(EGuidFormats::Digits),
-                    *Actor->GetName());
+                    TEXT("END   transform apply guid=%s (converged)"),
+                    *Guid.ToString(EGuidFormats::Digits));
             }
-            UE_LOG(LogLiveSync, Log,
-                TEXT("END   transform apply guid=%s (converged)"),
-                *Guid.ToString(EGuidFormats::Digits));
             ConvergedCount++;
             continue;
         }
@@ -6571,35 +6619,44 @@ InterpolateTransforms(
                         Parent->
                         GetActorTransform();
 
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("  BEGIN SetActorTransform guid=%s (attached child)"),
-                        *Guid.ToString(EGuidFormats::Digits));
+                    if (ShouldLogVerbose())
+                    {
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("  BEGIN SetActorTransform guid=%s (attached child)"),
+                            *Guid.ToString(EGuidFormats::Digits));
+                    }
 
                     if (ValidateTransform(WorldXForm, Guid, TEXT("AttachedChild")))
                     {
-                        UE_LOG(LogLiveSync, Log,
-                            TEXT("  DO SetActorTransform guid=%s (attached child)"),
-                            *Guid.ToString(EGuidFormats::Digits));
+                        if (ShouldLogVerbose())
+                        {
+                            UE_LOG(LogLiveSync, Log,
+                                TEXT("  DO SetActorTransform guid=%s (attached child)"),
+                                *Guid.ToString(EGuidFormats::Digits));
+                        }
                         if (!CVarLiveSyncBypassSetActorTransform.GetValueOnGameThread())
                         {
                             // Diagnostic: rotation pipeline before SetActorTransform
                             const FQuat TargetWorldRot = State.LocalTargetRotation * Parent->GetActorQuat();
                             const FQuat BeforeActorQuat = Actor->GetActorQuat();
                             const double DeltaAngleRad = TargetWorldRot.AngularDistance(WorldXForm.GetRotation());
-                            UE_LOG(LogLiveSync, Log,
-                                TEXT("[SAT_DIAG][child] frame=%llu guid=%s"
-                                     " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
-                                     " netTargetRot=(%.1f,%.1f,%.1f)"
-                                     " actorQuatBefore=(%.4f,%.4f,%.4f,%.4f)"
-                                     " appliedQuat=(%.4f,%.4f,%.4f,%.4f)"
-                                     " deltaAngleDeg=%.2f"),
-                                GFrameCounter,
-                                *Guid.ToString(EGuidFormats::Digits),
-                                State.LocalTargetRotation.X, State.LocalTargetRotation.Y, State.LocalTargetRotation.Z, State.LocalTargetRotation.W,
-                                State.LocalTargetRotation.Rotator().Pitch, State.LocalTargetRotation.Rotator().Yaw, State.LocalTargetRotation.Rotator().Roll,
-                                BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
-                                WorldXForm.GetRotation().X, WorldXForm.GetRotation().Y, WorldXForm.GetRotation().Z, WorldXForm.GetRotation().W,
-                                FMath::RadiansToDegrees(DeltaAngleRad));
+                            if (bEnableVerboseSyncLogs)
+                            {
+                                UE_LOG(LogLiveSync, Log,
+                                    TEXT("[SAT_DIAG][child] frame=%llu guid=%s"
+                                         " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
+                                         " netTargetRot=(%.1f,%.1f,%.1f)"
+                                         " actorQuatBefore=(%.4f,%.4f,%.4f,%.4f)"
+                                         " appliedQuat=(%.4f,%.4f,%.4f,%.4f)"
+                                         " deltaAngleDeg=%.2f"),
+                                    GFrameCounter,
+                                    *Guid.ToString(EGuidFormats::Digits),
+                                    State.LocalTargetRotation.X, State.LocalTargetRotation.Y, State.LocalTargetRotation.Z, State.LocalTargetRotation.W,
+                                    State.LocalTargetRotation.Rotator().Pitch, State.LocalTargetRotation.Rotator().Yaw, State.LocalTargetRotation.Rotator().Roll,
+                                    BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
+                                    WorldXForm.GetRotation().X, WorldXForm.GetRotation().Y, WorldXForm.GetRotation().Z, WorldXForm.GetRotation().W,
+                                    FMath::RadiansToDegrees(DeltaAngleRad));
+                            }
 
                             Actor->SetActorTransform(WorldXForm);
                             DiagBasis_CameraOneShot(Actor, Guid);
@@ -6625,12 +6682,15 @@ InterpolateTransforms(
                                 }
                             }
                         }
-                        else
+                    else
+                    {
+                        if (ShouldLogVerbose())
                         {
                             UE_LOG(LogLiveSync, Log,
                                 TEXT("  BYPASS SetActorTransform guid=%s (attached child)"),
                                 *Guid.ToString(EGuidFormats::Digits));
                         }
+                    }
                     }
                     else
                     {
@@ -6639,9 +6699,12 @@ InterpolateTransforms(
                             *Guid.ToString(EGuidFormats::Digits));
                     }
 
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("  END   SetActorTransform guid=%s (attached child)"),
-                        *Guid.ToString(EGuidFormats::Digits));
+                    if (ShouldLogVerbose())
+                    {
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("  END   SetActorTransform guid=%s (attached child)"),
+                            *Guid.ToString(EGuidFormats::Digits));
+                    }
 
                     // NON-AUTHORITATIVE
                     // Update debug world cache for diagnostics
@@ -6748,9 +6811,12 @@ InterpolateTransforms(
             State.CurrentScale =
                 State.TargetScale;
 
-            UE_LOG(LogLiveSync, Log,
-                TEXT("  BEGIN SetActorTransform guid=%s (root direct-set)"),
-                *Guid.ToString(EGuidFormats::Digits));
+            if (ShouldLogVerbose())
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("  BEGIN SetActorTransform guid=%s (root direct-set)"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
 
             FTransform RootDirectXForm(
                 State.CurrentRotation,
@@ -6759,9 +6825,12 @@ InterpolateTransforms(
 
             if (ValidateTransform(RootDirectXForm, Guid, TEXT("RootDirectSet")))
             {
-                UE_LOG(LogLiveSync, Log,
-                    TEXT("  DO SetActorTransform guid=%s (root direct-set)"),
-                    *Guid.ToString(EGuidFormats::Digits));
+                if (ShouldLogVerbose())
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("  DO SetActorTransform guid=%s (root direct-set)"),
+                        *Guid.ToString(EGuidFormats::Digits));
+                }
                 // MATSTALL: log the final applied transform.
                 if (GEnableVerboseSyncLogs)
                 {
@@ -6778,25 +6847,28 @@ InterpolateTransforms(
                     // Diagnostic: rotation pipeline before SetActorTransform
                     const FQuat BeforeActorQuat = Actor->GetActorQuat();
                     const double DeltaAngleRad = State.TargetRotation.AngularDistance(RootDirectXForm.GetRotation());
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("[SAT_DIAG][direct] frame=%llu guid=%s"
-                             " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
-                             " netTargetRot=(%.1f,%.1f,%.1f)"
-                             " actorQuatBefore=(%.4f,%.4f,%.4f,%.4f)"
-                             " appliedQuat=(%.4f,%.4f,%.4f,%.4f)"
-                             " deltaAngleDeg=%.2f"),
-                        GFrameCounter,
-                        *Guid.ToString(EGuidFormats::Digits),
-                        State.TargetRotation.X, State.TargetRotation.Y, State.TargetRotation.Z, State.TargetRotation.W,
-                        State.TargetRotation.Rotator().Pitch, State.TargetRotation.Rotator().Yaw, State.TargetRotation.Rotator().Roll,
-                        BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
-                        RootDirectXForm.GetRotation().X, RootDirectXForm.GetRotation().Y, RootDirectXForm.GetRotation().Z, RootDirectXForm.GetRotation().W,
-                        FMath::RadiansToDegrees(DeltaAngleRad));
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[SAT_DIAG][direct] frame=%llu guid=%s"
+                         " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
+                         " netTargetRot=(%.1f,%.1f,%.1f)"
+                         " actorQuatBefore=(%.4f,%.4f,%.4f,%.4f)"
+                         " appliedQuat=(%.4f,%.4f,%.4f,%.4f)"
+                         " deltaAngleDeg=%.2f"),
+                    GFrameCounter,
+                    *Guid.ToString(EGuidFormats::Digits),
+                    State.TargetRotation.X, State.TargetRotation.Y, State.TargetRotation.Z, State.TargetRotation.W,
+                    State.TargetRotation.Rotator().Pitch, State.TargetRotation.Rotator().Yaw, State.TargetRotation.Rotator().Roll,
+                    BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
+                    RootDirectXForm.GetRotation().X, RootDirectXForm.GetRotation().Y, RootDirectXForm.GetRotation().Z, RootDirectXForm.GetRotation().W,
+                    FMath::RadiansToDegrees(DeltaAngleRad));
+            }
 
                     Actor->SetActorTransform(RootDirectXForm);
                     DiagBasis_CameraOneShot(Actor, Guid);
                     // Stage 7G.4: camera diagnostic marker
-                    if (Actor->IsA(ACameraActor::StaticClass()))
+                    if (bEnableVerboseSyncLogs && Actor->IsA(ACameraActor::StaticClass()))
                     {
                         UE_LOG(LogLiveSync, Log,
                             TEXT("[CAMERA][TRANSFORM_APPLY] guid=%s actor=%s"),
@@ -6827,9 +6899,12 @@ InterpolateTransforms(
                 }
                 else
                 {
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("  BYPASS SetActorTransform guid=%s (root direct-set)"),
-                        *Guid.ToString(EGuidFormats::Digits));
+                    if (ShouldLogVerbose())
+                    {
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("  BYPASS SetActorTransform guid=%s (root direct-set)"),
+                            *Guid.ToString(EGuidFormats::Digits));
+                    }
                 }
             }
             else
@@ -6839,9 +6914,12 @@ InterpolateTransforms(
                     *Guid.ToString(EGuidFormats::Digits));
             }
 
-            UE_LOG(LogLiveSync, Log,
-                TEXT("  END   SetActorTransform guid=%s (root direct-set)"),
-                *Guid.ToString(EGuidFormats::Digits));
+            if (ShouldLogVerbose())
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("  END   SetActorTransform guid=%s (root direct-set)"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
 
             InterpCount++;
             continue;
@@ -6870,9 +6948,12 @@ InterpolateTransforms(
             State.CurrentScale =
                 State.TargetScale;
 
-            UE_LOG(LogLiveSync, Log,
-                TEXT("  BEGIN SetActorTransform guid=%s (root snap)"),
-                *Guid.ToString(EGuidFormats::Digits));
+            if (ShouldLogVerbose())
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("  BEGIN SetActorTransform guid=%s (root snap)"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
 
             FTransform RootSnapXForm(
                 State.CurrentRotation,
@@ -6881,9 +6962,12 @@ InterpolateTransforms(
 
             if (ValidateTransform(RootSnapXForm, Guid, TEXT("RootSnap")))
             {
-                UE_LOG(LogLiveSync, Log,
-                    TEXT("  DO SetActorTransform guid=%s (root snap)"),
-                    *Guid.ToString(EGuidFormats::Digits));
+                if (ShouldLogVerbose())
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("  DO SetActorTransform guid=%s (root snap)"),
+                        *Guid.ToString(EGuidFormats::Digits));
+                }
                 // MATSTALL: log the final applied transform.
                 if (GEnableVerboseSyncLogs)
                 {
@@ -6900,22 +6984,25 @@ InterpolateTransforms(
                     // Diagnostic: rotation pipeline before SetActorTransform
                     const FQuat BeforeActorQuat = Actor->GetActorQuat();
                     const double DeltaAngleRad = State.TargetRotation.AngularDistance(RootSnapXForm.GetRotation());
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("[SAT_DIAG][snap] frame=%llu guid=%s"
-                             " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
-                             " netTargetRot=(%.1f,%.1f,%.1f)"
-                             " actorQuatBefore=(%.4f,%.4f,%.4f,%.4f)"
-                             " appliedQuat=(%.4f,%.4f,%.4f,%.4f)"
-                             " deltaAngleDeg=%.2f"),
-                        GFrameCounter,
-                        *Guid.ToString(EGuidFormats::Digits),
-                        State.TargetRotation.X, State.TargetRotation.Y, State.TargetRotation.Z, State.TargetRotation.W,
-                        State.TargetRotation.Rotator().Pitch, State.TargetRotation.Rotator().Yaw, State.TargetRotation.Rotator().Roll,
-                        BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
-                        RootSnapXForm.GetRotation().X, RootSnapXForm.GetRotation().Y, RootSnapXForm.GetRotation().Z, RootSnapXForm.GetRotation().W,
-                        FMath::RadiansToDegrees(DeltaAngleRad));
+            if (bEnableVerboseSyncLogs)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[SAT_DIAG][snap] frame=%llu guid=%s"
+                         " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
+                         " netTargetRot=(%.1f,%.1f,%.1f)"
+                         " actorQuatBefore=(%.4f,%.4f,%.4f,%.4f)"
+                         " appliedQuat=(%.4f,%.4f,%.4f,%.4f)"
+                         " deltaAngleDeg=%.2f"),
+                    GFrameCounter,
+                    *Guid.ToString(EGuidFormats::Digits),
+                    State.TargetRotation.X, State.TargetRotation.Y, State.TargetRotation.Z, State.TargetRotation.W,
+                    State.TargetRotation.Rotator().Pitch, State.TargetRotation.Rotator().Yaw, State.TargetRotation.Rotator().Roll,
+                    BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
+                    RootSnapXForm.GetRotation().X, RootSnapXForm.GetRotation().Y, RootSnapXForm.GetRotation().Z, RootSnapXForm.GetRotation().W,
+                    FMath::RadiansToDegrees(DeltaAngleRad));
+            }
 
-                    Actor->SetActorTransform(RootSnapXForm);
+            Actor->SetActorTransform(RootSnapXForm);
                     DiagBasis_CameraOneShot(Actor, Guid);
                     // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
                     if (FBXAuthoritativeGuids.Contains(Guid))
@@ -6941,9 +7028,12 @@ InterpolateTransforms(
                 }
                 else
                 {
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("  BYPASS SetActorTransform guid=%s (root snap)"),
-                        *Guid.ToString(EGuidFormats::Digits));
+                    if (ShouldLogVerbose())
+                    {
+                        UE_LOG(LogLiveSync, Log,
+                            TEXT("  BYPASS SetActorTransform guid=%s (root snap)"),
+                            *Guid.ToString(EGuidFormats::Digits));
+                    }
                 }
             }
             else
@@ -6953,9 +7043,12 @@ InterpolateTransforms(
                     *Guid.ToString(EGuidFormats::Digits));
             }
 
-            UE_LOG(LogLiveSync, Log,
-                TEXT("  END   SetActorTransform guid=%s (root snap)"),
-                *Guid.ToString(EGuidFormats::Digits));
+            if (ShouldLogVerbose())
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("  END   SetActorTransform guid=%s (root snap)"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
 
             SnapCount++;
             continue;
@@ -7026,9 +7119,12 @@ InterpolateTransforms(
 
             State.TargetScale;
 
-        UE_LOG(LogLiveSync, Log,
-            TEXT("  BEGIN SetActorTransform guid=%s (root smooth)"),
-            *Guid.ToString(EGuidFormats::Digits));
+        if (ShouldLogVerbose())
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("  BEGIN SetActorTransform guid=%s (root smooth)"),
+                *Guid.ToString(EGuidFormats::Digits));
+        }
 
         FTransform RootSmoothXForm(
             State.CurrentRotation,
@@ -7037,9 +7133,12 @@ InterpolateTransforms(
 
         if (ValidateTransform(RootSmoothXForm, Guid, TEXT("RootSmooth")))
         {
-            UE_LOG(LogLiveSync, Log,
-                TEXT("  DO SetActorTransform guid=%s (root smooth)"),
-                *Guid.ToString(EGuidFormats::Digits));
+            if (ShouldLogVerbose())
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("  DO SetActorTransform guid=%s (root smooth)"),
+                    *Guid.ToString(EGuidFormats::Digits));
+            }
             // MATSTALL: log the final applied transform.
             if (GEnableVerboseSyncLogs)
             {
@@ -7056,6 +7155,8 @@ InterpolateTransforms(
                 // Diagnostic: rotation pipeline before SetActorTransform
                 const FQuat BeforeActorQuat = Actor->GetActorQuat();
                 const double DeltaAngleRad = State.TargetRotation.AngularDistance(RootSmoothXForm.GetRotation());
+            if (bEnableVerboseSyncLogs)
+            {
                 UE_LOG(LogLiveSync, Log,
                     TEXT("[SAT_DIAG][smooth] frame=%llu guid=%s"
                          " netTargetQuat=(%.4f,%.4f,%.4f,%.4f)"
@@ -7070,8 +7171,9 @@ InterpolateTransforms(
                     BeforeActorQuat.X, BeforeActorQuat.Y, BeforeActorQuat.Z, BeforeActorQuat.W,
                     RootSmoothXForm.GetRotation().X, RootSmoothXForm.GetRotation().Y, RootSmoothXForm.GetRotation().Z, RootSmoothXForm.GetRotation().W,
                     FMath::RadiansToDegrees(DeltaAngleRad));
+            }
 
-                Actor->SetActorTransform(RootSmoothXForm);
+            Actor->SetActorTransform(RootSmoothXForm);
                 DiagBasis_CameraOneShot(Actor, Guid);
                 // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
                 if (FBXAuthoritativeGuids.Contains(Guid))
@@ -7097,9 +7199,12 @@ InterpolateTransforms(
             }
             else
             {
-                UE_LOG(LogLiveSync, Log,
-                    TEXT("  BYPASS SetActorTransform guid=%s (root smooth)"),
-                    *Guid.ToString(EGuidFormats::Digits));
+                if (ShouldLogVerbose())
+                {
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("  BYPASS SetActorTransform guid=%s (root smooth)"),
+                        *Guid.ToString(EGuidFormats::Digits));
+                }
             }
         }
         else
@@ -7109,13 +7214,16 @@ InterpolateTransforms(
                     *Guid.ToString(EGuidFormats::Digits));
         }
 
-        UE_LOG(LogLiveSync, Log,
-            TEXT("  END   SetActorTransform guid=%s (root smooth)"),
-            *Guid.ToString(EGuidFormats::Digits));
+        if (ShouldLogVerbose())
+        {
+            UE_LOG(LogLiveSync, Log,
+                TEXT("  END   SetActorTransform guid=%s (root smooth)"),
+                *Guid.ToString(EGuidFormats::Digits));
 
-        UE_LOG(LogLiveSync, Log,
-            TEXT("END   transform apply guid=%s"),
-            *Guid.ToString(EGuidFormats::Digits));
+            UE_LOG(LogLiveSync, Log,
+                TEXT("END   transform apply guid=%s"),
+                *Guid.ToString(EGuidFormats::Digits));
+        }
 
         InterpCount++;
     }
@@ -7660,12 +7768,15 @@ AActor* Child =
                 EGuidFormats::Digits),
             *ParentGuid.ToString(
                 EGuidFormats::Digits));
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT("END TRACE: AttachToParent child=%s (depth exceeded)"),
-            *Guid.ToString(
-                EGuidFormats::Digits));
+        if (ShouldLogVerbose())
+        {
+            UE_LOG(
+                LogLiveSync,
+                Log,
+                TEXT("END TRACE: AttachToParent child=%s (depth exceeded)"),
+                *Guid.ToString(
+                    EGuidFormats::Digits));
+        }
         return;
     }
 
@@ -7708,20 +7819,26 @@ AActor* Child =
         LastAttachedParent.Add(Guid, ParentGuid);
     }
 
-    UE_LOG(LogLiveSync, Log,
-        TEXT("  BEGIN AttachToActor child=%s parent=%s"),
-        *Guid.ToString(EGuidFormats::Digits),
-        *ParentGuid.ToString(EGuidFormats::Digits));
+    if (ShouldLogVerbose())
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("  BEGIN AttachToActor child=%s parent=%s"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits));
+    }
 
     Child->AttachToActor(
         Parent,
         FAttachmentTransformRules::
             KeepWorldTransform);
 
-    UE_LOG(LogLiveSync, Log,
-        TEXT("  END   AttachToActor child=%s parent=%s"),
-        *Guid.ToString(EGuidFormats::Digits),
-        *ParentGuid.ToString(EGuidFormats::Digits));
+    if (ShouldLogVerbose())
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("  END   AttachToActor child=%s parent=%s"),
+            *Guid.ToString(EGuidFormats::Digits),
+            *ParentGuid.ToString(EGuidFormats::Digits));
+    }
 
     // Verbose authority transition log
     if (bEnableVerboseSyncLogs)
