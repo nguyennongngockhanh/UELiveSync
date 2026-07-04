@@ -384,6 +384,10 @@ _active_camera_packets_sent = 0
 _active_camera_state_changes = 0
 _camera_def_packets_sent = 0
 
+# Phase 10A.2: Per-GUID camera parameter signature for dirty detection
+# Maps guid_bytes → tuple(lens, sensor_width, sensor_height, clip_start, clip_end, ortho_scale, is_ortho)
+_last_camera_signature = {}
+
 # Phase 7E: sequencer ops state (no detection yet — storage only)
 _sequencer_op_sequence = 0
 _sequencer_op_packets_sent = 0
@@ -1359,6 +1363,23 @@ def scan_scene():
 
 
 # =========================================================
+# CAMERA SIGNATURE
+# =========================================================
+
+def _build_camera_signature(camera_data):
+    is_ortho = (camera_data.type == 'ORTHO')
+    return (
+        camera_data.lens,
+        camera_data.sensor_width,
+        camera_data.sensor_height,
+        camera_data.clip_start,
+        camera_data.clip_end,
+        camera_data.ortho_scale,
+        is_ortho,
+    )
+
+
+# =========================================================
 # MAIN UPDATE LOOP
 # =========================================================
 
@@ -1457,6 +1478,7 @@ def check_updates():
         _last_decision_init_printed.clear()
         _last_sidecar_digest.clear()
         _last_sidecar_info.clear()
+        _last_camera_signature.clear()
 
         if _verbose_logging:
             print(
@@ -1680,6 +1702,7 @@ def check_updates():
             _last_collection_state.pop(guid, None)  # Phase 6F: cleanup collection state
             _last_material_identity.pop(guid, None)  # Phase 7B
             _last_geometry_version.pop(guid, None)  # Phase 7C
+            _last_camera_signature.pop(guid, None)  # Phase 10A.2
 
             if _verbose_logging:
                 print(f"[DELETE] Detected: GUID={guid} — emitted V5 delete")
@@ -1707,6 +1730,7 @@ def check_updates():
             _last_material_identity.pop(guid, None)  # Phase 7B
             _last_geometry_version.pop(guid, None)  # Phase 7C
             _last_collection_state.pop(guid, None)  # Phase 6F: cleanup collection state
+            _last_camera_signature.pop(guid, None)  # Phase 10A.2
 
             deletes_to_send.append(
                 serialize_delete_v3(guid_obj)
@@ -2814,8 +2838,54 @@ def check_updates():
                 _burst_packet_count += 1
                 _camera_def_packets_sent += 1
                 _runtime_stats["camera_def_packets_sent"] = _camera_def_packets_sent
+                _last_camera_signature[guid_bytes] = _build_camera_signature(cam_data)
 
         _last_active_camera_guid = guid_bytes
+
+    # =====================================================
+    # PHASE 10A.2: CAMERA PARAMETER DIRTY DETECTION
+    # Scan all camera objects for parameter changes and
+    # emit standalone PT_CameraDef when signature changes.
+    # =====================================================
+
+    for obj in bpy.data.objects:
+        if obj.type != 'CAMERA':
+            continue
+        try:
+            _ = obj.name
+        except ReferenceError:
+            continue
+        cam_data = obj.data
+        if cam_data is None:
+            continue
+
+        guid_hex = ensure_guid(obj)
+        guid_obj = UUID(guid_hex)
+        guid_bytes = guid_obj.bytes
+
+        signature = _build_camera_signature(cam_data)
+        last_sig = _last_camera_signature.get(guid_bytes)
+
+        if last_sig is None or signature != last_sig:
+            is_ortho = (cam_data.type == 'ORTHO')
+            flags = CAMERA_DEF_FLAG_HAS_CAMERA_DEF
+            if is_ortho:
+                flags |= CAMERA_DEF_FLAG_IS_ORTHO
+            camdef_payload = serialize_camera_def(
+                guid_obj,
+                focal_length_mm=cam_data.lens,
+                sensor_width_mm=cam_data.sensor_width,
+                sensor_height_mm=cam_data.sensor_height,
+                clip_start=cam_data.clip_start,
+                clip_end=cam_data.clip_end,
+                ortho_scale=cam_data.ortho_scale,
+                flags=flags,
+            )
+            send_objects([camdef_payload], packet_type=PT_CameraDef, version=5)
+            _burst_packet_count += 1
+            _camera_def_packets_sent += 1
+            _runtime_stats["camera_def_packets_sent"] = _camera_def_packets_sent
+            _last_camera_signature[guid_bytes] = signature
 
     # =====================================================
     # AUTO-POPUP CRITICAL ERRORS
@@ -3207,6 +3277,7 @@ def start_sync():
     _known_guids.clear()
     _last_collection_state.clear()
     _last_keyframe_action.clear()
+    _last_camera_signature.clear()
     _last_playback_state = None
     _last_timeline_state = None
     _timeline_sequence = 0
