@@ -1075,6 +1075,7 @@ struct FLiveSyncStats
     std::atomic<int32> DeleteReplaySkipped{0};         // Delete events skipped during replay
     std::atomic<int32> DeleteStaleRejections{0};       // Stale/duplicate sequence rejections
     std::atomic<int32> DeleteTombstoneRejections{0};   // Packet blocked by tombstone check
+    std::atomic<int32> CreateTombstoneRestored{0};     // Tombstone cleared, create allowed (Undo)
     std::atomic<int32> DeleteMissingActor{0};          // Delete for GUID not in ActorCache
     std::atomic<int32> DeleteDeferredDuringSnapshot{0};// Delete deferred during snapshot replay (CREATE not yet processed)
 

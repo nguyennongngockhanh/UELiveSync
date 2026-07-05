@@ -1491,6 +1491,7 @@ ConsoleReset()
     Stats.DeleteReplaySkipped.store(0, std::memory_order_relaxed);
     Stats.DeleteStaleRejections.store(0, std::memory_order_relaxed);
     Stats.DeleteTombstoneRejections.store(0, std::memory_order_relaxed);
+    Stats.CreateTombstoneRestored.store(0, std::memory_order_relaxed);
     Stats.DeleteMissingActor.store(0, std::memory_order_relaxed);
     Stats.DeleteDeferredDuringSnapshot.store(0, std::memory_order_relaxed);
     GDeleteSequences.Clear();

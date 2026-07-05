@@ -8161,11 +8161,30 @@ HandleCreateObject(
 
     if (IsTombstoned(Guid))
     {
-        UE_LOG(LogLiveSync, Verbose,
-            TEXT("[CREATE][TOMBSTONE] GUID=%s — blocked by tombstone"),
-            *Guid.ToString(EGuidFormats::Digits));
-        Stats.DeleteTombstoneRejections.fetch_add(1, std::memory_order_relaxed);
-        return;
+        if (AActor* ExistingActor = FindActorFast(Guid))
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[CREATE][TOMBSTONE] GUID=%s prim=0x%02X — blocked by tombstone (actor still exists)"),
+                *Guid.ToString(EGuidFormats::Digits),
+                PrimitiveType);
+            Stats.DeleteTombstoneRejections.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Blender Undo preserves GUIDs.
+        // If no live actor exists for the GUID, allow this Create to
+        // recreate the object even though a tombstone still exists.
+        //
+        // This is a protocol heuristic.
+        // If PT_CreateObject ever gains per-object ordering metadata,
+        // replace this with sequence-based validation.
+        RemoveTombstone(Guid);
+        Stats.CreateTombstoneRestored.fetch_add(1, std::memory_order_relaxed);
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CREATE][TOMBSTONE_RESTORED] GUID=%s prim=0x%02X — tombstone cleared, spawning"),
+            *Guid.ToString(EGuidFormats::Digits),
+            PrimitiveType);
     }
 
     AActor* Existing =
