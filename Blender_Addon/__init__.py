@@ -18,6 +18,8 @@ from bpy.props import (
     EnumProperty,
 )
 
+from dataclasses import dataclass
+
 from . import network
 from . import sync
 
@@ -939,6 +941,796 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
                 pass
         if orig_active:
             bpy.context.view_layer.objects.active = orig_active
+
+
+# =========================================================
+# A3.2 Structured sidecar result
+# =========================================================
+
+
+@dataclass(frozen=True)
+class SidecarPreparationResult:
+    """One authoritative result per TextureAssetSource.
+
+    One result object per TextureAssetSource — success or failure.
+    Callers derive sidecar_copied, sidecar_info, material suppression,
+    dirty signatures, and MTEX records from this result, not from
+    scattered source fields or positional tuples.
+    """
+    source: 'TextureAssetSource'
+    status: str           # "ready" | "failed"
+    action: str           # "copied" | "overwritten" | "exported" | "verified"
+                           # | "collision" | "content_collision"
+                           # | "file_not_found" | "image_not_found"
+                           # | "unsupported_source" | "exception"
+                           # | "unsafe_*"
+    source_locator: str
+    destination_path: str
+    filename: str         # basename(destination_path)
+    image_name: str
+    size: int
+    asset_id: str = ""    # 16-char lowercase xxh64 hex of final bytes;
+                           # "" for failed results
+    error: str = ""
+
+
+# =========================================================
+# A3.1 Texture identity and sidecar preparation
+# =========================================================
+
+
+@dataclass
+class TextureAssetSource:
+    """One unique TEX_IMAGE node referenced by one or more usages.
+
+    Immutable source input and identity data only.
+    Preparation outcomes must never be written back onto this class.
+    """
+    mat_name: str
+    node_name: str
+    image_name: str
+    source_kind: str
+    filepath_raw: str
+    filepath: str
+    is_packed: bool
+    width: int
+    height: int
+    file_format: str
+    colorspace: str
+
+
+@dataclass
+class TextureUsage:
+    """One slot+channel reference to a TextureAssetSource."""
+    slot_index: int
+    channel: int
+    source: 'TextureAssetSource'
+    flags: int
+    sock_name: str
+
+
+def _get_instance_width_height(img):
+    sz = getattr(img, "size", None)
+    if sz and len(sz) >= 2:
+        return int(sz[0]), int(sz[1])
+    return (0, 0)
+
+
+def _extract_texture_usages_and_sources(obj):
+    """Two-pass extraction of all texture usages and unique sources.
+
+    Pass 1: Every TEX_IMAGE node in each material node tree becomes a
+    TextureAssetSource (connected or not).
+
+    Pass 2: Principled BSDF socket connections create TextureUsage objects
+    referencing those existing sources, with precomputed MTEX flags.
+
+    Returns:
+        tuple (list_of_TextureAssetSource, list_of_TextureUsage)
+    """
+    from collections import OrderedDict
+
+    sources = []
+    usages = []
+    source_by_key = OrderedDict()
+
+    if not obj.material_slots:
+        return sources, usages
+
+    # Pass 1: collect all TEX_IMAGE nodes as TextureAssetSource
+    for slot in obj.material_slots:
+        mat = slot.material
+        if not mat or not mat.use_nodes or not mat.node_tree:
+            continue
+        for node in mat.node_tree.nodes:
+            if getattr(node, "type", None) != "TEX_IMAGE":
+                continue
+            image = getattr(node, "image", None)
+            if image is None:
+                continue
+            source_key = (mat.name, node.name)
+            if source_key in source_by_key:
+                continue
+            filepath_raw = getattr(image, "filepath_raw", "") or ""
+            filepath_val = getattr(image, "filepath", "") or ""
+            src_kind = getattr(image, "source", "") or ""
+            is_packed = bool(getattr(image, "packed_file", None))
+            width, height = _get_instance_width_height(image)
+            file_fmt = getattr(image, "file_format", "PNG")
+            try:
+                cs = getattr(image, "colorspace_settings", None)
+                colorspace = getattr(cs, "name", "sRGB") if cs else "sRGB"
+            except Exception:
+                colorspace = "sRGB"
+            src = TextureAssetSource(
+                mat_name=mat.name,
+                node_name=node.name,
+                image_name=getattr(image, "name", "") or "",
+                source_kind=src_kind,
+                filepath_raw=filepath_raw,
+                filepath=filepath_val,
+                is_packed=is_packed,
+                width=width,
+                height=height,
+                file_format=file_fmt,
+                colorspace=colorspace,
+            )
+            source_by_key[source_key] = len(sources)
+            sources.append(src)
+
+    # Pass 2: trace Principled socket connections to create usages
+    for slot_idx, slot in enumerate(obj.material_slots):
+        mat = slot.material
+        if not mat or not mat.use_nodes or not mat.node_tree:
+            continue
+
+        principled = None
+        for node in mat.node_tree.nodes:
+            if getattr(node, "type", None) == "BSDF_PRINCIPLED":
+                principled = node
+                break
+        if principled is None:
+            continue
+
+        target_sockets = {}
+        for sock_name, channel in (
+            ("Base Color", network.MTEX_CHANNEL_BASECOLOR),
+            ("Roughness", network.MTEX_CHANNEL_ROUGHNESS),
+            ("Metallic", network.MTEX_CHANNEL_METALLIC),
+            ("Alpha", network.MTEX_CHANNEL_ALPHA),
+            ("Normal", network.MTEX_CHANNEL_NORMAL),
+        ):
+            sock = principled.inputs.get(sock_name)
+            if sock is not None and sock.is_linked:
+                target_sockets[sock_name] = channel
+
+        # Coat fallback for Roughness
+        roughness_sock = principled.inputs.get("Roughness")
+        coat_roughness = principled.inputs.get("Coat Roughness")
+        if "Roughness" not in target_sockets and roughness_sock is not None \
+                and coat_roughness is not None and coat_roughness.is_linked:
+            target_sockets["Coat Roughness"] = network.MTEX_CHANNEL_ROUGHNESS
+
+        # Coat fallback for Normal
+        normal_sock = principled.inputs.get("Normal")
+        coat_normal = principled.inputs.get("Coat Normal")
+        if "Normal" not in target_sockets:
+            ns_linked = normal_sock is not None and normal_sock.is_linked
+            cn_linked = coat_normal is not None and coat_normal.is_linked
+            if not ns_linked and cn_linked:
+                target_sockets["Coat Normal"] = network.MTEX_CHANNEL_NORMAL
+
+        if not target_sockets:
+            continue
+
+        for sock_name, channel in target_sockets.items():
+            sock = principled.inputs.get(sock_name)
+            if sock is None or not sock.is_linked:
+                continue
+
+            from_node = sock.links[0].from_node
+
+            if channel == network.MTEX_CHANNEL_NORMAL \
+                    and getattr(from_node, "type", None) == "NORMAL_MAP":
+                nm_color = from_node.inputs.get("Color")
+                if nm_color is not None and nm_color.is_linked:
+                    from_node = nm_color.links[0].from_node
+
+            if getattr(from_node, "type", None) != "TEX_IMAGE":
+                indirect_types = {
+                    "MIX_RGB", "COLOR_RAMP", "INVERT",
+                    "GAMMA", "CURVES", "HUE_SATURATION",
+                }
+                if getattr(from_node, "type", None) in indirect_types:
+                    color_input = from_node.inputs.get("Color")
+                    if color_input is None:
+                        color_input = from_node.inputs.get("Fac")
+                    if color_input is None:
+                        color_input = from_node.inputs.get("Value")
+                    if color_input is not None and color_input.is_linked:
+                        from_node = color_input.links[0].from_node
+
+            if getattr(from_node, "type", None) != "TEX_IMAGE":
+                continue
+
+            image = getattr(from_node, "image", None)
+            if image is None:
+                continue
+
+            source_key = (mat.name, from_node.name)
+            src_idx = source_by_key.get(source_key)
+            if src_idx is None:
+                continue
+            src = sources[src_idx]
+
+            # Compute MTEX flags once during extraction
+            flags = 0
+            if src.is_packed:
+                flags |= network.MTEX_FLAG_IMAGE_PACKED
+            src_is_file = src.source_kind == 'FILE' and not src.is_packed
+            if src_is_file and src.filepath:
+                _absp = bpy.path.abspath(src.filepath_raw or src.filepath)
+                if _absp.startswith("/") or (len(_absp) > 1 and _absp[1] == ":"):
+                    flags |= network.MTEX_FLAG_PATH_ABSOLUTE
+            _csl = src.colorspace.lower()
+            if "non-color" in _csl or "noncolor" in _csl or "raw" in _csl:
+                flags |= network.MTEX_FLAG_COLORSPACE_NON_COLOR
+            elif "srgb" in _csl:
+                flags |= network.MTEX_FLAG_COLORSPACE_SRGB
+            if not (flags & (network.MTEX_FLAG_COLORSPACE_SRGB
+                             | network.MTEX_FLAG_COLORSPACE_NON_COLOR)):
+                if channel in (network.MTEX_CHANNEL_ROUGHNESS,
+                               network.MTEX_CHANNEL_METALLIC,
+                               network.MTEX_CHANNEL_NORMAL):
+                    flags |= network.MTEX_FLAG_COLORSPACE_NON_COLOR
+
+            usage = TextureUsage(
+                slot_index=slot_idx,
+                channel=channel,
+                source=src,
+                flags=flags,
+                sock_name=sock_name,
+            )
+            usages.append(usage)
+
+    return sources, usages
+
+
+def _check_destination_safe(dest_dir, dest_path):
+    """Validate that dest_path is safe to write.
+
+    Checks:
+        1. dest_path is contained within dest_dir (realpath).
+        2. dest_path is not a symlink.
+        3. If dest_path exists, it is a regular file.
+        4. dest_dir exists and is a directory.
+
+    Returns:
+        (is_safe, reason) tuple.
+    """
+    if not os.path.isdir(dest_dir):
+        return False, "dest_dir_not_found"
+
+    real_dest_dir = os.path.realpath(dest_dir)
+    real_dest_path = os.path.realpath(dest_path)
+
+    common = os.path.commonpath([real_dest_dir, real_dest_path])
+    if common != real_dest_dir:
+        return False, "path_escape_detected"
+
+    if os.path.islink(dest_path):
+        return False, "path_is_symlink"
+
+    if os.path.exists(dest_path) and not os.path.isfile(dest_path):
+        return False, "existing_not_regular_file"
+
+    return True, ""
+
+
+def _register_sidecar_key(registry, dest_dir, sidecar_key, canonical_locator):
+    """Register a sidecar key and detect same-cycle collisions.
+
+    Args:
+        registry: dict (real_dest_dir, sidecar_key) -> canonical_locator.
+        dest_dir: Destination directory.
+        sidecar_key: Filename base (without extension).
+        canonical_locator: Canonical locator bytes for comparison.
+
+    Returns:
+        (registered, existing_locator) where registered is True if new.
+    """
+    real_dir = os.path.realpath(dest_dir)
+    key = (real_dir, sidecar_key)
+
+    if key in registry:
+        existing = registry[key]
+        if existing != canonical_locator:
+            return False, existing
+        return False, None
+
+    registry[key] = canonical_locator
+    return True, None
+
+
+def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"):
+    """Prepare sidecar file for one TextureAssetSource.
+
+    Content-keyed: filename derives from xxh64 of final bytes.
+    Every ready result has a verified asset_id matching the destination bytes.
+    Never returns ready without validated destination.
+    NEVER mutates source — all outcomes go through SidecarPreparationResult.
+
+    The collision_registry parameter is retained for API compatibility
+    but is no longer used — content-keyed filenames make registry-based
+    collision detection redundant.
+
+    Args:
+        source: TextureAssetSource to prepare.
+        dest_dir: Destination cache directory.
+        collision_registry: Unused (retained for API compat).
+        guid_short: Short GUID for logging.
+
+    Returns:
+        SidecarPreparationResult — always returns one result (success or failure).
+    """
+    import shutil
+    import tempfile as _tempfile
+
+    ext_map = {
+        "PNG": ".png", "JPEG": ".jpg", "JPEG2000": ".jp2",
+        "TARGA": ".tga", "TIFF": ".tif", "OPEN_EXR": ".exr",
+        "BMP": ".bmp", "HDR": ".hdr",
+    }
+    ext = ext_map.get(source.file_format, ".png")
+
+    # Resolve locator (for logging and failure results)
+    if source.source_kind == 'FILE' and not source.is_packed:
+        abs_path = bpy.path.abspath(source.filepath_raw or source.filepath)
+        locator = abs_path if os.path.isfile(abs_path) else (source.filepath_raw or source.filepath)
+    elif source.is_packed:
+        locator = source.image_name
+    else:
+        locator = source.image_name
+
+    dest_path = ""
+    basename_result = ""
+
+    def _make_failure(action, error_msg):
+        _fbx_log(f"[FBX][A3.1][SIDECAR_{action.upper()}] guid={guid_short} "
+                 f"source=({source.mat_name}:{source.node_name}) error={error_msg}")
+        return SidecarPreparationResult(
+            source=source,
+            status="failed",
+            action=action,
+            source_locator=locator,
+            destination_path=dest_path,
+            filename=basename_result,
+            image_name=source.image_name,
+            size=0,
+            asset_id="",
+            error=error_msg,
+        )
+
+    def _make_success(action, asset_id):
+        _fbx_log(f"[FBX][A3.3][SIDECAR_{action.upper()}] guid={guid_short} "
+                 f"source=({source.mat_name}:{source.node_name}) "
+                 f"filename={filename} asset_id={asset_id} image={source.image_name}")
+        try:
+            if not os.path.isfile(dest_path):
+                return _make_failure(
+                    "destination_missing",
+                    f"destination_missing_after_{action}:{dest_path}",
+                )
+            actual_size = os.path.getsize(dest_path)
+            final_hex = network._xxh64_file_hex(dest_path)
+            if final_hex != asset_id:
+                return _make_failure(
+                    "destination_hash_mismatch",
+                    f"destination_hash_mismatch:{final_hex}!={asset_id}",
+                )
+        except Exception as e:
+            return _make_failure(
+                "destination_stat_failed",
+                f"destination_stat_failed:{e}",
+            )
+        return SidecarPreparationResult(
+            source=source,
+            status="ready",
+            action=action,
+            source_locator=locator,
+            destination_path=dest_path,
+            filename=basename_result,
+            image_name=source.image_name,
+            size=actual_size,
+            asset_id=asset_id,
+        )
+
+    temp_path = None
+
+    try:
+        # === Phase 1: Content hash ===
+        content_hex = None
+        source_file_path = None
+
+        if source.source_kind == 'FILE' and not source.is_packed:
+            if not os.path.isfile(abs_path):
+                return _make_failure("file_not_found", f"source_file_not_found:{abs_path}")
+            content_hex = network._xxh64_file_hex(abs_path)
+            if not content_hex:
+                return _make_failure("source_hash_failed", f"xxh64_failed:{abs_path}")
+            source_file_path = abs_path
+
+        elif source.is_packed or source.source_kind == 'GENERATED':
+            img = bpy.data.images.get(source.image_name)
+            if img is None:
+                return _make_failure("image_not_found", "blender_image_not_found")
+            with _tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
+                temp_path = tf.name
+            try:
+                img.save_render(temp_path)
+            except Exception:
+                if os.path.isfile(temp_path):
+                    os.unlink(temp_path)
+                    temp_path = None
+                raise
+            content_hex = network._xxh64_file_hex(temp_path)
+            if not content_hex:
+                if os.path.isfile(temp_path):
+                    os.unlink(temp_path)
+                    temp_path = None
+                return _make_failure("rendered_hash_failed", f"xxh64_failed:{temp_path}")
+
+        else:
+            return _make_failure("unsupported_source", f"unsupported_source_kind:{source.source_kind}")
+
+        # === Phase 2: Filename from content hash ===
+        display_prefix = source.image_name
+        filename, sidecar_key, _ = network.make_sidecar_key(
+            display_prefix, content_hex, ext, dest_dir,
+        )
+        dest_path = os.path.join(dest_dir, filename)
+        basename_result = os.path.basename(dest_path)
+
+        # === Phase 3: Verify existing destination ===
+        if os.path.isfile(dest_path):
+            existing_hex = network._xxh64_file_hex(dest_path)
+            if existing_hex == content_hex:
+                return _make_success("verified", content_hex)
+            return _make_failure(
+                "content_collision",
+                f"content_collision:existing={existing_hex} new={content_hex}",
+            )
+
+        # === Phase 4: Safety check ===
+        is_safe, reason = _check_destination_safe(dest_dir, dest_path)
+        if not is_safe:
+            return _make_failure(f"unsafe:{reason}", f"destination_unsafe:{reason}")
+
+        # === Phase 5: Write via temp + atomic replace ===
+        if source.source_kind == 'FILE' and not source.is_packed:
+            with _tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
+                copy_temp = tf.name
+            try:
+                shutil.copy2(source_file_path, copy_temp)
+                temp_hex = network._xxh64_file_hex(copy_temp)
+                if temp_hex != content_hex:
+                    os.unlink(copy_temp)
+                    return _make_failure("temporary_hash_mismatch",
+                        f"temp_hash:{temp_hex}!=expected:{content_hex}")
+                os.replace(copy_temp, dest_path)
+            except Exception:
+                if os.path.isfile(copy_temp):
+                    os.unlink(copy_temp)
+                raise
+            action_str = "copied"
+
+        elif source.is_packed or source.source_kind == 'GENERATED':
+            temp_hex = network._xxh64_file_hex(temp_path)
+            if temp_hex != content_hex:
+                if os.path.isfile(temp_path):
+                    os.unlink(temp_path)
+                    temp_path = None
+                return _make_failure("temporary_hash_mismatch",
+                    f"temp_hash:{temp_hex}!=expected:{content_hex}")
+            os.replace(temp_path, dest_path)
+            temp_path = None
+            action_str = "exported"
+
+        else:
+            return _make_failure("unsupported_source", f"unsupported_source_kind:{source.source_kind}")
+
+        return _make_success(action_str, content_hex)
+
+    except Exception as e:
+        return _make_failure("exception", str(e))
+
+    finally:
+        if temp_path is not None and os.path.isfile(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+
+
+def _result_by_source(results):
+    """Build a dict mapping source identity -> SidecarPreparationResult.
+
+    Uses object identity (not name) so that one source shared by
+    multiple usages resolves to exactly one result.
+    """
+    return {id(r.source): r for r in results}
+
+
+def _should_suppress_material(usages, result_by_source):
+    """Return True if any usage has a failed or missing source.
+
+    Every usage with:
+    - no result mapping;
+    - a failed result;
+    - a malformed successful result
+    suppresses PT_Material.
+    It must never be silently skipped.
+
+    Checks the result object (authoritative) rather than source.status.
+    """
+    for u in usages:
+        r = result_by_source.get(id(u.source))
+        if r is None:
+            return True  # no result mapping
+        if r.status != "ready":
+            return True  # failed or malformed result
+    return False
+
+
+def _sidecar_result_to_manifest_entry(result):
+    """Convert one SidecarPreparationResult to a manifest-sidecar dict.
+
+    This is the single compatibility/serialization boundary.
+    """
+    return {
+        "filename": result.filename,
+        "path": result.destination_path,
+        "size": result.size,
+        "source": result.source_locator,
+    }
+
+
+def _prepare_and_persist_manifest_v3(
+    obj_dir, guid_hex, sources, usages, collision_registry, guid_short="?",
+):
+    """Delegate to manifest_v3.run_prepare_and_persist_v3 with real production callables."""
+    import manifest_v3 as _mv3
+    return _mv3.run_prepare_and_persist_v3(
+        sources, usages, obj_dir, guid_hex,
+        collision_registry,
+        _prepare_source_sidecar, _result_by_source, guid_short,
+    )
+
+
+def _evaluate_and_materialize_manifest_v3(
+    obj_dir, guid_hex, sources, usages, collision_registry, guid_short="?",
+):
+    """A3.5: manifest-informed sidecar reuse + manifest persistence.
+
+    Orchestrates:
+        1. Extract current content identities (FILE/PACKED/GENERATED).
+        2. Evaluate per-occurrence match against prior manifest.
+        3. Evaluate unique-asset reuse.
+        4. Materialize only prepare-required unique assets.
+        5. Assemble complete structured result map.
+        6. Persist new current manifest via manifest_v3.
+
+    Returns:
+        (ManifestV3IntegrationResult, list[SidecarPreparationResult])
+        Same signature as _prepare_and_persist_manifest_v3 for compatibility.
+    """
+    import manifest_v3 as _mv3
+    import manifest_reuse as _mr
+    from dataclasses import asdict
+
+    sidecar_dir = obj_dir
+    manifest_path = os.path.join(obj_dir, _mv3.MANIFEST_V3_FILENAME)
+
+    # ── Build occurrence descriptors from usages ──
+    occurrence_descriptors = []
+    for usage in usages:
+        src = usage.source
+        occ_id = _mv3.compute_occurrence_id(
+            guid=guid_hex,
+            slot_index=usage.slot_index,
+            material_identity=src.mat_name,
+            node_identity=f"{src.mat_name}/{src.node_name}",
+            channel=usage.channel,
+        )
+        # Compute current content identity without materialization
+        content_hex, _raw = _mr.compute_source_content_hex(
+            source_kind=src.source_kind,
+            source=src,
+            dest_dir=sidecar_dir,
+            guid_short=guid_short,
+        )
+        source_locator = src.filepath_raw or ""
+        colorspace = getattr(
+            getattr(usage.source, 'colorspace_settings', None), 'name', 'sRGB'
+        ) if hasattr(usage.source, 'colorspace_settings') else 'sRGB'
+        try:
+            cs = getattr(src, 'colorspace_settings', None)
+            colorspace = getattr(cs, 'name', 'sRGB') if cs else 'sRGB'
+        except Exception:
+            colorspace = 'sRGB'
+
+        occurrence_descriptors.append({
+            "occurrence_id": occ_id,
+            "slot_index": usage.slot_index,
+            "channel": usage.channel,
+            "material_identity": src.mat_name,
+            "node_identity": f"{src.mat_name}/{src.node_name}",
+            "source_kind": src.source_kind,
+            "source_locator": source_locator,
+            "colorspace": colorspace,
+            "source": src,
+            "current_content_hex": content_hex,
+        })
+
+    # ── Evaluate reuse ──
+    reuse_outcome = _mr.evaluate_manifest_reuse(
+        guid_hex=guid_hex,
+        occurrence_descriptors=occurrence_descriptors,
+        sidecar_dir=sidecar_dir,
+        manifest_path=manifest_path,
+        collision_registry=collision_registry,
+        prepare_fn=_reuse_prepare_fn,
+        guid_short=guid_short,
+    )
+
+    # ── If manifest was rejected or missing, fall through to full prepare ──
+    if not reuse_outcome.prior_manifest_eligible_for_generation:
+        # No reuse — run full prepare + persist via A3.4 path
+        return _prepare_and_persist_manifest_v3(
+            obj_dir, guid_hex, sources, usages,
+            collision_registry, guid_short,
+        )
+
+    # ── Build results list from reuse outcome ──
+    # Map source results back to usages
+    all_results = []
+    for usage in usages:
+        src_id = id(usage.source)
+        decision = reuse_outcome.decisions.get(src_id)
+        if decision is None:
+            # Fallback: prepare this source
+            result = _prepare_source_sidecar(usage.source, sidecar_dir, collision_registry, guid_short)
+            all_results.append(result)
+            continue
+
+        if decision.decision == _mr._DECISION_REUSE:
+            # Create a SidecarPreparationResult that represents a reused sidecar
+            asset_id = decision.asset_id
+            dest_path = decision.destination_path
+            # Get size from the destination file
+            try:
+                actual_size = os.path.getsize(dest_path)
+            except Exception:
+                actual_size = 0
+            result = SidecarPreparationResult(
+                source=usage.source,
+                status="ready",
+                action="reuse",
+                source_locator=decision.destination_path or "",
+                destination_path=dest_path,
+                filename=os.path.basename(dest_path) if dest_path else "",
+                image_name=usage.source.image_name,
+                size=actual_size,
+                asset_id=asset_id,
+                error="",
+            )
+            all_results.append(result)
+        else:
+            # decision is prepare or reject — call prepare_fn which materializes
+            prepare_decision, asset = _reuse_prepare_fn(
+                next(d for d in occurrence_descriptors if id(d["source"]) == src_id),
+                sidecar_dir, collision_registry, guid_short,
+            )
+            # Build SidecarPreparationResult from the prepared result
+            if asset and asset.get("status") == "ready":
+                result = SidecarPreparationResult(
+                    source=usage.source,
+                    status="ready",
+                    action=asset.get("action", "prepared"),
+                    source_locator=asset.get("source_locator", ""),
+                    destination_path=asset.get("destination_path", ""),
+                    filename=asset.get("filename", ""),
+                    image_name=usage.source.image_name,
+                    size=asset.get("size", 0),
+                    asset_id=asset.get("asset_id", ""),
+                    error=asset.get("error", ""),
+                )
+            else:
+                result = SidecarPreparationResult(
+                    source=usage.source,
+                    status="failed",
+                    action=prepare_decision.action,
+                    source_locator="",
+                    destination_path="",
+                    filename="",
+                    image_name=usage.source.image_name,
+                    size=0,
+                    asset_id="",
+                    error=prepare_decision.error,
+                )
+            all_results.append(result)
+
+    # ── Build results_by_source (A3.2 format) ──
+    results_by_source = _result_by_source(all_results)
+
+    # ── Persist new current manifest ──
+    # Build usages with sidecar results for manifest building
+    manifest_usages = []
+    for usage in usages:
+        class _UsageWrapper:
+            def __init__(self, u, result):
+                self.source = u.source
+                self.slot_index = u.slot_index
+                self.channel = u.channel
+                self.result = result
+        manifest_usages.append(_UsageWrapper(usage, None))
+
+    manifest_result = _mv3.run_manifest_pipeline(
+        guid_hex=guid_hex,
+        obj_dir=obj_dir,
+        manifest_path=manifest_path,
+        usages=manifest_usages,
+        results_by_source=results_by_source,
+    )
+
+    return manifest_result, all_results
+
+
+def _reuse_prepare_fn(source_desc, sidecar_dir, collision_registry, guid_short):
+    """Callback for prepare_fn in evaluate_manifest_reuse.
+
+    Prepares a sidecar via the existing _prepare_source_sidecar function
+    and returns (ReuseDecision, asset_dict).
+    """
+    import manifest_reuse as _mr
+    source = source_desc["source"]
+    result = _prepare_source_sidecar(source, sidecar_dir, collision_registry, guid_short)
+
+    if result.status == "ready":
+        decision = _mr.ReuseDecision(
+            decision="prepare", action=_mr._ACT_PREPARE_REQUIRED,
+            occurrence_id="", asset_id=result.asset_id,
+            source_kind=source.source_kind,
+            destination_path=result.destination_path,
+        )
+        asset = {
+            "asset_id": result.asset_id,
+            "status": "ready",
+            "action": result.action,
+            "source_locator": result.source_locator,
+            "destination_path": result.destination_path,
+            "filename": result.filename,
+            "size": result.size,
+        }
+    else:
+        decision = _mr.ReuseDecision(
+            decision="prepare", action=result.action,
+            occurrence_id="", asset_id="",
+            source_kind=source.source_kind,
+            destination_path="", error=result.error,
+        )
+        asset = {
+            "asset_id": "",
+            "status": "failed",
+            "action": result.action,
+            "source_locator": "",
+            "destination_path": "",
+            "filename": "",
+            "size": 0,
+            "error": result.error,
+        }
+
+    return decision, asset
 
 
 def _copy_textures_sidecar(obj, dest_dir, guid_short="?", fingerprint_map=None, stored_manifest=None):
