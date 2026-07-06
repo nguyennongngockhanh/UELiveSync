@@ -58,6 +58,41 @@ Phase 10D runtime gaps are **closed** (commit `1ef954a`):
 - Buyer should expect continued improvements in asset lifecycle, cleanup, and platform coverage.
 - Not yet recommended for production pipelines without prior testing on the target setup.
 
+## Performance (Phase 10A Investigation — 2026-07-06)
+
+Profile instrumentation added to `HandleImport()` in `LiveSyncFBXImporter.cpp` with `FFbxScopePhase` RAII wrappers around each pipeline stage. Tested on Wood_Marble_Premium_Console_Storage_Unit (4206 verts, 7992 tris, 3 material slots, 6 textures) under UE 5.7.4 / Linux / Vulkan.
+
+### Warm-cache results (textures exist under /Game/UELiveSync/Imported/Textures/)
+
+| Phase | Type | Duration |
+|-------|------|----------|
+| fbx_factory_import | exclusive | ~172 ms |
+| sidecar_batch_import | nested | ~350 ms |
+| semantic_signature | nested | ~0.1 ms |
+| sidecar_manifest_read | nested | ~0.1 ms |
+| sidecar_asset_lookup | nested | ~0.0 ms |
+| sidecar_result_mapping | nested | ~0.0 ms |
+| imported_asset_discovery | exclusive | ~0.0 ms |
+| request_parse / path_validation | exclusive | ~0.0 ms |
+| **Total (STALL_SUMMARY)** | | **~520 ms** |
+
+Cold DDC clear + sidecache wipe produced identical results (textures persisted in UE Content directory).
+
+### Key finding
+
+The previously reported ~30 s editor stall **only occurs** when UE imports brand-new texture assets that do not yet exist under `/Game/UELiveSync/Imported/Textures/`. This is a one-time cost (texture compression + DDC + asset registry) on the very first sync for each texture. All subsequent incremental syncs — even after clearing DDC — are fast (~520 ms) because the imported texture assets persist in the Content directory.
+
+### Bottleneck at warm
+
+- `sidecar_batch_import` (~350 ms): synchronous `ImportAssetsAutomated` with texture compression. Dominant cost. Each `ImportAssetsAutomated` call blocks the Game Thread.
+- `fbx_factory_import` (~172 ms): synchronous FBX reimport. Significant but smaller.
+
+Both are acceptable for incremental sync. Optimization (if desired) would target per-texture compression time or async import.
+
+### Instrumentation note
+
+`FFbxScopePhase` wrappers were added temporarily for this investigation and have been removed. See commit `xxx` for the cleanup. No behavior change from instrumentation.
+
 ## Related Docs
 
 - [SYSTEM_REQUIREMENTS.md](SYSTEM_REQUIREMENTS.md)

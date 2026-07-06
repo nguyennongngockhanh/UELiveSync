@@ -642,9 +642,7 @@ static void ApplyUnitScaleGuard(UStaticMeshComponent* SMC, const FGuid& Guid)
         {
             GBoundsExtentCache.Add(Guid, RawExtent);
         }
-    }
-    else
-    {
+
         // Phase 10J.5L: log unit-invalid state — do NOT let this overwrite good cache
         const FVector* Cached = GBoundsExtentCache.Find(Guid);
         if (Cached)
@@ -1542,7 +1540,7 @@ bool FLiveSyncFBXImporter::HandleImport(
         }
     }
 
-        // Phase 7H.6 / Task 9B.1: sidecar texture import (always runs).
+    // Phase 7H.6 / Task 9B.1: sidecar texture import (always runs).
         // Even when FBX import produces textures (embedded media), sidecar
         // lane is the sole authority — it reimports with canonical naming.
         const FString FbxDir = FPaths::GetPath(FbxPathStr);
