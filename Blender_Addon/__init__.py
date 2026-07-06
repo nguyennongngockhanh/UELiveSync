@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from . import network
 from . import sync
+from . import manifest_v3 as _mv3
 
 
 # Phase 10J.5M: dual-logging helper for FBX diagnostics.
@@ -1733,184 +1734,7 @@ def _reuse_prepare_fn(source_desc, sidecar_dir, collision_registry, guid_short):
     return decision, asset
 
 
-def _copy_textures_sidecar(obj, dest_dir, guid_short="?", fingerprint_map=None, stored_manifest=None):
-    """Copy material texture images into dest_dir for UE sidecar import.
-    
-    Iterates obj material slots, finds TEX_IMAGE nodes, and copies
-    referenced images into dest_dir (the FBX cache folder).
-    Handles FILE source (direct copy), packed images, and GENERATED images.
-    
-    When fingerprint_map and stored_manifest are provided, uses per-texture
-    fingerprinting to skip unchanged textures (fast path reuse).
-    
-    Returns (copied_count, sidecar_info_list).
-    """
-    import shutil
-    import uuid as _uuid
 
-    if not obj.material_slots:
-        _fbx_log(f"[FBX][TEXTURE_SIDECAR] guid={guid_short} "
-                 f"object={obj.name} no_material_slots")
-        return 0, []
-
-    # Build canonical_key -> (stored_sidecar_info) lookup from manifest
-    stored_sidecar = {}
-    stored_fps = {}
-    if stored_manifest:
-        stored_textures = stored_manifest.get("textures", {})
-        for key, entry in stored_textures.items():
-            si = entry.get("sidecarInfo")
-            if si:
-                stored_sidecar[key] = si
-            stored_fps[key] = entry
-
-    copied_count = 0
-    sidecar_info = []  # list of dicts: {filename, path, source_path, size}
-    for slot in obj.material_slots:
-        mat = slot.material
-        if not mat or not mat.use_nodes or not mat.node_tree:
-            continue
-        for node in mat.node_tree.nodes:
-            if node.type != 'TEX_IMAGE' or not node.image:
-                continue
-            img = node.image
-            filepath = getattr(img, "filepath", "") or ""
-            filepath_raw = getattr(img, "filepath_raw", "") or ""
-            source = getattr(img, "source", "")
-            is_packed = bool(getattr(img, "packed_file", False))
-
-            # Compute canonical key for per-texture fast path
-            canonical_key = _get_texture_canonical_key(
-                img, filepath_raw or filepath, source, is_packed)
-
-            # Fast path: if fingerprint matches stored, reuse sidecar info
-            if fingerprint_map and canonical_key and stored_sidecar:
-                fp = fingerprint_map.get(canonical_key)
-                sfp = stored_fps.get(canonical_key)
-                if fp and sfp and canonical_key in stored_sidecar:
-                    if _fingerprint_metadata_matches(fp, sfp):
-                        si = stored_sidecar[canonical_key]
-                        sidecar_info.append(si)
-                        _fbx_log(f"[FBX][TEXTURE_SIDECAR_REUSE] guid={guid_short} "
-                                 f"key={canonical_key} reason=metadata_unchanged")
-                        continue
-                    # Metadata changed — check content hash
-                    current_hash = _compute_content_hash_for_fingerprint(fp, img)
-                    stored_hash = sfp.get("contentHash")
-                    if current_hash and current_hash == stored_hash:
-                        si = stored_sidecar[canonical_key]
-                        sidecar_info.append(si)
-                        _fbx_log(f"[FBX][TEXTURE_SIDECAR_REUSE] guid={guid_short} "
-                                 f"key={canonical_key} reason=content_unchanged")
-                        continue
-
-            _fbx_log(f"[FBX][TEXTURE_SIDECAR_SCAN] guid={guid_short} "
-                     f"object={obj.name} material={mat.name} "
-                     f"image={img.name} source={source} "
-                     f"packed={1 if is_packed else 0}")
-
-            if source == 'FILE' and not is_packed:
-                # --- Task C: non-destructive copy for FILE source ---
-                abs_path = bpy.path.abspath(filepath)
-                if not os.path.isfile(abs_path):
-                    _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
-                             f"object={obj.name} material={mat.name} "
-                             f"image={img.name} reason=file_not_found "
-                             f"path={abs_path}")
-                    continue
-
-                # --- Task A: safety guard — never write to source path ---
-                resolved_src = os.path.realpath(abs_path)
-                resolved_dst = os.path.realpath(os.path.join(dest_dir, os.path.basename(abs_path)))
-                if resolved_dst == resolved_src:
-                    _fbx_log(f"[FBX][TEXTURE_SOURCE_WRITE_BLOCKED] path={resolved_dst} reason=destination_equals_source")
-                    continue
-
-                dest_name = os.path.basename(abs_path)
-                dest_path = os.path.join(dest_dir, dest_name)
-                if os.path.exists(dest_path):
-                    base, ext = os.path.splitext(dest_name)
-                    dest_name = f"{base}_{_uuid.uuid4().hex[:8]}{ext}"
-                    dest_path = os.path.join(dest_dir, dest_name)
-
-                # Use shutil.copy2 (never img.save_render) for FILE sources
-                try:
-                    shutil.copy2(abs_path, dest_path)
-                    _fbx_log(f"[FBX][TEXTURE_COPY] guid={guid_short} "
-                             f"object={obj.name} material={mat.name} "
-                             f"image={img.name} src={abs_path} "
-                             f"dst={dest_path}")
-                    # Task A: record sidecar info for manifest
-                    try:
-                        src_size = os.stat(abs_path).st_size
-                    except Exception:
-                        src_size = 0
-                    sidecar_info.append({
-                        "filename": os.path.basename(dest_path),
-                        "path": dest_path,
-                        "size": src_size,
-                        "source": abs_path,
-                    })
-                    _fbx_log(f"[FBX][MANIFEST_SIDECAR_TEXTURE] guid={guid_short} "
-                             f"file={os.path.basename(dest_path)} size={src_size}")
-                    copied_count += 1
-                except Exception as e:
-                    _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
-                             f"object={obj.name} material={mat.name} "
-                             f"image={img.name} reason=copy_failed "
-                             f"error={e}")
-
-            elif is_packed or source == 'GENERATED':
-                # --- Task C: temp save must be inside cache folder ---
-                ext = ".png"
-                try:
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
-                        temp_path = tf.name
-                    img.save_render(temp_path)
-                    _fbx_log(f"[FBX][TEXTURE_TEMP_SAVE] dst={temp_path} source={'PACKED' if is_packed else 'GENERATED'}")
-                    # Fix double extension: strip existing extension from img.name
-                    base_name = os.path.splitext(img.name)[0]
-                    dest_name = f"{base_name}{ext}"
-                    dest_path = os.path.join(dest_dir, dest_name)
-                    if os.path.exists(dest_path):
-                        dest_name = f"{base_name}_{_uuid.uuid4().hex[:8]}{ext}"
-                        dest_path = os.path.join(dest_dir, dest_name)
-                    shutil.move(temp_path, dest_path)
-                    _fbx_log(f"[FBX][TEXTURE_COPY] guid={guid_short} "
-                             f"object={obj.name} material={mat.name} "
-                             f"image={img.name} "
-                             f"source={'packed' if is_packed else 'generated'} "
-                             f"dst={dest_path}")
-                    # Record sidecar info for manifest (was missing — caused sidecarTextures=0)
-                    try:
-                        src_size = os.stat(dest_path).st_size
-                    except Exception:
-                        src_size = 0
-                    sidecar_info.append({
-                        "filename": os.path.basename(dest_path),
-                        "path": dest_path,
-                        "size": src_size,
-                        "source": temp_path,
-                    })
-                    _fbx_log(f"[FBX][MANIFEST_SIDECAR_TEXTURE] guid={guid_short} "
-                             f"file={os.path.basename(dest_path)} size={src_size}")
-                    copied_count += 1
-                except Exception as e:
-                    _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
-                             f"object={obj.name} material={mat.name} "
-                             f"image={img.name} "
-                             f"source={'packed' if is_packed else 'generated'} "
-                             f"reason=save_failed error={e}")
-            else:
-                _fbx_log(f"[FBX][TEXTURE_COPY_FAIL] guid={guid_short} "
-                         f"object={obj.name} material={mat.name} "
-                         f"image={img.name} source={source} "
-                         f"reason=unsupported_source")
-
-    _fbx_log(f"[FBX][TEXTURE_SIDECAR_SUMMARY] guid={guid_short} "
-             f"object={obj.name} copied={copied_count}")
-    return copied_count, sidecar_info
 
 
 # Phase 9B.6B.3: persistent sidecar state file name
@@ -2385,84 +2209,28 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 for p, sz, mt in source_stats_before:
                     _fbx_log(f"[FBX][TEXTURE_SOURCE_STAT_BEFORE] path={p} size={sz} mtime={mt:.6f}")
 
-                # Phase 9B.6B.4: per-texture fingerprint change detection
-                _fingerprints = _compute_texture_fingerprints(obj)
-                _combined_digest = _compute_fingerprint_metadata_digest(_fingerprints)
-                # Phase 9B.6B.3: load persistent state from disk if not in memory
-                _prev_sidecar_digest = sync._last_sidecar_digest.get(guid_hex)
-                _stored_manifest = None
-                if _prev_sidecar_digest is None:
-                    _loaded_digest, _loaded_info = _load_sidecar_state(obj_dir)
-                    if _loaded_digest is not None:
-                        sync._last_sidecar_digest[guid_hex] = _loaded_digest
-                        sync._last_sidecar_info[guid_hex] = _loaded_info
-                        _prev_sidecar_digest = _loaded_digest
-                        print(f"[FBX][SIDECAR_STATE_LOADED] guid={guid_hex[:8]} digest={_loaded_digest} textures={len(_loaded_info)}")
-                    # Also try loading v2 texture manifest
-                    _stored_manifest = _load_texture_manifest(obj_dir)
-                    if _stored_manifest:
-                        print(f"[FBX][MANIFEST_V2_LOADED] guid={guid_hex[:8]} textures={len(_stored_manifest.get('textures', {}))}")
-                else:
-                    _stored_manifest = _load_texture_manifest(obj_dir)
-                if _prev_sidecar_digest is not None and _prev_sidecar_digest == _combined_digest:
-                    sidecar_copied = 0
-                    sidecar_info = sync._last_sidecar_info.get(guid_hex, [])
-                    print(f"[FBX][SIDECAR_SKIP] guid={guid_hex[:8]} reason=textures_unchanged digest={_combined_digest}")
-                else:
-                    # Per-texture granular sidecar copy
-                    _bl_timer_sidecar_start = _time.perf_counter()
-                    sidecar_copied, sidecar_info = _copy_textures_sidecar(
-                        obj, obj_dir, guid_hex[:8],
-                        fingerprint_map=_fingerprints,
-                        stored_manifest=_stored_manifest)
-                    sync._last_sidecar_digest[guid_hex] = _combined_digest
-                    sync._last_sidecar_info[guid_hex] = sidecar_info
-                    # Build and save v2 texture manifest
-                    _textures_manifest = {"textures": {}, "guid": guid_hex}
-                    _stored_textures = _stored_manifest.get("textures", {}) if _stored_manifest else {}
-                    _si_idx = 0
-                    for _slot in obj.material_slots:
-                        _mat = _slot.material
-                        if not _mat or not _mat.use_nodes or not _mat.node_tree:
-                            continue
-                        for _node in _mat.node_tree.nodes:
-                            if _node.type != 'TEX_IMAGE' or not _node.image:
-                                continue
-                            _img = _node.image
-                            _filepath = getattr(_img, "filepath", "") or ""
-                            _filepath_raw = getattr(_img, "filepath_raw", "") or ""
-                            _source = getattr(_img, "source", "")
-                            _is_packed = bool(getattr(_img, "packed_file", False))
-                            _key = _get_texture_canonical_key(
-                                _img, _filepath_raw or _filepath, _source, _is_packed)
-                            if not _key:
-                                continue
-                            _fp = _fingerprints.get(_key, {})
-                            _entry = dict(_fp)
-                            # Reuse stored content hash if metadata unchanged
-                            _stored_entry = _stored_textures.get(_key)
-                            if _stored_entry and _fingerprint_metadata_matches(_fp, _stored_entry):
-                                _entry["contentHash"] = _stored_entry.get("contentHash", "")
-                            else:
-                                _entry["contentHash"] = _compute_content_hash_for_fingerprint(_fp, _img)
-                            _si = sidecar_info[_si_idx] if _si_idx < len(sidecar_info) else None
-                            if _si:
-                                _entry["sidecarInfo"] = _si
-                                _entry["destinationFilename"] = _si.get("filename", "")
-                                _entry["destinationSize"] = _si.get("size", 0)
-                            _entry["destinationFilename"] = _entry.get("destinationFilename", "")
-                            _entry["destinationSize"] = _entry.get("destinationSize", 0)
-                            _textures_manifest["textures"][_key] = _entry
-                            _si_idx += 1
-                    _save_texture_manifest(obj_dir, _textures_manifest)
-                    print(f"[FBX][MANIFEST_V2_SAVED] guid={guid_hex[:8]} textures={len(_textures_manifest['textures'])}")
-                    # Also persist legacy sidecar state for backward compat
-                    _save_sidecar_state(obj_dir, _combined_digest, sidecar_info)
-                    print(f"[FBX][SIDECAR_STATE_SAVED] guid={guid_hex[:8]} digest={_combined_digest} textures={len(sidecar_info)}")
-                _sidecars_prepared += sidecar_copied if isinstance(sidecar_copied, int) else 1
-                # Task A: deterministic ordering log for sidecar readiness
-                _reused_count = len(sidecar_info) - (sidecar_copied if isinstance(sidecar_copied, int) else 0)
-                print(f"[FBX][SIDECAR_READY] guid={guid_hex[:8]} copied={sidecar_copied} reused={_reused_count} total={len(sidecar_info)}")
+                # A3.1/A3.5 pipeline: extract sources + manifest-based sidecar
+                collision_registry = {}
+                sources, usages = _extract_texture_usages_and_sources(obj)
+                _bl_timer_sidecar_start = _time.perf_counter()
+                manifest_result, sidecar_results = _evaluate_and_materialize_manifest_v3(
+                    obj_dir, guid_hex, sources, usages,
+                    collision_registry, guid_hex[:8],
+                )
+                sidecar_info = [
+                    _sidecar_result_to_manifest_entry(r) for r in sidecar_results
+                    if r.status == "ready"
+                ]
+                sidecar_copied = sum(
+                    1 for r in sidecar_results
+                    if r.action in ("copied", "exported")
+                )
+                _sidecars_prepared += sidecar_copied
+                _reused_count = len(sidecar_info) - sidecar_copied
+                print(f"[FBX][SIDECAR_READY] guid={guid_hex[:8]} "
+                      f"copied={sidecar_copied} reused={_reused_count} "
+                      f"total={len(sidecar_info)}")
+                sync._last_sidecar_info[guid_hex] = sidecar_info
 
                 # --- Task D: log source texture state AFTER sidecar ---
                 source_modified = False
@@ -2535,33 +2303,8 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 finally:
                     evaluated_obj.to_mesh_clear()
 
-                # Write manifest JSON (sidecar info attached inline)
-                manifest = {
-                    "object_guid": guid_hex,
-                    "object_name": obj.name,
-                    "safe_name": safe_name,
-                    "fbx_path": fbx_path,
-                    "vert_count": vert_count,
-                    "tri_count": tri_count,
-                    "mat_slot_count": mat_slot_count,
-                    "timestamp": time.time(),
-                    "source": "Blender FBX export",
-                    "sidecar_textures": sidecar_info,
-                }
-
-                manifest_path = os.path.join(
-                    obj_dir,
-                    f"{safe_name}.manifest.json",
-                )
-                with open(
-                    manifest_path, "w"
-                ) as f:
-                    json.dump(
-                        manifest, f, indent=2
-                    )
-
-                # Task A: deterministic ordering log — manifest written before packet send
-                print(f"[FBX][MANIFEST_WRITE] guid={guid_hex[:8]} path={manifest_path} sidecarTextures={len(manifest['sidecar_textures'])}")
+                # Phase 3.5: manifest is written by _evaluate_and_materialize_manifest_v3
+                # as manifest_v3.json. Legacy v2 manifest is removed.
 
                 # Phase 10J.5L: compute mesh bounds (both meters and expected cm)
                 bounds_min_m = (0.0, 0.0, 0.0)
@@ -2617,33 +2360,39 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                       f"sendFBX={send_fbx} reason={'geometry_changed' if geometry_hash != prev_geom else 'unchanged'} "
                       f"oldGeomHash={prev_geom or 0} newGeomHash={geometry_hash}")
 
-                # Build and send FBX import request packet
-                payload = \
-                    network.serialize_fbx_import_request(
-                        guid_obj=guid_obj,
-                        fbx_path=fbx_path,
-                        object_name=safe_name,
-                        vert_count=vert_count,
-                        tri_count=tri_count,
-                        mat_slot_count=mat_slot_count,
-                        timestamp=time.time(),
-                        geometry_hash=geometry_hash,
-                    )
+                # Phase 3.5: serialize and send via manifest v3 helper
 
-                # Task A: deterministic send-ready log after all sidecar/manifest steps
-                print(f"[FBX][SEND_READY] guid={guid_hex[:8]} fbx={fbx_path} sidecarTextures={len(manifest['sidecar_textures'])}")
+                # Task A: deterministic send-ready log before helper
+                print(f"[FBX][SEND_READY] guid={guid_hex[:8]} fbx={fbx_path} sidecarTextures={len(sidecar_info)}")
 
-                network.send_objects(
-                    [payload],
+                # Phase 3.5: use manifest v3 serialize-and-send helper
+                send_result = _mv3.serialize_and_send_fbx_request(
+                    manifest_result=manifest_result,
+                    serialize_fn=network.serialize_fbx_import_request,
+                    send_fn=network.send_objects,
+                    guid_obj=guid_obj,
+                    fbx_path=fbx_path,
+                    object_name=safe_name,
+                    vert_count=vert_count,
+                    tri_count=tri_count,
+                    mat_slot_count=mat_slot_count,
+                    timestamp=time.time(),
+                    geometry_hash=geometry_hash,
                     packet_type=network.PT_FBXImportRequest,
                     version=network.LIVE_SYNC_VERSION_V5,
                 )
+                should_send_after_pipeline = send_result.sent
 
-                print(
-                    f"[FBX] Synced: {obj.name} → {fbx_path} "
-                    f"({tri_count} tri, "
-                    f"{vert_count} vert)"
-                )
+                if should_send_after_pipeline:
+                    print(
+                        f"[FBX] Synced: {obj.name} → {fbx_path} "
+                        f"({tri_count} tri, "
+                        f"{vert_count} vert)"
+                    )
+
+                # A3.6: Safe orphan sidecar pruning
+                from . import manifest_prune as _mp
+                _mp.prune_after_successful_send(send_succeeded=True)
 
                 # Phase 10J.5J: material property dirty detection for Sync FBX
                 # Collect current material property signature
@@ -2669,14 +2418,19 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     prev_prop_sig = sync._last_material_property_sig.get(guid_hex)
                     # Task 9B.6B.13: start collecting before first extraction call
                     network._mtex_start_collecting(seq, guid_hex)
+                    # Phase 3.2: use A3.1 extraction pipeline
+                    _all_sources, _all_usages = _extract_texture_usages_and_sources(obj)
+                    _tex_maps_dict = {}
+                    for _usage in _all_usages:
+                        _tex_maps_dict.setdefault(_usage.slot_index, []).append(
+                            (_usage.channel, _usage.source.filepath, _usage.source.image_name, _usage.flags)
+                        )
                     # Phase 7H: include texture hash in dirty detection
                     current_tex_sigs = {}
-                    for slot_idx, slot in enumerate(obj.material_slots):
-                        if slot and slot.material:
-                            maps = network.extract_texture_maps_for_slot(slot.material, slot.material.name, slot_idx, _collect=True)
-                            if maps:
-                                tex_hash = network.compute_material_texture_hash(slot_idx, maps)
-                                current_tex_sigs[slot_idx] = tex_hash
+                    for slot_idx, maps in _tex_maps_dict.items():
+                        if maps:
+                            tex_hash = network.compute_material_texture_hash(slot_idx, maps)
+                            current_tex_sigs[slot_idx] = tex_hash
 
                     # Compute dirty hashes for logging
                     scalar_hash_val, tex_hash_val, combined_hash_val = (
@@ -2723,22 +2477,18 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
 
                     tex_maps = None
                     try:
-                        tex_maps_dict = {}
-                        for slot_idx, slot in enumerate(obj.material_slots):
-                            if slot and slot.material:
-                                maps = network.extract_texture_maps_for_slot(slot.material, slot.material.name, slot_idx, _collect=True)
-                                if maps:
-                                    tex_maps_dict[slot_idx] = maps
-                                    for ch, fpath, img_name, flags in maps:
-                                        abs_path = bpy.path.abspath(fpath) if fpath else ""
-                                        file_exists = os.path.isfile(abs_path) if abs_path else False
-                                        source = "PACKED" if (flags & network.MTEX_FLAG_IMAGE_PACKED) else "FILE"
-                                        ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
-                                        has_tex = "1" if abs_path else "0"
-                                        exists_str = "1" if file_exists else "0"
-                                        print(f"[MATERIAL][TEXTURE_CHANNEL_SCAN] object={obj.name} slot={slot_idx} material={slot.material.name} channel={ch_name} hasTexture={has_tex} image={img_name} path={abs_path[:200] if abs_path else ''} exists={exists_str} source={source}")
-                        if tex_maps_dict:
-                            tex_maps = tex_maps_dict
+                        if _tex_maps_dict:
+                            for slot_idx, maps in _tex_maps_dict.items():
+                                for ch, fpath, img_name, flags in maps:
+                                    abs_path = bpy.path.abspath(fpath) if fpath else ""
+                                    file_exists = os.path.isfile(abs_path) if abs_path else False
+                                    source = "PACKED" if (flags & network.MTEX_FLAG_IMAGE_PACKED) else "FILE"
+                                    ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
+                                    has_tex = "1" if abs_path else "0"
+                                    exists_str = "1" if file_exists else "0"
+                                    mat_name = obj.material_slots[slot_idx].material.name if slot_idx < len(obj.material_slots) and obj.material_slots[slot_idx] and obj.material_slots[slot_idx].material else "?"
+                                    print(f"[MATERIAL][TEXTURE_CHANNEL_SCAN] object={obj.name} slot={slot_idx} material={mat_name} channel={ch_name} hasTexture={has_tex} image={img_name} path={abs_path[:200] if abs_path else ''} exists={exists_str} source={source}")
+                            tex_maps = _tex_maps_dict
                     except Exception:
                         tex_maps = None
 
