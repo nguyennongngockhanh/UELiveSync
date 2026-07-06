@@ -1,0 +1,19 @@
+--- .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-zero-count-fixture.py	2026-06-23 15:15:46.466706219 +0700
++++ .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.zero-count-fixture-fixed.py	2026-06-23 15:20:23.751176998 +0700
+@@ -2501,6 +2501,16 @@
+           _count_obj_in_fixture(_fixture_d) == 1,
+           detail=f"got={_count_obj_in_fixture(_fixture_d)}")
+ 
++    # Z: zero ObjectName conversions → rejected by exact-one predicate
++    _fixture_zero = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    return true;
++}"""
++    _zero_count = _count_obj_in_fixture(_fixture_zero)
++    _test("Self-test [ObjCount-Z-zero]: count == 0",
++          _zero_count == 0, detail=f"got={_zero_count}")
++    _test("Self-test [ObjCount-Z-zero]: exact-one predicate rejected",
++          _zero_count != 1, detail=f"got={_zero_count}")
++
+     # ===================================================================
+     # Self-test: ordering chain fail-closed on missing position
+     # ===================================================================

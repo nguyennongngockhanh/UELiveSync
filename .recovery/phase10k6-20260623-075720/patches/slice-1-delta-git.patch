@@ -1,0 +1,25 @@
+--- a/UE_Plugin/UELiveSync/Source/UELiveSync/Private/FBXImport/LiveSyncFBXImporter.cpp
++++ b/UE_Plugin/UELiveSync/Source/UELiveSync/Private/FBXImport/LiveSyncFBXImporter.cpp
+@@ -1060,6 +1060,14 @@
+         return false;
+     }
+ 
++    const int32 TransactionId =
++        Context.Stats->FBXTransactionId.fetch_add(
++            1,
++            std::memory_order_acq_rel);
++    const double HandleImportStart =
++        FPlatformTime::Seconds();
++    TMap<FString, double> PhaseDurations;
++
+     if (!ValidatePayloadSize(PayloadSize, *Context.Stats))
+     {
+         return false;
+@@ -1106,6 +1114,7 @@
+ 
+     FString SafeName = SanitizeObjectName(
+         ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.ObjectName)));
++    const FString TxnObjNameSanitized = SafeName;
+ 
+     const FString GuidShort =
+         Request.ObjectGUID.ToString().Left(8);

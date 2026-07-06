@@ -1,0 +1,517 @@
+
+Phase 10K.6 transaction decomposition tests: 511 passed, 0 failed
+
+  PASS  FBXTransactionId atomic<int32> exists
+  PASS  TransactionId allocated from FBXTransactionId fetch_add
+  PASS  TransactionId declared as int32
+  PASS  FFbxScopePhase struct defined
+  PASS  FFbxScopePhase has constructor with Phase/Guid/SyncId/ObjectName
+  PASS  FFbxScopePhase has destructor with PHASE_END
+  PASS  FFbxScopePhase constructor has optional OutDurationMs
+  PASS  FFbxScopePhase constructor has optional InPhaseDurations
+  PASS  FFbxScopePhase destructor writes through OutDurationMs
+  PASS  FFbxScopePhase destructor accumulates exclusive phases into PhaseDurations
+  PASS  FbxPhaseBegin static helper exists
+  PASS  FbxPhaseEnd static helper exists
+  PASS  FbxPhaseBegin helper function exists (count >= 1 includes definition)
+  PASS  FbxPhaseEnd helper function exists (count >= 1 includes definition)
+  PASS  Exclusive phase 'path_validation' has PHASE_BEGIN
+  PASS  Exclusive phase 'path_validation' has PHASE_END
+  PASS  No obsolete ComputePhaseClassificationExclusive in production
+  PASS  Exactly one ComputeExclusiveClassification definition
+  PASS  Classification uses TEXT("exclusive")
+  PASS  STALL_SUMMARY log exists
+  PASS  STALL_SUMMARY includes transactionId
+  PASS  STALL_SUMMARY includes totalMs
+  PASS  STALL_SUMMARY includes measuredExclusiveMs
+  PASS  STALL_SUMMARY includes coveragePercent
+  PASS  STALL_SUMMARY includes largestPhase
+  PASS  STALL_SUMMARY includes largestPhaseMs
+  PASS  STALL_SUMMARY includes unattributedMs
+  PASS  STALL_SUMMARY includes classification
+  PASS  PHASE_END includes durationMs field
+  PASS  PHASE_BEGIN includes guid field
+  PASS  PHASE_END includes guid field
+  PASS  PHASE_BEGIN includes transactionId
+  PASS  PHASE_END includes transactionId
+  PASS  TxnObjNameSanitized derived from SanitizeObjectName
+  PASS  PT_Keyframe still in protocol enum (no packet type changes)
+  PASS  No new PT_FBXVisibility packet type added
+  PASS  PHASE_BEGIN/PHASE_END are log markers (UE_LOG), not packets
+  PASS  FBXTransactionId initialized to 1 (not 0)
+  PASS  FFbxExclusiveClassification struct exists
+  PASS  ComputeExclusiveClassification static function exists
+  PASS  No SINGLE classification in active code
+  PASS  No old ComputePhaseClassificationExclusive in active code
+  PASS  FStringFromFixedAnsi helper exists
+  PASS  FStringFromFixedAnsi uses ConstructFromPtrSize
+  PASS  FStringFromFixedAnsi: null Data check present
+  PASS  FStringFromFixedAnsi: loop checks Length < Capacity before Data access
+  PASS  FStringFromFixedAnsi: ++Length increments by 1
+  PASS  FStringFromFixedAnsi: ConstructFromPtrSize receives Length, not Capacity
+  PASS  SyncId snapshot from MatPktSyncId
+  PASS  ObjectName uses FStringFromFixedAnsi in semantic signature
+  PASS  FbxPath uses FStringFromFixedAnsi
+  PASS  ObjectName uses FStringFromFixedAnsi at least twice
+  PASS  No ANSI_TO_TCHAR on fixed wire fields
+  PASS  Log parser: phase 'request_parse' has BEGIN
+  PASS  Log parser: phase 'request_parse' has END with duration
+  PASS  Log parser: phase 'path_validation' has BEGIN
+  PASS  Log parser: phase 'path_validation' has END with duration
+  PASS  Log parser: phase 'fbx_factory_import' has BEGIN
+  PASS  Log parser: phase 'fbx_factory_import' has END with duration
+  PASS  Log parser: phase 'imported_asset_discovery' has BEGIN
+  PASS  Log parser: phase 'imported_asset_discovery' has END with duration
+  PASS  Log parser: phase 'sidecar_processing' has BEGIN
+  PASS  Log parser: phase 'sidecar_processing' has END with duration
+  PASS  Log parser: phase 'semantic_signature' has BEGIN
+  PASS  Log parser: phase 'semantic_signature' has END with duration
+  PASS  Log parser: phase 'static_mesh_post_import' has BEGIN
+  PASS  Log parser: phase 'static_mesh_post_import' has END with duration
+  PASS  Log parser: phase 'actor_lookup_or_spawn' has BEGIN
+  PASS  Log parser: phase 'actor_lookup_or_spawn' has END with duration
+  PASS  Log parser: phase 'static_mesh_assignment' has BEGIN
+  PASS  Log parser: phase 'static_mesh_assignment' has END with duration
+  PASS  Log parser: phase 'material_slot_assignment' has BEGIN
+  PASS  Log parser: phase 'material_slot_assignment' has END with duration
+  PASS  Log parser: phase 'post_import_finalize' has BEGIN
+  PASS  Log parser: phase 'post_import_finalize' has END with duration
+  PASS  Log parser: phase 'sidecar_manifest_read' has BEGIN
+  PASS  Log parser: phase 'sidecar_manifest_read' has END with duration
+  PASS  Log parser: phase 'sidecar_fingerprint_classification' has BEGIN
+  PASS  Log parser: phase 'sidecar_fingerprint_classification' has END with duration
+  PASS  Log parser: phase 'sidecar_asset_lookup' has BEGIN
+  PASS  Log parser: phase 'sidecar_asset_lookup' has END with duration
+  PASS  Log parser: phase 'sidecar_batch_import' has BEGIN
+  PASS  Log parser: phase 'sidecar_batch_import' has END with duration
+  PASS  Log parser: phase 'sidecar_result_mapping' has BEGIN
+  PASS  Log parser: phase 'sidecar_result_mapping' has END with duration
+  PASS  Log parser: exclusive sum = 179.1 (expected 179.1)
+  PASS  Log parser: nested sum = 28.5 (expected 28.5)
+  PASS  Log parser: nested phase 'sidecar_manifest_read' not in exclusive phases
+  PASS  Log parser: nested phase 'sidecar_fingerprint_classification' not in exclusive phases
+  PASS  Log parser: nested phase 'sidecar_asset_lookup' not in exclusive phases
+  PASS  Log parser: nested phase 'sidecar_batch_import' not in exclusive phases
+  PASS  Log parser: nested phase 'sidecar_result_mapping' not in exclusive phases
+  PASS  Log parser: nested phase 'semantic_signature' not in exclusive phases
+  PASS  Log parser: nested phase 'post_import_finalize' not in exclusive phases
+  PASS  Log parser: exclusive phase 'request_parse' not in nested phases
+  PASS  Log parser: exclusive phase 'path_validation' not in nested phases
+  PASS  Log parser: exclusive phase 'fbx_factory_import' not in nested phases
+  PASS  Log parser: exclusive phase 'imported_asset_discovery' not in nested phases
+  PASS  Log parser: exclusive phase 'sidecar_processing' not in nested phases
+  PASS  Log parser: exclusive phase 'static_mesh_post_import' not in nested phases
+  PASS  Log parser: exclusive phase 'actor_lookup_or_spawn' not in nested phases
+  PASS  Log parser: exclusive phase 'static_mesh_assignment' not in nested phases
+  PASS  Log parser: exclusive phase 'material_slot_assignment' not in nested phases
+  PASS  Log parser: unattributedMs = 20.9 (expected 20.9)
+  PASS  Log parser: largest phase = 'sidecar_processing' (120.0ms)
+  PASS  Log parser: orphan begin detected for 'orphan_phase'
+  PASS  Log parser: duplicate end detected for 'dup_phase'
+  PASS  Log parser: MIXED classification detected
+  PASS  STALL_SUMMARY parsed successfully
+  PASS  STALL_SUMMARY transactionId=1
+  PASS  STALL_SUMMARY totalMs=200.0
+  PASS  STALL_SUMMARY measuredExclusiveMs=179.1
+  PASS  STALL_SUMMARY coveragePercent=89.55
+  PASS  STALL_SUMMARY largestPhase=sidecar_processing
+  PASS  STALL_SUMMARY largestPhaseMs=120.0
+  PASS  STALL_SUMMARY unattributedMs=20.9
+  PASS  STALL_SUMMARY classification=MIXED
+  PASS  Observed case: phase 'request_parse' has BEGIN
+  PASS  Observed case: phase 'request_parse' has END
+  PASS  Observed case: phase 'path_validation' has BEGIN
+  PASS  Observed case: phase 'path_validation' has END
+  PASS  Observed case: phase 'fbx_factory_import' has BEGIN
+  PASS  Observed case: phase 'fbx_factory_import' has END
+  PASS  Observed case: phase 'imported_asset_discovery' has BEGIN
+  PASS  Observed case: phase 'imported_asset_discovery' has END
+  PASS  Observed case: phase 'sidecar_processing' has BEGIN
+  PASS  Observed case: phase 'sidecar_processing' has END
+  PASS  Observed case: phase 'sidecar_manifest_read' has BEGIN
+  PASS  Observed case: phase 'sidecar_manifest_read' has END
+  PASS  Observed case: phase 'sidecar_fingerprint_classification' has BEGIN
+  PASS  Observed case: phase 'sidecar_fingerprint_classification' has END
+  PASS  Observed case: phase 'sidecar_asset_lookup' has BEGIN
+  PASS  Observed case: phase 'sidecar_asset_lookup' has END
+  PASS  Observed case: phase 'sidecar_batch_import' has BEGIN
+  PASS  Observed case: phase 'sidecar_batch_import' has END
+  PASS  Observed case: phase 'sidecar_result_mapping' has BEGIN
+  PASS  Observed case: phase 'sidecar_result_mapping' has END
+  PASS  Observed case: phase 'static_mesh_post_import' has BEGIN
+  PASS  Observed case: phase 'static_mesh_post_import' has END
+  PASS  Observed case: phase 'actor_lookup_or_spawn' has BEGIN
+  PASS  Observed case: phase 'actor_lookup_or_spawn' has END
+  PASS  Observed case: phase 'static_mesh_assignment' has BEGIN
+  PASS  Observed case: phase 'static_mesh_assignment' has END
+  PASS  Observed case: phase 'material_slot_assignment' has BEGIN
+  PASS  Observed case: phase 'material_slot_assignment' has END
+  PASS  Observed case: phase 'post_import_finalize' has BEGIN
+  PASS  Observed case: phase 'post_import_finalize' has END
+  PASS  Observed case: exclusive sum ≈ 707.5 (got 707.5)
+  PASS  Source: coveragePercent calculation exists
+  PASS  Source: timing validity check exists
+  PASS  Observed case: largestPhase == fbx_factory_import
+  PASS  Observed case: largestPhaseMs == 359.5
+  PASS  Observed case: sidecar_batch_import (nested) NOT in exclusive sum
+  PASS  Observed case: classification == MIXED
+  PASS  Observed case: unattributedMs >= 0 (got 0.0)
+  PASS  Exclusive sum > totalMs: unattributedMs clamped to >= 0
+  PASS  Largest phase correctly selected when emitted first
+  PASS  Phase name 'sidecar_processing' found exactly
+  PASS  No accidental 'sidecar' phase created
+  PASS  Mismatched transactionId (99) does not contaminate txnId=1 summary
+  PASS  Duplicate phase END: parser records summary as-is (test warns about the issue)
+  PASS  Phase with BEGIN but no END detected as unmatched
+  PASS  RAII struct destructor has PhaseDurations accumulation
+  PASS  RAII struct destructor writes OutDurationMs before PhaseDurations accumulation
+  PASS  RAII fix: no standalone PhaseDurations.FindOrAdd in HandleImport body
+  PASS  Production: HandleImport discovery skips commented signature
+  PASS  Production: 'path_validation' phase declaration uniqueness
+  PASS  Production: 'path_validation' total declaration count = 1
+  PASS  Production: 'path_validation' complete declaration count = 1
+  PASS  Production: 'path_validation' uses EFbxPhaseKind::Exclusive
+  PASS  Production: 'path_validation' supplies &PhaseDurations
+  PASS  Production: 'path_validation' declared in standalone dedicated block
+  PASS  Production: 'path_validation' block bounds inside HandleImport
+  PASS  Production: 'path_validation' decl before ValidatePathSecurity
+  PASS  Production: 'path_validation' block encloses ValidatePathSecurity
+  PASS  Production: 'path_validation' exact ordering chain
+  PASS  Production: 'request_parse' phase declaration uniqueness
+  PASS  Production: 'request_parse' total declaration count = 1
+  PASS  Production: 'request_parse' complete declaration count = 1
+  PASS  Production: 'request_parse' uses EFbxPhaseKind::Exclusive
+  PASS  Production: 'request_parse' supplies &PhaseDurations
+  PASS  Production: 'request_parse' declared in standalone dedicated block
+  PASS  Production: 'request_parse' block bounds inside HandleImport
+  PASS  Production: 'request_parse' decl before ValidateVersion
+  PASS  Production: 'request_parse' block encloses ValidateVersion
+  PASS  Production: 'request_parse' exact ordering chain
+  PASS  Production: 'request_parse' block encloses bounded FbxPath extraction
+  PASS  Production: 'request_parse' block closes before ValidatePathSecurity
+  PASS  Production: ValidatePathSecurity outside 'request_parse' block
+  PASS  IsExclusivePhase function exists
+  PASS  Phase 10K.5: SYNC_TIMING removed (superseded by STALL_SUMMARY)
+  PASS  Phase 10K.5: UE_LOG STALL_SUMMARY marker present
+  PASS  Phase 7E: no visibility channel changes in FBX importer
+  PASS  Self-test [A (standalone block)]
+  PASS  Self-test [B (HandleImport body only)]
+  PASS  Self-test [C (inside if block)]
+  PASS  Self-test [D (inside for loop)]
+  PASS  Self-test [E (braces in comments/strings)]
+  PASS  Self-test [F (text in comment)]
+  PASS  Self-test [G (work call in comment)]
+  PASS  Self-test [G]: work call masked in comment
+  PASS  Self-test [H]: declaration count = 2
+  PASS  Self-test [H]: no complete declaration
+  PASS  Self-test [H]: Alpha has Exclusive
+  PASS  Self-test [H]: Alpha lacks &PhaseDurations
+  PASS  Self-test [H]: Beta lacks Exclusive
+  PASS  Self-test [H]: Beta has &PhaseDurations
+  PASS  Self-test [I (control-flow after decl)]
+  PASS  Self-test [J]: full bounds inside HandleImport
+  PASS  Self-test [K1 (lambda [] { })]
+  PASS  Self-test [K2 (lambda [&] { })]
+  PASS  Self-test [K3 (lambda []() mutable { })]
+  PASS  Self-test [L]: VPS call inside HandleImport
+  PASS  Self-test [L]: VV call inside HandleImport
+  PASS  Self-test [L]: VPS call found without bounds
+  PASS  Self-test [L]: VPS bounded ≠ unbounded
+  PASS  Self-test [M1]: FbxPath(Request.FbxPath) accepted
+  PASS  Self-test [M2]: FbxPath(Request.ObjectName) rejected
+  PASS  Self-test [M3]: FbxPath in comment masked
+  PASS  Self-test [M4]: FbxPath outside HandleImport ignored
+  PASS  Self-test [N]: exact 1 declaration
+  PASS  Self-test [N]: canonical decl has both fields
+  PASS  Self-test [N]: standalone block found
+  PASS  Self-test [N]: full bounds inside HandleImport
+  PASS  Self-test [O]: declaration count = 2
+  PASS  Self-test [O]: no complete declaration
+  PASS  Self-test [O]: Alpha has no complete wiring
+  PASS  Self-test [O]: Beta has no complete wiring
+  PASS  Self-test [P]: one complete decl — total=1
+  PASS  Self-test [P]: one complete decl — complete=1
+  PASS  Self-test [Q]: two complete decls — total=2
+  PASS  Self-test [Q]: two complete decls — complete=2
+  PASS  Self-test [R]: one complete + one incomplete — total=2
+  PASS  Self-test [R]: one complete + one incomplete — complete=1
+  PASS  Self-test [S]: two incomplete — total=2
+  PASS  Self-test [S]: two incomplete — complete=0
+  PASS  Self-test [T]: phase name only in comment does not match
+  PASS  Self-test [T]: Exclusive only in comment does not count
+  PASS  Self-test [T]: &PhaseDurations only in comment does not count
+  PASS  Self-test [T2]: actual TEXT("request_parse") recognized
+  PASS  Self-test [T2]: Exclusive outside comment recognized
+  PASS  Self-test [T2]: PhaseDurations outside comment recognized
+  PASS  Self-test [FbxPath-Request.FbxPath]: accepted
+  PASS  Self-test [FbxPath-Request.ObjectName]: rejected
+  PASS  Self-test [FbxPath-Request.FbxPathBackup]: rejected
+  PASS  Self-test [FbxPath-Request.FbxPathSomething]: rejected
+  PASS  Self-test [RP-A]: declarative label — correct order
+  PASS  Self-test [RP-A-correct]: PASS (expected valid)
+  PASS  Self-test [RP-B-fbx-before-decl]: FAIL (expected invalid)
+  PASS  Self-test [RP-B]: exact failed relation — ValidateVersion_call<fbx_path_invocation_start
+  PASS  Self-test [RP-C-vv-before-fbx]: PASS (expected valid)
+  PASS  Self-test [RP-C]: ValidateVersion before FbxPath is valid
+  PASS  Self-test [RP-C-inv-fbx-before-vv]: FAIL (expected invalid)
+  PASS  Self-test [RP-C-inv]: exact failed relation — ValidateVersion_call<fbx_path_invocation_start
+  PASS  Self-test [RP-E-vps-inside-block]: FAIL (expected invalid)
+  PASS  Self-test [RP-E]: exact failed relation — phase_close<ValidatePathSecurity_call
+  PASS  Self-test [RP-F-vps-before-close]: FAIL (expected invalid)
+  PASS  Self-test [RP-F]: exact failed relation — phase_close<ValidatePathSecurity_call
+  PASS  Self-test [RP-G]: synthetic cross-boundary evaluator fixture
+  PASS  Self-test [RP-G-synth]: evaluator returns False
+  PASS  Self-test [RP-G-synth]: failed relation fbx_path_invocation_end<phase_close
+  PASS  Self-test [RP-G-parse]: normal balanced FbxPath start >= 0
+  PASS  Self-test [RP-G-parse]: normal balanced FbxPath end > start
+  PASS  Self-test [RP-G-parse]: FbxPath inside block
+  PASS  Self-test [PV-A]: declarative label — correct order
+  PASS  Self-test [PV-A-correct]: PASS (expected valid)
+  PASS  Self-test [PV-B-vps-before-decl-end]: FAIL (expected invalid)
+  PASS  Self-test [PV-B]: exact failed relation — declaration_end<ValidatePathSecurity_call
+  PASS  Self-test [PV-C-vps-before-decl]: FAIL (expected invalid)
+  PASS  Self-test [PV-C]: exact failed relation — declaration_end<ValidatePathSecurity_call
+  PASS  Self-test [PV-D-vps-after-hclose]: FAIL (expected invalid)
+  PASS  Self-test [PV-D]: exact failed relation — ValidatePathSecurity_call<phase_close
+  PASS  Self-test [PV-E-discovery]: no decl inside HandleImport bounds
+  PASS  Self-test [PV-E-invalid]: evaluator returns False
+  PASS  Self-test [PV-E-invalid]: failed relation handle_open<phase_open
+  PASS  Direct evaluator [RP-valid]: complete valid chain returns True
+  PASS  Direct evaluator [RP-inv-handle_open<phase_open]: returns False
+  PASS  Direct evaluator [RP-inv-handle_open<phase_open]: failed relation handle_open<phase_open
+  PASS  Direct evaluator [RP-inv-phase_open<declaration_start]: returns False
+  PASS  Direct evaluator [RP-inv-phase_open<declaration_start]: failed relation phase_open<declaration_start
+  PASS  Direct evaluator [RP-inv-declaration_start<declaration_end]: returns False
+  PASS  Direct evaluator [RP-inv-declaration_start<declaration_end]: failed relation declaration_start<declaration_end
+  PASS  Direct evaluator [RP-inv-declaration_end<ValidateVersion_call]: returns False
+  PASS  Direct evaluator [RP-inv-declaration_end<ValidateVersion_call]: failed relation declaration_end<ValidateVersion_call
+  PASS  Direct evaluator [RP-inv-ValidateVersion_call<fbx_path_invocation_start]: returns False
+  PASS  Direct evaluator [RP-inv-ValidateVersion_call<fbx_path_invocation_start]: failed relation ValidateVersion_call<fbx_path_invocation_start
+  PASS  Direct evaluator [RP-inv-fbx_path_invocation_start<fbx_path_invocation_end]: returns False
+  PASS  Direct evaluator [RP-inv-fbx_path_invocation_start<fbx_path_invocation_end]: failed relation fbx_path_invocation_start<fbx_path_invocation_end
+  PASS  Direct evaluator [RP-inv-fbx_path_invocation_end<phase_close]: returns False
+  PASS  Direct evaluator [RP-inv-fbx_path_invocation_end<phase_close]: failed relation fbx_path_invocation_end<phase_close
+  PASS  Direct evaluator [RP-inv-phase_close<ValidatePathSecurity_call]: returns False
+  PASS  Direct evaluator [RP-inv-phase_close<ValidatePathSecurity_call]: failed relation phase_close<ValidatePathSecurity_call
+  PASS  Direct evaluator [RP-inv-ValidatePathSecurity_call<handle_close]: returns False
+  PASS  Direct evaluator [RP-inv-ValidatePathSecurity_call<handle_close]: failed relation ValidatePathSecurity_call<handle_close
+  PASS  Direct evaluator [PV-valid]: complete valid chain returns True
+  PASS  Direct evaluator [PV-inv-handle_open<phase_open]: returns False
+  PASS  Direct evaluator [PV-inv-handle_open<phase_open]: failed relation handle_open<phase_open
+  PASS  Direct evaluator [PV-inv-phase_open<declaration_start]: returns False
+  PASS  Direct evaluator [PV-inv-phase_open<declaration_start]: failed relation phase_open<declaration_start
+  PASS  Direct evaluator [PV-inv-declaration_start<declaration_end]: returns False
+  PASS  Direct evaluator [PV-inv-declaration_start<declaration_end]: failed relation declaration_start<declaration_end
+  PASS  Direct evaluator [PV-inv-declaration_end<ValidatePathSecurity_call]: returns False
+  PASS  Direct evaluator [PV-inv-declaration_end<ValidatePathSecurity_call]: failed relation declaration_end<ValidatePathSecurity_call
+  PASS  Direct evaluator [PV-inv-ValidatePathSecurity_call<phase_close]: returns False
+  PASS  Direct evaluator [PV-inv-ValidatePathSecurity_call<phase_close]: failed relation ValidatePathSecurity_call<phase_close
+  PASS  Direct evaluator [PV-inv-phase_close<handle_close]: returns False
+  PASS  Direct evaluator [PV-inv-phase_close<handle_close]: failed relation phase_close<handle_close
+  PASS  Setup [RP-absent-decl]: prerequisites_valid=False
+  PASS  Setup [RP-absent-decl]: missing contains unique declaration
+  PASS  Setup [RP-incomplete]: prerequisites_valid=False
+  PASS  Setup [RP-incomplete]: evaluator_valid=False
+  PASS  Setup [RP-incomplete]: missing contains constructor bounds
+  PASS  Setup [RP-incomplete]: match_count == 1
+  PASS  Setup [RP-incomplete]: single_match is not None
+  PASS  Setup [RP-incomplete]: declaration_start >= 0
+  PASS  Setup [RP-incomplete]: declaration_end == -1
+  PASS  Setup [RP-incomplete]: invocation_complete == False
+  PASS  Setup [RP-incomplete]: missing does not contain unique decl
+  PASS  Setup [RP-LC]: fallback — line-comment-only target
+  PASS  Setup [RP-LC]: single_match is the second decl
+  PASS  Setup [RP-LC]: exact selected position == valid_pos
+  PASS  Setup [RP-LC]: selected position > broken_pos
+  PASS  Setup [RP-LC]: prerequisites_valid=True
+  PASS  Setup [RP-BC]: fallback — block-comment-only target
+  PASS  Setup [RP-BC]: exact selected position == valid_pos
+  PASS  Setup [RP-BC]: selected position > broken_pos
+  PASS  Setup [RP-BC]: prerequisites_valid=True
+  PASS  Setup [RP-SL]: fallback — unrelated-string-only target
+  PASS  Setup [RP-SL]: exact selected position == valid_pos
+  PASS  Setup [RP-SL]: selected position > broken_pos
+  PASS  Setup [RP-SL]: prerequisites_valid=True
+  PASS  Setup [RP-SL2]: string literal before broken decl — valid
+  PASS  Setup [RP-SL2]: prerequisites_valid=True
+  PASS  Setup [RP-OC]: other-class false-positive guard — valid
+  PASS  Setup [RP-OC]: prerequisites_valid=True
+  PASS  Setup [RP-LD]: later-declaration bleed guard — match_count=1
+  PASS  Setup [RP-LD]: single_match is the second decl
+  PASS  Setup [RP-LD]: exact selected position == valid_pos
+  PASS  Setup [RP-LD]: selected position > broken_pos
+  PASS  Setup [RP-LD]: invocation_complete=True for selected decl
+  PASS  Setup [RP-LD]: prerequisites_valid=True
+  PASS  Direct scanner [RP-cutoff]: end_pos before TEXT returns False
+  PASS  Direct scanner [RP-cutoff]: start_pos after opening paren
+  PASS  Direct scanner [RP-cutoff]: cutoff <= target position
+  PASS  Direct scanner [RP-full]: full end_pos includes target returns True
+  PASS  Direct scanner [RP-full]: full end_pos > target position
+  PASS  Direct scanner [PV-cutoff]: end_pos before TEXT returns False
+  PASS  Direct scanner [PV-cutoff]: start_pos after opening paren
+  PASS  Direct scanner [PV-cutoff]: cutoff <= target position
+  PASS  Direct scanner [PV-full]: full end_pos includes target returns True
+  PASS  Direct scanner [PV-full]: full end_pos > target position
+  PASS  Setup [RP-FA]: actual incomplete fallback — match_count=1
+  PASS  Setup [RP-FA]: single_match is not None
+  PASS  Setup [RP-FA]: declaration_end == -1
+  PASS  Setup [RP-FA]: constructor bounds missing
+  PASS  Setup [RP-FA]: prerequisites_valid=False
+  PASS  Setup [RP-FB]: incomplete + line-comment only — match_count=0
+  PASS  Setup [RP-FB]: missing unique declaration
+  PASS  Setup [RP-FC]: incomplete + block-comment only — match_count=0
+  PASS  Setup [RP-FC]: missing unique declaration
+  PASS  Setup [RP-FD]: incomplete + unrelated string — match_count=0
+  PASS  Setup [RP-FD]: missing unique declaration
+  PASS  Setup [RP-FE]: incomplete + other_phase + comment — match_count=0
+  PASS  Setup [RP-FE]: missing unique declaration
+  PASS  Setup [RP-FF]: broken + unrelated UE_LOG — match_count=0
+  PASS  Setup [RP-FF]: missing unique declaration
+  PASS  Setup [RP-BD1]: enclosing block boundary — match_count=1
+  PASS  Setup [RP-BD1]: holds valid decl
+  PASS  Setup [RP-BD2]: next declaration boundary — match_count=1
+  PASS  Setup [RP-BD2]: holds valid decl
+  PASS  Setup [RP-no-FbxPath]: prerequisites_valid=False
+  PASS  Setup [RP-no-FbxPath]: missing contains FbxPath invocation
+  PASS  Setup [RP-no-VV]: prerequisites_valid=False
+  PASS  Setup [RP-no-VV]: missing contains ValidateVersion call
+  PASS  Setup [RP-no-VPS]: prerequisites_valid=False
+  PASS  Setup [RP-no-VPS]: missing contains ValidatePathSecurity call
+  PASS  Setup [PV-absent-decl]: prerequisites_valid=False
+  PASS  Setup [PV-absent-decl]: missing contains unique declaration
+  PASS  Setup [PV-incomplete]: prerequisites_valid=False
+  PASS  Setup [PV-incomplete]: evaluator_valid=False
+  PASS  Setup [PV-incomplete]: missing contains constructor bounds
+  PASS  Setup [PV-incomplete]: match_count == 1
+  PASS  Setup [PV-incomplete]: single_match is not None
+  PASS  Setup [PV-incomplete]: declaration_start >= 0
+  PASS  Setup [PV-incomplete]: declaration_end == -1
+  PASS  Setup [PV-incomplete]: invocation_complete == False
+  PASS  Setup [PV-incomplete]: missing does not contain unique decl
+  PASS  Setup [PV-LC]: fallback — line-comment-only target — match_count=0
+  PASS  Setup [PV-LC]: missing unique declaration
+  PASS  Setup [PV-BC]: fallback — block-comment-only target — match_count=0
+  PASS  Setup [PV-BC]: missing unique declaration
+  PASS  Setup [PV-US]: fallback — unrelated string — match_count=0
+  PASS  Setup [PV-US]: missing unique declaration
+  PASS  Setup [PV-FF]: broken + unrelated UE_LOG — match_count=0
+  PASS  Setup [PV-FF]: missing unique declaration
+  PASS  Setup [PV-no-VPS]: prerequisites_valid=False
+  PASS  Setup [PV-no-VPS]: missing contains ValidatePathSecurity call
+  PASS  STATE [RP-no-decl]: prerequisites_valid=False
+  PASS  STATE [RP-no-decl]: evaluator_valid=False
+  PASS  STATE [RP-no-decl]: missing contains 'unique declaration'
+  PASS  STATE [RP-no-block]: prerequisites_valid=False
+  PASS  STATE [RP-no-block]: evaluator_valid=False
+  PASS  STATE [RP-no-block]: missing contains 'dedicated block'
+  PASS  STATE [RP-no-decl-end]: prerequisites_valid=False
+  PASS  STATE [RP-no-decl-end]: evaluator_valid=False
+  PASS  STATE [RP-no-decl-end]: missing contains 'constructor bounds'
+  PASS  STATE [RP-no-FbxPath]: prerequisites_valid=False
+  PASS  STATE [RP-no-FbxPath]: evaluator_valid=False
+  PASS  STATE [RP-no-FbxPath]: missing contains 'FbxPath invocation'
+  PASS  STATE [RP-no-VV]: prerequisites_valid=False
+  PASS  STATE [RP-no-VV]: evaluator_valid=False
+  PASS  STATE [RP-no-VV]: missing contains 'ValidateVersion call'
+  PASS  STATE [RP-no-VPS]: prerequisites_valid=False
+  PASS  STATE [RP-no-VPS]: evaluator_valid=False
+  PASS  STATE [RP-no-VPS]: missing contains 'ValidatePathSecurity call'
+  PASS  STATE [RP-bad-order]: prerequisites_valid=True
+  PASS  STATE [RP-bad-order]: evaluator_valid=False
+  PASS  STATE [RP-bad-order]: failing contains 'ValidateVersion_call<fbx_path_invocation_start'
+  PASS  STATE [RP-good-order]: prerequisites_valid=True
+  PASS  STATE [RP-good-order]: evaluator_valid=True
+  PASS  STATE [PV-no-decl]: prerequisites_valid=False
+  PASS  STATE [PV-no-decl]: evaluator_valid=False
+  PASS  STATE [PV-no-decl]: missing contains 'unique declaration'
+  PASS  STATE [PV-no-block]: prerequisites_valid=False
+  PASS  STATE [PV-no-block]: evaluator_valid=False
+  PASS  STATE [PV-no-block]: missing contains 'dedicated block'
+  PASS  STATE [PV-no-decl-end]: prerequisites_valid=False
+  PASS  STATE [PV-no-decl-end]: evaluator_valid=False
+  PASS  STATE [PV-no-decl-end]: missing contains 'constructor bounds'
+  PASS  STATE [PV-no-VPS]: prerequisites_valid=False
+  PASS  STATE [PV-no-VPS]: evaluator_valid=False
+  PASS  STATE [PV-no-VPS]: missing contains 'ValidatePathSecurity call'
+  PASS  STATE [PV-bad-order]: prerequisites_valid=True
+  PASS  STATE [PV-bad-order]: evaluator_valid=False
+  PASS  STATE [PV-bad-order]: failing contains 'ValidatePathSecurity_call<phase_close'
+  PASS  STATE [PV-good-order]: prerequisites_valid=True
+  PASS  STATE [PV-good-order]: evaluator_valid=True
+  PASS  Sequential exclusive phases: coverage <= 100% (got 85.71)
+  PASS  Nested phase excluded from exclusive sum (got 10.0)
+  PASS  Source: IsExclusivePhase used in STALL_SUMMARY calculation
+  PASS  Overlap detected: classification=INVALID_OVERLAP
+  PASS  measuredExclusiveMs > totalMs: raw coverage retained and overlap invalid
+  PASS  Timer tolerance: measured > total by < 0.5ms is still valid
+  PASS  Largest phase correctly identified (got large_phase)
+  PASS  Classification only computed when timing is valid
+  PASS  Phase 'request_parse' has non-zero duration (got 0.5)
+  PASS  Phase 'path_validation' has non-zero duration (got 1.2)
+  PASS  Phase 'fbx_factory_import' has non-zero duration (got 45.0)
+  PASS  Classification fixture: no positive phases → UNRESOLVED
+  PASS  Classification fixture: one positive phase → DOMINANT_sidecar_processing
+  PASS  Classification fixture: 80% boundary → MIXED
+  PASS  Classification fixture: below 80% → DOMINANT_phase_a
+  PASS  Classification fixture: equal tie A-B → largest=phase_a
+  PASS  Classification fixture: equal tie B-A → largest=phase_a
+  PASS  Classification fixture: nested phase ignored → DOMINANT_exclusive_phase
+  PASS  Classification fixture: zero/negative ignored → UNRESOLVED
+  PASS  Classification fixture: invalid overlap → INVALID_OVERLAP
+  PASS  Classification fixture: invalid overlap computed excess > 0.5
+  PASS  Coverage fixture: computed coverage equals 200
+  PASS  Coverage fixture: computed coverage > 100 (no clamp)
+  PASS  RAII fixture A: one guard + one emission accepted
+  PASS  RAII fixture B: duplicate guard rejected
+  PASS  RAII fixture C: duplicate emission is explicit rejection reason
+  PASS  RAII fixture D: guard after early return rejected
+  PASS  RAII fixture E: PhaseDurations after guard rejected
+  PASS  Production: exactly one FFbxTransactionSummary definition
+  PASS  Production: exactly one TxnSummary declaration inside HandleImport
+  PASS  Production: exactly one STALL_SUMMARY UE_LOG invocation
+  PASS  Production: STALL_SUMMARY emission count = 1 (exact)
+  PASS  Production: exactly one ComputeExclusiveClassification definition
+  PASS  Production: exactly one ComputeExclusiveClassification call site in FFbxTransactionSummary
+  PASS  Production: zero obsolete ComputePhaseClassificationExclusive identifiers
+  PASS  Production: ordering txn_alloc < PhaseDurations
+  PASS  Production: ordering PhaseDurations < TxnSummary
+  PASS  Production: ordering TxnSummary < ValidatePayloadSize
+  PASS  Production: ordering VPS < first_return_after_txn
+  PASS  Production: SetGuid after FMemory::Memcpy
+  PASS  Production: SetObjectName after bounded ObjectName conversion
+  PASS  FFbxScopePhase struct exists
+  PASS  FbxPhaseBegin helper exists
+  PASS  FbxPhaseEnd helper exists
+  PASS  GExclusivePhases TSet exists
+  PASS  IsExclusivePhase function exists
+  PASS  ComputeExclusiveClassification function exists
+  PASS  PHASE_BEGIN UE_LOG marker exists
+  PASS  PHASE_END UE_LOG marker exists
+  PASS  STALL_SUMMARY UE_LOG marker exists
+  PASS  Semantic regression: HandleImport bounds found
+  PASS  Semantic regression: exactly one ValidateVersion in HandleImport
+  PASS  Semantic regression: exactly one ValidatePathSecurity in HandleImport
+  PASS  Semantic regression: exactly one FbxPath conversion in HandleImport
+  PASS  Semantic regression: ValidateVersion before FbxPath
+  PASS  Semantic regression: ValidateVersion before ValidatePathSecurity
+  PASS  Semantic regression: no ObjectName conversion before ValidateVersion
+  PASS  Semantic regression: exactly one ObjectName conversion in HandleImport
+  PASS  Semantic regression: exactly one complete request_parse block
+  PASS  Semantic regression: path_validation block found
+  PASS  Semantic regression: FbxPath conversion bounds found
+  PASS  Semantic regression: no ObjectName conversion inside request_parse
+  PASS  Semantic regression: no ObjectName conversion inside path_validation
+  PASS  Semantic regression: ObjectName conversion after path_validation close
+  PASS  Semantic regression: all ordering positions present
+  PASS  Semantic regression: full ordering chain
+  PASS  Self-test [ObjCount-A-one]: count == 1
+  PASS  Self-test [ObjCount-B-duplicate]: count != 1
+  PASS  Self-test [ObjCount-C-comment]: count == 1 (comment ignored)
+  PASS  Self-test [ObjCount-D-unrelated]: count == 1 (unrelated ignored)
+  PASS  Self-test [ObjCount-Z-zero]: count == 0
+  PASS  Self-test [ObjCount-Z-zero]: exact-one predicate rejected
+  PASS  Self-test [Ordering-E-missing]: all_positions_present=False
+  PASS  Self-test [Ordering-E-missing]: order_ok=False
+
+
+Timestamp: 2026-06-24T07:47:37+07:00

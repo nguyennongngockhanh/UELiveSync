@@ -1,0 +1,31 @@
+Test: parser-evidence-restoration
+Phase: 10K.6 — final parser-evidence fix
+Timestamp: 2026-06-23T12:32:51+07:00
+File: tests/phase10k6_transaction_decomposition.py
+
+Changes applied:
+1. Fixed false-pass in "Setup [RP-incomplete-constructor]: single_match
+   is not None" — was _rp_inccon[3] is not None and True (always True
+   because _rp_inccon[3] is a bool from 5-tuple); now checks
+   _rp_inccon.single_match is not None.
+2. Added complete parser-state assertions for RP-incomplete fixture:
+   match_count==1, single_match not None, declaration_start>=0,
+   declaration_end==-1, invocation_complete==False,
+   missing does NOT contain "unique declaration".
+3. Added "evaluator_valid" assertion for both RP-incomplete and
+   PV-incomplete fixtures to verify the evaluator state is also False.
+4. Converted all remaining tuple-index assertions ([0], [1]) to named
+   field access (.prerequisites_valid, .missing) for RP and PV
+   variables.
+5. Added 7 lexical false-positive fixtures:
+   - RP-LC: phase name inside // comment — must still pass
+   - RP-BC: phase name inside /* */ — must still pass
+   - RP-SL: phase name inside string literal — must still pass
+   - RP-OC: different class name containing FFbxScopePhase — must pass
+   - RP-LD: same phase name in a later block — must still match correct
+     declaration first
+   - PV-LC: phase name inside // comment — must still pass
+   - PV-BC: phase name inside /* */ — must still pass
+   All 7 verify prerequisites_valid == True.
+6. Grouped setup tests into labeled sections (lexical false-positive,
+   missing-element).

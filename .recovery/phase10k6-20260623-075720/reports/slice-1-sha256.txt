@@ -1,0 +1,7 @@
+=== Patch ===
+6cea49d86609c0f56bf61a62a5de237deafeb4ea7194688b4f3278fdbee2240c  /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/patches/slice-1.patch
+=== Snapshot ===
+fc95c9c2cc1480fe358dbe910f79cf757b94ae02388eb4b3332697f78f193682  /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.slice-1.cpp
+
+=== Pre-slice-1 baseline ===
+3885d5da6f3f64d4f85a72903a17e45add6820dc4ef693acc2bdcf8bfdc79739  /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.pre-slice-1.cpp

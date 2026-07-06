@@ -1,0 +1,672 @@
+173c173
+< # ---- HandleImport body bounds -----------------------------------------------
+---
+> # ---- HandleImport body bounds (lexical-aware) --------------------------------
+176,183c176,192
+<     (-1, -1) if not found."""
+<     hi_pos = content.find('bool FLiveSyncFBXImporter::HandleImport(')
+<     if hi_pos < 0:
+<         return (-1, -1)
+<     result = _find_lexical_brace_pair(content, mask, hi_pos, '{', '}')
+<     if result is None:
+<         return (-1, -1)
+<     return result
+---
+>     (-1, -1) if not found.  Uses masked scan to skip comments/strings."""
+>     n = len(content)
+>     sig = 'bool FLiveSyncFBXImporter::HandleImport('
+>     # Scan masked-aware through the content
+>     i = 0
+>     while i < n:
+>         if mask[i]:
+>             i += 1
+>             continue
+>         # Check for the signature at this position
+>         if content[i:i+len(sig)] == sig:
+>             hi_pos = i
+>             result = _find_lexical_brace_pair(content, mask, hi_pos, '{', '}')
+>             if result is not None:
+>                 return result
+>         i += 1
+>     return (-1, -1)
+358c367
+<         if invocation and f'TEXT("{phase_name}")' in invocation:
+---
+>         if invocation and phase_name in _extract_text_macro_args(invocation):
+376a386,502
+> # ---- Balanced-parenthesis extraction (top-level comma aware) -----------------
+> def _extract_balanced_first_arg(content, mask, start_pos):
+>     """Extract the first top-level argument from a parenthesized call at
+>     start_pos (assumes start_pos points to an opening paren '(').
+>     Returns (first_arg_text, first_arg_end_pos) where first_arg_end_pos
+>     is the position of the comma (or matching ')' for single-arg).
+>     Returns None on failure."""
+>     depth = 1
+>     arg_start = -1
+>     arg_end = -1
+>     n = len(content)
+>     i = start_pos + 1
+>     # Skip whitespace/mask after opening paren
+>     while i < n and (mask[i] or content[i] in ' \t\n\r'):
+>         i += 1
+>     if i >= n:
+>         return None
+>     arg_start = i
+>     while i < n and depth > 0:
+>         if mask[i]:
+>             i += 1
+>             continue
+>         if content[i] == '(':
+>             depth += 1
+>         elif content[i] == ')':
+>             depth -= 1
+>             if depth == 0:
+>                 arg_end = i
+>                 break
+>         elif content[i] == ',' and depth == 1:
+>             arg_end = i
+>             break
+>         i += 1
+>     if arg_end < 0:
+>         return None
+>     raw = content[arg_start:arg_end].strip()
+>     return raw, arg_end
+> 
+> 
+> # ---- Invocation-local lexical mask -------------------------------------------
+> def _has_field_outside_comment(invocation_text, field_str):
+>     """Return True if field_str appears in invocation_text outside of
+>     comments, string literals, and character literals."""
+>     mask = _build_lexical_mask(invocation_text)
+>     idx = 0
+>     while True:
+>         pos = invocation_text.find(field_str, idx)
+>         if pos < 0:
+>             return False
+>         if not mask[pos]:
+>             return True
+>         idx = pos + 1
+> 
+> 
+> def _extract_text_macro_args(invocation_text):
+>     """Extract all TEXT(\"...\") argument values from invocation_text.
+>     Returns list of string values found outside comments/strings.
+>     Uses manual comment-skipping for the outer scan (not _build_lexical_mask)
+>     because _build_lexical_mask masks string literal content, which would
+>     prevent scanning inside TEXT(\"...\")."""
+>     n = len(invocation_text)
+>     results = []
+>     i = 0
+>     # Simple comment mask: track // and /* */ for outer scan only
+>     def _in_comment(pos):
+>         """Quick check if pos is inside a // or /* */ comment."""
+>         for ci in range(pos):
+>             if invocation_text[ci:ci+2] == '//' and invocation_text.find('\n', ci) >= pos:
+>                 return True
+>             if invocation_text[ci:ci+2] == '/*':
+>                 end = invocation_text.find('*/', ci + 2)
+>                 if end >= 0 and end + 2 > pos:
+>                     return True
+>         return False
+> 
+>     while i < n:
+>         if _in_comment(i):
+>             i += 1
+>             continue
+>         if invocation_text[i:i+5] == 'TEXT(':
+>             # Skip whitespace after '('
+>             j = i + 5
+>             while j < n and invocation_text[j] in ' \t\n\r':
+>                 j += 1
+>             if j < n and invocation_text[j] == '"':
+>                 j += 1  # skip opening quote
+>                 arg_start = j
+>                 while j < n:
+>                     if invocation_text[j] == '\\':
+>                         j += 2
+>                         continue
+>                     if invocation_text[j] == '"':
+>                         arg_val = invocation_text[arg_start:j]
+>                         results.append(arg_val)
+>                         break
+>                     j += 1
+>             i += 5
+>         else:
+>             i += 1
+>     return results
+> 
+> 
+> # ---- Declaration uniqueness -----------------------------------------------
+> def _count_phase_declarations(decls_list, invocation_texts):
+>     """Count total and complete declarations from a list of
+>     (match, invocation) pairs.
+>     Returns (total_count, complete_count)."""
+>     total = len(decls_list)
+>     complete = 0
+>     for _, inv in decls_list:
+>         has_excl = _has_field_outside_comment(inv, 'EFbxPhaseKind::Exclusive')
+>         has_dur = _has_field_outside_comment(inv, '&PhaseDurations')
+>         if has_excl and has_dur:
+>             complete += 1
+>     return total, complete
+> 
+> 
+396,397c522,526
+<         args = inv[paren + 1 : -1].strip()
+<         if args.startswith('Request.FbxPath'):
+---
+>         first_arg = _extract_balanced_first_arg(content, mask, m.end() - 1)
+>         if first_arg is None:
+>             continue
+>         arg_text, _ = first_arg
+>         if arg_text == 'Request.FbxPath':
+1507c1636,1643
+<     the HandleImport function body."""
+---
+>     the HandleImport function body.
+> 
+>     Enforces:
+>       - Declaration uniqueness: exactly 1 FFbxScopePhase per phase.
+>       - Independent field assertions: Exclusive and PhaseDurations checked
+>         separately (lexically-aware).
+>       - Exact ordering chain for each phase.
+>     """
+1522a1659,1673
+>     # Fixture for lexical HandleImport discovery (req 7)
+>     # check commented signature before real one is ignored
+>     fixture_lexical_hi = (
+>         '// bool FLiveSyncFBXImporter::HandleImport(FBXImportRequest& Request)\n'
+>         'bool FLiveSyncFBXImporter::HandleImport(FBXImportRequest& Request)\n'
+>         '{\n'
+>         '    return true;\n'
+>         '}'
+>     )
+>     mask_lex_hi = _build_lexical_mask(fixture_lexical_hi)
+>     ho, hc = _find_handleimport_full_bounds(fixture_lexical_hi, mask_lex_hi)
+>     _test("Production: HandleImport discovery skips commented signature",
+>           ho >= 0 and hc > ho,
+>           detail="commented signature before real one must not confuse discovery")
+> 
+1524c1675
+<     # Helper: run all assertions for one phase
+---
+>     # Helper: run assertions for one phase
+1527,1531c1678,1682
+<                     extra_checks=None):
+<         """Run assertions 1-7 for a phase.  extra_checks is called as
+<         extra_checks(block_open, block_close, block_body) for ph-specific
+<         checks (8+).  Returns (selected_decl_match, block) or (None, None)."""
+<         # Find ALL declarations for this phase within HandleImport
+---
+>                     enclosed_func2=None, enclosed_func2_pos=-1,
+>                     require_fbx_path=False):
+>         """Run declaration uniqueness, independent field assertions,
+>         block detection, bounds, and ordering chain."""
+>         # --- 1. Collect ALL declarations ---
+1534,1552c1685,1702
+<         decl_count = len(all_decls)
+< 
+<         # 1. Declaration exists
+<         _test(f"Production: '{ph_name}' FFbxScopePhase declaration exists",
+<               decl_count > 0,
+<               detail=f"unmasked FFbxScopePhase with TEXT(\"{ph_name}\") "
+<                      f"inside HandleImport (count={decl_count})")
+< 
+<         # Find canonical declaration: one that has BOTH Exclusive AND
+<         # PhaseDurations in the same invocation
+<         canonical_idx = -1
+<         canonical_match = None
+<         canonical_inv = None
+<         for i, (m, inv) in enumerate(all_decls):
+<             if 'EFbxPhaseKind::Exclusive' in inv and '&PhaseDurations' in inv:
+<                 canonical_idx = i
+<                 canonical_match = m
+<                 canonical_inv = inv
+<                 break
+---
+>         total, complete = _count_phase_declarations(
+>             all_decls, [inv for _, inv in all_decls])
+>         decl_count = total
+> 
+>         has_unique = (decl_count == 1)
+>         _test(f"Production: '{ph_name}' phase declaration uniqueness",
+>               has_unique,
+>               detail=f"total={total}, complete={complete}, "
+>                      f"expected exactly 1 declaration")
+> 
+>         # --- Independent field assertions (on the single declaration) ---
+>         if has_unique and decl_count == 1:
+>             _, single_inv = all_decls[0]
+>             single_match = all_decls[0][0]
+>             has_excl = _has_field_outside_comment(
+>                 single_inv, 'EFbxPhaseKind::Exclusive')
+>             has_dur = _has_field_outside_comment(
+>                 single_inv, '&PhaseDurations')
+1554,1555d1703
+<         if canonical_match and canonical_inv:
+<             # 2. Exclusive in same invocation
+1557,1559c1705,1706
+<                   True,
+<                   detail="canonical declaration has Exclusive+PhaseDurations")
+<             # 3. PhaseDurations in same invocation
+---
+>                   has_excl,
+>                   detail="lexical-aware check in invocation text")
+1561,1571c1708,1709
+<                   True,
+<                   detail="canonical declaration has Exclusive+PhaseDurations")
+<         elif decl_count > 0:
+<             _test(f"Production: '{ph_name}' uses EFbxPhaseKind::Exclusive",
+<                   False,
+<                   detail=f"none of {decl_count} decl(s) have both Exclusive "
+<                          f"and &PhaseDurations in the same invocation")
+<             _test(f"Production: '{ph_name}' supplies &PhaseDurations",
+<                   False,
+<                   detail=f"none of {decl_count} decl(s) have both Exclusive "
+<                          f"and &PhaseDurations in the same invocation")
+---
+>                   has_dur,
+>                   detail="lexical-aware check in invocation text")
+1572a1711
+>             single_match = None
+1574c1713
+<                   False, detail="no declaration inside HandleImport")
+---
+>                   False, detail="no unique declaration")
+1576c1715
+<                   False, detail="no declaration inside HandleImport")
+---
+>                   False, detail="no unique declaration")
+1578c1717
+<         # 4. Standalone dedicated block
+---
+>         # --- Standalone dedicated block ---
+1580,1581c1719,1720
+<         if canonical_match:
+<             block = _find_dedicated_block(content, mask, canonical_match.start())
+---
+>         if single_match:
+>             block = _find_dedicated_block(content, mask, single_match.start())
+1587,1588c1726,1727
+<         # 5. Full bounds
+<         if block_exists and canonical_match:
+---
+>         # --- Full bounds ---
+>         if block_exists and single_match:
+1590,1591c1729,1730
+<             decl_start = canonical_match.start()
+<             inv = _extract_constructor_invocation(content, mask, canonical_match)
+---
+>             decl_start = single_match.start()
+>             inv = _extract_constructor_invocation(content, mask, single_match)
+1600a1740
+>             block_open = block_close = decl_start = decl_end = -1
+1604,1605c1744,1745
+<         # 6. Declaration before enclosed function
+<         if canonical_match and block_exists and enclosed_func_pos >= 0:
+---
+>         # --- Declaration before enclosed function ---
+>         if single_match and block_exists and enclosed_func_pos >= 0:
+1607,1608c1747,1748
+<                   canonical_match.start() < enclosed_func_pos,
+<                   detail=(f"decl@{canonical_match.start()} "
+---
+>                   single_match.start() < enclosed_func_pos,
+>                   detail=(f"decl@{single_match.start()} "
+1613c1753
+<                   detail="canonical decl or block or {enclosed_func} not found")
+---
+>                   detail="decl or block or {enclosed_func} not found")
+1615c1755
+<         # 7. Enclosed function inside block
+---
+>         # --- Enclosed function inside block ---
+1617d1756
+<             block_open, block_close, _ = block
+1627,1628c1766,1802
+<         if extra_checks and block:
+<             extra_checks(block[0], block[1], block[2])
+---
+>         # --- Ordering chain ---
+>         def position(name, p):
+>             return f" {name}@{p}" if p >= 0 else f" {name}=-"
+> 
+>         order_ok = True
+>         order_detail = ""
+> 
+>         if block_exists and single_match:
+>             chain = [
+>                 ("handle_open", handle_open),
+>                 ("phase_open", block_open),
+>                 ("decl_start", decl_start),
+>                 ("decl_end", decl_end),
+>             ]
+>             if require_fbx_path:
+>                 chain.append(("fbx_path_start", fbx_path_start))
+>                 chain.append(("fbx_path_end", fbx_path_end))
+>             chain.append((enclosed_func, enclosed_func_pos))
+>             if require_fbx_path:
+>                 chain.append(("phase_close", block_close))
+>                 chain.append(("ValidatePathSecurity", vps_pos))
+>             else:
+>                 chain.append(("phase_close", block_close))
+>             chain.append(("handle_close", handle_close))
+> 
+>             for i in range(len(chain) - 1):
+>                 name_a, pos_a = chain[i]
+>                 name_b, pos_b = chain[i + 1]
+>                 if pos_a < 0 or pos_b < 0 or not (pos_a < pos_b):
+>                     order_ok = False
+>                     order_detail += f" {name_a}<{name_b}:FAIL" + \
+>                                     position(name_a, pos_a) + position(name_b, pos_b)
+> 
+>         suffix = "request_parse" if require_fbx_path else "path_validation"
+>         _test(f"Production: '{suffix}' exact ordering chain",
+>               order_ok,
+>               detail=order_detail if order_detail else "all positions in order")
+1630c1804
+<         return canonical_match, block
+---
+>         return single_match, block
+1633c1807
+<     # path_validation (7 assertions)
+---
+>     # path_validation — no FbxPath, no ValidateVersion
+1635c1809,1812
+<     check_phase('path_validation', 'ValidatePathSecurity', vps_pos)
+---
+>     check_phase(
+>         'path_validation', 'ValidatePathSecurity', vps_pos,
+>         require_fbx_path=False,
+>     )
+1638c1815
+<     # request_parse (10 assertions)
+---
+>     # request_parse — FbxPath before ValidateVersion
+1641c1818
+<         # 8. Bounded FbxPath invocation inside block (start+end positions)
+---
+>         # Bounded FbxPath invocation inside block
+1649c1826
+<         # 9. Block closes before ValidatePathSecurity
+---
+>         # Block closes before ValidatePathSecurity
+1654c1831
+<         # 10. ValidatePathSecurity outside block
+---
+>         # ValidatePathSecurity outside block
+1661c1838
+<         extra_checks=rp_extra,
+---
+>         require_fbx_path=True,
+1664,1671c1841,1845
+<     # Fallback assertions for request_parse specific checks 8-10 when
+<     # canonical decl or block are missing
+<     if rp_match is None or rp_block is None:
+<         rp_has_decl = bool(_find_ffbxscopephase_decls(
+<             content, mask, 'request_parse', hi_body_start, hi_body_end))
+<         reason = ("canonical decl found but no standalone block"
+<                   if rp_match else "canonical decl not found")
+< 
+---
+>     if rp_match and rp_block:
+>         rp_extra(rp_block[0], rp_block[1], rp_block[2])
+>     else:
+>         reason = ("decl found but no block" if rp_match
+>                   else "decl not found")
+2186d2359
+<     # No canonical block should be found
+2191,2193d2363
+<         # Either Block should not be in a dedicated block, OR it should
+<         # still be found (standalone block) but the assertion for
+<         # canonical does not exist for either.
+2197a2368,2616
+> 
+>     # ===================================================================
+>     # Declaration uniqueness fixtures (req 1)
+>     # ===================================================================
+>     # P: one complete declaration → total=1, complete=1
+>     fixture_p = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+>     {
+>         FFbxScopePhase Scope(guid, TEXT("request_parse"),
+>                              EFbxPhaseKind::Exclusive,
+>                              &PhaseDurations);
+>         ValidateVersion(Request);
+>     }
+>     return true;
+> }"""
+>     mask_p = _build_lexical_mask(fixture_p)
+>     h_open_p, h_close_p = _find_handleimport_full_bounds(fixture_p, mask_p)
+>     decls_p = _find_ffbxscopephase_decls(
+>         fixture_p, mask_p, 'request_parse',
+>         h_open_p + 1, h_close_p)
+>     total_p, comp_p = _count_phase_declarations(
+>         decls_p, [inv for _, inv in decls_p])
+>     _test("Self-test [P]: one complete decl — total=1", total_p == 1,
+>           detail=f"total={total_p}")
+>     _test("Self-test [P]: one complete decl — complete=1", comp_p == 1,
+>           detail=f"complete={comp_p}")
+> 
+>     # Q: two complete declarations → total=2, complete=2 → rejected
+>     fixture_q = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+>     {
+>         FFbxScopePhase ScopeA(guid, TEXT("request_parse"),
+>                               EFbxPhaseKind::Exclusive,
+>                               &PhaseDurations);
+>         FFbxScopePhase ScopeB(guid, TEXT("request_parse"),
+>                               EFbxPhaseKind::Exclusive,
+>                               &PhaseDurations);
+>         ValidateVersion(Request);
+>     }
+>     return true;
+> }"""
+>     mask_q = _build_lexical_mask(fixture_q)
+>     h_open_q, h_close_q = _find_handleimport_full_bounds(fixture_q, mask_q)
+>     decls_q = _find_ffbxscopephase_decls(
+>         fixture_q, mask_q, 'request_parse',
+>         h_open_q + 1, h_close_q)
+>     total_q, comp_q = _count_phase_declarations(
+>         decls_q, [inv for _, inv in decls_q])
+>     _test("Self-test [Q]: two complete decls — total=2", total_q == 2,
+>           detail=f"total={total_q}")
+>     _test("Self-test [Q]: two complete decls — complete=2", comp_q == 2,
+>           detail=f"complete={comp_q}")
+> 
+>     # R: one complete + one incomplete → total=2, complete=1 → rejected
+>     fixture_r = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+>     {
+>         FFbxScopePhase Complete(guid, TEXT("request_parse"),
+>                                 EFbxPhaseKind::Exclusive,
+>                                 &PhaseDurations);
+>         FFbxScopePhase MissingExcl(guid, TEXT("request_parse"),
+>                                    &PhaseDurations);
+>         ValidateVersion(Request);
+>     }
+>     return true;
+> }"""
+>     mask_r = _build_lexical_mask(fixture_r)
+>     h_open_r, h_close_r = _find_handleimport_full_bounds(fixture_r, mask_r)
+>     decls_r = _find_ffbxscopephase_decls(
+>         fixture_r, mask_r, 'request_parse',
+>         h_open_r + 1, h_close_r)
+>     total_r, comp_r = _count_phase_declarations(
+>         decls_r, [inv for _, inv in decls_r])
+>     _test("Self-test [R]: one complete + one incomplete — total=2",
+>           total_r == 2, detail=f"total={total_r}")
+>     _test("Self-test [R]: one complete + one incomplete — complete=1",
+>           comp_r == 1, detail=f"complete={comp_r}")
+> 
+>     # S: two incomplete → total=2, complete=0 → rejected
+>     fixture_s = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+>     {
+>         FFbxScopePhase OnlyExcl(guid, TEXT("request_parse"),
+>                                 EFbxPhaseKind::Exclusive, nullptr);
+>         FFbxScopePhase OnlyDur(guid, TEXT("request_parse"),
+>                                &PhaseDurations);
+>         ValidateVersion(Request);
+>     }
+>     return true;
+> }"""
+>     mask_s = _build_lexical_mask(fixture_s)
+>     h_open_s, h_close_s = _find_handleimport_full_bounds(fixture_s, mask_s)
+>     decls_s = _find_ffbxscopephase_decls(
+>         fixture_s, mask_s, 'request_parse',
+>         h_open_s + 1, h_close_s)
+>     total_s, comp_s = _count_phase_declarations(
+>         decls_s, [inv for _, inv in decls_s])
+>     _test("Self-test [S]: two incomplete — total=2",
+>           total_s == 2, detail=f"total={total_s}")
+>     _test("Self-test [S]: two incomplete — complete=0",
+>           comp_s == 0, detail=f"complete={comp_s}")
+> 
+>     # ===================================================================
+>     # Comment-safe constructor content checks (req 3)
+>     # ===================================================================
+>     # T: fields only in comments must not match
+>     fixture_t = (
+>         'FFbxScopePhase Scope(guid,\n'
+>         '    TEXT("other_phase"),\n'
+>         '    EFbxPhaseKind::Nested,\n'
+>         '    nullptr\n'
+>         '    // TEXT("request_parse")\n'
+>         '    // EFbxPhaseKind::Exclusive\n'
+>         '    // &PhaseDurations\n'
+>         ');'
+>     )
+>     _test("Self-test [T]: phase name only in comment does not match",
+>           'request_parse' not in _extract_text_macro_args(fixture_t),
+>           detail=f"got {_extract_text_macro_args(fixture_t)}")
+>     _test("Self-test [T]: Exclusive only in comment does not count",
+>           not _has_field_outside_comment(fixture_t, 'EFbxPhaseKind::Exclusive'),
+>           detail="Exclusive inside comment must not match")
+>     _test("Self-test [T]: &PhaseDurations only in comment does not count",
+>           not _has_field_outside_comment(fixture_t, '&PhaseDurations'),
+>           detail="&PhaseDurations inside comment must not match")
+> 
+>     # T2: actual TEXT("request_parse") argument is recognized
+>     fixture_t2 = (
+>         'FFbxScopePhase Scope(guid,\n'
+>         '    TEXT("request_parse"),\n'
+>         '    EFbxPhaseKind::Exclusive,\n'
+>         '    &PhaseDurations\n'
+>         ');'
+>     )
+>     _test("Self-test [T2]: actual TEXT(\"request_parse\") recognized",
+>           'request_parse' in _extract_text_macro_args(fixture_t2),
+>           detail=f"got {_extract_text_macro_args(fixture_t2)}")
+>     _test("Self-test [T2]: Exclusive outside comment recognized",
+>           _has_field_outside_comment(fixture_t2, 'EFbxPhaseKind::Exclusive'),
+>           detail="Exclusive not found in invocation")
+>     _test("Self-test [T2]: PhaseDurations outside comment recognized",
+>           _has_field_outside_comment(fixture_t2, '&PhaseDurations'),
+>           detail="&PhaseDurations not found in invocation")
+> 
+>     # ===================================================================
+>     # Exact FbxPath first argument (req 4) — extend M2 coverage
+>     # ===================================================================
+>     # M2-style already tests Request.ObjectName rejected. Add:
+>     # Request.FbxPathBackup and Request.FbxPathSomething.
+>     def _check_fbxpath_first_arg(fixture, label, expected_found):
+>         msk = _build_lexical_mask(fixture)
+>         ho, hc = _find_handleimport_full_bounds(fixture, msk)
+>         s, e = _find_fbxpath_invocation(fixture, msk, ho + 1, hc)
+>         found = s >= 0 and e > s
+>         _test(f"Self-test [FbxPath-{label}]: {'accepted' if expected_found else 'rejected'}",
+>               found == expected_found,
+>               detail=f"found={found} start={s}")
+> 
+>     fbxp_fixture_base = (
+>         'bool FLiveSyncFBXImporter::HandleImport(FBXImportRequest& Request)\n'
+>         '{\n'
+>         '    DoSetup();\n'
+>         '    {\n'
+>         '        FFbxScopePhase Scope(guid, TEXT("request_parse"));\n'
+>         '        FStringFromFixedAnsi({ARG}, UE_ARRAY_COUNT({ARG}));\n'
+>         '        ValidateVersion(Request);\n'
+>         '    }\n'
+>         '    return true;\n'
+>         '}'
+>     )
+>     _check_fbxpath_first_arg(
+>         fbxp_fixture_base.replace('{ARG}', 'Request.FbxPath'),
+>         'Request.FbxPath', True)
+>     _check_fbxpath_first_arg(
+>         fbxp_fixture_base.replace('{ARG}', 'Request.ObjectName'),
+>         'Request.ObjectName', False)
+>     _check_fbxpath_first_arg(
+>         fbxp_fixture_base.replace('{ARG}', 'Request.FbxPathBackup'),
+>         'Request.FbxPathBackup', False)
+>     _check_fbxpath_first_arg(
+>         fbxp_fixture_base.replace('{ARG}', 'Request.FbxPathSomething'),
+>         'Request.FbxPathSomething', False)
+> 
+>     # ===================================================================
+>     # Ordering chain fixtures (reqs 5+6) — wrong order must be rejected
+>     # ===================================================================
+>     # V1: FbxPath appears before phase declaration
+>     fixture_v1 = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+>     DoSetup();
+>     FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
+>     {
+>         FFbxScopePhase Scope(guid, TEXT("request_parse"),
+>                              EFbxPhaseKind::Exclusive,
+>                              &PhaseDurations);
+>         ValidateVersion(Request);
+>     }
+>     return true;
+> }"""
+>     mask_v1 = _build_lexical_mask(fixture_v1)
+>     h_open_v1, h_close_v1 = _find_handleimport_full_bounds(fixture_v1, mask_v1)
+>     decls_v1 = _find_ffbxscopephase_decls(
+>         fixture_v1, mask_v1, 'request_parse',
+>         h_open_v1 + 1, h_close_v1)
+>     total_v1, _ = _count_phase_declarations(
+>         decls_v1, [inv for _, inv in decls_v1])
+>     # FbxPath should be found outside the phase block
+>     fbx_v1_s, fbx_v1_e = _find_fbxpath_invocation(
+>         fixture_v1, mask_v1, h_open_v1 + 1, h_close_v1)
+>     if total_v1 == 1 and decls_v1:
+>         decl_start_v1 = decls_v1[0][0].start()
+>         v1_ordering_fail = fbx_v1_s > 0 and fbx_v1_s < decl_start_v1
+>         _test("Self-test [V1]: FbxPath before declaration → ordering violation",
+>               v1_ordering_fail,
+>               detail=f"fbx@{fbx_v1_s} decl@{decl_start_v1} — "
+>                      "FbxPath must not appear before declaration")
+>     else:
+>         _test("Self-test [V1]: FbxPath before declaration → ordering violation",
+>               False, detail="no decl found")
+> 
+>     # V2: ValidatePathSecurity inside request_parse block → must be rejected
+>     fixture_v2 = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+>     DoSetup();
+>     {
+>         FFbxScopePhase Scope(guid, TEXT("request_parse"),
+>                              EFbxPhaseKind::Exclusive,
+>                              &PhaseDurations);
+>         ValidatePathSecurity(Request);
+>     }
+>     return true;
+> }"""
+>     mask_v2 = _build_lexical_mask(fixture_v2)
+>     h_open_v2, h_close_v2 = _find_handleimport_full_bounds(fixture_v2, mask_v2)
+>     decls_v2 = _find_ffbxscopephase_decls(
+>         fixture_v2, mask_v2, 'request_parse',
+>         h_open_v2 + 1, h_close_v2)
+>     total_v2, _ = _count_phase_declarations(
+>         decls_v2, [inv for _, inv in decls_v2])
+>     vps_v2 = _find_unmasked_call(fixture_v2, mask_v2, 'ValidatePathSecurity',
+>                                  h_open_v2 + 1, h_close_v2)
+>     if total_v2 == 1 and decls_v2:
+>         block_v2 = _find_dedicated_block(fixture_v2, mask_v2, decls_v2[0][0].start())
+>         if block_v2:
+>             b_open_v2, b_close_v2, _ = block_v2
+>             v2_inside = vps_v2 > b_open_v2 and vps_v2 < b_close_v2
+>             _test("Self-test [V2]: VPS inside request_parse → rejected",
+>                   v2_inside,
+>                   detail=f"VPS@{vps_v2} inside block@{b_open_v2},{b_close_v2}")
+>         else:
+>             _test("Self-test [V2]: VPS inside request_parse → rejected",
+>                   False, detail="no block found")
+>     else:
+>         _test("Self-test [V2]: VPS inside request_parse → rejected",
+>               False, detail="not exactly 1 decl")

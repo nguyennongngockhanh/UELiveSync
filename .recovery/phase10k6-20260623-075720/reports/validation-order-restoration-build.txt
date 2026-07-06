@@ -1,0 +1,11 @@
+Phase 10K.6 validation-order restoration — Build report
+Timestamp: 2026-06-23T14:53:36+07:00
+
+Command:
+  /home/nguyennongngockhanh/Unreal/UE5.7.4/Engine/Build/BatchFiles/Linux/Build.sh     ProjectTemplateEditor Linux Development     "/home/nguyennongngockhanh/Documents/Unreal Projects/ProjectTemplate/ProjectTemplate.uproject"     -waitmutex
+
+Result: Succeeded
+Elapsed: 20.07 seconds
+Errors: 0
+Warnings: 0
+Notices: 1 (IncludeOrderVersion upgrade notice, informational only)

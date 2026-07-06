@@ -1,0 +1,95 @@
+UELiveSync — Phase 10K.6 Preparation State Restoration Report
+================================================================
+Report timestamp: 2026-06-23T12:13:43+07:00
+Test file: tests/phase10k6_transaction_decomposition.py
+
+Authoritative runner:
+  command: python3 tests/phase10k6_transaction_decomposition.py
+  passed: 336
+  failed: 40
+  unexpected failures: 0
+  failure classification:
+
+    Production 'request_parse' (9 failures):
+      phase declaration uniqueness, total=0, complete=0, uses Exclusive,
+      supplies &PhaseDurations, standalone block, block bounds,
+      decl before ValidateVersion, block encloses ValidateVersion,
+      exact ordering chain, block encloses FbxPath, block closes
+      before ValidatePathSecurity, VPS outside block
+
+    Production 'path_validation' (9 failures):
+      phase declaration uniqueness, total=0, complete=0, uses Exclusive,
+      supplies &PhaseDurations, standalone block, block bounds,
+      decl before ValidatePathSecurity, block encloses VPS,
+      exact ordering chain
+
+    STALL_SUMMARY (11 failures):
+      log exists, transactionId, totalMs, measuredExclusiveMs,
+      coveragePercent, largestPhase, largestPhaseMs, unattributedMs,
+      classification, UE_LOG marker
+
+    Source contract (2 failures):
+      coveragePercent calculation exists, timing validity check exists
+
+    Classification (2 failures):
+      Classification uses TEXT("exclusive")+TEXT("SINGLE"),
+      Classification only computed when timing is valid
+
+    Phase 10K.5 (2 failures):
+      FBX transaction timing markers present, STALL_SUMMARY present
+
+    Other (1 failure):
+      Exclusive phase 'path_validation' has PHASE_END
+
+Pytest informational:
+  passed: 50
+  failed: 0
+
+Constructor-bound gate:
+  request_parse: decl_start < 0 or decl_end <= decl_start
+  path_validation: decl_start < 0 or decl_end <= decl_start
+
+Preparation state tests (all PASS):
+  RP-no-decl:   prerequisites_valid=False, missing=unique declaration
+  RP-no-block:  prerequisites_valid=False, missing=dedicated block
+  RP-no-decl-end: prerequisites_valid=False, missing=constructor bounds
+  RP-no-FbxPath:  prerequisites_valid=False, missing=FbxPath invocation
+  RP-no-VV:       prerequisites_valid=False, missing=ValidateVersion call
+  RP-no-VPS:      prerequisites_valid=False, missing=ValidatePathSecurity call
+  RP-bad-order:   prerequisites_valid=True, evaluator_valid=False,
+                  failing=fbx_path_invocation_end<ValidateVersion_call
+  RP-good-order:  prerequisites_valid=True, evaluator_valid=True
+  PV-no-decl:     prerequisites_valid=False, missing=unique declaration
+  PV-no-block:    prerequisites_valid=False, missing=dedicated block
+  PV-no-decl-end: prerequisites_valid=False, missing=constructor bounds
+  PV-no-VPS:      prerequisites_valid=False, missing=ValidatePathSecurity call
+  PV-bad-order:   prerequisites_valid=True, evaluator_valid=False,
+                  failing=ValidatePathSecurity_call<phase_close
+  PV-good-order:  prerequisites_valid=True, evaluator_valid=True
+
+Controlled parser setup tests (all PASS):
+  RP-no-FbxPath:            missing=FbxPath invocation
+  RP-no-VV:                 missing=ValidateVersion call
+  RP-no-VPS:                missing=ValidatePathSecurity call
+  RP-malformed:             missing=unique declaration
+  PV-no-VPS:                missing=ValidatePathSecurity call
+  PV-malformed:             missing=unique declaration
+
+No self-test-generated expected FAIL: YES
+  All _check_rp_ordering / _check_pv_ordering calls expect_valid=True
+  (ordered fixtures only).  All missing-prerequisite tests use
+  _parse_and_prepare_* with _test(..., True, ...).
+
+Artifacts:
+  base snapshot:   snapshots/phase10k6_transaction_decomposition.pre-preparation-state-fix.py
+  result snapshot: snapshots/phase10k6_transaction_decomposition.preparation-state-fixed.py
+  unified patch:   patches/test-preparation-state-restoration.patch (448 lines)
+  report:          reports/test-preparation-state-restoration.txt
+  audit:           reports/test-preparation-state-audit.md
+  actual timestamp: 2026-06-23T12:13:43+07:00
+
+Test migration: PASS
+  Zero unexpected fixture or prerequisite-gate failures.
+  All state distinctions above are proven.
+
+Ready for request_parse/path_validation implementation: YES

@@ -1,0 +1,15 @@
+087459b217bee7f19b2daeee4dd0213b51d4c5358bb2c4d59f4191d46ce82248  UE_Plugin/UELiveSync/Source/UELiveSync/Private/FBXImport/LiveSyncFBXImporter.cpp
+
+=== All correction artifacts ===
+087459b217bee7f19b2daeee4dd0213b51d4c5358bb2c4d59f4191d46ce82248  .recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.infra-correction.cpp
+5ab51cb9dcd601b8ab70c4a52bdf6f396327f2b4d5c924827ba94040132bca73  .recovery/phase10k6-20260623-075720/patches/infra-correction-delta.patch
+510253d7c1bf03f7de6fc51d7bd2a90783d0afa4348170c95160ca81f1575f83  .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.infra-correction.py
+175af313567c0a91c0594d2fbf42e006f7be6fd8d921a908974efac7fe8a0ad4  .recovery/phase10k6-20260623-075720/patches/test-infra-correction-delta.patch
+d95a1cdd2f1504c787566ea47306607ea447ed32cb80e83cacf677d32143bb99  .recovery/phase10k6-20260623-075720/reports/infra-correction-custom-tests.txt
+5e077cf47195d07e43d30ea665d9cc0f2808c404e53c2d9c20fa50657b4bb25f  .recovery/phase10k6-20260623-075720/reports/infra-correction-lexical-brace.txt
+282c24288c324161b69cc4c7b1bda36e460eb7285f3d359376ed43ba7a167ab8  .recovery/phase10k6-20260623-075720/reports/infra-correction-brace.txt
+7669638407acaaf10e879d9ce72996a6f90124779697afec1deea7237d1b774a  .recovery/phase10k6-20260623-075720/reports/infra-correction-build.log
+b29992914176b9e7592779d11082336070cc9a71a72900c394c774b6100f4374  .recovery/phase10k6-20260623-075720/reports/infra-correction-syncid-audit.md
+a5f174d26a85a1b84e6ee9369f3656f5851eddbf2b4ac748f23bcb1fb6d4fb6b  .recovery/phase10k6-20260623-075720/reports/infra-correction-hunk-audit.md
+2febf6e3469d67587410331be54e7f1ea4f177fc67401a4e3626d103772fc1ca  .recovery/phase10k6-20260623-075720/reports/infra-correction-diff-check.txt
+4d11763cce59cb7292e8954a68d9fb3aab9ed15d845b69f073bb8809894080c1  .recovery/phase10k6-20260623-075720/reports/ue_brace_scanner.py

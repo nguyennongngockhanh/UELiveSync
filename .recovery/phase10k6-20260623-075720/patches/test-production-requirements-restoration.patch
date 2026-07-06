@@ -1,0 +1,108 @@
+--- /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-test-restoration.py	2026-06-23 09:02:40.890481846 +0700
++++ /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.test-restored.py	2026-06-23 09:23:22.294307838 +0700
+@@ -495,7 +495,8 @@
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# 21A. FStringFromFixedAnsi bounded helper
++# 21A. FStringFromFixedAnsi bounded helper — source-presence and structural
++#      boundary checks.  Runtime behavior cannot be verified from source alone.
+ # ---------------------------------------------------------------------------
+ def test_fstring_from_fixed_ansi():
+     content = _read(FBX_IMPORTER_CPP)
+@@ -505,6 +506,19 @@
+     _test("FStringFromFixedAnsi uses ConstructFromPtrSize",
+           re.search(r'ConstructFromPtrSize', content) is not None,
+           detail="ConstructFromPtrSize called inside helper")
++    # Structural boundary checks — verify the loop prevents over-read
++    _test("FStringFromFixedAnsi: null Data check present",
++          re.search(r'if\s*\(!Data\s*\|\|\s*Capacity\s*<=\s*0\)', content) is not None,
++          detail="guard clause rejects null Data and zero/negative Capacity")
++    _test("FStringFromFixedAnsi: loop checks Length < Capacity before Data access",
++          re.search(r'while\s*\(Length\s*<\s*Capacity\s*&&\s*Data\[Length\]\s*!=\s*0\)', content) is not None,
++          detail="loop condition checks Length < Capacity before reading Data[Length]")
++    _test("FStringFromFixedAnsi: ++Length increments by 1",
++          re.search(r'\+\+Length', content) is not None,
++          detail="Length increments by 1 per iteration (cannot exceed Capacity)")
++    _test("FStringFromFixedAnsi: ConstructFromPtrSize receives Length, not Capacity",
++          re.search(r'ConstructFromPtrSize\(\s*\n?\s*reinterpret_cast<const ANSICHAR\*>\(Data\),\s*\n?\s*Length\)', content, re.DOTALL) is not None,
++          detail="ConstructFromPtrSize uses Length (bounded by Capacity but never exceeding it)")
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -784,13 +798,12 @@
+           abs(exclusive_sum - 707.5) < 0.1,
+           detail=f"got {exclusive_sum:.1f}, expected ~707.5")
+ 
+-    # coverage clamped to 100% — source code must clamp >100 to 100
+-    # Verify source code clamps coverage to 100%
++    # coveragePercent calculation must exist (the approved contract specifies
++    # CoveragePercent = (MeasuredExclusiveMs / TotalMs) * 100.0; with no clamp).
+     content = _read(FBX_IMPORTER_CPP)
+-    _test("Source: coveragePercent clamped to 100% max",
+-          re.search(r'CoveragePercent.*100\.0', content) is not None or
+-          re.search(r'CoveragePercent.*=.*100', content) is not None,
+-          detail="source must clamp coveragePercent to 100 max")
++    _test("Source: coveragePercent calculation exists",
++          re.search(r'CoveragePercent', content) is not None,
++          detail="CoveragePercent must exist in source (contract: no clamp required)")
+ 
+     # Verify timing validity check exists
+     _test("Source: timing validity check exists",
+@@ -1157,6 +1170,48 @@
+ 
+ 
+ # ---------------------------------------------------------------------------
++# 27B. Future-slice production checks: FFbxScopePhase wiring for each phase
++#      These check the form:
++#        FFbxScopePhase Scope(..., TEXT("phase"), EFbxPhaseKind::Exclusive,
++#                             ..., &PhaseDurations);
++#      All must fail until the production phases are implemented (Slice 3+).
++# ---------------------------------------------------------------------------
++def test_production_phase_wiring():
++    """Verify each production phase will pass &PhaseDurations to FFbxScopePhase."""
++    content = _read(FBX_IMPORTER_CPP)
++    # Phases that must use the destructor-owner accumulator pattern
++    phases = [
++        ("path_validation", None),
++        ("request_parse",  "ValidateVersion"),
++    ]
++    for ph, ordering_hint in phases:
++        # Full wiring check: scope instantiation with phase name, Exclusive kind, and &PhaseDurations
++        scope_re = (
++            r'FFbxScopePhase\s+\w+\('
++            r'[^)]*TEXT\("' + ph + r'"\)'
++            r'[^)]*EFbxPhaseKind::Exclusive'
++            r'[^)]*&PhaseDurations'
++        )
++        scope_match = re.search(scope_re, content, re.DOTALL)
++        _test(f"Production: '{ph}' FFbxScopePhase with Exclusive+&PhaseDurations exists",
++              scope_match is not None,
++              detail=f"phase={ph}: expected "
++                     f"FFbxScopePhase Xxx(..., TEXT(\"{ph}\"), EFbxPhaseKind::Exclusive, ..., &PhaseDurations)")
++
++        # Ordered wiring: if scope exists, verify it begins before the hinted call
++        if ordering_hint and scope_match:
++            after_scope = content[scope_match.start():]
++            hint_match = re.search(re.escape(ordering_hint), after_scope)
++            _test(f"Production: '{ph}' scope begins before {ordering_hint}",
++                  hint_match is not None,
++                  detail=f"phase={ph}: {ordering_hint} should appear after scope start")
++        elif ordering_hint:
++            _test(f"Production: '{ph}' scope begins before {ordering_hint}",
++                  False,
++                  detail=f"phase={ph}: scope not yet implemented — cannot verify ordering")
++
++
++# ---------------------------------------------------------------------------
+ # 28. Source-structure test: exclusive phase registry completeness
+ # ---------------------------------------------------------------------------
+ def test_exclusive_phase_registry_complete():
+@@ -1307,6 +1362,7 @@
+ 
+     # Task 2: source-structure tests for RAII accumulator correctness
+     test_raii_accumulator_inside_destructor()
++    test_production_phase_wiring()
+     test_exclusive_phase_registry_complete()
+     test_registry_and_parser_do_not_drift()
+ 

@@ -1,0 +1,359 @@
+--- .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-validation-order-restoration.py	2026-06-23 14:34:52.401764296 +0700
++++ .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.validation-order-restored.py	2026-06-23 14:53:22.494105666 +0700
+@@ -631,9 +631,9 @@
+         ("phase_open", phase_open),
+         ("declaration_start", decl_start),
+         ("declaration_end", decl_end),
++        ("ValidateVersion_call", vv_pos),
+         ("fbx_path_invocation_start", fbx_start),
+         ("fbx_path_invocation_end", fbx_end),
+-        ("ValidateVersion_call", vv_pos),
+         ("phase_close", phase_close),
+         ("ValidatePathSecurity_call", vps_pos),
+         ("handle_close", handle_close),
+@@ -2143,7 +2143,7 @@
+     )
+ 
+     # ===================================================================
+-    # request_parse — FbxPath before ValidateVersion
++    # request_parse — ValidateVersion before FbxPath
+     # ===================================================================
+     def rp_extra(block_open, block_close, body):
+         # Bounded FbxPath invocation inside block
+@@ -2283,6 +2283,166 @@
+ 
+ 
+ # ---------------------------------------------------------------------------
++# 29B. Semantic-regression source tests for request_parse/path_validation
++# ---------------------------------------------------------------------------
++def test_semantic_regression_source_assertions():
++    """Verify exact call counts and ordering invariants in the production
++    LiveSyncFBXImporter.cpp source.
++
++    Enforces:
++      - ValidateVersion runs before FbxPath extraction in HandleImport.
++      - No FbxPath or ObjectName conversion before version validation.
++      - Exactly one FbxPath conversion in HandleImport.
++      - Exactly one ValidatePathSecurity call in HandleImport.
++      - ValidateVersion before ValidatePathSecurity.
++      - ObjectName conversions occur after path_validation block close.
++      - No ObjectName conversion inside request_parse or path_validation blocks.
++      - Full ordering: VV < fbx_start < fbx_end < rp_close
++        < pv_decl < VPS < pv_close < ObjectName.
++    """
++    content = _read(FBX_IMPORTER_CPP)
++    mask = _build_lexical_mask(content)
++
++    ho, hc = _find_handleimport_full_bounds(content, mask)
++    hi_start = ho + 1 if ho >= 0 else 0
++    hi_end = hc if hc >= 0 else len(content)
++
++    _test("Semantic regression: HandleImport bounds found",
++          ho >= 0 and hc > ho, detail=f"hi@{ho},{hc}")
++
++    # --- Count unmasked calls inside HandleImport body ---
++    all_vv = list(re.finditer(r'ValidateVersion\(', content))
++    all_vps = list(re.finditer(r'ValidatePathSecurity\(', content))
++    all_fbx = list(re.finditer(r'FStringFromFixedAnsi\s*\(\s*Request\.FbxPath', content))
++    all_obj = list(re.finditer(r'FStringFromFixedAnsi\s*\(\s*Request\.ObjectName', content))
++
++    hi_vv = [m for m in all_vv if hi_start <= m.start() < hi_end and not any(mask[m.start():m.end()])]
++    hi_vps = [m for m in all_vps if hi_start <= m.start() < hi_end and not any(mask[m.start():m.end()])]
++    hi_fbx = [m for m in all_fbx if hi_start <= m.start() < hi_end and not any(mask[m.start():m.end()])]
++    hi_obj = [m for m in all_obj if hi_start <= m.start() < hi_end and not any(mask[m.start():m.end()])]
++
++    _test("Semantic regression: exactly one ValidateVersion in HandleImport",
++          len(hi_vv) == 1, detail=f"count={len(hi_vv)}")
++    _test("Semantic regression: exactly one ValidatePathSecurity in HandleImport",
++          len(hi_vps) == 1, detail=f"count={len(hi_vps)}")
++    _test("Semantic regression: exactly one FbxPath conversion in HandleImport",
++          len(hi_fbx) == 1, detail=f"count={len(hi_fbx)}")
++
++    # --- ValidateVersion before FbxPath ---
++    if len(hi_vv) == 1 and len(hi_fbx) == 1:
++        vv_pos = hi_vv[0].start()
++        fbx_pos = hi_fbx[0].start()
++        _test("Semantic regression: ValidateVersion before FbxPath",
++              vv_pos < fbx_pos,
++              detail=f"vv@{vv_pos} < fbx@{fbx_pos}")
++    else:
++        _test("Semantic regression: ValidateVersion before FbxPath",
++              False, detail="missing vv or fbx call")
++
++    # --- ValidateVersion before ValidatePathSecurity ---
++    if len(hi_vv) == 1 and len(hi_vps) == 1:
++        vv_pos = hi_vv[0].start()
++        vps_pos = hi_vps[0].start()
++        _test("Semantic regression: ValidateVersion before ValidatePathSecurity",
++              vv_pos < vps_pos,
++              detail=f"vv@{vv_pos} < vps@{vps_pos}")
++    else:
++        _test("Semantic regression: ValidateVersion before ValidatePathSecurity",
++              False, detail="missing vv or vps call")
++
++    # --- ObjectName conversions: none before ValidateVersion ---
++    if len(hi_vv) == 1:
++        vv_pos = hi_vv[0].start()
++        pre_vv_obj = [m for m in hi_obj if m.start() < vv_pos]
++        _test("Semantic regression: no ObjectName conversion before ValidateVersion",
++              len(pre_vv_obj) == 0,
++              detail=f"{len(pre_vv_obj)} ObjectName conversions before ValidateVersion")
++    else:
++        _test("Semantic regression: no ObjectName conversion before ValidateVersion",
++              False, detail="ValidateVersion not found")
++
++    # --- ObjectName conversion exists in HandleImport (deferred after validation) ---
++    _test("Semantic regression: at least one ObjectName conversion in HandleImport",
++          len(hi_obj) >= 1, detail=f"count={len(hi_obj)}")
++
++    # --- ObjectName strictly after path_validation block close ---
++    # Locate request_parse phase declaration and its dedicated block.
++    rp_decls = _find_ffbxscopephase_decls(content, mask, 'request_parse',
++                                           hi_start, hi_end)
++    rp_total, rp_complete = _count_phase_declarations(
++        rp_decls, [inv for _, inv in rp_decls])
++    rp_unique = (rp_total == 1 and rp_complete == 1 and len(rp_decls) == 1)
++    rp_single = rp_decls[0][0] if rp_unique else None
++    rp_block = _find_dedicated_block(content, mask, rp_single.start()) if rp_single else None
++    rp_close = rp_block[1] if rp_block else -1
++
++    # Locate path_validation phase declaration and its dedicated block.
++    pv_decls = _find_ffbxscopephase_decls(content, mask, 'path_validation',
++                                           hi_start, hi_end)
++    pv_total, pv_complete = _count_phase_declarations(
++        pv_decls, [inv for _, inv in pv_decls])
++    pv_unique = (pv_total == 1 and pv_complete == 1 and len(pv_decls) == 1)
++    pv_single = pv_decls[0][0] if pv_unique else None
++    pv_block = _find_dedicated_block(content, mask, pv_single.start()) if pv_single else None
++    pv_close = pv_block[1] if pv_block else -1
++    pv_decl_start = pv_single.start() if pv_single else -1
++
++    # Request_parse phase assertions (structural sanity)
++    _test("Semantic regression: exactly one complete request_parse block",
++          rp_unique and rp_block is not None,
++          detail=f"total={rp_total}, complete={rp_complete}, block={'yes' if rp_block else 'no'}")
++
++    # Path_validation phase assertions (structural sanity)
++    _test("Semantic regression: path_validation block found",
++          pv_unique and pv_block is not None,
++          detail=f"total={pv_total}, complete={pv_complete}, block={'yes' if pv_block else 'no'}")
++
++    # Get FbxPath conversion exact bounds
++    fbx_s, fbx_e = _find_fbxpath_invocation(content, mask, hi_start, hi_end)
++    _test("Semantic regression: FbxPath conversion bounds found",
++          fbx_s >= 0 and fbx_e > fbx_s, detail=f"fbx@{fbx_s},{fbx_e}")
++
++    # Collect exact positions for reporting
++    vv_pos = hi_vv[0].start() if len(hi_vv) == 1 else -1
++    vps_pos = hi_vps[0].start() if len(hi_vps) == 1 else -1
++    first_obj_pos = hi_obj[0].start() if hi_obj else -1
++
++    # No ObjectName inside request_parse block
++    obj_in_rp = [m for m in hi_obj if rp_block and rp_block[0] < m.start() < rp_block[1]]
++    _test("Semantic regression: no ObjectName conversion inside request_parse",
++          len(obj_in_rp) == 0,
++          detail=f"{len(obj_in_rp)} ObjectName conversions inside request_parse")
++
++    # No ObjectName inside path_validation block
++    obj_in_pv = [m for m in hi_obj if pv_block and pv_block[0] < m.start() < pv_block[1]]
++    _test("Semantic regression: no ObjectName conversion inside path_validation",
++          len(obj_in_pv) == 0,
++          detail=f"{len(obj_in_pv)} ObjectName conversions inside path_validation")
++
++    # First ObjectName conversion after path_validation block close
++    _test("Semantic regression: ObjectName conversion after path_validation close",
++          rp_close >= 0 and pv_close >= 0 and first_obj_pos >= 0 and first_obj_pos > pv_close,
++          detail=(f"obj@{first_obj_pos} > pv_close@{pv_close}" if first_obj_pos >= 0 and pv_close >= 0
++                  else f"obj={first_obj_pos}, pv_close={pv_close}"))
++
++    # Full ordering: VV < fbx_start < fbx_end < rp_close < pv_decl < VPS < pv_close < obj
++    ordering_parts = [
++        ("vv", vv_pos), ("fbx_s", fbx_s), ("fbx_e", fbx_e),
++        ("rp_close", rp_close), ("pv_decl", pv_decl_start),
++        ("vps", vps_pos), ("pv_close", pv_close), ("obj", first_obj_pos)
++    ]
++    order_ok = all(
++        ordering_parts[i][1] < ordering_parts[i + 1][1]
++        for i in range(len(ordering_parts) - 1)
++        if ordering_parts[i][1] >= 0 and ordering_parts[i + 1][1] >= 0
++    )
++    order_detail = " < ".join(
++        f"{name}@{pos}" for name, pos in ordering_parts if pos >= 0)
++    _test("Semantic regression: full ordering chain",
++          order_ok, detail=order_detail)
++
++
++# ---------------------------------------------------------------------------
+ # Scope extractor self-test fixtures — prove the dedicated-block detector
+ # works correctly on controlled test data.
+ # ---------------------------------------------------------------------------
+@@ -2931,14 +3091,15 @@
+         return eval_valid, eval_failing
+ 
+     # RP-A: Correct full ordering → PASS
++    # Chain: ValidateVersion before bounded FbxPath before ValidatePathSecurity.
+     fixture_rp_a = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+         FFbxScopePhase Scope(guid, TEXT("request_parse"),
+                              EFbxPhaseKind::Exclusive,
+                              &PhaseDurations);
+-        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
+         ValidateVersion(Request);
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
+     }
+     ValidatePathSecurity(Request);
+     return true;
+@@ -2961,11 +3122,12 @@
+     return true;
+ }"""
+     _, fail_b = _check_rp_ordering(fixture_rp_b, "B-fbx-before-decl", False)
+-    _test("Self-test [RP-B]: exact failed relation — declaration_end<fbx_path_invocation_start",
+-          any("declaration_end<fbx_path_invocation_start" in r for r in fail_b),
++    _test("Self-test [RP-B]: exact failed relation — ValidateVersion_call<fbx_path_invocation_start",
++          any("ValidateVersion_call<fbx_path_invocation_start" in r for r in fail_b),
+           detail=f"failing: {fail_b}")
+ 
+-    # RP-C: ValidateVersion before FbxPath extraction → FAIL
++    # RP-C: ValidateVersion before FbxPath extraction → PASS
++    # This is the correct ordering for the new chain: vv < fbx.
+     fixture_rp_c = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+@@ -2978,30 +3140,28 @@
+     ValidatePathSecurity(Request);
+     return true;
+ }"""
+-    _, fail_c = _check_rp_ordering(fixture_rp_c, "C-vv-before-fbx", False)
+-    _test("Self-test [RP-C]: exact failed relation — fbx_path_invocation_end<ValidateVersion_call",
+-          any("fbx_path_invocation_end<ValidateVersion_call" in r for r in fail_c),
+-          detail=f"failing: {fail_c}")
+-
+-    # RP-D: FbxPath inside block but after ValidateVersion → FAIL
+-    # The chain expects fbx_end < ValidateVersion_call, but here
+-    # ValidateVersion is before FbxPath.
+-    fixture_rp_d = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    valid_c, _ = _check_rp_ordering(fixture_rp_c, "C-vv-before-fbx", True)
++    _test("Self-test [RP-C]: ValidateVersion before FbxPath is valid",
++          valid_c, detail=f"valid={valid_c}")
++
++    # RP-C-inv: FbxPath before ValidateVersion inside block → FAIL
++    # Tests the inverted ordering where FbxPath extraction precedes version check.
++    fixture_rp_cinv = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+         FFbxScopePhase Scope(guid, TEXT("request_parse"),
+                              EFbxPhaseKind::Exclusive,
+                              &PhaseDurations);
+-        ValidateVersion(Request);
+         FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++        ValidateVersion(Request);
+     }
+     ValidatePathSecurity(Request);
+     return true;
+ }"""
+-    _, fail_d = _check_rp_ordering(fixture_rp_d, "D-fbx-after-vv", False)
+-    _test("Self-test [RP-D]: exact failed relation — fbx_path_invocation_end<ValidateVersion_call",
+-          any("fbx_path_invocation_end<ValidateVersion_call" in r for r in fail_d),
+-          detail=f"failing: {fail_d}")
++    _, fail_cinv = _check_rp_ordering(fixture_rp_cinv, "C-inv-fbx-before-vv", False)
++    _test("Self-test [RP-C-inv]: exact failed relation — ValidateVersion_call<fbx_path_invocation_start",
++          any("ValidateVersion_call<fbx_path_invocation_start" in r for r in fail_cinv),
++          detail=f"failing: {fail_cinv}")
+ 
+     # RP-E: ValidatePathSecurity inside request_parse block → FAIL
+     fixture_rp_e = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+@@ -3043,11 +3203,10 @@
+     # RP-G: synthetic cross-boundary evaluator fixture (no C++ parsing).
+     # fbx_end(60) after phase_close(50) means FbxPath positions cross the
+     # phase-close boundary, making the downstream ordering invalid.
+-    # The evaluator reports ValidateVersion_call < phase_close because VV(70)
+-    # is also after phase_close(50) — FbxPath and VV are in the same chain
+-    # segment after phase_close.  The evaluator does NOT directly contain an
+-    # fbx_end < phase_close edge; the chain edge is
+-    # fbx_end < vv < phase_close, so the vv < phase_close relation fails.
++    # With the new chain (vv < fS < fE < pC), the evaluator catches both
++    # vv(70)>fS(40) → ValidateVersion_call<fbx_path_invocation_start
++    # and fE(60)>pC(50) → fbx_path_invocation_end<phase_close.
++    # We assert the second because cross-boundary is the fixture's intent.
+     _test("Self-test [RP-G]: synthetic cross-boundary evaluator fixture",
+           True, detail="request_parse evaluator with fbx_end > phase_close")
+     _rp_g_valid, _rp_g_fail, _rp_g_detail = _evaluate_request_parse_ordering(
+@@ -3057,8 +3216,8 @@
+     _test("Self-test [RP-G-synth]: evaluator returns False",
+           not _rp_g_valid,
+           detail=f"valid={_rp_g_valid}, detail={_rp_g_detail}")
+-    _test("Self-test [RP-G-synth]: failed relation ValidateVersion_call<phase_close",
+-          any("ValidateVersion_call<phase_close" in r for r in _rp_g_fail),
++    _test("Self-test [RP-G-synth]: failed relation fbx_path_invocation_end<phase_close",
++          any("fbx_path_invocation_end<phase_close" in r for r in _rp_g_fail),
+           detail=f"failing: {_rp_g_fail}")
+ 
+     # RP-G-parser: separate parser fixture proving a normal balanced FbxPath
+@@ -3255,10 +3414,10 @@
+     # ===================================================================
+     # Request_parse evaluator: valid chain
+     # params: handle_open,phase_open,decl_start,decl_end,fbx_start,fbx_end,vv_pos,vps_pos,handle_close,phase_close
+-    # chain: hO < pO < dS < dE < fS < fE < vv < pC < vps < hC
++    # chain: hO < pO < dS < dE < vv < fS < fE < pC < vps < hC
+     # valid: 0 < 10 < 20 < 30 < 40 < 50 < 60 < 70 < 80 < 100
+     _rp_v, _, _ = _evaluate_request_parse_ordering(
+-        0, 10, 20, 30, 40, 50, 60, 80, 100, 70)
++        0, 10, 20, 30, 50, 60, 40, 80, 100, 70)
+     _test("Direct evaluator [RP-valid]: complete valid chain returns True",
+           _rp_v, detail="all adjacent positions strictly increasing")
+ 
+@@ -3266,15 +3425,15 @@
+     # Each row swaps one adjacent pair while keeping all else strictly increasing.
+     # Expected: exactly one failed relation matching the label.
+     pairs = [
+-        ("handle_open<phase_open", 10, 5, 20, 30, 40, 50, 60, 80, 100, 70),
+-        ("phase_open<declaration_start", 0, 15, 10, 30, 40, 50, 60, 80, 100, 70),
+-        ("declaration_start<declaration_end", 0, 10, 25, 20, 40, 50, 60, 80, 100, 70),
+-        ("declaration_end<fbx_path_invocation_start", 0, 10, 20, 35, 30, 50, 60, 80, 100, 70),
+-        ("fbx_path_invocation_start<fbx_path_invocation_end", 0, 10, 20, 30, 45, 40, 60, 80, 100, 70),
+-        ("fbx_path_invocation_end<ValidateVersion_call", 0, 10, 20, 30, 40, 55, 50, 80, 100, 70),
+-        ("ValidateVersion_call<phase_close", 0, 10, 20, 30, 40, 50, 65, 80, 100, 60),
+-        ("phase_close<ValidatePathSecurity_call", 0, 10, 20, 30, 40, 50, 60, 70, 100, 75),
+-        ("ValidatePathSecurity_call<handle_close", 0, 10, 20, 30, 40, 50, 60, 95, 90, 70),
++        ("handle_open<phase_open", 10, 5, 20, 30, 50, 60, 40, 80, 100, 70),
++        ("phase_open<declaration_start", 0, 15, 10, 30, 50, 60, 40, 80, 100, 70),
++        ("declaration_start<declaration_end", 0, 10, 25, 20, 50, 60, 40, 80, 100, 70),
++        ("declaration_end<ValidateVersion_call", 0, 10, 20, 45, 50, 60, 30, 80, 100, 70),
++        ("ValidateVersion_call<fbx_path_invocation_start", 0, 10, 20, 30, 50, 60, 55, 80, 100, 70),
++        ("fbx_path_invocation_start<fbx_path_invocation_end", 0, 10, 20, 30, 65, 50, 40, 80, 100, 70),
++        ("fbx_path_invocation_end<phase_close", 0, 10, 20, 30, 50, 75, 40, 80, 100, 60),
++        ("phase_close<ValidatePathSecurity_call", 0, 10, 20, 30, 50, 60, 40, 70, 100, 85),
++        ("ValidatePathSecurity_call<handle_close", 0, 10, 20, 30, 50, 60, 40, 95, 90, 70),
+     ]
+     for label, *args in pairs:
+         v, f, d = _evaluate_request_parse_ordering(*args)
+@@ -4118,17 +4277,17 @@
+         expect_pv=False, expect_ev=False,
+         expected_missing=["ValidatePathSecurity call"])
+ 
+-    # RP: all prereqs, bad ordering — fbx_end(65) after vv(55) → fbx_end<vv fails (G)
++    # RP: all prereqs, bad ordering — vv(55) after fS(45) → vv<fS fails (G)
+     _check_preparation("RP-bad-order",
+         lambda: _prepare_request_parse_ordering(
+             0, 100, True, "m", 20, 40, True, 10, 50, 45, 65, 55, 70),
+         expect_pv=True, expect_ev=False,
+-        expected_failing=["fbx_path_invocation_end<ValidateVersion_call"])
++        expected_failing=["ValidateVersion_call<fbx_path_invocation_start"])
+ 
+-    # RP: all prereqs + good ordering (H)
++    # RP: all prereqs + good ordering (vv<fS<fE<pC) (H)
+     _check_preparation("RP-good-order",
+         lambda: _prepare_request_parse_ordering(
+-            0, 100, True, "m", 20, 40, True, 10, 50, 42, 44, 46, 70),
++            0, 100, True, "m", 20, 40, True, 10, 50, 44, 46, 42, 70),
+         expect_pv=True, expect_ev=True)
+ 
+     # PV: missing unique declaration (A)
+@@ -4248,5 +4407,6 @@
+     test_mixed_classification_only_when_timing_valid()
+     test_missing_phase_not_silently_zero()
+     test_all_required_source_markers_exist()
++    test_semantic_regression_source_assertions()
+ 
+     sys.exit(main())

@@ -1,0 +1,8 @@
+=== HandleImport extraction (with comment line) ===
+108b9a3c3e985e44e27d5ac3abe7477f79479b09522929bbf435b37bc149b730  /tmp/HandleImport.pre-slice-0.cpp
+495ab676b1d8bbe462879d037e21887466a6b17ace8f97fb68789d30b1bb23b5  /tmp/HandleImport.slice-0.cpp
+
+=== HandleImport body only (stripping first comment line) ===
+Pre-slice body: cf639fd3ea2f4823b9a03253ccb1fa041844b3e403ef1ccc2c8d92b883f369b1
+Slice-0 body:   cf639fd3ea2f4823b9a03253ccb1fa041844b3e403ef1ccc2c8d92b883f369b1
+MATCH: HandleImport function body is identical pre vs post

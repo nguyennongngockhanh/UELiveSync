@@ -1,0 +1,198 @@
+--- /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-infra-correction.py	2026-06-23 08:43:05.674228045 +0700
++++ /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.infra-correction.py	2026-06-23 09:02:40.890481846 +0700
+@@ -451,13 +451,22 @@
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# 18. FFbxScopePhase has optional OutDurationMs parameter
++# 18. FFbxScopePhase has optional OutDurationMs and PhaseDurations parameters
+ # ---------------------------------------------------------------------------
+ def test_ffbxscopephase_optional_duration():
+     content = _read(FBX_IMPORTER_CPP)
+     _test("FFbxScopePhase constructor has optional OutDurationMs",
+           re.search(r'FFbxScopePhase.*double\s*\*\s*InOutDurationMs\s*=\s*nullptr', content, re.DOTALL) is not None,
+           detail="double* InOutDurationMs = nullptr parameter exists")
++    _test("FFbxScopePhase constructor has optional InPhaseDurations",
++          re.search(r'FFbxScopePhase.*TMap<FString,\s*double>\s*\*\s*InPhaseDurations\s*=\s*nullptr', content, re.DOTALL) is not None,
++          detail="TMap<FString, double>* InPhaseDurations = nullptr parameter exists")
++    _test("FFbxScopePhase destructor writes through OutDurationMs",
++          re.search(r'~FFbxScopePhase.*\n.*\n.*if\s*\(OutDurationMs\).*\n.*\*OutDurationMs\s*=', content, re.DOTALL) is not None,
++          detail="destructor: if (OutDurationMs) { *OutDurationMs = Ms; }")
++    _test("FFbxScopePhase destructor accumulates exclusive phases into PhaseDurations",
++          re.search(r'~FFbxScopePhase.*\n.*\n.*if\s*\(PhaseDurations\s*&&\s*Kind\s*==\s*EFbxPhaseKind::Exclusive\).*\n.*PhaseDurations->FindOrAdd', content, re.DOTALL) is not None,
++          detail="destructor: if (PhaseDurations && Kind == Exclusive) PhaseDurations->FindOrAdd")
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -486,6 +495,49 @@
+ 
+ 
+ # ---------------------------------------------------------------------------
++# 21A. FStringFromFixedAnsi bounded helper
++# ---------------------------------------------------------------------------
++def test_fstring_from_fixed_ansi():
++    content = _read(FBX_IMPORTER_CPP)
++    _test("FStringFromFixedAnsi helper exists",
++          re.search(r'static\s+FString\s+FStringFromFixedAnsi', content) is not None,
++          detail="static FString FStringFromFixedAnsi(...) function found")
++    _test("FStringFromFixedAnsi uses ConstructFromPtrSize",
++          re.search(r'ConstructFromPtrSize', content) is not None,
++          detail="ConstructFromPtrSize called inside helper")
++
++
++# ---------------------------------------------------------------------------
++# 21B. SyncId snapshot from MatPktSyncId (frozen per HandleImport call)
++# ---------------------------------------------------------------------------
++def test_sync_id_snapshot():
++    content = _read(FBX_IMPORTER_CPP)
++    _test("SyncId snapshot from MatPktSyncId",
++          re.search(r'const\s+int32\s+SyncId\s*=\s*Context\.Stats->MatPktSyncId', content) is not None,
++          detail="one SyncId snapshot per HandleImport call")
++
++
++# ---------------------------------------------------------------------------
++# 21C. Bounded decode safety for fixed-length wire fields
++# ---------------------------------------------------------------------------
++def test_bounded_decode_safety():
++    content = _read(FBX_IMPORTER_CPP)
++    _test("ObjectName uses FStringFromFixedAnsi in semantic signature",
++          re.search(r'FStringFromFixedAnsi\(\s*Request\.ObjectName', content) is not None,
++          detail="semantic-signature ObjectName decoded with bounded helper")
++    _test("FbxPath uses FStringFromFixedAnsi",
++          re.search(r'FStringFromFixedAnsi\(\s*Request\.FbxPath', content) is not None,
++          detail="HandleImport FbxPath decoded with bounded helper")
++    _test("ObjectName uses FStringFromFixedAnsi at least twice",
++          len(re.findall(r'FStringFromFixedAnsi\(\s*Request\.ObjectName', content)) >= 2,
++          detail="expected >=2 uses (semantic signature + HandleImport)")
++    _test("No ANSI_TO_TCHAR on fixed wire fields",
++          'ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.ObjectName)' not in content and
++          'ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.FbxPath)' not in content,
++          detail="all fixed-field conversions must use FStringFromFixedAnsi instead of ANSI_TO_TCHAR")
++
++
++# ---------------------------------------------------------------------------
+ # 22. Synthesized log: orphan begin detection
+ # ---------------------------------------------------------------------------
+ def build_log_with_orphan_begin():
+@@ -1078,78 +1130,30 @@
+ # ---------------------------------------------------------------------------
+ # Run all
+ # ---------------------------------------------------------------------------
+-# 27. Source-structure test: RAII accumulator write after scope
+-#     For each affected phase, prove the PhaseDurations write
+-#     appears after the closing brace of the FFbxScopePhase scope.
+-# ---------------------------------------------------------------------------
+-def test_raii_accumulator_write_after_scope():
+-    """Verify FFbxScopePhase RAII pattern correctness for all 3 affected phases."""
+-    content = _read(FBX_IMPORTER_CPP)
+-    # Phases that have the RAII scope pattern
+-    phases_affected = ["path_validation"]
+-
+-    for phase in phases_affected:
+-        # Find the FFbxScopePhase instantiation (not the struct definition)
+-        # The instantiation has: FFbxScopePhase <any_name>(TEXT("phase"),
+-        scope_pattern = rf'FFbxScopePhase\s+\w+\(TEXT\("{phase}"\)'
+-        # The accumulator write uses: PhaseDurations.FindOrAdd(TEXT("phase"))
+-        accum_pattern = rf'PhaseDurations\.FindOrAdd\(TEXT\("{phase}"\)\)'
+-
+-        scope_match = re.search(scope_pattern, content, re.DOTALL)
+-        accum_match = re.search(accum_pattern, content, re.DOTALL)
+-
+-        _test(f"RAII struct: FFbxScopePhase for '{phase}' exists",
+-              scope_match is not None,
+-              detail=f"phase={phase}")
+-
+-        _test(f"RAII accumulator: PhaseDurations write for '{phase}' exists",
+-              accum_match is not None,
+-              detail=f"phase={phase}")
+-
+-        if scope_match and accum_match:
+-            scope_pos = scope_match.start()
+-            accum_pos = accum_match.start()
+-            # The accumulator must be after the FFbxScopePhase declaration
+-            _test(f"RAII fix: accumulator for '{phase}' is AFTER FFbxScopePhase declaration",
+-                  accum_pos > scope_pos,
+-                  detail=f"phase={phase}: FFbxScopePhase@{scope_pos}, accumulator@{accum_pos}")
+-
+-            # Verify there is a standalone '}' on its own line between the scope
+-            # declaration and the accumulator (proving RAII scope boundary exists)
+-            between = content[scope_pos:accum_pos]
+-            # Look for a closing brace that appears to end a scope block
+-            lines = between.split('\n')
+-            # Find the line with 'FFbxScopePhase' and look for a '}' on its own line after it
+-            scope_line_idx = None
+-            for i, line in enumerate(lines):
+-                if 'FFbxScopePhase' in line:
+-                    scope_line_idx = i
+-                    break
+-            has_scope_close = False
+-            if scope_line_idx is not None:
+-                brace_depth = 0
+-                # Look BACKWARDS from scope_line for the opening brace of the scope
+-                for k in range(scope_line_idx - 1, -1, -1):
+-                    for ch in lines[k]:
+-                        if ch == '{':
+-                            brace_depth += 1
+-                            break
+-                # Now track brace depth forward to find the matching closing brace
+-                for j in range(scope_line_idx + 1, len(lines)):
+-                    stripped = lines[j].strip()
+-                    for ch in stripped:
+-                        if ch == '{':
+-                            brace_depth += 1
+-                        elif ch == '}':
+-                            brace_depth -= 1
+-                            if brace_depth == 0:
+-                                has_scope_close = True
+-                                break
+-                    if has_scope_close:
+-                        break
+-            _test(f"RAII fix: scope closing brace exists between FFbxScopePhase and accumulator for '{phase}'",
+-                  has_scope_close,
+-                  detail=f"phase={phase}: scope_close={has_scope_close}")
++# 27. Source-structure test: RAII accumulator inside destructor
++#     Verifies the FFbxScopePhase destructor accumulates PhaseDurations
++#     for exclusive phases, replacing the old post-scope write pattern.
++# ---------------------------------------------------------------------------
++def test_raii_accumulator_inside_destructor():
++    """Verify FFbxScopePhase destructor accumulates PhaseDurations for exclusive phases."""
++    content = _read(FBX_IMPORTER_CPP)
++
++    # The struct destructor must contain the accumulator logic
++    _test("RAII struct destructor has PhaseDurations accumulation",
++          re.search(r'if\s*\(PhaseDurations\s*&&\s*Kind\s*==\s*EFbxPhaseKind::Exclusive\)\s*\n\s*\{\s*\n\s*PhaseDurations->FindOrAdd', content, re.DOTALL) is not None,
++          detail="destructor: PhaseDurations->FindOrAdd(PhaseName) += Ms inside Kind==Exclusive guard")
++    _test("RAII struct destructor writes OutDurationMs before PhaseDurations accumulation",
++          re.search(r'if\s*\(OutDurationMs\)\s*\n\s*\{\s*\n\s*\*OutDurationMs\s*=', content, re.DOTALL) is not None,
++          detail="destructor: *OutDurationMs = Ms written before PhaseDurations accumulation")
++    # Verify no standalone post-scope accumulator for exclusive phases exists
++    # in the HandleImport function (validating the new pattern replaced the old one)
++    handle_import_match = re.search(r'bool FLiveSyncFBXImporter::HandleImport\(', content)
++    if handle_import_match:
++        import_body = content[handle_import_match.start():]
++        standalone_accum = re.search(r'PhaseDurations\.FindOrAdd\(', import_body)
++        _test("RAII fix: no standalone PhaseDurations.FindOrAdd in HandleImport body",
++              standalone_accum is None,
++              detail="standalone accumulator would indicate pre-destructor pattern remains")
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -1278,6 +1282,9 @@
+     test_no_protocol_changes()
+     test_transaction_id_never_zero()
+     test_compute_phase_classification()
++    test_fstring_from_fixed_ansi()
++    test_sync_id_snapshot()
++    test_bounded_decode_safety()
+ 
+     test_log_all_phases_complete()
+     test_log_exclusive_sum()
+@@ -1299,7 +1306,7 @@
+     test_missing_exclusive_phase_visible()
+ 
+     # Task 2: source-structure tests for RAII accumulator correctness
+-    test_raii_accumulator_write_after_scope()
++    test_raii_accumulator_inside_destructor()
+     test_exclusive_phase_registry_complete()
+     test_registry_and_parser_do_not_drift()
+ 

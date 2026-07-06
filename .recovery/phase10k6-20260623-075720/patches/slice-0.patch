@@ -1,0 +1,181 @@
+diff --git a/UE_Plugin/UELiveSync/Source/UELiveSync/Private/FBXImport/LiveSyncFBXImporter.cpp b/UE_Plugin/UELiveSync/Source/UELiveSync/Private/FBXImport/LiveSyncFBXImporter.cpp
+index 1eeae18..897852b 100644
+--- a/UE_Plugin/UELiveSync/Source/UELiveSync/Private/FBXImport/LiveSyncFBXImporter.cpp
++++ b/UE_Plugin/UELiveSync/Source/UELiveSync/Private/FBXImport/LiveSyncFBXImporter.cpp
+@@ -33,6 +33,176 @@ static TAutoConsoleVariable<int32> CVarLiveSyncFBXVerboseLogs(
+ // Game-thread only. Safe on missing actor / invalid path.
+ // =========================================================
+ 
++// Phase 10K.6: Transaction timing decomposition infrastructure
++// =========================================================
++
++static FString PhaseKindToClassification(EFbxPhaseKind Kind)
++{
++    switch (Kind)
++    {
++        case EFbxPhaseKind::Exclusive:       return TEXT("exclusive");
++        case EFbxPhaseKind::Nested:          return TEXT("nested");
++        case EFbxPhaseKind::InclusiveParent: return TEXT("inclusive_parent");
++        case EFbxPhaseKind::Unobservable:    return TEXT("unobservable");
++        default:                             return TEXT("unknown");
++    }
++}
++
++// One authoritative phase metadata registry.
++// Exclusive phases are strictly sequential and never overlap.
++// Nested phases have a named parent; they are excluded from the exclusive sum.
++static const TMap<FString, FFbxPhaseMetadata> GPhaseMetadata = {
++    {TEXT("request_parse"),                     {EFbxPhaseKind::Exclusive,     nullptr}},
++    {TEXT("path_validation"),                   {EFbxPhaseKind::Exclusive,     nullptr}},
++    {TEXT("semantic_signature"),                {EFbxPhaseKind::Nested,        nullptr}},
++    {TEXT("fbx_factory_import"),                {EFbxPhaseKind::Exclusive,     nullptr}},
++    {TEXT("imported_asset_discovery"),          {EFbxPhaseKind::Exclusive,     nullptr}},
++    {TEXT("sidecar_processing"),                {EFbxPhaseKind::Exclusive,     nullptr}},
++    {TEXT("sidecar_manifest_read"),             {EFbxPhaseKind::Nested,        TEXT("sidecar_processing")}},
++    {TEXT("sidecar_fingerprint_classification"),{EFbxPhaseKind::Nested,        TEXT("sidecar_processing")}},
++    {TEXT("sidecar_asset_lookup"),              {EFbxPhaseKind::Nested,        TEXT("sidecar_processing")}},
++    {TEXT("sidecar_batch_import"),              {EFbxPhaseKind::Nested,        TEXT("sidecar_processing")}},
++    {TEXT("sidecar_result_mapping"),            {EFbxPhaseKind::Nested,        TEXT("sidecar_processing")}},
++    {TEXT("static_mesh_post_import"),           {EFbxPhaseKind::Exclusive,     nullptr}},
++    {TEXT("actor_lookup_or_spawn"),             {EFbxPhaseKind::Exclusive,     nullptr}},
++    {TEXT("static_mesh_assignment"),            {EFbxPhaseKind::Exclusive,     nullptr}},
++    {TEXT("material_slot_assignment"),          {EFbxPhaseKind::Exclusive,     nullptr}},
++    {TEXT("post_import_finalize"),              {EFbxPhaseKind::Nested,        TEXT("fbx_transaction")}},
++};
++
++// Derived exclusive-phase set.  Single source of truth is GPhaseMetadata.
++// Lambda initializer ensures no manually duplicated list.
++static TSet<FString> GExclusivePhases = []()
++{
++    TSet<FString> Result;
++    for (const auto& KV : GPhaseMetadata)
++    {
++        if (KV.Value.Kind == EFbxPhaseKind::Exclusive)
++        {
++            Result.Add(KV.Key);
++        }
++    }
++    return Result;
++}();
++
++static bool IsExclusivePhase(const FString& PhaseName)
++{
++    const FFbxPhaseMetadata* Meta = GPhaseMetadata.Find(PhaseName);
++    return Meta && Meta->Kind == EFbxPhaseKind::Exclusive;
++}
++
++static FString ComputePhaseClassificationExclusive(const TMap<FString, double>& PhaseDurations)
++{
++    FString LargestPhase, SecondPhase;
++    double LargestMs = 0.0, SecondMs = 0.0;
++    for (const auto& KV : PhaseDurations)
++    {
++        if (!IsExclusivePhase(KV.Key))
++            continue;
++        if (KV.Value > LargestMs)
++        {
++            SecondMs = LargestMs;
++            SecondPhase = LargestPhase;
++            LargestMs = KV.Value;
++            LargestPhase = KV.Key;
++        }
++        else if (KV.Value > SecondMs)
++        {
++            SecondMs = KV.Value;
++            SecondPhase = KV.Key;
++        }
++    }
++    if (LargestMs <= 0.0)
++        return TEXT("UNRESOLVED");
++    if (SecondMs >= 0.8 * LargestMs)
++        return TEXT("MIXED");
++    return FString::Printf(TEXT("DOMINANT_%s"), *LargestPhase);
++}
++
++// Phase marker helpers.  These define the authoritative log format.
++static void FbxPhaseBegin(
++    int32 TransactionId,
++    const FGuid& Guid,
++    int32 SyncId,
++    const FString& ObjectName,
++    const FString& PhaseName,
++    EFbxPhaseKind Kind)
++{
++    UE_LOG(LogLiveSync, Log,
++        TEXT("[FBX][PHASE_BEGIN] transactionId=%d guid=%s syncId=%d objectName=%s phase=\"%s\" classification=\"%s\""),
++        TransactionId,
++        *Guid.ToString(EGuidFormats::Digits),
++        SyncId,
++        *ObjectName,
++        *PhaseName,
++        *PhaseKindToClassification(Kind));
++}
++
++static void FbxPhaseEnd(
++    int32 TransactionId,
++    const FGuid& Guid,
++    int32 SyncId,
++    const FString& ObjectName,
++    const FString& PhaseName,
++    EFbxPhaseKind Kind,
++    double DurationMs)
++{
++    UE_LOG(LogLiveSync, Log,
++        TEXT("[FBX][PHASE_END] transactionId=%d guid=%s syncId=%d objectName=%s phase=\"%s\" classification=\"%s\" durationMs=%.1f"),
++        TransactionId,
++        *Guid.ToString(EGuidFormats::Digits),
++        SyncId,
++        *ObjectName,
++        *PhaseName,
++        *PhaseKindToClassification(Kind),
++        DurationMs);
++}
++
++// RAII scope phase.  Emits PHASE_BEGIN in the constructor and PHASE_END in
++// the destructor.  If OutDurationMs is non-null, the measured duration is
++// written through that pointer before PHASE_END.
++struct FFbxScopePhase
++{
++    int32 TransactionId;
++    FGuid Guid;
++    int32 SyncId;
++    FString ObjectName;
++    FString PhaseName;
++    EFbxPhaseKind Kind;
++    double StartTime;
++    double* OutDurationMs;
++
++    FFbxScopePhase(
++        int32 InTransactionId,
++        const FGuid& InGuid,
++        int32 InSyncId,
++        const FString& InObjectName,
++        const FString& InPhaseName,
++        EFbxPhaseKind InKind,
++        double* InOutDurationMs = nullptr)
++        : TransactionId(InTransactionId)
++        , Guid(InGuid)
++        , SyncId(InSyncId)
++        , ObjectName(InObjectName)
++        , PhaseName(InPhaseName)
++        , Kind(InKind)
++        , StartTime(FPlatformTime::Seconds())
++        , OutDurationMs(InOutDurationMs)
++    {
++        FbxPhaseBegin(TransactionId, Guid, SyncId, ObjectName, PhaseName, Kind);
++    }
++
++    ~FFbxScopePhase()
++    {
++        const double Ms = (FPlatformTime::Seconds() - StartTime) * 1000.0;
++        if (OutDurationMs)
++        {
++            *OutDurationMs = Ms;
++        }
++        FbxPhaseEnd(TransactionId, Guid, SyncId, ObjectName, PhaseName, Kind, Ms);
++    }
++};
++
+ // =========================================================
+ // VALIDATION HELPERS
+ // =========================================================

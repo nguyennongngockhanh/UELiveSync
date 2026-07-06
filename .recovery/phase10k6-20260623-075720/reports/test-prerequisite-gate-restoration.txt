@@ -1,0 +1,58 @@
+UELiveSync — Phase 10K.6 Test Prerequisite Gate Restoration Report
+===================================================================
+Report timestamp: 2026-06-23T11:31:37+07:00
+Test file: tests/phase10k6_transaction_decomposition.py
+Total tests: 50
+Passed: 50
+Failed: 0
+Pre-snapshot: .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-prerequisite-gate-fix.py
+Post-snapshot: .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.post-prerequisite-gate-fix.py
+Unified patch: .recovery/phase10k6-20260623-075720/patches/test-prerequisite-gate-restoration.patch (536 lines)
+
+Changes applied
+---------------
+1. Added shared preparation helpers before _check_rp_ordering/_check_pv_ordering:
+   - _prepare_request_parse_ordering() — gates on handle bounds, unique decl,
+     block, decl_end, FbxPath positions, VV pos, VPS pos before calling
+     _evaluate_request_parse_ordering.
+   - _prepare_path_validation_ordering() — gates on handle bounds, unique decl,
+     block, decl_end, VPS pos before calling _evaluate_path_validation_ordering.
+
+2. Rewrote _check_rp_ordering() to call _prepare_request_parse_ordering()
+   instead of inline evaluator. Missing prerequisites now always FAIL the
+   self-test instead of returning evaluator=False.
+
+3. Rewrote _check_pv_ordering() to call _prepare_path_validation_ordering()
+   instead of inline evaluator. Missing prerequisites now always FAIL the
+   self-test instead of returning evaluator=False.
+
+4. Updated test_production_phase_wiring check_phase to use the same shared
+   preparation helpers instead of inline evaluator.
+
+5. Changed declaration-count assertions from hardcoded True to total == 1 and
+   complete == 1 (eliminates false pass when zero declarations).
+
+6. Fixed production ordering chain initialization from order_valid=True to
+   order_valid=False with explicit per-prerequisite detail strings.
+
+7. Fixed RP-G fixture: corrected FbxPath to single call after ValidateVersion;
+   replaced malformed fixture with synthetic cross-boundary evaluator fixture
+   plus separate balanced-C++ parser fixture RP-G-parse.
+
+8. Reclassified PV-E as discovery-bounds fixture; added PV-E-invalid
+   evaluator fixture with handle_open > phase_open.
+
+9. Added controlled negative-fixture setup tests:
+   - RP: no FbxPath, no ValidateVersion, no ValidatePathSecurity, malformed
+     constructor invocation.
+   - PV: no ValidatePathSecurity, malformed constructor invocation.
+
+10. Added comprehensive production-prerequisite self-tests for both phases:
+    - missing unique declaration, missing dedicated block, missing constructor
+      end, missing FbxPath, missing VV, missing VPS, bad ordering, good ordering.
+
+11. Preserved 15 pure evaluator unit tests (no parsing dependency):
+    - 1 valid chain + 9 inverted-adjacent for request_parse
+    - 1 valid chain + 6 inverted-adjacent for path_validation
+
+12. Final test suite: 50 passed in ~77s.

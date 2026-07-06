@@ -1,0 +1,452 @@
+--- /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-parser-evidence-fix.py	2026-06-23 12:26:38.284688454 +0700
++++ /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.parser-evidence-fixed.py	2026-06-23 12:32:51.016492528 +0700
+@@ -369,6 +369,47 @@
+     return results
+ 
+ 
++def _scan_for_phase_name_in_span(content, mask, phase_name, start_pos, end_pos):
++    """Lexical-aware scan for TEXT("phase_name") within [start_pos, end_pos).
++    Stops at: next unmasked '}' at depth 0, next unmasked FFbxScopePhase,
++    end_pos.  Uses mask to skip //, /* */, and string literals.
++    Returns True if TEXT("phase_name") found before any stop condition."""
++    ffbx_pat = re.compile(r'FFbxScopePhase\s+\w+\s*\(')
++    text_pat = re.compile(r'TEXT\s*\(\s*"([^"]*)"\s*\)')
++    depth = 0
++    pos = start_pos
++    while pos < end_pos and pos < len(content):
++        if mask[pos]:
++            pos += 1
++            continue
++        c = content[pos]
++        if c == '{':
++            depth += 1
++            pos += 1
++            continue
++        if c == '}':
++            depth -= 1
++            if depth < 0:
++                return False
++            pos += 1
++            continue
++        if depth == 0 and c == '}':
++            return False
++        # Check for next declaration token
++        if pos + 14 <= len(content) and content[pos:pos+14] == 'FFbxScopePhase':
++            if ffbx_pat.match(content, pos) and not mask[pos]:
++                return False
++        # Check for TEXT macro
++        tm = text_pat.match(content, pos)
++        if tm:
++            if tm.group(1) == phase_name:
++                return True
++            pos = tm.end()
++            continue
++        pos += 1
++    return False
++
++
+ def _find_ffbxscopephase_matches(content, mask, phase_name,
+                                   start_pos=0, end_pos=None):
+     """Find all unmasked FFbxScopePhase tokens with the given phase name.
+@@ -388,12 +429,24 @@
+             if phase_name in _extract_text_macro_args(invocation):
+                 results.append((m, invocation))
+         else:
+-            # Extraction failed; check phase name in raw content.
+-            # The phase TEXT(...) arg should appear within 300 chars after '('.
+-            search_end = min(m.end() + 300, len(content))
+-            snippet = content[m.end():search_end]
+-            text_pattern = r'TEXT\s*\(\s*"' + re.escape(phase_name) + r'"\s*\)'
+-            if re.search(text_pattern, snippet):
++            # Extraction failed; lexical-aware scan for phase name.
++            # Stop before next declaration, block boundary, or end_pos.
++            scan_end = end_pos
++            # Look for next FFbxScopePhase token after current one
++            next_match = None
++            for nm in re.finditer(pattern, content):
++                if nm.start() <= m.start():
++                    continue
++                if nm.start() >= end_pos:
++                    break
++                if not mask[nm.start()]:
++                    next_match = nm
++                    break
++            if next_match:
++                scan_end = next_match.start()
++            found = _scan_for_phase_name_in_span(
++                content, mask, phase_name, m.end(), min(scan_end, end_pos))
++            if found:
+                 results.append((m, None))
+     return results
+ 
+@@ -660,11 +713,33 @@
+     return (True, [], valid, failing, detail)
+ 
+ 
++# ---- Parser result structure for setup tests --------------------------------
++class ParserResult:
++    """Structured result from _parse_and_prepare_rp / _parse_and_prepare_pv."""
++    def __init__(self, handle_open, handle_close, matches, single_match,
++                 declaration_start, declaration_end, invocation_complete,
++                 block_exists, prep_result):
++        self.handle_open = handle_open
++        self.handle_close = handle_close
++        self.matches = matches
++        self.match_count = len(matches)
++        self.single_match = single_match
++        self.declaration_start = declaration_start
++        self.declaration_end = declaration_end
++        self.invocation_complete = invocation_complete
++        self.block_exists = block_exists
++        self.prerequisites_valid = prep_result[0]
++        self.missing = prep_result[1]
++        self.evaluator_valid = prep_result[2]
++        self.failing_relations = prep_result[3]
++        self.detail = prep_result[4]
++        self._prep = prep_result
++
++
+ # ---- Parser-to-preparation helpers for setup tests --------------------------
+ def _parse_and_prepare_rp(fixture_text):
+     """Parse a C++ fixture and call _prepare_request_parse_ordering.
+-    Returns (prerequisites_valid, missing_list, evaluator_valid,
+-             failing_relations, detail_str)."""
++    Returns ParserResult."""
+     msk = _build_lexical_mask(fixture_text)
+     ho, hc = _find_handleimport_full_bounds(fixture_text, msk)
+     hbs = ho + 1
+@@ -676,8 +751,10 @@
+     ds = single_match.start() if single_match else -1
+     if has_unique and invocation is not None:
+         de = len(invocation) + ds
++        inv_complete = True
+     else:
+         de = -1
++        inv_complete = False
+     block = _find_dedicated_block(fixture_text, msk, ds) if single_match else None
+     block_exists = block is not None
+     bo = bc = -1
+@@ -686,15 +763,16 @@
+     fbx_start, fbx_end = _find_fbxpath_invocation(fixture_text, msk, hbs, hbe)
+     vv = _find_unmasked_call(fixture_text, msk, 'ValidateVersion', hbs, hbe)
+     vps = _find_unmasked_call(fixture_text, msk, 'ValidatePathSecurity', hbs, hbe)
+-    return _prepare_request_parse_ordering(
++    prep = _prepare_request_parse_ordering(
+         ho, hc, has_unique, single_match, ds, de,
+         block_exists, bo, bc, fbx_start, fbx_end, vv, vps)
++    return ParserResult(ho, hc, matches, single_match, ds, de,
++                        inv_complete, block_exists, prep)
+ 
+ 
+ def _parse_and_prepare_pv(fixture_text):
+     """Parse a C++ fixture and call _prepare_path_validation_ordering.
+-    Returns (prerequisites_valid, missing_list, evaluator_valid,
+-             failing_relations, detail_str)."""
++    Returns ParserResult."""
+     msk = _build_lexical_mask(fixture_text)
+     ho, hc = _find_handleimport_full_bounds(fixture_text, msk)
+     hbs = ho + 1
+@@ -706,17 +784,21 @@
+     ds = single_match.start() if single_match else -1
+     if has_unique and invocation is not None:
+         de = len(invocation) + ds
++        inv_complete = True
+     else:
+         de = -1
++        inv_complete = False
+     block = _find_dedicated_block(fixture_text, msk, ds) if single_match else None
+     block_exists = block is not None
+     bo = bc = -1
+     if block:
+         bo, bc, _ = block
+     vps = _find_unmasked_call(fixture_text, msk, 'ValidatePathSecurity', hbs, hbe)
+-    return _prepare_path_validation_ordering(
++    prep = _prepare_path_validation_ordering(
+         ho, hc, has_unique, single_match, ds, de,
+         block_exists, bo, bc, vps)
++    return ParserResult(ho, hc, matches, single_match, ds, de,
++                        inv_complete, block_exists, prep)
+ 
+ 
+ # ---- Lexical FStringFromFixedAnsi(Request.FbxPath) invocation ----------------
+@@ -3208,9 +3290,11 @@
+     return true;
+ }""")
+     _test("Setup [RP-absent-decl]: prerequisites_valid=False",
+-          _rp_absdecl[0] == False, detail=f"pv={_rp_absdecl[0]}, missing={_rp_absdecl[1]}")
++          _rp_absdecl.prerequisites_valid == False,
++          detail=f"pv={_rp_absdecl.prerequisites_valid}, missing={_rp_absdecl.missing}")
+     _test("Setup [RP-absent-decl]: missing contains unique declaration",
+-          "unique declaration" in _rp_absdecl[1], detail=f"missing={_rp_absdecl[1]}")
++          "unique declaration" in _rp_absdecl.missing,
++          detail=f"missing={_rp_absdecl.missing}")
+ 
+     # RP-incomplete-constructor (B): token found but unmatched parens.
+     _rp_inccon = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+@@ -3225,13 +3309,169 @@
+     ValidatePathSecurity(Request);
+     return true;
+ }""")
+-    _test("Setup [RP-incomplete-constructor]: prerequisites_valid=False",
+-          _rp_inccon[0] == False, detail=f"pv={_rp_inccon[0]}, missing={_rp_inccon[1]}")
+-    _test("Setup [RP-incomplete-constructor]: missing contains constructor bounds",
+-          "constructor bounds" in _rp_inccon[1], detail=f"missing={_rp_inccon[1]}")
+-    _test("Setup [RP-incomplete-constructor]: single_match is not None",
+-          _rp_inccon[3] is not None and True,
+-          detail=f"declaration_end value not -1 check needed")
++    _test("Setup [RP-incomplete]: prerequisites_valid=False",
++          _rp_inccon.prerequisites_valid == False,
++          detail=f"pv={_rp_inccon.prerequisites_valid}, missing={_rp_inccon.missing}")
++    _test("Setup [RP-incomplete]: evaluator_valid=False",
++          _rp_inccon.evaluator_valid == False,
++          detail=f"ev={_rp_inccon.evaluator_valid}")
++    _test("Setup [RP-incomplete]: missing contains constructor bounds",
++          "constructor bounds" in _rp_inccon.missing,
++          detail=f"missing={_rp_inccon.missing}")
++    _test("Setup [RP-incomplete]: match_count == 1",
++          _rp_inccon.match_count == 1, detail=f"count={_rp_inccon.match_count}")
++    _test("Setup [RP-incomplete]: single_match is not None",
++          _rp_inccon.single_match is not None,
++          detail=f"single_match={_rp_inccon.single_match}")
++    _test("Setup [RP-incomplete]: declaration_start >= 0",
++          _rp_inccon.declaration_start >= 0,
++          detail=f"ds={_rp_inccon.declaration_start}")
++    _test("Setup [RP-incomplete]: declaration_end == -1",
++          _rp_inccon.declaration_end == -1,
++          detail=f"de={_rp_inccon.declaration_end}")
++    _test("Setup [RP-incomplete]: invocation_complete == False",
++          _rp_inccon.invocation_complete == False,
++          detail=f"inv_comp={_rp_inccon.invocation_complete}")
++    _test("Setup [RP-incomplete]: missing does not contain unique decl",
++          "unique declaration" not in _rp_inccon.missing,
++          detail=f"missing={_rp_inccon.missing}")
++
++    # ===================================================================
++    # Lexical false-positive fixtures (RP)
++    # Phase name must NOT be matched inside comments, strings, or later
++    # declarations. Each fixture has FFbxScopePhase in a masked context
++    # and an unmasked 'request_parse' (the correct target) further down.
++    # ===================================================================
++
++    _rp_lc = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    // FFbxScopePhase Scope(guid, TEXT("request_parse"), ...);
++    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++        ValidateVersion(Request);
++    }
++    ValidatePathSecurity(Request);
++    return true;
++}""")
++    _test("Setup [RP-LC]: comment false-positive guard — valid",
++          _rp_lc.prerequisites_valid == True,
++          detail=f"pv={_rp_lc.prerequisites_valid}, missing={_rp_lc.missing}")
++
++    _rp_bc = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    /* FFbxScopePhase Scope(guid, TEXT("request_parse"), ...); */
++    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++        ValidateVersion(Request);
++    }
++    ValidatePathSecurity(Request);
++    return true;
++}""")
++    _test("Setup [RP-BC]: block-comment false-positive guard — valid",
++          _rp_bc.prerequisites_valid == True,
++          detail=f"pv={_rp_bc.prerequisites_valid}, missing={_rp_bc.missing}")
++
++    _rp_sl = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    FString quoted = TEXT("FFbxScopePhase Scope(guid, TEXT(\"request_parse\"), ...);");
++    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++        ValidateVersion(Request);
++    }
++    ValidatePathSecurity(Request);
++    return true;
++}""")
++    _test("Setup [RP-SL]: string-literal false-positive guard — valid",
++          _rp_sl.prerequisites_valid == True,
++          detail=f"pv={_rp_sl.prerequisites_valid}, missing={_rp_sl.missing}")
++
++    _rp_oc = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    OtherClass<FFbxScopePhase> oc(guid, TEXT("request_parse"),
++                                  EFbxPhaseKind::Exclusive,
++                                  &PhaseDurations);
++    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++        ValidateVersion(Request);
++    }
++    ValidatePathSecurity(Request);
++    return true;
++}""")
++    _test("Setup [RP-OC]: other-class false-positive guard — valid",
++          _rp_oc.prerequisites_valid == True,
++          detail=f"pv={_rp_oc.prerequisites_valid}, missing={_rp_oc.missing}")
++
++    _rp_ld = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    // later declaration — same name, different block
++    {
++        FFbxScopePhase Later(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++    }
++    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++        ValidateVersion(Request);
++    }
++    ValidatePathSecurity(Request);
++    return true;
++}""")
++    _test("Setup [RP-LD]: later-declaration false-positive guard — valid",
++          _rp_ld.prerequisites_valid == True,
++          detail=f"pv={_rp_ld.prerequisites_valid}, missing={_rp_ld.missing}")
++
++    # ===================================================================
++    # Lexical false-positive fixtures (PV)
++    # ===================================================================
++
++    _pv_lc = _parse_and_prepare_pv("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    // FFbxScopePhase Scope(guid, TEXT("path_validation"), ...);
++    {
++        FFbxScopePhase Scope(guid, TEXT("path_validation"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++        ValidatePathSecurity(Request);
++    }
++    return true;
++}""")
++    _test("Setup [PV-LC]: comment false-positive guard — valid",
++          _pv_lc.prerequisites_valid == True,
++          detail=f"pv={_pv_lc.prerequisites_valid}, missing={_pv_lc.missing}")
++
++    _pv_bc = _parse_and_prepare_pv("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    /* FFbxScopePhase Scope(guid, TEXT("path_validation"), ...); */
++    {
++        FFbxScopePhase Scope(guid, TEXT("path_validation"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++        ValidatePathSecurity(Request);
++    }
++    return true;
++}""")
++    _test("Setup [PV-BC]: block-comment false-positive guard — valid",
++          _pv_bc.prerequisites_valid == True,
++          detail=f"pv={_pv_bc.prerequisites_valid}, missing={_pv_bc.missing}")
++
++    # ===================================================================
++    # Missing-element fixtures
++    # ===================================================================
+ 
+     # RP-no-FbxPath (C): complete constructor, no FbxPath.
+     _rp_nofbx = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+@@ -3246,9 +3486,11 @@
+     return true;
+ }""")
+     _test("Setup [RP-no-FbxPath]: prerequisites_valid=False",
+-          _rp_nofbx[0] == False, detail=f"pv={_rp_nofbx[0]}, missing={_rp_nofbx[1]}")
++          _rp_nofbx.prerequisites_valid == False,
++          detail=f"pv={_rp_nofbx.prerequisites_valid}, missing={_rp_nofbx.missing}")
+     _test("Setup [RP-no-FbxPath]: missing contains FbxPath invocation",
+-          "FbxPath invocation" in _rp_nofbx[1], detail=f"missing={_rp_nofbx[1]}")
++          "FbxPath invocation" in _rp_nofbx.missing,
++          detail=f"missing={_rp_nofbx.missing}")
+ 
+     # RP-no-VV (C): complete constructor, no ValidateVersion.
+     _rp_novv = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+@@ -3263,9 +3505,11 @@
+     return true;
+ }""")
+     _test("Setup [RP-no-VV]: prerequisites_valid=False",
+-          _rp_novv[0] == False, detail=f"pv={_rp_novv[0]}, missing={_rp_novv[1]}")
++          _rp_novv.prerequisites_valid == False,
++          detail=f"pv={_rp_novv.prerequisites_valid}, missing={_rp_novv.missing}")
+     _test("Setup [RP-no-VV]: missing contains ValidateVersion call",
+-          "ValidateVersion call" in _rp_novv[1], detail=f"missing={_rp_novv[1]}")
++          "ValidateVersion call" in _rp_novv.missing,
++          detail=f"missing={_rp_novv.missing}")
+ 
+     # RP-no-VPS (C): complete constructor, no ValidatePathSecurity.
+     _rp_novps = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+@@ -3280,9 +3524,11 @@
+     return true;
+ }""")
+     _test("Setup [RP-no-VPS]: prerequisites_valid=False",
+-          _rp_novps[0] == False, detail=f"pv={_rp_novps[0]}, missing={_rp_novps[1]}")
++          _rp_novps.prerequisites_valid == False,
++          detail=f"pv={_rp_novps.prerequisites_valid}, missing={_rp_novps.missing}")
+     _test("Setup [RP-no-VPS]: missing contains ValidatePathSecurity call",
+-          "ValidatePathSecurity call" in _rp_novps[1], detail=f"missing={_rp_novps[1]}")
++          "ValidatePathSecurity call" in _rp_novps.missing,
++          detail=f"missing={_rp_novps.missing}")
+ 
+     # PV-absent-decl (A): no FFbxScopePhase token at all.
+     _pv_absdecl = _parse_and_prepare_pv("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+@@ -3291,9 +3537,11 @@
+     return true;
+ }""")
+     _test("Setup [PV-absent-decl]: prerequisites_valid=False",
+-          _pv_absdecl[0] == False, detail=f"pv={_pv_absdecl[0]}, missing={_pv_absdecl[1]}")
++          _pv_absdecl.prerequisites_valid == False,
++          detail=f"pv={_pv_absdecl.prerequisites_valid}, missing={_pv_absdecl.missing}")
+     _test("Setup [PV-absent-decl]: missing contains unique declaration",
+-          "unique declaration" in _pv_absdecl[1], detail=f"missing={_pv_absdecl[1]}")
++          "unique declaration" in _pv_absdecl.missing,
++          detail=f"missing={_pv_absdecl.missing}")
+ 
+     # PV-incomplete-constructor (B): token found but unmatched parens.
+     _pv_inccon = _parse_and_prepare_pv("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+@@ -3306,10 +3554,15 @@
+     ValidatePathSecurity(Request);
+     return true;
+ }""")
+-    _test("Setup [PV-incomplete-constructor]: prerequisites_valid=False",
+-          _pv_inccon[0] == False, detail=f"pv={_pv_inccon[0]}, missing={_pv_inccon[1]}")
+-    _test("Setup [PV-incomplete-constructor]: missing contains constructor bounds",
+-          "constructor bounds" in _pv_inccon[1], detail=f"missing={_pv_inccon[1]}")
++    _test("Setup [PV-incomplete]: prerequisites_valid=False",
++          _pv_inccon.prerequisites_valid == False,
++          detail=f"pv={_pv_inccon.prerequisites_valid}, missing={_pv_inccon.missing}")
++    _test("Setup [PV-incomplete]: missing contains constructor bounds",
++          "constructor bounds" in _pv_inccon.missing,
++          detail=f"missing={_pv_inccon.missing}")
++    _test("Setup [PV-incomplete]: evaluator_valid=False",
++          _pv_inccon.evaluator_valid == False,
++          detail=f"ev={_pv_inccon.evaluator_valid}")
+ 
+     # PV-no-VPS (C): complete constructor, no ValidatePathSecurity.
+     _pv_novps = _parse_and_prepare_pv("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+@@ -3322,9 +3575,11 @@
+     return true;
+ }""")
+     _test("Setup [PV-no-VPS]: prerequisites_valid=False",
+-          _pv_novps[0] == False, detail=f"pv={_pv_novps[0]}, missing={_pv_novps[1]}")
++          _pv_novps.prerequisites_valid == False,
++          detail=f"pv={_pv_novps.prerequisites_valid}, missing={_pv_novps.missing}")
+     _test("Setup [PV-no-VPS]: missing contains ValidatePathSecurity call",
+-          "ValidatePathSecurity call" in _pv_novps[1], detail=f"missing={_pv_novps[1]}")
++          "ValidatePathSecurity call" in _pv_novps.missing,
++          detail=f"missing={_pv_novps.missing}")
+ 
+     # ===================================================================
+     # Production-prerequisite state self-tests (_check_preparation)

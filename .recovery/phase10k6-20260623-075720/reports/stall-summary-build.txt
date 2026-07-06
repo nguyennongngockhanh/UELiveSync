@@ -1,0 +1,71 @@
+Setting up bundled DotNet SDK
+Running command : dotnet Engine/Binaries/DotNET/UnrealBuildTool/UnrealBuildTool.dll ProjectTemplateEditor Linux Development /home/nguyennongngockhanh/Documents/Unreal Projects/ProjectTemplate/ProjectTemplate.uproject -waitmutex
+Log file: /home/nguyennongngockhanh/Unreal/UE5.7.4/Engine/Programs/UnrealBuildTool/Log.txt
+Using 'git status' to determine working set for adaptive non-unity build (/home/nguyennongngockhanh/Unreal/UE5.7.4).
+Using 'git status' to determine working set for adaptive non-unity build (/home/nguyennongngockhanh/Documents/Unreal Projects/ProjectTemplate).
+Invalidating makefile for ProjectTemplateEditor (Definitions.UELiveSync.h deleted)
+UHT compiled-in object format Default
+Parsing headers for ProjectTemplateEditor
+  Running Internal UnrealHeaderTool "/home/nguyennongngockhanh/Documents/Unreal Projects/ProjectTemplate/ProjectTemplate.uproject" "/home/nguyennongngockhanh/Documents/Unreal Projects/ProjectTemplate/Intermediate/Build/Linux/ProjectTemplateEditor/Development/ProjectTemplateEditor.uhtmanifest" -WarningsAsErrors
+UHT processed ProjectTemplateEditor in 1.5136581 seconds (6 files written)
+------- Build details --------
+Using toolchain located at '/home/nguyennongngockhanh/Unreal/UE5.7.4/Engine/Extras/ThirdPartyNotUE/SDKs/HostLinux/Linux_x64/v26_clang-20.1.8-rockylinux8/x86_64-unknown-linux-gnu'.
+Using clang (/home/nguyennongngockhanh/Unreal/UE5.7.4/Engine/Extras/ThirdPartyNotUE/SDKs/HostLinux/Linux_x64/v26_clang-20.1.8-rockylinux8/x86_64-unknown-linux-gnu/bin/clang++) version 'clang version 20.1.8 (github.com/llvm/llvm-project 87f0227cb60147a26a1eeb4fb06e3b505e9c7261)
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /home/nguyennongngockhanh/Unreal/UE5.7.4/Engine/Extras/ThirdPartyNotUE/SDKs/HostLinux/Linux_x64/v26_clang-20.1.8-rockylinux8/x86_64-unknown-linux-gnu/bin' (string), 20 (major), 1 (minor), 8 (patch)
+Using bundled libc++ standard C++ library.
+Using lld linker
+Using llvm-ar (/home/nguyennongngockhanh/Unreal/UE5.7.4/Engine/Extras/ThirdPartyNotUE/SDKs/HostLinux/Linux_x64/v26_clang-20.1.8-rockylinux8/x86_64-unknown-linux-gnu/bin/llvm-ar) version 'LLVM (http://llvm.org/):
+  LLVM version 20.1.8
+  Optimized build. (string)'
+Compressing debug files
+Targeted minimum CPU architecture: None
+------------------------------
+Building ProjectTemplateEditor...
+[Upgrade]
+[Upgrade] Using backward-compatible include order. The latest version of UE has changed the order of includes, which may require code changes. The current setting is:
+[Upgrade]     IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_4
+[Upgrade] Suppress this message by setting 'IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_7;' in ProjectTemplateEditor.Target.cs.
+[Upgrade] Alternatively you can set this to 'EngineIncludeOrderVersion.Latest' to always use the latest include order. This will potentially cause compile errors when integrating new versions of the engine.
+[Upgrade]
+[Adaptive Build] Excluded from UELiveSync unity file: LiveSyncRunnable.cpp, UELiveSync.cpp, UELiveSyncSequencerProbe.cpp, UELiveSyncSubsystem.cpp, LiveSyncFBXImporter.cpp
+[Adaptive Build] Excluded from UELiveSyncEditor unity file: SLiveSyncDiagnosticsWidget.cpp, SLiveSyncStatusWidget.cpp, UELiveSyncEditorModule.cpp
+[Adaptive Build] Excluded from DLSSBlueprint unity file: DLSSLibrary.cpp, DLSSUpscalerModularFeatureTest.cpp
+[Adaptive Build] Excluded from StreamlineNGXCommon unity file: StreamlineNGXCommon.cpp
+[Adaptive Build] Excluded from StreamlineDLSSGBlueprint unity file: StreamlineLibraryDLSSG.cpp
+[Adaptive Build] Excluded from StreamlineBlueprint unity file: StreamlineLibrary.cpp
+[Adaptive Build] Excluded from StreamlineReflexBlueprint unity file: StreamlineLibraryReflex.cpp
+[Adaptive Build] Excluded from NISCore unity file: NISCore.cpp, NISUpscaler.cpp
+[Adaptive Build] Excluded from NISShaders unity file: NISShaders.cpp
+[Adaptive Build] Excluded from NISBlueprint unity file: NISLibrary.cpp
+[Adaptive Build] Excluded from StreamlineDeepDVCBlueprint unity file: StreamlineLibaryDeepDVC.cpp
+Determining max actions to execute in parallel (16 physical cores, 32 logical cores)
+  Executing up to 16 processes, one per physical core
+Using Unreal Build Accelerator local executor to run 13 action(s)
+  Storage capacity 40Gb
+---- Starting trace ----
+UbaSessionServer - Disable remote execution (remote sessions will finish current processes)
+[1/13] Compile UELiveSync.cpp
+[2/13] Compile Module.UELiveSyncEditor.cpp
+[3/13] Compile LiveSyncRunnable.cpp
+[4/13] Compile UELiveSyncEditorModule.cpp
+[5/13] Compile Module.UELiveSync.cpp
+[6/13] Compile SLiveSyncDiagnosticsWidget.cpp
+[7/13] Compile SLiveSyncStatusWidget.cpp
+[8/13] Compile UELiveSyncSequencerProbe.cpp
+[9/13] Compile LiveSyncFBXImporter.cpp
+[10/13] Compile UELiveSyncSubsystem.cpp
+[11/13] Link (lld) libUnrealEditor-UELiveSync.so
+[12/13] Link (lld) libUnrealEditor-UELiveSyncEditor.so
+[13/13] WriteMetadata ProjectTemplateEditor.target [NoUba]
+
+Trace written to file /home/nguyennongngockhanh/Unreal/UE5.7.4/Engine/Programs/UnrealBuildTool/Log.uba with size 4.2kb
+Total time in Unreal Build Accelerator local executor: 12.74 seconds
+
+Result: Succeeded
+Total execution time: 18.07 seconds
+
+
+
+Timestamp: 2026-06-24T07:47:37+07:00

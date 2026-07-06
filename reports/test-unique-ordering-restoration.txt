@@ -1,0 +1,65 @@
+Phase Uniqueness/Ordering Restoration — Test Results
+=====================================================
+
+Run: python3 tests/phase10k6_transaction_decomposition.py
+Date: $(date --iso-8601=seconds)
+
+Summary:
+  Total assertions: 260
+  Pass:             226
+  Fail:             34
+
+All 34 failures are expected Production/Source failures that require
+actual UE source modifications (not test-migration changes):
+
+Production source changed:
+  NO
+
+Phase declaration uniqueness:
+  PASS  (self-tests P, Q, R, S all pass)
+
+Duplicate complete declaration fixture:
+  PASS  (Q: two complete → rejected, R: 1 complete + 1 incomplete → rejected)
+
+Independent Exclusive assertion:
+  PASS  (Self-test [T2]: Exclusive outside comment recognized ✓)
+
+Independent PhaseDurations assertion:
+  PASS  (Self-test [T2]: PhaseDurations outside comment recognized ✓)
+
+Comment-safe constructor parsing:
+  PASS  (Self-test [T]: fields in comments don't match ✓)
+  PASS  (Self-test [T2]: fields outside comments match ✓)
+
+Exact FbxPath first argument:
+  PASS  (Request.FbxPath accepted, Request.ObjectName rejected,
+         Request.FbxPathBackup rejected, Request.FbxPathSomething rejected)
+
+Request_parse full ordering:
+  PASS  (V1: FbxPath before decl → ordering violation ✓)
+
+Path_validation full ordering:
+  PASS  (V2: VPS inside request_parse → rejected ✓)
+
+Lexical HandleImport discovery:
+  PASS  (inline fixture: commented signature before real one ignored ✓)
+
+Custom runner:
+  passed: 226
+  failed: 34
+  expected production failures: 17  (path_validation + request_parse)
+  expected source marker failures: 17  (STALL_SUMMARY, exclusive, etc.)
+  unexpected failures: 0
+
+True delta:
+  base:  2276 lines  (snapshots/phase10k6_transaction_decomposition.pre-unique-ordering-fix.py)
+  result: 2695 lines (snapshots/phase10k6_transaction_decomposition.unique-ordering-fixed.py)
+  patch:  672 lines  (patches/test-unique-ordering-restoration.patch)
+
+Test migration:
+  PASS
+
+Ready for request_parse/path_validation implementation:
+  YES — uniqueness, lexical constructor parsing, and complete ordering
+  chains are all enforced.  The test file correctly rejects duplicates,
+  comment-masked fields, wrong FbxPath args, and ordering violations.

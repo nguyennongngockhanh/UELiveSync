@@ -1,0 +1,62 @@
+Shared Ordering Evaluators — Test Results
+============================================
+
+Run: python3 tests/phase10k6_transaction_decomposition.py
+Date: 2026-06-23T07:57:20+00:00
+
+Production source changed:
+  NO
+
+Shared request_parse ordering evaluator:
+  PASS
+
+Shared path_validation ordering evaluator:
+  PASS
+
+Request_parse positive fixture:
+  PASS  (RP-A: correct full ordering)
+
+Request_parse negative fixtures:
+  before declaration:                              PASS  (RP-B: declaration_end<fbx_path_invocation_start)
+  ValidateVersion before FbxPath:                  PASS  (RP-C: fbx_path_invocation_end<ValidateVersion_call)
+  FbxPath after ValidateVersion:                   PASS  (RP-D: fbx_path_invocation_end<ValidateVersion_call)
+  VPS inside phase:                                PASS  (RP-E: phase_close<ValidatePathSecurity_call)
+  VPS before phase close:                          PASS  (RP-F: phase_close<ValidatePathSecurity_call)
+  invocation crosses phase close:                  PASS  (RP-G: ValidateVersion_call<phase_close)
+
+Path_validation positive fixture:
+  PASS  (PV-A: correct full ordering)
+
+Path_validation negative fixtures:
+  VPS before declaration_end:                      PASS  (PV-B: declaration_end<ValidatePathSecurity_call)
+  VPS before declaration:                          PASS  (PV-C: declaration_end<ValidatePathSecurity_call)
+  VPS after phase_close:                           PASS  (PV-D: ValidatePathSecurity_call<phase_close)
+  block outside HandleImport:                      PASS  (PV-E: no decl inside HI bounds)
+
+Declaration counts:
+  total count assertion:                           PASS
+  complete count assertion:                        PASS
+  independent field assertions:                    PASS
+
+Artifacts under recovery root:
+  base snapshot:   .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-shared-ordering-fix.py
+  result snapshot: .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.shared-ordering-fixed.py
+  unified patch:   .recovery/phase10k6-20260623-075720/patches/test-shared-ordering-restoration.patch
+  test report:     .recovery/phase10k6-20260623-075720/reports/test-shared-ordering-restoration.txt
+  audit report:    .recovery/phase10k6-20260623-075720/reports/test-shared-ordering-audit.md
+
+Patch format:
+  unified diff: YES
+
+Custom runner:
+  passed: 251
+  failed: 34
+  expected production/source failures: 34  (17 production + 17 source markers)
+  unexpected failures: 0
+
+Test migration:
+  PASS — all ordering fixtures use the same evaluator as production.
+  All authoritative artifacts are under .recovery/phase10k6-20260623-075720.
+
+Ready for request_parse/path_validation implementation:
+  YES

@@ -1,0 +1,81 @@
+False-Pass Path Correction — Test Results
+============================================
+
+Run: python3 tests/phase10k6_transaction_decomposition.py
+Date: 2026-06-23T07:57:20+00:00
+
+Production source changed:
+  NO
+
+Real declaration assertions:
+  total == 1:                               PASS  (total=0→FAIL, total=1→PASS)
+  complete == 1:                            PASS  (complete=0→FAIL, complete=1→PASS)
+  independent Exclusive:                    PASS  (separate from count)
+  independent PhaseDurations:               PASS  (separate from count)
+
+Production missing-prerequisite ordering:
+  missing declaration:                      PASS  (no unique decl→"missing unique declaration")
+  missing block:                            PASS  (no dedicated block→"missing dedicated block")
+  missing required call:                    PASS  (call=-1→"missing 'func' call position")
+
+Negative fixture prerequisite enforcement:
+  PASS  (RP-B through RP-G all require decl+block; PV-B through PV-D likewise)
+  Missing prereq → FAIL even for expect_valid=False:  PASS
+
+RP-D single invocation:
+  PASS
+  failed relation: fbx_path_invocation_end<ValidateVersion_call
+
+RP-G balanced/synthetic boundary fixture:
+  PASS
+  failed relation: ValidateVersion_call<phase_close
+
+RP-G-parse balanced parser fixture:
+  PASS  (normal FbxPath inside block correctly detected)
+
+PV-E discovery fixture:
+  PASS  (no decl found inside HI bounds for block-outside-HI fixture)
+
+PV invalid-bounds evaluator fixture:
+  PASS
+  failed relation: handle_open<phase_open
+
+Direct evaluator tests:
+  request_parse valid chain:                PASS
+  request_parse each adjacent inversion:    PASS  (9 pairs, all fail correctly)
+  path_validation valid chain:              PASS
+  path_validation each adjacent inversion:  PASS  (6 pairs, all fail correctly)
+
+Missing declaration self-test:
+  PASS  (evaluator returns False when decl=-1)
+
+Missing call self-test:
+  PASS  (evaluator returns False when vps=-1)
+
+Missing HandleImport bounds self-test:
+  PASS  (evaluator returns False when handle_open=-1)
+
+Artifacts:
+  base snapshot:   snapshots/phase10k6_transaction_decomposition.pre-false-pass-fix.py (2981 lines)
+  result snapshot: snapshots/phase10k6_transaction_decomposition.false-pass-fixed.py (3117 lines)
+  unified patch:   patches/test-false-pass-restoration.patch (300 lines)
+  test report:     reports/test-false-pass-restoration.txt
+  audit report:    reports/test-false-pass-audit.md
+
+Patch format:
+  unified diff: YES
+
+Custom runner:
+  passed: 289
+  failed: 40
+  expected production/source failures: 40
+    (23 production, 15 source markers, 2 classification/timing)
+  unexpected failures: 0
+
+Test migration:
+  PASS — all ordering fixtures use the same evaluator as production,
+         no negative fixture can pass because of missing prereqs,
+         missing production prerequisites make ordering assertion fail.
+
+Ready for request_parse/path_validation implementation:
+  YES

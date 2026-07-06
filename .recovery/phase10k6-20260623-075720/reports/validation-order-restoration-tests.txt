@@ -1,0 +1,31 @@
+Phase 10K.6 validation-order restoration — Test report
+Timestamp: 2026-06-23T14:53:36+07:00
+File: tests/phase10k6_transaction_decomposition.py
+
+Result: 452 passed, 16 failed
+
+FAIL lines (all later-slice/pre-existing):
+  FAIL  Classification uses TEXT("exclusive") and TEXT("SINGLE")
+  FAIL  STALL_SUMMARY log exists
+  FAIL  STALL_SUMMARY includes transactionId
+  FAIL  STALL_SUMMARY includes totalMs
+  FAIL  STALL_SUMMARY includes measuredExclusiveMs
+  FAIL  STALL_SUMMARY includes coveragePercent
+  FAIL  STALL_SUMMARY includes largestPhase
+  FAIL  STALL_SUMMARY includes largestPhaseMs
+  FAIL  STALL_SUMMARY includes unattributedMs
+  FAIL  STALL_SUMMARY includes classification
+  FAIL  Source: coveragePercent calculation exists
+  FAIL  Source: timing validity check exists
+  FAIL  Phase 10K.5: FBX transaction timing markers present
+  FAIL  Phase 10K.5: STALL_SUMMARY present
+  FAIL  Classification only computed when timing is valid
+  FAIL  STALL_SUMMARY UE_LOG marker exists
+
+Unexpected failures: 0
+
+All semantic-regression assertions PASS.
+All direct evaluator inversion pairs PASS.
+All production ordering (RP + PV) chains PASS.
+All self-test fixtures PASS.
+All STATE prereq tests PASS.

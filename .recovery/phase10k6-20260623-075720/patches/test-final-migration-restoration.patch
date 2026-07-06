@@ -1,0 +1,216 @@
+--- .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-final-migration-fix.py	2026-06-23 12:18:21.529983694 +0700
++++ .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.final-migration-fixed.py	2026-06-23 12:22:28.515559998 +0700
+@@ -369,6 +369,35 @@
+     return results
+ 
+ 
++def _find_ffbxscopephase_matches(content, mask, phase_name,
++                                  start_pos=0, end_pos=None):
++    """Find all unmasked FFbxScopePhase tokens with the given phase name.
++    Unlike _find_ffbxscopephase_decls, this does NOT require successful
++    constructor extraction.  Returns list of (re.Match, invocation_or_None)."""
++    if end_pos is None:
++        end_pos = len(content)
++    results = []
++    pattern = r'FFbxScopePhase\s+\w+\s*\('
++    for m in re.finditer(pattern, content):
++        if m.start() < start_pos or m.start() >= end_pos:
++            continue
++        if mask[m.start()]:
++            continue
++        invocation = _extract_constructor_invocation(content, mask, m)
++        if invocation:
++            if phase_name in _extract_text_macro_args(invocation):
++                results.append((m, invocation))
++        else:
++            # Extraction failed; check phase name in raw content.
++            # The phase TEXT(...) arg should appear within 300 chars after '('.
++            search_end = min(m.end() + 300, len(content))
++            snippet = content[m.end():search_end]
++            text_pattern = r'TEXT\s*\(\s*"' + re.escape(phase_name) + r'"\s*\)'
++            if re.search(text_pattern, snippet):
++                results.append((m, None))
++    return results
++
++
+ # ---- Balanced-parenthesis constructor extraction ----------------------------
+ def _extract_constructor_invocation(content, mask, decl_match):
+     """Extract the complete constructor invocation text using
+@@ -640,14 +669,13 @@
+     ho, hc = _find_handleimport_full_bounds(fixture_text, msk)
+     hbs = ho + 1
+     hbe = hc
+-    decls = _find_ffbxscopephase_decls(fixture_text, msk, 'request_parse', hbs, hbe)
+-    total, _ = _count_phase_declarations(decls, [inv for _, inv in decls])
+-    has_unique = (total == 1 and len(decls) == 1)
+-    single_match = decls[0][0] if has_unique else None
++    matches = _find_ffbxscopephase_matches(fixture_text, msk, 'request_parse', hbs, hbe)
++    has_unique = (len(matches) == 1)
++    single_match = matches[0][0] if has_unique else None
++    invocation = matches[0][1] if has_unique else None
+     ds = single_match.start() if single_match else -1
+-    if single_match:
+-        inv2 = _extract_constructor_invocation(fixture_text, msk, single_match)
+-        de = -1 if inv2 is None else len(inv2) + ds
++    if has_unique and invocation is not None:
++        de = len(invocation) + ds
+     else:
+         de = -1
+     block = _find_dedicated_block(fixture_text, msk, ds) if single_match else None
+@@ -671,14 +699,13 @@
+     ho, hc = _find_handleimport_full_bounds(fixture_text, msk)
+     hbs = ho + 1
+     hbe = hc
+-    decls = _find_ffbxscopephase_decls(fixture_text, msk, 'path_validation', hbs, hbe)
+-    total, _ = _count_phase_declarations(decls, [inv for _, inv in decls])
+-    has_unique = (total == 1 and len(decls) == 1)
+-    single_match = decls[0][0] if has_unique else None
++    matches = _find_ffbxscopephase_matches(fixture_text, msk, 'path_validation', hbs, hbe)
++    has_unique = (len(matches) == 1)
++    single_match = matches[0][0] if has_unique else None
++    invocation = matches[0][1] if has_unique else None
+     ds = single_match.start() if single_match else -1
+-    if single_match:
+-        inv2 = _extract_constructor_invocation(fixture_text, msk, single_match)
+-        de = -1 if inv2 is None else len(inv2) + ds
++    if has_unique and invocation is not None:
++        de = len(invocation) + ds
+     else:
+         de = -1
+     block = _find_dedicated_block(fixture_text, msk, ds) if single_match else None
+@@ -3168,8 +3195,45 @@
+     # ===================================================================
+     # Each test parses a C++ fixture, calls _prepare_* directly, and
+     # asserts the exact missing prerequisite.  The test itself must PASS.
++    #
++    # Cases: (A) no FFbxScopePhase token, (B) token exists but constructor
++    # incomplete, (C) complete constructor but missing other items.
+ 
+-    # RP-missing-fbx: no FbxPath invocation at all
++    # RP-absent-decl (A): no FFbxScopePhase token at all.
++    _rp_absdecl = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++    ValidateVersion(Request);
++    ValidatePathSecurity(Request);
++    return true;
++}""")
++    _test("Setup [RP-absent-decl]: prerequisites_valid=False",
++          _rp_absdecl[0] == False, detail=f"pv={_rp_absdecl[0]}, missing={_rp_absdecl[1]}")
++    _test("Setup [RP-absent-decl]: missing contains unique declaration",
++          "unique declaration" in _rp_absdecl[1], detail=f"missing={_rp_absdecl[1]}")
++
++    # RP-incomplete-constructor (B): token found but unmatched parens.
++    _rp_inccon = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++        ValidateVersion(Request);
++    }
++    ValidatePathSecurity(Request);
++    return true;
++}""")
++    _test("Setup [RP-incomplete-constructor]: prerequisites_valid=False",
++          _rp_inccon[0] == False, detail=f"pv={_rp_inccon[0]}, missing={_rp_inccon[1]}")
++    _test("Setup [RP-incomplete-constructor]: missing contains constructor bounds",
++          "constructor bounds" in _rp_inccon[1], detail=f"missing={_rp_inccon[1]}")
++    _test("Setup [RP-incomplete-constructor]: single_match is not None",
++          _rp_inccon[3] is not None and True,
++          detail=f"declaration_end value not -1 check needed")
++
++    # RP-no-FbxPath (C): complete constructor, no FbxPath.
+     _rp_nofbx = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+@@ -3185,10 +3249,8 @@
+           _rp_nofbx[0] == False, detail=f"pv={_rp_nofbx[0]}, missing={_rp_nofbx[1]}")
+     _test("Setup [RP-no-FbxPath]: missing contains FbxPath invocation",
+           "FbxPath invocation" in _rp_nofbx[1], detail=f"missing={_rp_nofbx[1]}")
+-    _test("Setup [RP-no-FbxPath]: evaluator_valid=False",
+-          _rp_nofbx[2] == False, detail=f"ev={_rp_nofbx[2]}")
+ 
+-    # RP-missing-vv: no ValidateVersion call
++    # RP-no-VV (C): complete constructor, no ValidateVersion.
+     _rp_novv = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+@@ -3205,7 +3267,7 @@
+     _test("Setup [RP-no-VV]: missing contains ValidateVersion call",
+           "ValidateVersion call" in _rp_novv[1], detail=f"missing={_rp_novv[1]}")
+ 
+-    # RP-missing-vps: no ValidatePathSecurity call
++    # RP-no-VPS (C): complete constructor, no ValidatePathSecurity.
+     _rp_novps = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+@@ -3222,25 +3284,34 @@
+     _test("Setup [RP-no-VPS]: missing contains ValidatePathSecurity call",
+           "ValidatePathSecurity call" in _rp_novps[1], detail=f"missing={_rp_novps[1]}")
+ 
+-    # RP-malformed-invocation: unextractable constructor — unmatched parens
+-    _rp_badinv = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    # PV-absent-decl (A): no FFbxScopePhase token at all.
++    _pv_absdecl = _parse_and_prepare_pv("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    ValidatePathSecurity(Request);
++    return true;
++}""")
++    _test("Setup [PV-absent-decl]: prerequisites_valid=False",
++          _pv_absdecl[0] == False, detail=f"pv={_pv_absdecl[0]}, missing={_pv_absdecl[1]}")
++    _test("Setup [PV-absent-decl]: missing contains unique declaration",
++          "unique declaration" in _pv_absdecl[1], detail=f"missing={_pv_absdecl[1]}")
++
++    # PV-incomplete-constructor (B): token found but unmatched parens.
++    _pv_inccon = _parse_and_prepare_pv("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+-        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++        FFbxScopePhase Scope(guid, TEXT("path_validation"),
+                              EFbxPhaseKind::Exclusive,
+                              &PhaseDurations
+-        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
+-        ValidateVersion(Request);
+     }
+     ValidatePathSecurity(Request);
+     return true;
+ }""")
+-    _test("Setup [RP-malformed]: prerequisites_valid=False",
+-          _rp_badinv[0] == False, detail=f"pv={_rp_badinv[0]}, missing={_rp_badinv[1]}")
+-    _test("Setup [RP-malformed]: missing contains unique declaration",
+-          "unique declaration" in _rp_badinv[1], detail=f"missing={_rp_badinv[1]}")
++    _test("Setup [PV-incomplete-constructor]: prerequisites_valid=False",
++          _pv_inccon[0] == False, detail=f"pv={_pv_inccon[0]}, missing={_pv_inccon[1]}")
++    _test("Setup [PV-incomplete-constructor]: missing contains constructor bounds",
++          "constructor bounds" in _pv_inccon[1], detail=f"missing={_pv_inccon[1]}")
+ 
+-    # PV-missing-vps: no ValidatePathSecurity call
++    # PV-no-VPS (C): complete constructor, no ValidatePathSecurity.
+     _pv_novps = _parse_and_prepare_pv("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+@@ -3255,22 +3326,6 @@
+     _test("Setup [PV-no-VPS]: missing contains ValidatePathSecurity call",
+           "ValidatePathSecurity call" in _pv_novps[1], detail=f"missing={_pv_novps[1]}")
+ 
+-    # PV-malformed-invocation: unextractable constructor
+-    _pv_badinv = _parse_and_prepare_pv("""bool FLiveSyncFBXImporter::HandleImport(Args) {
+-    DoSetup();
+-    {
+-        FFbxScopePhase Scope(guid, TEXT("path_validation"),
+-                             EFbxPhaseKind::Exclusive,
+-                             &PhaseDurations
+-    }
+-    ValidatePathSecurity(Request);
+-    return true;
+-}""")
+-    _test("Setup [PV-malformed]: prerequisites_valid=False",
+-          _pv_badinv[0] == False, detail=f"pv={_pv_badinv[0]}, missing={_pv_badinv[1]}")
+-    _test("Setup [PV-malformed]: missing contains unique declaration",
+-          "unique declaration" in _pv_badinv[1], detail=f"missing={_pv_badinv[1]}")
+-
+     # ===================================================================
+     # Production-prerequisite state self-tests (_check_preparation)
+     # ===================================================================

@@ -1,0 +1,219 @@
+diff --git a/Blender_Addon/network.py b/Blender_Addon/network.py
+index 29c8dc8..7da446c 100755
+--- a/Blender_Addon/network.py
++++ b/Blender_Addon/network.py
+@@ -846,16 +846,6 @@ def get_material_basic_properties(material):
+         props["Metallic"] = 0.0
+         source = "diffuse_color_no_nodes"
+ 
+-    # Phase 10J.5L: log extraction to debug file
+-    _append_blender_debug_log(
+-        f"[MAT][EXTRACT] mat={mat_name} "
+-        f"use_nodes={material.use_nodes if material else 'N/A'} "
+-        f"source={source} "
+-        f"color=({props.get('BaseColorR', 0):.3f},{props.get('BaseColorG', 0):.3f},{props.get('BaseColorB', 0):.3f},{props.get('Alpha', 1):.3f}) "
+-        f"roughness={props.get('Roughness', 0.5):.3f} "
+-        f"metallic={props.get('Metallic', 0):.3f}"
+-    )
+-
+     return props
+ 
+ 
+@@ -884,6 +874,102 @@ MTEX_FLAG_COLORSPACE_NON_COLOR = 0x08
+ MTEX_MAX_PATH_LEN = 2048
+ MTEX_MAX_IMAGE_NAME_LEN = 255
+ 
++# =========================================================
++# Material texture extraction logging controls (Task 9B.6B.13)
++# =========================================================
++
++# Global verbose flag: when false, only summaries/errors are logged.
++# Set via addon preferences or diagnostic operator.
++material_verbose_logging = False
++
++# Deduplication set for MTEX extraction records.
++# Key: (sync_id, guid, slot_index, channel, canonical_image_key)
++# Cleared on Stop Sync, reconnect, addon reload, or new explicit sync.
++_mtex_extract_dedup_set = set()
++
++# Per-sync collector: list of (slot_index, channel, image_name, filepath, flags, is_packed)
++# Populated when _mtex_collecting is True, cleared when _mtex_collecting is False.
++_mtex_collect_records = []
++_mtex_collecting = False
++
++
++def _mtex_clear_dedup_state():
++    """Clear the MTEX extraction dedup set. Call on Stop Sync, reconnect, reload."""
++    global _mtex_extract_dedup_set, _mtex_collecting, _mtex_collect_records
++    _mtex_extract_dedup_set = set()
++    _mtex_collecting = False
++    _mtex_collect_records = []
++
++
++def _mtex_start_collecting(sync_id, guid):
++    """Enable MTEX record collection for one sync. Call before extract_texture_maps_for_slot()."""
++    global _mtex_collecting, _mtex_collect_records
++    _mtex_collecting = True
++    _mtex_collect_sync_id = sync_id
++    _mtex_collect_guid = guid
++    _mtex_collect_records = []
++
++
++def _mtex_collect_channel(slot_index, channel, image_name, filepath, flags, is_packed):
++    """Append a channel record to the current collection."""
++    global _mtex_collecting, _mtex_collect_records
++    if _mtex_collecting:
++        _mtex_collect_records.append((slot_index, channel, image_name, filepath, flags, is_packed))
++
++
++# =========================================================
++# Phase 10J.5L: Material basic property extraction collection
++# =========================================================
++# Replaces [MAT][EXTRACT] per-call log spam (Task 9B.6B.14).
++# Transaction-scoped summaries only on actual material sends or
++# explicit FBX syncs.
++
++_mat_basic_collecting = False
++_mat_basic_collect_sync_id = 0
++_mat_basic_collect_guid = ""
++_mat_basic_collect_records = []  # list of (slot_index, props_dict)
++
++
++def _mt_basic_clear_state():
++    """Clear material basic property collection state."""
++    global _mat_basic_collecting, _mat_basic_collect_records
++    _mat_basic_collecting = False
++    _mat_basic_collect_records = []
++
++
++def _mt_basic_start_collecting(sync_id, guid):
++    """Enable material basic property collection for one sync."""
++    global _mat_basic_collecting, _mat_basic_collect_sync_id, _mat_basic_collect_guid, _mat_basic_collect_records
++    _mat_basic_collecting = True
++    _mat_basic_collect_sync_id = sync_id
++    _mat_basic_collect_guid = guid
++    _mat_basic_collect_records = []
++
++
++def _mt_basic_collect_slot(slot_index, props):
++    """Append a material slot's basic properties to the current collection."""
++    global _mat_basic_collecting, _mat_basic_collect_records
++    if _mat_basic_collecting and props is not None:
++        _mat_basic_collect_records.append((slot_index, props))
++
++
++# Exposed for sync.py / __init__.py access
++mat_basic_collect_records = _mat_basic_collect_records
++
++
++def compute_material_basic_changed_fields(prev_props, cur_props):
++    """Return a list of field names that changed between prev and cur.
++
++    Only keys present in both dicts are compared.
++    """
++    if prev_props is None or cur_props is None:
++        return []
++    changed = []
++    for key in cur_props:
++        if key in prev_props and prev_props[key] != cur_props[key]:
++            changed.append(key)
++    return changed
++
+ 
+ def _get_image_colorspace_flag(image):
+     """Return MTEX color space flag for a Blender image."""
+@@ -903,7 +989,7 @@ def _get_image_colorspace_flag(image):
+     return 0
+ 
+ 
+-def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
++def extract_texture_maps_for_slot(material, material_name="", slot_index=-1, _collect=False, _suppress_summary=False):
+     """Extract texture map references from a Blender material node tree.
+ 
+     Phase 10K.1: diagnostic-only. Supports direct links from Image Texture
+@@ -1024,7 +1110,20 @@ def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
+             continue
+ 
+         filepath = getattr(image, "filepath", "") or ""
++        # Derive canonical image name from filepath basename (without extension)
++        # to match UE sidecar registration key. This fixes texture replacement
++        # when user re-sources an image data-block to a different file:
++        # image.name stays the same, but filepath basename changes.
+         image_name = getattr(image, "name", "") or ""
++        if filepath:
++            try:
++                base = os.path.basename(filepath)
++                if base:
++                    name_no_ext = os.path.splitext(base)[0]
++                    if name_no_ext:
++                        image_name = name_no_ext
++            except Exception:
++                pass
+         is_packed = getattr(image, "packed_file", None) is not None
+ 
+         flags = 0
+@@ -1052,29 +1151,24 @@ def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
+ 
+         results.append((channel, filepath, image_name, flags))
+ 
+-        # Diagnostic: channel source tracking.
++        # Diagnostic: channel source tracking (suppress on every tick).
+         is_coat_fallback = sock_name in ("Coat Roughness", "Coat Normal")
+-        print(
+-            f"[MATERIAL][CHANNEL_SOURCE] slot={slot_index} material={material_name} "
+-            f"outputChannel={ch_names.get(channel, str(channel))} "
+-            f"principledInput={sock_name} fallback={int(is_coat_fallback)}"
+-        )
+-
+         if is_coat_fallback:
+             print(
+                 f"[MATERIAL][COAT_FALLBACK] slot={slot_index} material={material_name} "
+                 f"coatInput={sock_name} mappedChannel={ch_names.get(channel, str(channel))}"
+             )
+ 
+-        _append_blender_debug_log(
+-            f"[MTEX][EXTRACT] slot={slot_index} material={material_name} channel={channel} "
+-            f"image={image_name} path={filepath[:80] if filepath else '(none)'} "
+-            f"packed={int(is_packed)} cs_flags={flags}"
+-        )
++        # Task 9B.6B.13: collect channel for transaction-scoped summary (only when _collect=True).
++        # The hot path (timer tick) must never emit per-channel debug lines.
++        if _collect:
++            _mtex_collect_channel(slot_index, channel, image_name, filepath, flags, is_packed)
+ 
+-    # Diagnostic: per-slot/channel extraction summary
+-    detected = [ch_names.get(r[0], f"chan{r[0]}") for r in results]
+-    print(f"[MATERIAL][CHANNEL_EXTRACT_SUMMARY] slot={slot_index} material={material_name} channels={detected}")
++    # Task 9B.6B.13: per-slot/channel extraction summary suppressed on timer ticks.
++    # When _suppress_summary=False (explicit FBX sync), emit for diagnostic visibility.
++    if not _suppress_summary:
++        detected = [ch_names.get(r[0], f"chan{r[0]}") for r in results]
++        print(f"[MATERIAL][CHANNEL_EXTRACT_SUMMARY] slot={slot_index} material={material_name} channels={detected}")
+ 
+     return results
+ 
+@@ -3313,10 +3407,22 @@ class LiveSyncClient:
+             # Set flag bit 0 to indicate sub-header is present
+             flags |= COLLECTION_PACKET_FLAG_HAS_SUBHEADER
+ 
+-        object_count = len(objects_data)
++        # Harden: validate objects_data type and element types.
++        if isinstance(objects_data, (bytes, bytearray, memoryview)):
++            raise TypeError(
++                f"_build_packet: objects_data must be an iterable of serialized "
++                f"records, not a raw bytes-like payload (got {type(objects_data).__name__})"
++            )
+ 
+-        for obj in objects_data:
++        object_count = len(objects_data)
+ 
++        for idx, obj in enumerate(objects_data):
++            if not isinstance(obj, (bytes, bytearray, memoryview)):
++                raise TypeError(
++                    f"_build_packet packet_type={packet_type} index={idx} "
++                    f"expected bytes/bytearray/memoryview but got "
++                    f"{type(obj).__name__} value={repr(obj)[:120]}"
++                )
+             payload.extend(obj)
+ 
+         if version >= LIVE_SYNC_VERSION_V3:

@@ -1,0 +1,5 @@
+=== .recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.pre-infra-correction.cpp ===
+BRACES_BALANCED
+Depth: 11
+Unmatched: (none)
+

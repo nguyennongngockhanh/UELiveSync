@@ -1,0 +1,300 @@
+--- .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-false-pass-fix.py	2026-06-23 11:11:21.144732885 +0700
++++ .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.false-pass-fixed.py	2026-06-23 11:23:29.944259377 +0700
+@@ -1754,11 +1754,11 @@
+ 
+         # --- Declaration count assertions ---
+         _test(f"Production: '{ph_name}' total declaration count = {total}",
+-              True,
+-              detail=f"total={total}")
++              total == 1,
++              detail=f"total={total}, expected exactly 1")
+         _test(f"Production: '{ph_name}' complete declaration count = {complete}",
+-              True,
+-              detail=f"complete={complete} (has both Exclusive and &PhaseDurations)")
++              complete == 1,
++              detail=f"complete={complete}, expected exactly 1 (both Exclusive and &PhaseDurations)")
+ 
+         # --- Independent field assertions (on the single declaration) ---
+         if has_unique and decl_count == 1:
+@@ -1832,9 +1832,9 @@
+                   False, detail="block or {enclosed_func} not found")
+ 
+         # --- Ordering chain (shared evaluator) ---
+-        order_valid = order_failing = order_detail = True
++        order_valid = False
+         order_failing = []
+-        order_detail = ""
++        order_detail = "missing prerequisites"
+         if block_exists and single_match:
+             if require_fbx_path:
+                 order_valid, order_failing, order_detail = \
+@@ -1847,6 +1847,16 @@
+                     _evaluate_path_validation_ordering(
+                         handle_open, block_open, decl_start, decl_end,
+                         enclosed_func_pos, handle_close, block_close)
++        elif not has_unique:
++            order_detail = "missing unique declaration"
++        elif not block_exists:
++            order_detail = "missing dedicated block"
++        elif enclosed_func_pos < 0:
++            order_detail = f"missing '{enclosed_func}' call position"
++        elif require_fbx_path and (fbx_path_start < 0 or fbx_path_end < 0):
++            order_detail = "missing FbxPath invocation"
++        else:
++            order_detail = "missing prerequisites (unknown)"
+ 
+         suffix = "request_parse" if require_fbx_path else "path_validation"
+         _test(f"Production: '{suffix}' exact ordering chain",
+@@ -2611,18 +2621,16 @@
+         total, _ = _count_phase_declarations(
+             decls, [inv for _, inv in decls])
+         if total != 1 or not decls:
+-            _test(f"Self-test [RP-{label}]: {'PASS' if expect_valid else 'FAIL'} "
+-                  f"(expected {'valid' if expect_valid else 'invalid'})",
+-                  not expect_valid,
+-                  detail=f"expected 1 decl, got {total}")
++            _test(f"Self-test [RP-{label}]: FAIL (missing declaration)",
++                  False,
++                  detail=f"expected 1 declaration, got {total}")
+             return False, []
+         m, inv = decls[0]
+         block = _find_dedicated_block(fixture_text, msk, m.start())
+         if not block:
+-            _test(f"Self-test [RP-{label}]: {'PASS' if expect_valid else 'FAIL'} "
+-                  f"(expected {'valid' if expect_valid else 'invalid'})",
+-                  not expect_valid,
+-                  detail="no dedicated block")
++            _test(f"Self-test [RP-{label}]: FAIL (missing dedicated block)",
++                  False,
++                  detail="no dedicated block found")
+             return False, []
+         bo, bc, _ = block
+         ds = m.start()
+@@ -2693,8 +2701,9 @@
+           any("fbx_path_invocation_end<ValidateVersion_call" in r for r in fail_c),
+           detail=f"failing: {fail_c}")
+ 
+-    # RP-D: FbxPath after ValidateVersion → FAIL (distinct fixture from C:
+-    # VV is inside the block, FbxPath is outside — different arrangement)
++    # RP-D: FbxPath inside block but after ValidateVersion → FAIL
++    # The chain expects fbx_end < ValidateVersion_call, but here
++    # ValidateVersion is before FbxPath.
+     fixture_rp_d = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+@@ -2702,8 +2711,8 @@
+                              EFbxPhaseKind::Exclusive,
+                              &PhaseDurations);
+         ValidateVersion(Request);
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
+     }
+-    FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
+     ValidatePathSecurity(Request);
+     return true;
+ }"""
+@@ -2749,24 +2758,46 @@
+           any("phase_close<ValidatePathSecurity_call" in r for r in fail_f),
+           detail=f"failing: {fail_f}")
+ 
+-    # RP-G: FbxPath invocation starts inside but ends outside phase block → FAIL
+-    fixture_rp_g = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    # RP-G: synthetic cross-boundary evaluator fixture (no C++ parsing).
++    # FbxPath_end(60) > phase_close(50) → fbx_end < phase_close fails.
++    _test("Self-test [RP-G]: synthetic cross-boundary evaluator fixture",
++          True, detail="request_parse evaluator with fbx_end > phase_close")
++    _rp_g_valid, _rp_g_fail, _rp_g_detail = _evaluate_request_parse_ordering(
++        handle_open=0, phase_open=10, decl_start=20, decl_end=30,
++        fbx_start=40, fbx_end=60, vv_pos=70, vps_pos=80,
++        handle_close=90, phase_close=50)
++    _test("Self-test [RP-G-synth]: evaluator returns False",
++          not _rp_g_valid,
++          detail=f"valid={_rp_g_valid}, detail={_rp_g_detail}")
++    _test("Self-test [RP-G-synth]: failed relation ValidateVersion_call<phase_close",
++          any("ValidateVersion_call<phase_close" in r for r in _rp_g_fail),
++          detail=f"failing: {_rp_g_fail}")
++
++    # RP-G-parser: separate parser fixture proving a normal balanced FbxPath
++    # invocation returns correct start/end within the block.
++    fixture_rp_g_parse = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+         FFbxScopePhase Scope(guid, TEXT("request_parse"),
+                              EFbxPhaseKind::Exclusive,
+                              &PhaseDurations);
+-        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath)
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++        ValidateVersion(Request);
+     }
+-    );
+-    ValidateVersion(Request);
+     ValidatePathSecurity(Request);
+     return true;
+ }"""
+-    _, fail_g = _check_rp_ordering(fixture_rp_g, "G-fbx-crosses-close", False)
+-    _test("Self-test [RP-G]: exact failed relation — ValidateVersion_call<phase_close",
+-          any("ValidateVersion_call<phase_close" in r for r in fail_g),
+-          detail=f"failing: {fail_g}")
++    mask_rp_gp = _build_lexical_mask(fixture_rp_g_parse)
++    ho_gp, hc_gp = _find_handleimport_full_bounds(fixture_rp_g_parse, mask_rp_gp)
++    fbx_gp_s, fbx_gp_e = _find_fbxpath_invocation(
++        fixture_rp_g_parse, mask_rp_gp, ho_gp + 1, hc_gp)
++    _test("Self-test [RP-G-parse]: normal balanced FbxPath start >= 0",
++          fbx_gp_s >= 0, detail=f"start={fbx_gp_s}")
++    _test("Self-test [RP-G-parse]: normal balanced FbxPath end > start",
++          fbx_gp_e > fbx_gp_s, detail=f"start={fbx_gp_s}, end={fbx_gp_e}")
++    _test("Self-test [RP-G-parse]: FbxPath inside block",
++          fbx_gp_s > ho_gp and fbx_gp_e < hc_gp,
++          detail=f"fbx@{fbx_gp_s},{fbx_gp_e} hi@{ho_gp},{hc_gp}")
+ 
+     # ===================================================================
+     # Path_validation ordering fixtures (all use shared evaluator)
+@@ -2783,18 +2814,16 @@
+         total, _ = _count_phase_declarations(
+             decls, [inv for _, inv in decls])
+         if total != 1 or not decls:
+-            _test(f"Self-test [PV-{label}]: {'PASS' if expect_valid else 'FAIL'} "
+-                  f"(expected {'valid' if expect_valid else 'invalid'})",
+-                  not expect_valid,
+-                  detail=f"expected 1 decl, got {total}")
++            _test(f"Self-test [PV-{label}]: FAIL (missing declaration)",
++                  False,
++                  detail=f"expected 1 declaration, got {total}")
+             return False, []
+         m, inv = decls[0]
+         block = _find_dedicated_block(fixture_text, msk, m.start())
+         if not block:
+-            _test(f"Self-test [PV-{label}]: {'PASS' if expect_valid else 'FAIL'} "
+-                  f"(expected {'valid' if expect_valid else 'invalid'})",
+-                  not expect_valid,
+-                  detail="no dedicated block")
++            _test(f"Self-test [PV-{label}]: FAIL (missing dedicated block)",
++                  False,
++                  detail="no dedicated block found")
+             return False, []
+         bo, bc, _ = block
+         ds = m.start()
+@@ -2888,7 +2917,8 @@
+           any("ValidatePathSecurity_call<phase_close" in r for r in fail_pv_d),
+           detail=f"failing: {fail_pv_d}")
+ 
+-    # PV-E: phase block outside HandleImport bounds → FAIL
++    # PV-E: phase block outside HandleImport bounds → discovery/bounds fixture.
++    # This manually verifies the parser correctly rejects a block outside HI.
+     fixture_pv_e = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     return true;
+@@ -2899,7 +2929,113 @@
+                          &PhaseDurations);
+     ValidatePathSecurity(Request);
+ }"""
+-    _check_pv_ordering(fixture_pv_e, "E-block-outside-hi", False)
++    mask_pv_e = _build_lexical_mask(fixture_pv_e)
++    ho_pv_e, hc_pv_e = _find_handleimport_full_bounds(fixture_pv_e, mask_pv_e)
++    decls_pv_e = _find_ffbxscopephase_decls(
++        fixture_pv_e, mask_pv_e, 'path_validation',
++        ho_pv_e + 1, hc_pv_e)
++    _test("Self-test [PV-E-discovery]: no decl inside HandleImport bounds",
++          len(decls_pv_e) == 0,
++          detail=f"found {len(decls_pv_e)} decl(s) inside HI (expected 0)")
++
++    # PV-E-invalid-bounds: pure evaluator fixture with phase_open < handle_open
++    _pv_e_valid, _pv_e_fail, _pv_e_detail = _evaluate_path_validation_ordering(
++        handle_open=10, phase_open=5,  # phase_open < handle_open → FAIL
++        decl_start=20, decl_end=30,
++        vps_pos=40, handle_close=50, phase_close=45)
++    _test("Self-test [PV-E-invalid]: evaluator returns False",
++          not _pv_e_valid,
++          detail=f"valid={_pv_e_valid}")
++    _test("Self-test [PV-E-invalid]: failed relation handle_open<phase_open",
++          any("handle_open<phase_open" in r for r in _pv_e_fail),
++          detail=f"failing: {_pv_e_fail}")
++
++    # ===================================================================
++    # Direct shared-evaluator positive/negative unit fixtures (req 7)
++    # ===================================================================
++    # Request_parse evaluator: valid chain
++    # params: handle_open,phase_open,decl_start,decl_end,fbx_start,fbx_end,vv_pos,vps_pos,handle_close,phase_close
++    # chain: hO < pO < dS < dE < fS < fE < vv < pC < vps < hC
++    # valid: 0 < 10 < 20 < 30 < 40 < 50 < 60 < 70 < 80 < 100
++    _rp_v, _, _ = _evaluate_request_parse_ordering(
++        0, 10, 20, 30, 40, 50, 60, 80, 100, 70)
++    _test("Direct evaluator [RP-valid]: complete valid chain returns True",
++          _rp_v, detail="all adjacent positions strictly increasing")
++
++    # Request_parse evaluator: each adjacent relation independently inverted.
++    # Each row swaps one adjacent pair while keeping all else strictly increasing.
++    # Expected: exactly one failed relation matching the label.
++    pairs = [
++        ("handle_open<phase_open", 10, 5, 20, 30, 40, 50, 60, 80, 100, 70),
++        ("phase_open<declaration_start", 0, 15, 10, 30, 40, 50, 60, 80, 100, 70),
++        ("declaration_start<declaration_end", 0, 10, 25, 20, 40, 50, 60, 80, 100, 70),
++        ("declaration_end<fbx_path_invocation_start", 0, 10, 20, 35, 30, 50, 60, 80, 100, 70),
++        ("fbx_path_invocation_start<fbx_path_invocation_end", 0, 10, 20, 30, 45, 40, 60, 80, 100, 70),
++        ("fbx_path_invocation_end<ValidateVersion_call", 0, 10, 20, 30, 40, 55, 50, 80, 100, 70),
++        ("ValidateVersion_call<phase_close", 0, 10, 20, 30, 40, 50, 65, 80, 100, 60),
++        ("phase_close<ValidatePathSecurity_call", 0, 10, 20, 30, 40, 50, 60, 70, 100, 75),
++        ("ValidatePathSecurity_call<handle_close", 0, 10, 20, 30, 40, 50, 60, 95, 90, 70),
++    ]
++    for label, *args in pairs:
++        v, f, d = _evaluate_request_parse_ordering(*args)
++        _test(f"Direct evaluator [RP-inv-{label}]: returns False",
++              not v, detail=f"valid={v}, failing={f}")
++        _test(f"Direct evaluator [RP-inv-{label}]: failed relation {label}",
++              any(label in r for r in f), detail=f"failing={f}")
++
++    # Path_validation evaluator: valid chain
++    # params: handle_open,phase_open,decl_start,decl_end,vps_pos,handle_close,phase_close
++    # chain: hO < pO < dS < dE < vps < pC < hC
++    # valid: 0 < 10 < 20 < 30 < 40 < 50 < 60
++    _pv_v, _, _ = _evaluate_path_validation_ordering(
++        0, 10, 20, 30, 40, 60, 50)
++    _test("Direct evaluator [PV-valid]: complete valid chain returns True",
++          _pv_v, detail="all adjacent positions strictly increasing")
++
++    # Path_validation evaluator: each adjacent relation independently inverted
++    pv_pairs = [
++        ("handle_open<phase_open", 10, 5, 20, 30, 40, 60, 50),
++        ("phase_open<declaration_start", 0, 15, 10, 30, 40, 60, 50),
++        ("declaration_start<declaration_end", 0, 10, 25, 20, 40, 60, 50),
++        ("declaration_end<ValidatePathSecurity_call", 0, 10, 20, 35, 30, 60, 50),
++        ("ValidatePathSecurity_call<phase_close", 0, 10, 20, 30, 45, 60, 40),
++        ("phase_close<handle_close", 0, 10, 20, 30, 40, 50, 55),
++    ]
++    for label, *args in pv_pairs:
++        v, f, d = _evaluate_path_validation_ordering(*args)
++        _test(f"Direct evaluator [PV-inv-{label}]: returns False",
++              not v, detail=f"valid={v}, failing={f}")
++        _test(f"Direct evaluator [PV-inv-{label}]: failed relation {label}",
++              any(label in r for r in f), detail=f"failing={f}")
++    # ===================================================================
++    # Self-tests for missing production prerequisites (req 2)
++    # ===================================================================
++    # Missing declaration: pass -1 for decl_start/decl_end
++    _md_v, _md_f, _md_d = _evaluate_request_parse_ordering(
++        0, 10, -1, 30, 40, 50, 60, 80, 100, 70)
++    _test("Self-test [PROD-missing-decl]: evaluator returns False",
++          not _md_v, detail=f"valid={_md_v}")
++    _test("Self-test [PROD-missing-decl]: failed relation includes declaration_start",
++          any("declaration_start" in r for r in _md_f),
++          detail=f"failing={_md_f}")
++
++    # Missing block: still uses same evaluator path; positions serve as proxy
++    _mb_v, _mb_f, _mb_d = _evaluate_path_validation_ordering(
++        0, 10, 20, 30, -1, 50, 60)
++    _test("Self-test [PROD-missing-call]: evaluator returns False",
++          not _mb_v, detail=f"valid={_mb_v}")
++    _test("Self-test [PROD-missing-call]: failed relation includes ValidatePathSecurity_call",
++          any("ValidatePathSecurity_call" in r for r in _mb_f),
++          detail=f"failing={_mb_f}")
++
++    # HandleImport bounds out of range
++    _hib_v, _hib_f, _hib_d = _evaluate_request_parse_ordering(
++        -1, 10, 20, 30, 40, 50, 60, 80, 100, 70)
++    _test("Self-test [PROD-missing-hi-bounds]: evaluator returns False",
++          not _hib_v, detail=f"valid={_hib_v}")
++    _test("Self-test [PROD-missing-hi-bounds]: failed relation includes handle_open",
++          any("handle_open" in r for r in _hib_f),
++          detail=f"failing={_hib_f}")
+ 
+ 
+ def main():

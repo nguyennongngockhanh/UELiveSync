@@ -1,0 +1,61 @@
+--- .recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.pre-validation-order-restoration.cpp	2026-06-23 14:34:52.401764296 +0700
++++ .recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.validation-order-restored.cpp	2026-06-23 14:53:22.493105633 +0700
+@@ -1139,12 +1139,6 @@
+             Request.VertCount, Request.TriCount, Request.MatSlotCount);
+     }
+ 
+-    FString SafeName = SanitizeObjectName(
+-        FStringFromFixedAnsi(
+-            Request.ObjectName,
+-            UE_ARRAY_COUNT(Request.ObjectName)));
+-    const FString TxnObjNameSanitized = SafeName;
+-
+     FString FbxPathStr;
+     // request_parse exclusive phase
+     {
+@@ -1152,18 +1146,18 @@
+             TransactionId,
+             Request.ObjectGUID,
+             SyncId,
+-            TxnObjNameSanitized,
++            FString(),
+             TEXT("request_parse"),
+             EFbxPhaseKind::Exclusive,
+             nullptr,
+             &PhaseDurations);
+-        FbxPathStr = FStringFromFixedAnsi(
+-            Request.FbxPath,
+-            UE_ARRAY_COUNT(Request.FbxPath));
+         if (!ValidateVersion(Request.Version, *Context.Stats))
+         {
+             return false;
+         }
++        FbxPathStr = FStringFromFixedAnsi(
++            Request.FbxPath,
++            UE_ARRAY_COUNT(Request.FbxPath));
+     }
+ 
+     // path_validation exclusive phase
+@@ -1172,7 +1166,7 @@
+             TransactionId,
+             Request.ObjectGUID,
+             SyncId,
+-            TxnObjNameSanitized,
++            FString(),
+             TEXT("path_validation"),
+             EFbxPhaseKind::Exclusive,
+             nullptr,
+@@ -1183,6 +1177,13 @@
+         }
+     }
+ 
++    // ObjectName conversion (after both validation blocks)
++    FString SafeName = SanitizeObjectName(
++        FStringFromFixedAnsi(
++            Request.ObjectName,
++            UE_ARRAY_COUNT(Request.ObjectName)));
++    const FString TxnObjNameSanitized = SafeName;
++
+     const FString GuidShort =
+         Request.ObjectGUID.ToString().Left(8);
+     const FString AssetBasePath =

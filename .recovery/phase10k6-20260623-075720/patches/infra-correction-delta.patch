@@ -1,0 +1,118 @@
+--- /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.pre-infra-correction.cpp	2026-06-23 08:36:58.932663365 +0700
++++ UE_Plugin/UELiveSync/Source/UELiveSync/Private/FBXImport/LiveSyncFBXImporter.cpp	2026-06-23 09:00:42.097394250 +0700
+@@ -171,6 +171,7 @@
+     EFbxPhaseKind Kind;
+     double StartTime;
+     double* OutDurationMs;
++    TMap<FString, double>* PhaseDurations;
+ 
+     FFbxScopePhase(
+         int32 InTransactionId,
+@@ -179,7 +180,8 @@
+         const FString& InObjectName,
+         const FString& InPhaseName,
+         EFbxPhaseKind InKind,
+-        double* InOutDurationMs = nullptr)
++        double* InOutDurationMs = nullptr,
++        TMap<FString, double>* InPhaseDurations = nullptr)
+         : TransactionId(InTransactionId)
+         , Guid(InGuid)
+         , SyncId(InSyncId)
+@@ -188,6 +190,7 @@
+         , Kind(InKind)
+         , StartTime(FPlatformTime::Seconds())
+         , OutDurationMs(InOutDurationMs)
++        , PhaseDurations(InPhaseDurations)
+     {
+         FbxPhaseBegin(TransactionId, Guid, SyncId, ObjectName, PhaseName, Kind);
+     }
+@@ -199,11 +202,45 @@
+         {
+             *OutDurationMs = Ms;
+         }
++        if (PhaseDurations &&
++            Kind == EFbxPhaseKind::Exclusive)
++        {
++            PhaseDurations->FindOrAdd(PhaseName) += Ms;
++        }
+         FbxPhaseEnd(TransactionId, Guid, SyncId, ObjectName, PhaseName, Kind, Ms);
+     }
+ };
+ 
+ // =========================================================
++// BOUNDED FIXED-FIELD HELPERS
++// =========================================================
++// Source encoding: UTF-8 (Blender writes str.encode('utf-8')).
++// Current compatibility decode: ANSI (byte-by-byte, no decode).
++// Memory over-read fixed: YES.
++// Unicode correctness fixed: NO (a later protocol/string slice should
++// migrate to bounded UTF-8 decoding and define malformed/truncated UTF-8
++// handling).
++static FString FStringFromFixedAnsi(
++    const uint8* Data,
++    int32 Capacity)
++{
++    if (!Data || Capacity <= 0)
++    {
++        return FString();
++    }
++
++    int32 Length = 0;
++    while (Length < Capacity && Data[Length] != 0)
++    {
++        ++Length;
++    }
++
++    return FString::ConstructFromPtrSize(
++        reinterpret_cast<const ANSICHAR*>(Data),
++        Length);
++}
++
++// =========================================================
+ // VALIDATION HELPERS
+ // =========================================================
+ 
+@@ -1037,8 +1074,9 @@
+     Sig.VertCount = Request.VertCount;
+     Sig.TriCount = Request.TriCount;
+     Sig.MatSlotCount = Request.MatSlotCount;
+-    Sig.ObjectName = ANSI_TO_TCHAR(
+-        reinterpret_cast<const ANSICHAR*>(Request.ObjectName));
++    Sig.ObjectName = FStringFromFixedAnsi(
++        Request.ObjectName,
++        UE_ARRAY_COUNT(Request.ObjectName));
+     Sig.GeometryHash = Request.GeometryHash;
+ 
+     IFileManager& FileManager = IFileManager::Get();
+@@ -1064,6 +1102,8 @@
+         Context.Stats->FBXTransactionId.fetch_add(
+             1,
+             std::memory_order_acq_rel);
++    const int32 SyncId =
++        Context.Stats->MatPktSyncId;
+     const double HandleImportStart =
+         FPlatformTime::Seconds();
+     TMap<FString, double> PhaseDurations;
+@@ -1104,8 +1144,9 @@
+         return false;
+     }
+ 
+-    FString FbxPathStr(
+-        ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.FbxPath)));
++    FString FbxPathStr = FStringFromFixedAnsi(
++        Request.FbxPath,
++        UE_ARRAY_COUNT(Request.FbxPath));
+ 
+     if (!ValidatePathSecurity(FbxPathStr, *Context.Stats))
+     {
+@@ -1113,7 +1154,9 @@
+     }
+ 
+     FString SafeName = SanitizeObjectName(
+-        ANSI_TO_TCHAR(reinterpret_cast<const ANSICHAR*>(Request.ObjectName)));
++        FStringFromFixedAnsi(
++            Request.ObjectName,
++            UE_ARRAY_COUNT(Request.ObjectName)));
+     const FString TxnObjNameSanitized = SafeName;
+ 
+     const FString GuidShort =

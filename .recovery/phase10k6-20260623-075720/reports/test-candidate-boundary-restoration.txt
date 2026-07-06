@@ -1,0 +1,20 @@
+Test: candidate-boundary-restoration
+Phase: 10K.6 — candidate-boundary-fix (final)
+Timestamp: 2026-06-23T13:14:54+07:00
+File: tests/phase10k6_transaction_decomposition.py
+
+Changes applied:
+1. Rewrote _scan_for_phase_name_in_span with arg_state (0/1/2) heuristic:
+   - arg_state==0 after '(' or ',' (expecting expression start)
+   - arg_state==1 after any expression content
+   - arg_state==2 after binary operator
+   - IDENTIFIER( at arg_state==1 → new statement → stop
+   - IDENTIFIER( at arg_state==0/2 → nested call in argument → enter
+2. Removed unreachable depth==0/c=='}' condition.
+3. Fixed RP-LD: first decl broken (no TEXT), second decl valid request_parse.
+4. Added 7 real incomplete-constructor fallback fixtures (RP-FA through RP-FF).
+5. Added 2 scanner boundary fixtures (BD1/BD2).
+6. Added PV fallback fixtures (LC, BC, US, FF).
+7. Completed PV-incomplete parser-state assertions (all 10 fields).
+8. Added RP-SL2: unrelated FString TEXT before broken decl.
+9. Fixed RP-BD1/BD2: valid second decl wrapped in dedicated {} block.

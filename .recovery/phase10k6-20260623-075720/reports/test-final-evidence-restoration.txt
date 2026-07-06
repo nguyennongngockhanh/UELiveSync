@@ -1,0 +1,19 @@
+Test: final-evidence-restoration
+Phase: 10K.6 — final evidence fix
+Timestamp: 2026-06-23T14:23:03+07:00
+File: tests/phase10k6_transaction_decomposition.py
+
+Changes applied:
+1. RP-LC: extracted fixture text variable, added broken/valid position
+   computation, replaced declaration_start>0 with exact==valid_pos + >broken_pos.
+2. RP-BC: same treatment (added single_match check and exact positions).
+3. RP-SL: same treatment.
+4. RP-LD: same treatment (added exact position assertions).
+5. Added 12 direct _scan_for_phase_name_in_span assertions:
+   - RP-cutoff: end_pos before TEXT returns False
+   - RP-cutoff: start_pos after opening paren
+   - RP-cutoff: cutoff <= target position
+   - RP-full: full end_pos includes target returns True
+   - RP-full: full end_pos > target position
+   - PV-cutoff: same 3 assertions
+   - PV-full: same 3 assertions

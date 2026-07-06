@@ -1,0 +1,536 @@
+--- .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-prerequisite-gate-fix.py	2026-06-23 11:27:21.253800188 +0700
++++ .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.post-prerequisite-gate-fix.py	2026-06-23 11:31:27.724814629 +0700
+@@ -560,6 +560,77 @@
+     return valid, failing, "".join(details)
+ 
+ 
++# ---- Shared ordering preparation helpers (used by both production and fixtures) -
++def _prepare_request_parse_ordering(
++    handle_open, handle_close,
++    has_unique_decl, single_match,
++    decl_start, decl_end,
++    block_exists, block_open, block_close,
++    fbx_path_start, fbx_path_end,
++    vv_pos, vps_pos,
++):
++    """Check request_parse ordering prerequisites and evaluate chain.
++    Returns (prerequisites_valid, missing_list, evaluator_valid,
++             failing_relations, detail_str)."""
++    missing = []
++
++    if handle_open < 0 or handle_close < 0 or handle_close <= handle_open:
++        missing.append("HandleImport bounds")
++    if not has_unique_decl or single_match is None:
++        missing.append("unique declaration")
++    if single_match is not None and (decl_start < 0 and decl_end < 0):
++        missing.append("constructor bounds")
++    if not block_exists:
++        missing.append("dedicated block")
++    if fbx_path_start < 0 or fbx_path_end <= fbx_path_start:
++        missing.append("FbxPath invocation")
++    if vv_pos < 0:
++        missing.append("ValidateVersion call")
++    if vps_pos < 0:
++        missing.append("ValidatePathSecurity call")
++
++    if missing:
++        return (False, missing, False, [], "; ".join(missing))
++
++    valid, failing, detail = _evaluate_request_parse_ordering(
++        handle_open, block_open, decl_start, decl_end,
++        fbx_path_start, fbx_path_end, vv_pos, vps_pos,
++        handle_close, block_close)
++    return (True, [], valid, failing, detail)
++
++
++def _prepare_path_validation_ordering(
++    handle_open, handle_close,
++    has_unique_decl, single_match,
++    decl_start, decl_end,
++    block_exists, block_open, block_close,
++    vps_pos,
++):
++    """Check path_validation ordering prerequisites and evaluate chain.
++    Returns (prerequisites_valid, missing_list, evaluator_valid,
++             failing_relations, detail_str)."""
++    missing = []
++
++    if handle_open < 0 or handle_close < 0 or handle_close <= handle_open:
++        missing.append("HandleImport bounds")
++    if not has_unique_decl or single_match is None:
++        missing.append("unique declaration")
++    if single_match is not None and (decl_start < 0 and decl_end < 0):
++        missing.append("constructor bounds")
++    if not block_exists:
++        missing.append("dedicated block")
++    if vps_pos < 0:
++        missing.append("ValidatePathSecurity call")
++
++    if missing:
++        return (False, missing, False, [], "; ".join(missing))
++
++    valid, failing, detail = _evaluate_path_validation_ordering(
++        handle_open, block_open, decl_start, decl_end,
++        vps_pos, handle_close, block_close)
++    return (True, [], valid, failing, detail)
++
++
+ # ---- Lexical FStringFromFixedAnsi(Request.FbxPath) invocation ----------------
+ def _find_fbxpath_invocation(content, mask, start_pos=0, end_pos=None):
+     """Find the unmasked FStringFromFixedAnsi(Request.FbxPath, ...)
+@@ -1831,32 +1902,24 @@
+             _test(f"Production: '{ph_name}' block encloses {enclosed_func}",
+                   False, detail="block or {enclosed_func} not found")
+ 
+-        # --- Ordering chain (shared evaluator) ---
+-        order_valid = False
+-        order_failing = []
+-        order_detail = "missing prerequisites"
+-        if block_exists and single_match:
+-            if require_fbx_path:
+-                order_valid, order_failing, order_detail = \
+-                    _evaluate_request_parse_ordering(
+-                        handle_open, block_open, decl_start, decl_end,
+-                        fbx_path_start, fbx_path_end, enclosed_func_pos,
+-                        vps_pos, handle_close, block_close)
+-            else:
+-                order_valid, order_failing, order_detail = \
+-                    _evaluate_path_validation_ordering(
+-                        handle_open, block_open, decl_start, decl_end,
+-                        enclosed_func_pos, handle_close, block_close)
+-        elif not has_unique:
+-            order_detail = "missing unique declaration"
+-        elif not block_exists:
+-            order_detail = "missing dedicated block"
+-        elif enclosed_func_pos < 0:
+-            order_detail = f"missing '{enclosed_func}' call position"
+-        elif require_fbx_path and (fbx_path_start < 0 or fbx_path_end < 0):
+-            order_detail = "missing FbxPath invocation"
++        # --- Ordering chain (shared preparation helper) ---
++        if require_fbx_path:
++            prep_valid, prep_missing, order_valid, order_failing, order_detail = \
++                _prepare_request_parse_ordering(
++                    handle_open, handle_close,
++                    has_unique, single_match,
++                    decl_start, decl_end,
++                    block_exists, block_open, block_close,
++                    fbx_path_start, fbx_path_end,
++                    enclosed_func_pos, vps_pos)
+         else:
+-            order_detail = "missing prerequisites (unknown)"
++            prep_valid, prep_missing, order_valid, order_failing, order_detail = \
++                _prepare_path_validation_ordering(
++                    handle_open, handle_close,
++                    has_unique, single_match,
++                    decl_start, decl_end,
++                    block_exists, block_open, block_close,
++                    enclosed_func_pos)
+ 
+         suffix = "request_parse" if require_fbx_path else "path_validation"
+         _test(f"Production: '{suffix}' exact ordering chain",
+@@ -2611,7 +2674,8 @@
+     # ===================================================================
+     def _check_rp_ordering(fixture_text, label, expect_valid):
+         """Evaluate request_parse ordering on a fixture using the shared
+-        evaluator.  Returns (valid, failing)."""
++        preparation helper.  Returns (valid, failing).
++        Every missing prerequisite causes a FAIL even when expect_valid=False."""
+         msk = _build_lexical_mask(fixture_text)
+         ho, hc = _find_handleimport_full_bounds(fixture_text, msk)
+         hbs = ho + 1
+@@ -2620,33 +2684,45 @@
+             fixture_text, msk, 'request_parse', hbs, hbe)
+         total, _ = _count_phase_declarations(
+             decls, [inv for _, inv in decls])
+-        if total != 1 or not decls:
+-            _test(f"Self-test [RP-{label}]: FAIL (missing declaration)",
+-                  False,
+-                  detail=f"expected 1 declaration, got {total}")
+-            return False, []
+-        m, inv = decls[0]
+-        block = _find_dedicated_block(fixture_text, msk, m.start())
+-        if not block:
+-            _test(f"Self-test [RP-{label}]: FAIL (missing dedicated block)",
+-                  False,
+-                  detail="no dedicated block found")
+-            return False, []
+-        bo, bc, _ = block
+-        ds = m.start()
+-        inv2 = _extract_constructor_invocation(fixture_text, msk, m)
+-        de = len(inv2) + ds if inv2 else ds + 1
++        has_unique = (total == 1 and len(decls) == 1)
++
++        single_match = decls[0][0] if has_unique else None
++        ds = single_match.start() if single_match else -1
++        if single_match:
++            inv2 = _extract_constructor_invocation(fixture_text, msk, single_match)
++            de = len(inv2) + ds if inv2 else -1
++        else:
++            inv2 = None
++            de = -1
++
++        block = _find_dedicated_block(fixture_text, msk, ds) if single_match else None
++        block_exists = block is not None
++        bo = bc = -1
++        if block:
++            bo, bc, _ = block
++
+         fbx_s, fbx_e = _find_fbxpath_invocation(
+             fixture_text, msk, hbs, hbe)
+         vv = _find_unmasked_call(fixture_text, msk, 'ValidateVersion', hbs, hbe)
+         vps = _find_unmasked_call(fixture_text, msk, 'ValidatePathSecurity', hbs, hbe)
+-        valid, failing, detail = _evaluate_request_parse_ordering(
+-            ho, bo, ds, de, fbx_s, fbx_e, vv, vps, hc, bc)
++
++        prep_valid, prep_missing, eval_valid, eval_failing, eval_detail = \
++            _prepare_request_parse_ordering(
++                ho, hc, has_unique, single_match,
++                ds, de, block_exists, bo, bc,
++                fbx_s, fbx_e, vv, vps)
++
++        if not prep_valid:
++            _test(f"Self-test [RP-{label}]: FAIL (prerequisite missing: {prep_missing[0] if prep_missing else 'unknown'})",
++                  False,
++                  detail=f"missing: {prep_missing}")
++            return False, eval_failing
++
+         _test(f"Self-test [RP-{label}]: {'PASS' if expect_valid else 'FAIL'} "
+               f"(expected {'valid' if expect_valid else 'invalid'})",
+-              valid == expect_valid,
+-              detail=detail if detail else "expected_pass" if expect_valid else "expected_fail")
+-        return valid, failing
++              eval_valid == expect_valid,
++              detail=eval_detail if eval_detail else "expected_pass" if expect_valid else "expected_fail")
++        return eval_valid, eval_failing
+ 
+     # RP-A: Correct full ordering → PASS
+     fixture_rp_a = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+@@ -2759,7 +2835,13 @@
+           detail=f"failing: {fail_f}")
+ 
+     # RP-G: synthetic cross-boundary evaluator fixture (no C++ parsing).
+-    # FbxPath_end(60) > phase_close(50) → fbx_end < phase_close fails.
++    # fbx_end(60) after phase_close(50) means FbxPath positions cross the
++    # phase-close boundary, making the downstream ordering invalid.
++    # The evaluator reports ValidateVersion_call < phase_close because VV(70)
++    # is also after phase_close(50) — FbxPath and VV are in the same chain
++    # segment after phase_close.  The evaluator does NOT directly contain an
++    # fbx_end < phase_close edge; the chain edge is
++    # fbx_end < vv < phase_close, so the vv < phase_close relation fails.
+     _test("Self-test [RP-G]: synthetic cross-boundary evaluator fixture",
+           True, detail="request_parse evaluator with fbx_end > phase_close")
+     _rp_g_valid, _rp_g_fail, _rp_g_detail = _evaluate_request_parse_ordering(
+@@ -2804,7 +2886,8 @@
+     # ===================================================================
+     def _check_pv_ordering(fixture_text, label, expect_valid):
+         """Evaluate path_validation ordering on a fixture using the shared
+-        evaluator.  Returns (valid, failing)."""
++        preparation helper.  Returns (valid, failing).
++        Every missing prerequisite causes a FAIL even when expect_valid=False."""
+         msk = _build_lexical_mask(fixture_text)
+         ho, hc = _find_handleimport_full_bounds(fixture_text, msk)
+         hbs = ho + 1
+@@ -2813,30 +2896,41 @@
+             fixture_text, msk, 'path_validation', hbs, hbe)
+         total, _ = _count_phase_declarations(
+             decls, [inv for _, inv in decls])
+-        if total != 1 or not decls:
+-            _test(f"Self-test [PV-{label}]: FAIL (missing declaration)",
+-                  False,
+-                  detail=f"expected 1 declaration, got {total}")
+-            return False, []
+-        m, inv = decls[0]
+-        block = _find_dedicated_block(fixture_text, msk, m.start())
+-        if not block:
+-            _test(f"Self-test [PV-{label}]: FAIL (missing dedicated block)",
+-                  False,
+-                  detail="no dedicated block found")
+-            return False, []
+-        bo, bc, _ = block
+-        ds = m.start()
+-        inv2 = _extract_constructor_invocation(fixture_text, msk, m)
+-        de = len(inv2) + ds if inv2 else ds + 1
++        has_unique = (total == 1 and len(decls) == 1)
++
++        single_match = decls[0][0] if has_unique else None
++        ds = single_match.start() if single_match else -1
++        if single_match:
++            inv2 = _extract_constructor_invocation(fixture_text, msk, single_match)
++            de = len(inv2) + ds if inv2 else -1
++        else:
++            inv2 = None
++            de = -1
++
++        block = _find_dedicated_block(fixture_text, msk, ds) if single_match else None
++        block_exists = block is not None
++        bo = bc = -1
++        if block:
++            bo, bc, _ = block
++
+         vps = _find_unmasked_call(fixture_text, msk, 'ValidatePathSecurity', hbs, hbe)
+-        valid, failing, detail = _evaluate_path_validation_ordering(
+-            ho, bo, ds, de, vps, hc, bc)
++
++        prep_valid, prep_missing, eval_valid, eval_failing, eval_detail = \
++            _prepare_path_validation_ordering(
++                ho, hc, has_unique, single_match,
++                ds, de, block_exists, bo, bc, vps)
++
++        if not prep_valid:
++            _test(f"Self-test [PV-{label}]: FAIL (prerequisite missing: {prep_missing[0] if prep_missing else 'unknown'})",
++                  False,
++                  detail=f"missing: {prep_missing}")
++            return False, eval_failing
++
+         _test(f"Self-test [PV-{label}]: {'PASS' if expect_valid else 'FAIL'} "
+               f"(expected {'valid' if expect_valid else 'invalid'})",
+-              valid == expect_valid,
+-              detail=detail if detail else "expected_pass" if expect_valid else "expected_fail")
+-        return valid, failing
++              eval_valid == expect_valid,
++              detail=eval_detail if eval_detail else "expected_pass" if expect_valid else "expected_fail")
++        return eval_valid, eval_failing
+ 
+     # PV-A: Correct full ordering → PASS
+     fixture_pv_a = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+@@ -2951,7 +3045,7 @@
+           detail=f"failing: {_pv_e_fail}")
+ 
+     # ===================================================================
+-    # Direct shared-evaluator positive/negative unit fixtures (req 7)
++    # Direct shared-evaluator positive/negative unit fixtures (tasks 4)
+     # ===================================================================
+     # Request_parse evaluator: valid chain
+     # params: handle_open,phase_open,decl_start,decl_end,fbx_start,fbx_end,vv_pos,vps_pos,handle_close,phase_close
+@@ -3007,35 +3101,204 @@
+               not v, detail=f"valid={v}, failing={f}")
+         _test(f"Direct evaluator [PV-inv-{label}]: failed relation {label}",
+               any(label in r for r in f), detail=f"failing={f}")
++
+     # ===================================================================
+-    # Self-tests for missing production prerequisites (req 2)
++    # Controlled negative-fixture setup tests (task 1)
+     # ===================================================================
+-    # Missing declaration: pass -1 for decl_start/decl_end
+-    _md_v, _md_f, _md_d = _evaluate_request_parse_ordering(
+-        0, 10, -1, 30, 40, 50, 60, 80, 100, 70)
+-    _test("Self-test [PROD-missing-decl]: evaluator returns False",
+-          not _md_v, detail=f"valid={_md_v}")
+-    _test("Self-test [PROD-missing-decl]: failed relation includes declaration_start",
+-          any("declaration_start" in r for r in _md_f),
+-          detail=f"failing={_md_f}")
+-
+-    # Missing block: still uses same evaluator path; positions serve as proxy
+-    _mb_v, _mb_f, _mb_d = _evaluate_path_validation_ordering(
+-        0, 10, 20, 30, -1, 50, 60)
+-    _test("Self-test [PROD-missing-call]: evaluator returns False",
+-          not _mb_v, detail=f"valid={_mb_v}")
+-    _test("Self-test [PROD-missing-call]: failed relation includes ValidatePathSecurity_call",
+-          any("ValidatePathSecurity_call" in r for r in _mb_f),
+-          detail=f"failing={_mb_f}")
+-
+-    # HandleImport bounds out of range
+-    _hib_v, _hib_f, _hib_d = _evaluate_request_parse_ordering(
+-        -1, 10, 20, 30, 40, 50, 60, 80, 100, 70)
+-    _test("Self-test [PROD-missing-hi-bounds]: evaluator returns False",
+-          not _hib_v, detail=f"valid={_hib_v}")
+-    _test("Self-test [PROD-missing-hi-bounds]: failed relation includes handle_open",
+-          any("handle_open" in r for r in _hib_f),
+-          detail=f"failing={_hib_f}")
++    # Each fixture is intentionally missing ONE prerequisite and expects
++    # _check_rp_ordering / _check_pv_ordering to FAIL (not pass with
++    # evaluator=False).
++
++    # RP-missing-fbx: no FbxPath invocation at all
++    fixture_rp_nofbx = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++        ValidateVersion(Request);
++    }
++    ValidatePathSecurity(Request);
++    return true;
++}"""
++    _check_rp_ordering(fixture_rp_nofbx, "no-FbxPath", False)
++
++    # RP-missing-vv: no ValidateVersion call
++    fixture_rp_novv = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++    }
++    ValidatePathSecurity(Request);
++    return true;
++}"""
++    _check_rp_ordering(fixture_rp_novv, "no-ValidateVersion", False)
++
++    # RP-missing-vps: no ValidatePathSecurity call
++    fixture_rp_novps = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++        ValidateVersion(Request);
++    }
++    return true;
++}"""
++    _check_rp_ordering(fixture_rp_novps, "no-ValidatePathSecurity", False)
++
++    # RP-malformed-invocation: unextractable constructor — unmatched parens
++    fixture_rp_badinv = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations
++        FStringFromFixedAnsi(Request.FbxPath, UE_ARRAY_COUNT(Request.FbxPath));
++        ValidateVersion(Request);
++    }
++    ValidatePathSecurity(Request);
++    return true;
++}"""
++    _check_rp_ordering(fixture_rp_badinv, "malformed-invocation", False)
++
++    # PV-missing-vps: no ValidatePathSecurity call
++    fixture_pv_novps = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    {
++        FFbxScopePhase Scope(guid, TEXT("path_validation"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations);
++    }
++    return true;
++}"""
++    _check_pv_ordering(fixture_pv_novps, "no-ValidatePathSecurity", False)
++
++    # PV-malformed-invocation: unextractable constructor
++    fixture_pv_badinv = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    {
++        FFbxScopePhase Scope(guid, TEXT("path_validation"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations
++    }
++    ValidatePathSecurity(Request);
++    return true;
++}"""
++    _check_pv_ordering(fixture_pv_badinv, "malformed-invocation", False)
++
++    # ===================================================================
++    # Production-prerequisite self-tests using shared preparation helper (task 3)
++    # ===================================================================
++    # Baseline valid data for a request_parse ordering
++    _rp_base_valid = lambda: _prepare_request_parse_ordering(
++        0, 100,    # handle_open, handle_close
++        True, "match",  # has_unique_decl, single_match
++        20, 40,    # decl_start, decl_end
++        True, 30, 50,  # block_exists, block_open, block_close
++        45, 55,    # fbx_path_start, fbx_path_end
++        60,        # vv_pos
++        70,        # vps_pos
++    )
++    # Baseline valid data for a path_validation ordering
++    _pv_base_valid = lambda: _prepare_path_validation_ordering(
++        0, 100,    # handle_open, handle_close
++        True, "match",  # has_unique_decl, single_match
++        20, 40,    # decl_start, decl_end
++        True, 30, 50,  # block_exists, block_open, block_close
++        60,        # vps_pos
++    )
++
++    def _check_prereq(label, fn, expect_valid):
++        pv, pm, ev, ef, ed = fn()
++        if expect_valid:
++            _test(f"PREREQ [{label}]: prerequisites_valid=True",
++                  pv, detail=f"missing: {pm}")
++            _test(f"PREREQ [{label}]: evaluator_valid={ev}",
++                  True, detail=f"eval_valid={ev}, failing={ef}")
++        else:
++            _test(f"PREREQ [{label}]: prerequisites_valid=False",
++                  not pv, detail=f"pv={pv}, missing: {pm}")
++            _test(f"PREREQ [{label}]: evaluator_valid=False",
++                  not ev, detail=f"eval_valid={ev}")
++            _test(f"PREREQ [{label}]: missing list non-empty",
++                  len(pm) > 0, detail=f"missing: {pm}")
++
++    # RP missing unique declaration
++    _check_prereq("RP-no-decl",
++                  lambda: _prepare_request_parse_ordering(
++                      0, 100, False, None, 20, 40, True, 30, 50, 45, 55, 60, 70),
++                  False)
++    # RP missing dedicated block
++    _check_prereq("RP-no-block",
++                  lambda: _prepare_request_parse_ordering(
++                      0, 100, True, "m", 20, 40, False, -1, -1, 45, 55, 60, 70),
++                  False)
++    # RP missing constructor end
++    _check_prereq("RP-no-decl-end",
++                  lambda: _prepare_request_parse_ordering(
++                      0, 100, True, "m", 20, -1, True, 30, 50, 45, 55, 60, 70),
++                  False)
++    # RP missing FbxPath
++    _check_prereq("RP-no-FbxPath",
++                  lambda: _prepare_request_parse_ordering(
++                      0, 100, True, "m", 20, 40, True, 30, 50, -1, -1, 60, 70),
++                  False)
++    # RP missing ValidateVersion
++    _check_prereq("RP-no-VV",
++                  lambda: _prepare_request_parse_ordering(
++                      0, 100, True, "m", 20, 40, True, 30, 50, 45, 55, -1, 70),
++                  False)
++    # RP missing ValidatePathSecurity
++    _check_prereq("RP-no-VPS",
++                  lambda: _prepare_request_parse_ordering(
++                      0, 100, True, "m", 20, 40, True, 30, 50, 45, 55, 60, -1),
++                  False)
++    # RP all prereqs but bad ordering (fbx_end after vv)
++    _check_prereq("RP-bad-order",
++                  lambda: _prepare_request_parse_ordering(
++                      0, 100, True, "m", 20, 40, True, 10, 50, 45, 65, 55, 70),
++                  True)
++    # RP all prereqs + ordering valid
++    _check_prereq("RP-good-order",
++                  lambda: _prepare_request_parse_ordering(
++                      0, 100, True, "m", 20, 40, True, 10, 50, 42, 48, 55, 70),
++                  True)
++
++    # PV missing unique declaration
++    _check_prereq("PV-no-decl",
++                  lambda: _prepare_path_validation_ordering(
++                      0, 100, False, None, 20, 40, True, 30, 50, 60),
++                  False)
++    # PV missing dedicated block
++    _check_prereq("PV-no-block",
++                  lambda: _prepare_path_validation_ordering(
++                      0, 100, True, "m", 20, 40, False, -1, -1, 60),
++                  False)
++    # PV missing constructor end
++    _check_prereq("PV-no-decl-end",
++                  lambda: _prepare_path_validation_ordering(
++                      0, 100, True, "m", 20, -1, True, 30, 50, 60),
++                  False)
++    # PV missing ValidatePathSecurity
++    _check_prereq("PV-no-VPS",
++                  lambda: _prepare_path_validation_ordering(
++                      0, 100, True, "m", 20, 40, True, 30, 50, -1),
++                  False)
++    # PV all prereqs but bad ordering (vps after phase_close)
++    _check_prereq("PV-bad-order",
++                  lambda: _prepare_path_validation_ordering(
++                      0, 100, True, "m", 20, 40, True, 10, 50, 55),
++                  True)
++    # PV all prereqs + ordering valid
++    _check_prereq("PV-good-order",
++                  lambda: _prepare_path_validation_ordering(
++                      0, 100, True, "m", 20, 40, True, 10, 50, 45),
++                  True)
+ 
+ 
+ def main():

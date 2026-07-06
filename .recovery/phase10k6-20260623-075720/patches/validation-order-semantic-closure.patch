@@ -1,0 +1,121 @@
+--- .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-semantic-closure.py	2026-06-23 14:59:17.661137022 +0700
++++ .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.semantic-closure-fixed.py	2026-06-23 15:12:30.954889270 +0700
+@@ -2362,8 +2362,9 @@
+               False, detail="ValidateVersion not found")
+ 
+     # --- ObjectName conversion exists in HandleImport (deferred after validation) ---
+-    _test("Semantic regression: at least one ObjectName conversion in HandleImport",
+-          len(hi_obj) >= 1, detail=f"count={len(hi_obj)}")
++    # Baseline contract: exactly one bounded Request.ObjectName conversion.
++    _test("Semantic regression: exactly one ObjectName conversion in HandleImport",
++          len(hi_obj) == 1, detail=f"count={len(hi_obj)}")
+ 
+     # --- ObjectName strictly after path_validation block close ---
+     # Locate request_parse phase declaration and its dedicated block.
+@@ -2405,7 +2406,7 @@
+     # Collect exact positions for reporting
+     vv_pos = hi_vv[0].start() if len(hi_vv) == 1 else -1
+     vps_pos = hi_vps[0].start() if len(hi_vps) == 1 else -1
+-    first_obj_pos = hi_obj[0].start() if hi_obj else -1
++    first_obj_pos = hi_obj[0].start() if len(hi_obj) == 1 else -1
+ 
+     # No ObjectName inside request_parse block
+     obj_in_rp = [m for m in hi_obj if rp_block and rp_block[0] < m.start() < rp_block[1]]
+@@ -2426,21 +2427,95 @@
+                   else f"obj={first_obj_pos}, pv_close={pv_close}"))
+ 
+     # Full ordering: VV < fbx_start < fbx_end < rp_close < pv_decl < VPS < pv_close < obj
++    # Fail closed: all positions must be present, then strictly increasing.
+     ordering_parts = [
+         ("vv", vv_pos), ("fbx_s", fbx_s), ("fbx_e", fbx_e),
+         ("rp_close", rp_close), ("pv_decl", pv_decl_start),
+         ("vps", vps_pos), ("pv_close", pv_close), ("obj", first_obj_pos)
+     ]
+-    order_ok = all(
++    all_positions_present = all(pos >= 0 for _, pos in ordering_parts)
++    order_ok = all_positions_present and all(
+         ordering_parts[i][1] < ordering_parts[i + 1][1]
+         for i in range(len(ordering_parts) - 1)
+-        if ordering_parts[i][1] >= 0 and ordering_parts[i + 1][1] >= 0
+     )
+     order_detail = " < ".join(
+         f"{name}@{pos}" for name, pos in ordering_parts if pos >= 0)
++    _test("Semantic regression: all ordering positions present",
++          all_positions_present, detail=order_detail)
+     _test("Semantic regression: full ordering chain",
+           order_ok, detail=order_detail)
+ 
++    # ===================================================================
++    # Self-tests: ObjectName count guards
++    # ===================================================================
++    def _count_obj_in_fixture(fixture_text):
++        """Count unmasked bounded Request.ObjectName conversions inside
++        a HandleImport fixture."""
++        f_mask = _build_lexical_mask(fixture_text)
++        f_ho, f_hc = _find_handleimport_full_bounds(fixture_text, f_mask)
++        f_start = f_ho + 1 if f_ho >= 0 else 0
++        f_end = f_hc if f_hc >= 0 else len(fixture_text)
++        import re
++        f_all = list(re.finditer(r'FStringFromFixedAnsi\s*\(\s*Request\.ObjectName',
++                                  fixture_text))
++        return len([m for m in f_all
++                    if f_start <= m.start() < f_end
++                    and not any(f_mask[m.start():m.end()])])
++
++    # A: exactly one ObjectName conversion → accepted
++    _fixture_a = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    FStringFromFixedAnsi(Request.ObjectName, UE_ARRAY_COUNT(Request.ObjectName));
++    return true;
++}"""
++    _test("Self-test [ObjCount-A-one]: count == 1",
++          _count_obj_in_fixture(_fixture_a) == 1,
++          detail=f"got={_count_obj_in_fixture(_fixture_a)}")
++
++    # B: duplicate ObjectName conversions → rejected
++    _fixture_b = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    FStringFromFixedAnsi(Request.ObjectName, UE_ARRAY_COUNT(Request.ObjectName));
++    FStringFromFixedAnsi(Request.ObjectName, UE_ARRAY_COUNT(Request.ObjectName));
++    return true;
++}"""
++    _test("Self-test [ObjCount-B-duplicate]: count != 1",
++          _count_obj_in_fixture(_fixture_b) != 1,
++          detail=f"got={_count_obj_in_fixture(_fixture_b)}")
++
++    # C: commented ObjectName conversion does not increase count
++    _fixture_c = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    // FStringFromFixedAnsi(Request.ObjectName, UE_ARRAY_COUNT(Request.ObjectName));
++    FStringFromFixedAnsi(Request.ObjectName, UE_ARRAY_COUNT(Request.ObjectName));
++    return true;
++}"""
++    _test("Self-test [ObjCount-C-comment]: count == 1 (comment ignored)",
++          _count_obj_in_fixture(_fixture_c) == 1,
++          detail=f"got={_count_obj_in_fixture(_fixture_c)}")
++
++    # D: unrelated field does not increase ObjectName count
++    _fixture_d = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    FStringFromFixedAnsi(Request.OtherField, UE_ARRAY_COUNT(Request.OtherField));
++    FStringFromFixedAnsi(Request.ObjectName, UE_ARRAY_COUNT(Request.ObjectName));
++    return true;
++}"""
++    _test("Self-test [ObjCount-D-unrelated]: count == 1 (unrelated ignored)",
++          _count_obj_in_fixture(_fixture_d) == 1,
++          detail=f"got={_count_obj_in_fixture(_fixture_d)}")
++
++    # ===================================================================
++    # Self-test: ordering chain fail-closed on missing position
++    # ===================================================================
++    # E: one position is -1 → all_positions_present=False, order_ok=False
++    _fake_parts = [("a", 10), ("b", -1), ("c", 30)]
++    _fake_app = all(pos >= 0 for _, pos in _fake_parts)
++    _fake_ook = _fake_app and all(
++        _fake_parts[i][1] < _fake_parts[i + 1][1]
++        for i in range(len(_fake_parts) - 1)
++    )
++    _test("Self-test [Ordering-E-missing]: all_positions_present=False",
++          not _fake_app, detail=f"app={_fake_app}")
++    _test("Self-test [Ordering-E-missing]: order_ok=False",
++          not _fake_ook, detail=f"ook={_fake_ook}")
++
+ 
+ # ---------------------------------------------------------------------------
+ # Scope extractor self-test fixtures — prove the dedicated-block detector

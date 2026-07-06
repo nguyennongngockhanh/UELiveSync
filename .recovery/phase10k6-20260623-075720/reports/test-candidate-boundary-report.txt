@@ -1,0 +1,55 @@
+Final Report — Candidate Boundary Fix
+
+Production source changed:
+  NO
+
+Authoritative runner completed:
+  YES
+  passed: 397
+  failed: 40
+  unexpected parser/fixture/state failures: 0
+
+RP incomplete state:
+  match_count: 1
+  single_match: not None
+  declaration_start: >=0
+  declaration_end: -1
+  invocation_complete: False
+  missing: ['constructor bounds', 'FbxPath invocation', 'ValidateVersion call']
+  evaluator_valid: False
+
+PV incomplete state:
+  match_count: 1
+  single_match: not None
+  declaration_start: >=0
+  declaration_end: -1
+  invocation_complete: False
+  missing: ['constructor bounds']
+  evaluator_valid: False
+
+Actual fallback fixtures:
+  line comment:            match_count=0 (PASS)
+  block comment:           match_count=0 (PASS)
+  unrelated string:        match_count=0 (PASS)
+  other phase + commented: match_count=0 (PASS)
+  unrelated UE_LOG TEXT:   match_count=0 (PASS)
+  later declaration bleed: match_count=1, decl_end>=0 (PASS)
+
+Scanner boundaries:
+  enclosing block:     match_count=1 (PASS)
+  next declaration:    match_count=1 (PASS)
+  constructor only:   arg_state==1 stops at IDENTIFIER( (PASS)
+
+Artifacts:
+  base:   snapshots/phase10k6_transaction_decomposition.pre-candidate-boundary-fix.py
+  result: snapshots/phase10k6_transaction_decomposition.candidate-boundary-fixed.py
+  unified patch: patches/test-candidate-boundary-restoration.patch
+  report:  reports/test-candidate-boundary-restoration.txt
+  audit:   reports/test-candidate-boundary-audit.md
+
+Test migration:
+  PASS — authoritative run proves the actual fallback path cannot match
+  comments, strings, unrelated TEXT macros, or later declarations.
+
+Ready for request_parse/path_validation implementation:
+  YES

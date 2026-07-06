@@ -1,0 +1,174 @@
+
+Phase 10K.6 transaction decomposition tests: 151 passed, 19 failed
+
+  PASS  FBXTransactionId atomic<int32> exists
+  PASS  TransactionId allocated from FBXTransactionId fetch_add
+  PASS  TransactionId declared as int32
+  PASS  FFbxScopePhase struct defined
+  PASS  FFbxScopePhase has constructor with Phase/Guid/SyncId/ObjectName
+  PASS  FFbxScopePhase has destructor with PHASE_END
+  PASS  FFbxScopePhase constructor has optional OutDurationMs
+  PASS  FbxPhaseBegin static helper exists
+  PASS  FbxPhaseEnd static helper exists
+  PASS  FbxPhaseBegin helper function exists (count >= 1 includes definition)
+  PASS  FbxPhaseEnd helper function exists (count >= 1 includes definition)
+  PASS  Exclusive phase 'path_validation' has PHASE_BEGIN
+  FAIL  Exclusive phase 'path_validation' has PHASE_END — phase=path_validation
+  PASS  ComputePhaseClassificationExclusive exists
+  FAIL  Classification uses TEXT("exclusive") and TEXT("SINGLE")
+  FAIL  STALL_SUMMARY log exists
+  FAIL  STALL_SUMMARY includes transactionId
+  FAIL  STALL_SUMMARY includes totalMs
+  FAIL  STALL_SUMMARY includes measuredExclusiveMs
+  FAIL  STALL_SUMMARY includes coveragePercent
+  FAIL  STALL_SUMMARY includes largestPhase
+  FAIL  STALL_SUMMARY includes largestPhaseMs
+  FAIL  STALL_SUMMARY includes unattributedMs
+  FAIL  STALL_SUMMARY includes classification
+  PASS  PHASE_END includes durationMs field
+  PASS  PHASE_BEGIN includes guid field
+  PASS  PHASE_END includes guid field
+  PASS  PHASE_BEGIN includes transactionId
+  PASS  PHASE_END includes transactionId
+  PASS  TxnObjNameSanitized derived from SanitizeObjectName
+  PASS  PT_Keyframe still in protocol enum (no packet type changes)
+  PASS  No new PT_FBXVisibility packet type added
+  PASS  PHASE_BEGIN/PHASE_END are log markers (UE_LOG), not packets
+  PASS  FBXTransactionId initialized to 1 (not 0)
+  PASS  ComputePhaseClassification static function exists
+  PASS  Log parser: phase 'request_parse' has BEGIN
+  PASS  Log parser: phase 'request_parse' has END with duration
+  PASS  Log parser: phase 'path_validation' has BEGIN
+  PASS  Log parser: phase 'path_validation' has END with duration
+  PASS  Log parser: phase 'fbx_factory_import' has BEGIN
+  PASS  Log parser: phase 'fbx_factory_import' has END with duration
+  PASS  Log parser: phase 'imported_asset_discovery' has BEGIN
+  PASS  Log parser: phase 'imported_asset_discovery' has END with duration
+  PASS  Log parser: phase 'sidecar_processing' has BEGIN
+  PASS  Log parser: phase 'sidecar_processing' has END with duration
+  PASS  Log parser: phase 'semantic_signature' has BEGIN
+  PASS  Log parser: phase 'semantic_signature' has END with duration
+  PASS  Log parser: phase 'static_mesh_post_import' has BEGIN
+  PASS  Log parser: phase 'static_mesh_post_import' has END with duration
+  PASS  Log parser: phase 'actor_lookup_or_spawn' has BEGIN
+  PASS  Log parser: phase 'actor_lookup_or_spawn' has END with duration
+  PASS  Log parser: phase 'static_mesh_assignment' has BEGIN
+  PASS  Log parser: phase 'static_mesh_assignment' has END with duration
+  PASS  Log parser: phase 'material_slot_assignment' has BEGIN
+  PASS  Log parser: phase 'material_slot_assignment' has END with duration
+  PASS  Log parser: phase 'post_import_finalize' has BEGIN
+  PASS  Log parser: phase 'post_import_finalize' has END with duration
+  PASS  Log parser: phase 'sidecar_manifest_read' has BEGIN
+  PASS  Log parser: phase 'sidecar_manifest_read' has END with duration
+  PASS  Log parser: phase 'sidecar_fingerprint_classification' has BEGIN
+  PASS  Log parser: phase 'sidecar_fingerprint_classification' has END with duration
+  PASS  Log parser: phase 'sidecar_asset_lookup' has BEGIN
+  PASS  Log parser: phase 'sidecar_asset_lookup' has END with duration
+  PASS  Log parser: phase 'sidecar_batch_import' has BEGIN
+  PASS  Log parser: phase 'sidecar_batch_import' has END with duration
+  PASS  Log parser: phase 'sidecar_result_mapping' has BEGIN
+  PASS  Log parser: phase 'sidecar_result_mapping' has END with duration
+  PASS  Log parser: exclusive sum = 179.1 (expected 179.1)
+  PASS  Log parser: nested sum = 28.5 (expected 28.5)
+  PASS  Log parser: nested phase 'sidecar_manifest_read' not in exclusive phases
+  PASS  Log parser: nested phase 'sidecar_fingerprint_classification' not in exclusive phases
+  PASS  Log parser: nested phase 'sidecar_asset_lookup' not in exclusive phases
+  PASS  Log parser: nested phase 'sidecar_batch_import' not in exclusive phases
+  PASS  Log parser: nested phase 'sidecar_result_mapping' not in exclusive phases
+  PASS  Log parser: nested phase 'semantic_signature' not in exclusive phases
+  PASS  Log parser: nested phase 'post_import_finalize' not in exclusive phases
+  PASS  Log parser: exclusive phase 'request_parse' not in nested phases
+  PASS  Log parser: exclusive phase 'path_validation' not in nested phases
+  PASS  Log parser: exclusive phase 'fbx_factory_import' not in nested phases
+  PASS  Log parser: exclusive phase 'imported_asset_discovery' not in nested phases
+  PASS  Log parser: exclusive phase 'sidecar_processing' not in nested phases
+  PASS  Log parser: exclusive phase 'static_mesh_post_import' not in nested phases
+  PASS  Log parser: exclusive phase 'actor_lookup_or_spawn' not in nested phases
+  PASS  Log parser: exclusive phase 'static_mesh_assignment' not in nested phases
+  PASS  Log parser: exclusive phase 'material_slot_assignment' not in nested phases
+  PASS  Log parser: unattributedMs = 20.9 (expected 20.9)
+  PASS  Log parser: largest phase = 'sidecar_processing' (120.0ms)
+  PASS  Log parser: orphan begin detected for 'orphan_phase'
+  PASS  Log parser: duplicate end detected for 'dup_phase'
+  PASS  Log parser: MIXED classification detected
+  PASS  STALL_SUMMARY parsed successfully
+  PASS  STALL_SUMMARY transactionId=1
+  PASS  STALL_SUMMARY totalMs=200.0
+  PASS  STALL_SUMMARY measuredExclusiveMs=179.1
+  PASS  STALL_SUMMARY coveragePercent=89.55
+  PASS  STALL_SUMMARY largestPhase=sidecar_processing
+  PASS  STALL_SUMMARY largestPhaseMs=120.0
+  PASS  STALL_SUMMARY unattributedMs=20.9
+  PASS  STALL_SUMMARY classification=MIXED
+  PASS  Observed case: phase 'request_parse' has BEGIN
+  PASS  Observed case: phase 'request_parse' has END
+  PASS  Observed case: phase 'path_validation' has BEGIN
+  PASS  Observed case: phase 'path_validation' has END
+  PASS  Observed case: phase 'fbx_factory_import' has BEGIN
+  PASS  Observed case: phase 'fbx_factory_import' has END
+  PASS  Observed case: phase 'imported_asset_discovery' has BEGIN
+  PASS  Observed case: phase 'imported_asset_discovery' has END
+  PASS  Observed case: phase 'sidecar_processing' has BEGIN
+  PASS  Observed case: phase 'sidecar_processing' has END
+  PASS  Observed case: phase 'sidecar_manifest_read' has BEGIN
+  PASS  Observed case: phase 'sidecar_manifest_read' has END
+  PASS  Observed case: phase 'sidecar_fingerprint_classification' has BEGIN
+  PASS  Observed case: phase 'sidecar_fingerprint_classification' has END
+  PASS  Observed case: phase 'sidecar_asset_lookup' has BEGIN
+  PASS  Observed case: phase 'sidecar_asset_lookup' has END
+  PASS  Observed case: phase 'sidecar_batch_import' has BEGIN
+  PASS  Observed case: phase 'sidecar_batch_import' has END
+  PASS  Observed case: phase 'sidecar_result_mapping' has BEGIN
+  PASS  Observed case: phase 'sidecar_result_mapping' has END
+  PASS  Observed case: phase 'static_mesh_post_import' has BEGIN
+  PASS  Observed case: phase 'static_mesh_post_import' has END
+  PASS  Observed case: phase 'actor_lookup_or_spawn' has BEGIN
+  PASS  Observed case: phase 'actor_lookup_or_spawn' has END
+  PASS  Observed case: phase 'static_mesh_assignment' has BEGIN
+  PASS  Observed case: phase 'static_mesh_assignment' has END
+  PASS  Observed case: phase 'material_slot_assignment' has BEGIN
+  PASS  Observed case: phase 'material_slot_assignment' has END
+  PASS  Observed case: phase 'post_import_finalize' has BEGIN
+  PASS  Observed case: phase 'post_import_finalize' has END
+  PASS  Observed case: exclusive sum ≈ 707.5 (got 707.5)
+  FAIL  Source: coveragePercent clamped to 100% max — source must clamp coveragePercent to 100 max
+  FAIL  Source: timing validity check exists — source must check timing validity before classification
+  PASS  Observed case: largestPhase == fbx_factory_import
+  PASS  Observed case: largestPhaseMs == 359.5
+  PASS  Observed case: sidecar_batch_import (nested) NOT in exclusive sum
+  PASS  Observed case: classification == MIXED
+  PASS  Observed case: unattributedMs >= 0 (got 0.0)
+  PASS  Exclusive sum > totalMs: unattributedMs clamped to >= 0
+  PASS  Largest phase correctly selected when emitted first
+  PASS  Phase name 'sidecar_processing' found exactly
+  PASS  No accidental 'sidecar' phase created
+  PASS  Mismatched transactionId (99) does not contaminate txnId=1 summary
+  PASS  Duplicate phase END: parser records summary as-is (test warns about the issue)
+  PASS  Phase with BEGIN but no END detected as unmatched
+  FAIL  RAII struct: FFbxScopePhase for 'path_validation' exists — phase=path_validation
+  FAIL  RAII accumulator: PhaseDurations write for 'path_validation' exists — phase=path_validation
+  PASS  IsExclusivePhase function exists
+  FAIL  Phase 10K.5: FBX transaction timing markers present
+  FAIL  Phase 10K.5: STALL_SUMMARY present
+  PASS  Phase 7E: no visibility channel changes in FBX importer
+  PASS  Sequential exclusive phases: coverage <= 100% (got 85.71)
+  PASS  Nested phase excluded from exclusive sum (got 10.0)
+  PASS  Source: IsExclusivePhase used in STALL_SUMMARY calculation
+  PASS  Overlap detected: classification=TIMING_CLASSIFICATION_INVALID
+  PASS  measuredExclusiveMs > totalMs: coverage clamped to 100%
+  PASS  Timer tolerance: measured > total by < 0.5ms is still valid
+  PASS  Largest phase correctly identified (got large_phase)
+  FAIL  Classification only computed when timing is valid — source must check timing validity before MIXED classification
+  PASS  Phase 'request_parse' has non-zero duration (got 0.5)
+  PASS  Phase 'path_validation' has non-zero duration (got 1.2)
+  PASS  Phase 'fbx_factory_import' has non-zero duration (got 45.0)
+  PASS  FFbxScopePhase struct exists
+  PASS  FbxPhaseBegin helper exists
+  PASS  FbxPhaseEnd helper exists
+  PASS  GExclusivePhases TSet exists
+  PASS  IsExclusivePhase function exists
+  PASS  ComputePhaseClassificationExclusive function exists
+  PASS  PHASE_BEGIN UE_LOG marker exists
+  PASS  PHASE_END UE_LOG marker exists
+  FAIL  STALL_SUMMARY UE_LOG marker exists
+

@@ -1,0 +1,226 @@
+--- /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.pre-stall-summary.cpp	2026-06-23 15:22:46.261841011 +0700
++++ /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.stall-summary-implemented.cpp	2026-06-23 17:10:17.733429248 +0700
+@@ -91,32 +91,70 @@
+     return Meta && Meta->Kind == EFbxPhaseKind::Exclusive;
+ }
+ 
+-static FString ComputePhaseClassificationExclusive(const TMap<FString, double>& PhaseDurations)
++// Deterministic phase classification for STALL_SUMMARY.
++// Returns largest/second-largest exclusive phase metadata plus the
++// classification label (UNRESOLVED / DOMINANT_*/MIXED).
++struct FFbxExclusiveClassification
++{
++    FString LargestPhase = TEXT("UNRESOLVED");
++    double LargestPhaseMs = 0.0;
++    FString SecondLargestPhase;
++    double SecondLargestPhaseMs = 0.0;
++    FString Classification = TEXT("UNRESOLVED");
++};
++
++static FFbxExclusiveClassification ComputeExclusiveClassification(
++    const TMap<FString, double>& PhaseDurations)
+ {
+-    FString LargestPhase, SecondPhase;
+-    double LargestMs = 0.0, SecondMs = 0.0;
++    FString LargestPhase = TEXT("UNRESOLVED");
++    double LargestMs = 0.0;
++    FString SecondPhase;
++    double SecondMs = 0.0;
++
+     for (const auto& KV : PhaseDurations)
+     {
+         if (!IsExclusivePhase(KV.Key))
+             continue;
+-        if (KV.Value > LargestMs)
++        if (KV.Value <= 0.0)
++            continue;
++        // Deterministic ranking:
++        //   1) larger duration sorts first
++        //   2) equal duration sorts by phase name lexically ascending
++        if (KV.Value > LargestMs ||
++            (KV.Value == LargestMs && KV.Key < LargestPhase))
+         {
+-            SecondMs = LargestMs;
+-            SecondPhase = LargestPhase;
++            // Shift current largest to second
++            if (LargestMs > 0.0)
++            {
++                SecondMs = LargestMs;
++                SecondPhase = LargestPhase;
++            }
+             LargestMs = KV.Value;
+             LargestPhase = KV.Key;
+         }
+-        else if (KV.Value > SecondMs)
++        else if (KV.Value > SecondMs ||
++                 (KV.Value == SecondMs && KV.Key < SecondPhase))
+         {
+             SecondMs = KV.Value;
+             SecondPhase = KV.Key;
+         }
+     }
++
+     if (LargestMs <= 0.0)
+-        return TEXT("UNRESOLVED");
+-    if (SecondMs >= 0.8 * LargestMs)
+-        return TEXT("MIXED");
+-    return FString::Printf(TEXT("DOMINANT_%s"), *LargestPhase);
++        return { TEXT("UNRESOLVED"), 0.0, FString(), 0.0, TEXT("UNRESOLVED") };
++
++    // Exactly one positive phase => DOMINANT
++    if (SecondMs <= 0.0)
++        return { LargestPhase, LargestMs, SecondPhase, SecondMs,
++                 FString::Printf(TEXT("DOMINANT_%s"), *LargestPhase) };
++
++    // Two or more positive phases: 80 % gate
++    if (SecondMs >= LargestMs * 0.8)
++        return { LargestPhase, LargestMs, SecondPhase, SecondMs,
++                 TEXT("MIXED") };
++
++    return { LargestPhase, LargestMs, SecondPhase, SecondMs,
++             FString::Printf(TEXT("DOMINANT_%s"), *LargestPhase) };
+ }
+ 
+ // Phase marker helpers.  These define the authoritative log format.
+@@ -211,6 +249,108 @@
+     }
+ };
+ 
++// Phase 10K.6: STALL_SUMMARY calculation helpers
++
++// Largest exclusive-phase info used by STALL_SUMMARY
++// RAII guard that emits exactly one STALL_SUMMARY log per HandleImport transaction.
++// Construct after HandleImportStart is captured.  The Guid must be set after
++// Request is parsed (via SetGuid), and ObjectName must be set after the
++// ObjectName conversion (via SetObjectName).
++struct FFbxTransactionSummary
++{
++    int32 TransactionId;
++    FGuid Guid;
++    int32 SyncId;
++    FString ObjectName;
++    double HandleImportStart;
++    const TMap<FString, double>* PhaseDurations;
++    FLiveSyncStats* Stats;
++
++    FFbxTransactionSummary(
++        int32 InTransactionId,
++        const FGuid& InGuid,
++        int32 InSyncId,
++        double InHandleImportStart,
++        const TMap<FString, double>* InPhaseDurations,
++        FLiveSyncStats* InStats)
++        : TransactionId(InTransactionId)
++        , Guid(InGuid)
++        , SyncId(InSyncId)
++        , HandleImportStart(InHandleImportStart)
++        , PhaseDurations(InPhaseDurations)
++        , Stats(InStats)
++    {}
++
++    void SetGuid(const FGuid& InGuid) { Guid = InGuid; }
++    void SetObjectName(const FString& InName) { ObjectName = InName; }
++
++    ~FFbxTransactionSummary()
++    {
++        if (!Stats) return;
++
++        const double Now = FPlatformTime::Seconds();
++        const double TotalMs = (Now - HandleImportStart) * 1000.0;
++
++        // Safe fallback for null PhaseDurations
++        static const TMap<FString, double> EmptyPhaseDurations;
++        const TMap<FString, double>& SafePhaseDurations =
++            PhaseDurations ? *PhaseDurations : EmptyPhaseDurations;
++
++        double MeasuredExclusiveMs = 0.0;
++        for (const auto& KV : SafePhaseDurations)
++        {
++            if (IsExclusivePhase(KV.Key))
++            {
++                MeasuredExclusiveMs += KV.Value;
++            }
++        }
++
++        const double CoveragePercent =
++            TotalMs > 0.0
++                ? (MeasuredExclusiveMs / TotalMs) * 100.0
++                : 0.0;
++        const double UnattributedMs =
++            FMath::Max(0.0, TotalMs - MeasuredExclusiveMs);
++        const double ExcessMs =
++            FMath::Max(0.0, MeasuredExclusiveMs - TotalMs);
++        const bool bTimingValid =
++            ExcessMs <= 0.5;
++
++        FString LargestPhase = TEXT("UNRESOLVED");
++        double LargestPhaseMs = 0.0;
++        FString Classification;
++
++        if (!bTimingValid)
++        {
++            Classification = TEXT("INVALID_OVERLAP");
++            LargestPhase = TEXT("UNRESOLVED");
++            LargestPhaseMs = 0.0;
++        }
++        else
++        {
++            const FFbxExclusiveClassification Result =
++                ComputeExclusiveClassification(SafePhaseDurations);
++            Classification = Result.Classification;
++            LargestPhase = Result.LargestPhase;
++            LargestPhaseMs = Result.LargestPhaseMs;
++        }
++
++        UE_LOG(LogLiveSync, Log,
++            TEXT("[FBX][STALL_SUMMARY] transactionId=%d guid=%s syncId=%d objectName=%s totalMs=%.1f measuredExclusiveMs=%.1f coveragePercent=%.2f largestPhase=%s largestPhaseMs=%.1f unattributedMs=%.1f classification=%s"),
++            TransactionId,
++            *Guid.ToString(EGuidFormats::Digits),
++            SyncId,
++            *ObjectName,
++            TotalMs,
++            MeasuredExclusiveMs,
++            CoveragePercent,
++            *LargestPhase,
++            LargestPhaseMs,
++            UnattributedMs,
++            *Classification);
++    }
++};
++
+ // =========================================================
+ // BOUNDED FIXED-FIELD HELPERS
+ // =========================================================
+@@ -1108,6 +1248,15 @@
+         FPlatformTime::Seconds();
+     TMap<FString, double> PhaseDurations;
+ 
++    // Phase 10K.6: STALL_SUMMARY — RAII guard emits one summary per transaction
++    FFbxTransactionSummary TxnSummary(
++        TransactionId,
++        FGuid(),     // updated after Request parsing
++        SyncId,
++        HandleImportStart,
++        &PhaseDurations,
++        Context.Stats);
++
+     if (!ValidatePayloadSize(PayloadSize, *Context.Stats))
+     {
+         return false;
+@@ -1123,6 +1272,8 @@
+         FMemory::Memcpy(&Request, PayloadPtr, CopySize);
+     }
+ 
++    TxnSummary.SetGuid(Request.ObjectGUID);
++
+     if (Request.GeometryHash != 0)
+     {
+         UE_LOG(LogLiveSync, Log,
+@@ -1183,6 +1334,7 @@
+             Request.ObjectName,
+             UE_ARRAY_COUNT(Request.ObjectName)));
+     const FString TxnObjNameSanitized = SafeName;
++    TxnSummary.SetObjectName(TxnObjNameSanitized);
+ 
+     const FString GuidShort =
+         Request.ObjectGUID.ToString().Left(8);

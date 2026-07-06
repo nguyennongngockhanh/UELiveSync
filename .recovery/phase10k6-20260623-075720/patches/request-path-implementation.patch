@@ -1,0 +1,67 @@
+--- /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.pre-request-path-implementation.cpp	2026-06-23 14:27:02.906506781 +0700
++++ /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.request-path-implemented.cpp	2026-06-23 14:29:48.134876249 +0700
+@@ -1139,26 +1139,50 @@
+             Request.VertCount, Request.TriCount, Request.MatSlotCount);
+     }
+ 
+-    if (!ValidateVersion(Request.Version, *Context.Stats))
+-    {
+-        return false;
+-    }
+-
+-    FString FbxPathStr = FStringFromFixedAnsi(
+-        Request.FbxPath,
+-        UE_ARRAY_COUNT(Request.FbxPath));
+-
+-    if (!ValidatePathSecurity(FbxPathStr, *Context.Stats))
+-    {
+-        return false;
+-    }
+-
+     FString SafeName = SanitizeObjectName(
+         FStringFromFixedAnsi(
+             Request.ObjectName,
+             UE_ARRAY_COUNT(Request.ObjectName)));
+     const FString TxnObjNameSanitized = SafeName;
+ 
++    FString FbxPathStr;
++    // request_parse exclusive phase
++    {
++        FFbxScopePhase RequestPhase(
++            TransactionId,
++            Request.ObjectGUID,
++            SyncId,
++            TxnObjNameSanitized,
++            TEXT("request_parse"),
++            EFbxPhaseKind::Exclusive,
++            nullptr,
++            &PhaseDurations);
++        FbxPathStr = FStringFromFixedAnsi(
++            Request.FbxPath,
++            UE_ARRAY_COUNT(Request.FbxPath));
++        if (!ValidateVersion(Request.Version, *Context.Stats))
++        {
++            return false;
++        }
++    }
++
++    // path_validation exclusive phase
++    {
++        FFbxScopePhase PathPhase(
++            TransactionId,
++            Request.ObjectGUID,
++            SyncId,
++            TxnObjNameSanitized,
++            TEXT("path_validation"),
++            EFbxPhaseKind::Exclusive,
++            nullptr,
++            &PhaseDurations);
++        if (!ValidatePathSecurity(FbxPathStr, *Context.Stats))
++        {
++            return false;
++        }
++    }
++
+     const FString GuidShort =
+         Request.ObjectGUID.ToString().Left(8);
+     const FString AssetBasePath =

@@ -1,0 +1,787 @@
+--- .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-lexical-phase-block-fix.py	2026-06-23 09:46:45.494791364 +0700
++++ .recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.lexical-phase-block-fixed.py	2026-06-23 09:58:33.310298695 +0700
+@@ -138,53 +138,54 @@
+     return mask
+ 
+ 
+-def _find_enclosing_scope(content, mask, position):
+-    """Find the exact { } block that lexically contains position.
+-    Returns (open_brace_pos, close_brace_pos, body_text) or None."""
++# ---- Lexical brace-scanner helpers -------------------------------------------
++def _find_lexical_brace_pair(content, mask, start_pos, open_char='{', close_char='}'):
++    """Find the matching close brace using lexical-balanced scanning
++    that ignores masked content.  Returns (open_pos, close_pos) where
++    open_pos is the *first* occurrence of open_char on or after start_pos.
++    When open_char != close_char (default { }), finds the one explicit pair.
++    When open_char == close_char (e.g. using '(' for both), this is NOT
++    supported — use only with distinct delimiters.
++    """
+     n = len(content)
+-    depth = 0
+     open_pos = -1
+-    for i in range(position - 1, -1, -1):
++    for i in range(start_pos, n):
+         if mask[i]:
+             continue
+-        if content[i] == '}':
+-            depth += 1
+-        elif content[i] == '{':
+-            if depth == 0:
+-                open_pos = i
+-                break
+-            depth -= 1
++        if content[i] == open_char:
++            open_pos = i
++            break
+     if open_pos < 0:
+         return None
+     depth = 1
+     for j in range(open_pos + 1, n):
+         if mask[j]:
+             continue
+-        if content[j] == '{':
++        if content[j] == open_char:
+             depth += 1
+-        elif content[j] == '}':
++        elif content[j] == close_char:
+             depth -= 1
+             if depth == 0:
+-                return (open_pos, j, content[open_pos + 1:j])
++                return (open_pos, j)
+     return None
+ 
+ 
+-def _find_handleimport_open(content, mask):
+-    """Find HandleImport function body opening brace position."""
++# ---- HandleImport body bounds -----------------------------------------------
++def _find_handleimport_full_bounds(content, mask):
++    """Return (handle_open, handle_close) for HandleImport body, or
++    (-1, -1) if not found."""
+     hi_pos = content.find('bool FLiveSyncFBXImporter::HandleImport(')
+     if hi_pos < 0:
+-        return -1
+-    for i in range(hi_pos, len(content)):
+-        if mask[i]:
+-            continue
+-        if content[i] == '{':
+-            return i
+-    return -1
++        return (-1, -1)
++    result = _find_lexical_brace_pair(content, mask, hi_pos, '{', '}')
++    if result is None:
++        return (-1, -1)
++    return result
+ 
+ 
++# ---- Direct child check (not inside a nested block) -------------------------
+ def _is_direct_child_of_block(content, mask, open_pos, decl_pos):
+-    """Return True if decl_pos is a direct child (not in a nested block)
+-    of the block starting at open_pos."""
++    """Return True if decl_pos is at relative depth 0 from open_pos."""
+     rel_depth = 0
+     for i in range(open_pos + 1, decl_pos):
+         if mask[i]:
+@@ -196,18 +197,65 @@
+     return rel_depth == 0
+ 
+ 
++# ---- Standalone block detection (no control-flow keyword before '{') --------
++_CONTROL_TOKENS = frozenset({'if', 'else', 'for', 'while', 'do', 'switch',
++                             'case', 'default', 'try', 'catch'})
++
++
++def _is_standalone_block(content, mask, open_pos):
++    """Return True only if the opening brace at open_pos is a standalone
++    compound statement (not preceded by a control-flow keyword or ')' or ':')."""
++    # Scan backward over whitespace and masked content
++    i = open_pos - 1
++    while i >= 0 and (mask[i] or content[i] in ' \t\n\r'):
++        i -= 1
++    if i < 0:
++        return True  # start of file
++
++    c = content[i]
++
++    # )-preceded: if/while/for/switch/catch/lambda/function
++    if c == ')':
++        return False
++    # }-preceded: standalone (else/try have keyword between, not })
++    if c == '}':
++        return True
++    # ;-preceded: statement terminator → standalone
++    if c == ';':
++        return True
++    # {-preceded: standalone (never a control keyword)
++    if c == '{':
++        return True
++    # :-preceded: case/default label → not standalone
++    if c == ':':
++        return False
++
++    # Word keyword check — extract the complete word
++    word_end = i + 1
++    while i >= 0 and not (mask[i] or content[i] in ' \t\n\r{}();,+'):
++        i -= 1
++    word = content[i + 1:word_end]
++
++    if word in _CONTROL_TOKENS:
++        return False
++    return True
++
++
++# ---- Dedicated phase block -----------------------------------------------
+ def _find_dedicated_block(content, mask, decl_pos):
+-    """Find the exact dedicated { } block containing a declaration.
++    """Find the exact dedicated standalone { } block containing a declaration.
+ 
+     Returns (open_brace_pos, close_brace_pos, body_text) ONLY if:
+-      - The declaration is directly inside a { } block (not in a nested block)
+-      - That block is narrower than the HandleImport function body
++      - The declaration is directly inside the { } block (not in a nested block)
++      - The block is a standalone compound statement (not if/for/while/etc.)
++      - If HandleImport exists: block is strictly inside its bounds
++      - (In test fixtures without HandleImport, block is accepted if standalone)
+ 
+-    Returns None if:
+-      - Declaration is directly in HandleImport body (no dedicated block)
+-      - Declaration is inside a nested block (if/for/while/etc.)
++    Returns None otherwise.
+     """
+     n = len(content)
++    handle_open, handle_close = _find_handleimport_full_bounds(content, mask)
++    has_hi = handle_open >= 0
+ 
+     # 1. Find the enclosing {
+     depth = 0
+@@ -224,30 +272,68 @@
+             depth -= 1
+     if open_pos < 0:
+         return None
++    if has_hi and open_pos <= handle_open:
++        return None  # not strictly inside HandleImport
+ 
+-    # 2. Verify declaration is a direct child of this block
+-    if not _is_direct_child_of_block(content, mask, open_pos, decl_pos):
++    # 2. Only accept a standalone block
++    if not _is_standalone_block(content, mask, open_pos):
+         return None
+ 
+-    # 3. Verify block is NOT the HandleImport function body
+-    hi_open = _find_handleimport_open(content, mask)
+-    if hi_open >= 0 and hi_open == open_pos:
++    # 3. Verify declaration is a direct child of this block
++    if not _is_direct_child_of_block(content, mask, open_pos, decl_pos):
+         return None
+ 
+     # 4. Find matching close brace
+-    rel_depth = 1
+-    for j in range(open_pos + 1, n):
+-        if mask[j]:
++    result = _find_lexical_brace_pair(content, mask, open_pos, '{', '}')
++    if result is None:
++        return None
++    close_pos = result[1]
++    if has_hi and close_pos >= handle_close:
++        return None  # block must close before HandleImport body closes
++
++    return (open_pos, close_pos, content[open_pos + 1:close_pos])
++
++
++# ---- Find unmasked call position -------------------------------------------
++def _find_unmasked_call(content, mask, call_name):
++    """Find the first unmasked occurrence of call_name(.
++    Returns the position of the '(' or -1."""
++    pattern = re.escape(call_name) + r'\('
++    for m in re.finditer(pattern, content):
++        if not any(mask[m.start():m.end()]):
++            return m.start()
++    return -1
++
++
++# ---- Lexical-aware FFbxScopePhase declaration search ------------------------
++def _find_ffbxscopephase_decl(content, mask, phase_name):
++    """Find the first unmasked FFbxScopePhase declaration with the given
++    phase name.  Returns a re.Match or None."""
++    pattern = r'FFbxScopePhase\s+\w+\s*\('
++    for m in re.finditer(pattern, content):
++        if mask[m.start()]:
+             continue
+-        if content[j] == '{':
+-            rel_depth += 1
+-        elif content[j] == '}':
+-            rel_depth -= 1
+-            if rel_depth == 0:
+-                return (open_pos, j, content[open_pos + 1:j])
++        # Found an unmasked start — check if this invocation has the phase name
++        invocation = _extract_constructor_invocation(content, mask, m)
++        if invocation and f'TEXT("{phase_name}")' in invocation:
++            return m
+     return None
+ 
+ 
++# ---- Balanced-parenthesis constructor extraction ----------------------------
++def _extract_constructor_invocation(content, mask, decl_match):
++    """Extract the complete constructor invocation text using
++    balanced-parenthesis scanning that ignores masked content.
++    Returns the substring from decl start through matching ')' or None."""
++    start = decl_match.start()
++    paren_open = decl_match.end()
++    # Find the actual '(' — might be after whitespace
++    result = _find_lexical_brace_pair(content, mask, start, '(', ')')
++    if result is None:
++        return None
++    return content[start:result[1] + 1]
++
++
+ # ---------------------------------------------------------------------------
+ # 1. FBXTransactionId atomic in SyncTypes.h
+ # ---------------------------------------------------------------------------
+@@ -1350,162 +1436,156 @@
+ #                             ..., &PhaseDurations);
+ #      All must fail until the production phases are implemented (Slice 3+).
+ # ---------------------------------------------------------------------------
+-def _test_phase_wiring(ph_name, content, mask, enclosed_func, enclosed_func_pos,
+-                       extra_checks=None):
+-    """Run independent wiring assertions for a single phase.
+-
+-    extra_checks: optional callable(block_open, block_close, block_body)
+-                  for phase-specific additional checks.
+-    Returns the dedicated block tuple if found, else None.
+-    """
+-    # 1. Declaration exists (by phase name only, not ORed with other params)
+-    decl_re = r'FFbxScopePhase\s+\w+\([^)]*TEXT\("' + ph_name + r'"\)'
+-    decl_match = re.search(decl_re, content, re.DOTALL)
+-    decl_exists = decl_match is not None
+-    _test(f"Production: '{ph_name}' FFbxScopePhase declaration exists",
+-          decl_exists,
+-          detail=f"FFbxScopePhase Xxx(..., TEXT(\"{ph_name}\"), ...)")
+-
+-    if decl_exists:
+-        # 2. Exclusive kind (independent of &PhaseDurations)
+-        exclusive_re = (
+-            r'FFbxScopePhase\s+\w+\('
+-            r'[^)]*TEXT\("' + ph_name + r'"\)'
+-            r'[^)]*EFbxPhaseKind::Exclusive'
+-        )
+-        _test(f"Production: '{ph_name}' uses EFbxPhaseKind::Exclusive",
+-              re.search(exclusive_re, content, re.DOTALL) is not None,
+-              detail="scope kind must be Exclusive")
+-
+-        # 3. &PhaseDurations (independent of Exclusive)
+-        durations_re = (
+-            r'FFbxScopePhase\s+\w+\('
+-            r'[^)]*TEXT\("' + ph_name + r'"\)'
+-            r'[^)]*&PhaseDurations'
+-        )
+-        _test(f"Production: '{ph_name}' supplies &PhaseDurations",
+-              re.search(durations_re, content, re.DOTALL) is not None,
+-              detail="scope must pass &PhaseDurations")
+-    else:
+-        _test(f"Production: '{ph_name}' uses EFbxPhaseKind::Exclusive",
+-              False, detail="scope kind must be Exclusive")
+-        _test(f"Production: '{ph_name}' supplies &PhaseDurations",
+-              False, detail="scope must pass &PhaseDurations")
+-
+-    # 4. Dedicated explicit block
+-    hi_open = _find_handleimport_open(content, mask)
+-    if decl_exists:
+-        block = _find_dedicated_block(content, mask, decl_match.start())
+-    else:
+-        block = None
+-    block_exists = block is not None
+-    _test(f"Production: '{ph_name}' declared in dedicated explicit block",
+-          block_exists,
+-          detail="scope must be inside its own { } block, not in HandleImport body directly")
+-
+-    # 5. Dedicated block narrower than HandleImport body
+-    if block_exists and hi_open >= 0:
+-        block_open, block_close, body = block
+-        is_narrower = block_open > hi_open
+-        _test(f"Production: '{ph_name}' dedicated block narrower than HandleImport body",
+-              is_narrower,
+-              detail=f"block open@{block_open} vs HandleImport open@{hi_open}")
+-    else:
+-        _test(f"Production: '{ph_name}' dedicated block narrower than HandleImport body",
+-              False,
+-              detail="no dedicated block found or HandleImport not found")
+-
+-    enclosed_exists = enclosed_func_pos >= 0
+-
+-    # 6. Declaration before enclosed function
+-    if decl_exists and enclosed_exists:
+-        _test(f"Production: '{ph_name}' decl before {enclosed_func}",
+-              decl_match.start() < enclosed_func_pos,
+-              detail=f"decl@{decl_match.start()} vs {enclosed_func}@{enclosed_func_pos}")
+-    else:
+-        _test(f"Production: '{ph_name}' decl before {enclosed_func}",
+-              False,
+-              detail="declaration or {enclosed_func} not found")
+-
+-    # 7. Enclosed function inside dedicated block
+-    if block_exists and enclosed_exists:
+-        _, _, body = block
+-        _test(f"Production: '{ph_name}' block encloses {enclosed_func}",
+-              enclosed_func + '(' in body,
+-              detail=f"{enclosed_func} must be lexically inside the dedicated scope block")
+-    else:
+-        _test(f"Production: '{ph_name}' block encloses {enclosed_func}",
+-              False,
+-              detail="dedicated block or {enclosed_func} not found")
+-
+-    return block
+-
+-
+ def test_production_phase_wiring():
+-    """Verify each production phase will pass &PhaseDurations to FFbxScopePhase
+-    and lexically enclose its expected work within a dedicated explicit block."""
++    """Verify each production phase has a standalone dedicated block with
++    correct wiring and lexical enclosure."""
+     content = _read(FBX_IMPORTER_CPP)
+     mask = _build_lexical_mask(content)
+ 
+-    # Find call-site positions within HandleImport body
+-    hi_pos = content.find('bool FLiveSyncFBXImporter::HandleImport(')
+-    hi_body = content[hi_pos:] if hi_pos >= 0 else ''
+-    validate_path_security_pos = hi_pos + hi_body.find('ValidatePathSecurity(') if hi_pos >= 0 and 'ValidatePathSecurity(' in hi_body else -1
+-    validate_version_pos = hi_pos + hi_body.find('ValidateVersion(') if hi_pos >= 0 and 'ValidateVersion(' in hi_body else -1
+-
+-    # ------------------------------------------------------------------
+-    # path_validation (7 assertions)
+-    # ------------------------------------------------------------------
+-    _test_phase_wiring(
+-        'path_validation', content, mask,
+-        'ValidatePathSecurity', validate_path_security_pos,
+-    )
++    handle_open, handle_close = _find_handleimport_full_bounds(content, mask)
+ 
+-    # ------------------------------------------------------------------
+-    # request_parse (10 assertions)
+-    # ------------------------------------------------------------------
+-    rp_block = _test_phase_wiring(
+-        'request_parse', content, mask,
+-        'ValidateVersion', validate_version_pos,
+-    )
+-
+-    # request_parse-specific assertions (8-10)
+-    rp_decl_re = r'FFbxScopePhase\s+\w+\([^)]*TEXT\("request_parse"\)'
+-    rp_decl_match = re.search(rp_decl_re, content, re.DOTALL)
+-    rp_has_decl = rp_decl_match is not None
++    # Find unmasked work-call positions
++    vps_pos = _find_unmasked_call(content, mask, 'ValidatePathSecurity')
++    vv_pos = _find_unmasked_call(content, mask, 'ValidateVersion')
++    fbx_path_pos = _find_unmasked_call(content, mask, 'FStringFromFixedAnsi(Request.FbxPath')
++
++    # ===================================================================
++    # Helper: run all assertions for one phase
++    # ===================================================================
++    def check_phase(ph_name, enclosed_func, enclosed_func_pos,
++                    extra_checks=None):
++        """Run assertions 1-7 for a phase.  extra_checks is called as
++        extra_checks(block_open, block_close, block_body) for ph-specific
++        checks (8+).  Returns (block, decl_match) or (None, None)."""
++        # 1. Lexical-aware declaration exists
++        decl_match = _find_ffbxscopephase_decl(content, mask, ph_name)
++        decl_exists = decl_match is not None
++        _test(f"Production: '{ph_name}' FFbxScopePhase declaration exists",
++              decl_exists,
++              detail=f"unmasked FFbxScopePhase with TEXT(\"{ph_name}\")")
++
++        if decl_exists:
++            # Extract the single constructor invocation for all checks
++            invocation = _extract_constructor_invocation(content, mask, decl_match)
++            inv_ok = invocation is not None
++
++            # 2. EFbxPhaseKind::Exclusive in same invocation
++            has_exclusive = inv_ok and 'EFbxPhaseKind::Exclusive' in invocation
++            _test(f"Production: '{ph_name}' uses EFbxPhaseKind::Exclusive",
++                  has_exclusive,
++                  detail="one-constructor invocation must contain Exclusive")
++
++            # 3. &PhaseDurations in same invocation
++            has_durations = inv_ok and '&PhaseDurations' in invocation
++            _test(f"Production: '{ph_name}' supplies &PhaseDurations",
++                  has_durations,
++                  detail="one-constructor invocation must contain &PhaseDurations")
++        else:
++            _test(f"Production: '{ph_name}' uses EFbxPhaseKind::Exclusive",
++                  False, detail="declaration not found")
++            _test(f"Production: '{ph_name}' supplies &PhaseDurations",
++                  False, detail="declaration not found")
++
++        # 4-5. Standalone dedicated block inside HandleImport
++        block = _find_dedicated_block(content, mask,
++                                      decl_match.start() if decl_match else -1) \
++                if decl_match else None
++        block_exists = block is not None
++        _test(f"Production: '{ph_name}' declared in standalone dedicated block",
++              block_exists,
++              detail="scope must be in a standalone { } block inside HandleImport")
++
++        if block_exists:
++            block_open, block_close, body = block
++            # 5. Full bound check: handle_open < phase_open < decl_start < decl_end < body_close < handle_close
++            decl_start = decl_match.start()
++            # compute decl_end from the constructor invocation
++            inv = _extract_constructor_invocation(content, mask, decl_match)
++            decl_end = len(inv) + decl_start if inv else decl_start + 1
++
++            bounds_ok = (handle_open < block_open < decl_start < decl_end
++                         < block_close < handle_close)
++            _test(f"Production: '{ph_name}' block bounds inside HandleImport",
++                  bounds_ok,
++                  detail=(f"handle@{handle_open},{handle_close} "
++                          f"block@{block_open},{block_close} "
++                          f"decl@{decl_start},{decl_end}"))
++        else:
++            _test(f"Production: '{ph_name}' block bounds inside HandleImport",
++                  False, detail="no standalone block found")
+ 
+-    if rp_has_decl and rp_block and validate_path_security_pos >= 0:
+-        _, rp_close, rp_body = rp_block
++        enclosed_exists = enclosed_func_pos >= 0
+ 
+-        # 8. Bounded FbxPath extraction inside block
++        # 6. Declaration before enclosed function
++        if decl_exists and block_exists and enclosed_exists:
++            _test(f"Production: '{ph_name}' decl before {enclosed_func}",
++                  decl_match.start() < enclosed_func_pos,
++                  detail=f"decl@{decl_match.start()} vs {enclosed_func}@{enclosed_func_pos}")
++        else:
++            _test(f"Production: '{ph_name}' decl before {enclosed_func}",
++                  False,
++                  detail="decl or block or {enclosed_func} not found")
++
++        # 7. Enclosed function inside block
++        if block_exists and enclosed_exists:
++            _, _, body = block
++            _test(f"Production: '{ph_name}' block encloses {enclosed_func}",
++                  enclosed_func_pos > block_open and enclosed_func_pos < block_close,
++                  detail=f"{enclosed_func}@{enclosed_func_pos} inside block@{block_open},{block_close}")
++        else:
++            _test(f"Production: '{ph_name}' block encloses {enclosed_func}",
++                  False,
++                  detail="block or {enclosed_func} not found")
++
++        if extra_checks and block:
++            extra_checks(block[0], block[1], block[2])
++
++        return block, decl_match
++
++    # ===================================================================
++    # path_validation
++    # ===================================================================
++    check_phase('path_validation', 'ValidatePathSecurity', vps_pos)
++
++    # ===================================================================
++    # request_parse
++    # ===================================================================
++    def rp_extra(block_open, block_close, body):
++        # 8. FbxPath bounded decode inside block
+         _test("Production: 'request_parse' block encloses bounded FbxPath extraction",
+-              'FStringFromFixedAnsi(Request.FbxPath' in rp_body,
+-              detail="FbxPath bounded decoding must be inside the request_parse scope block")
++              fbx_path_pos > block_open and fbx_path_pos < block_close,
++              detail=f"FbxPath decode@{fbx_path_pos} inside block@{block_open},{block_close}")
+ 
+         # 9. Block closes before ValidatePathSecurity
+         _test("Production: 'request_parse' block closes before ValidatePathSecurity",
+-              rp_close < validate_path_security_pos,
+-              detail=f"close@{rp_close} vs ValidatePathSecurity@{validate_path_security_pos}")
++              block_close < vps_pos,
++              detail=f"close@{block_close} vs VPS@{vps_pos}")
+ 
+         # 10. ValidatePathSecurity outside block
+         _test("Production: ValidatePathSecurity outside 'request_parse' block",
+-              'ValidatePathSecurity(' not in rp_body,
+-              detail="ValidatePathSecurity must not be inside the request_parse block")
+-    else:
+-        rp_block_found = rp_block is not None
+-        vps_found = validate_path_security_pos >= 0
++              vps_pos < 0 or not (vps_pos > block_open and vps_pos < block_close),
++              detail="VPS must be outside request_parse block")
+ 
+-        _test("Production: 'request_parse' block encloses bounded FbxPath extraction",
+-              False,
+-              detail="declaration exists" if rp_has_decl else "declaration missing")
+-
+-        _test("Production: 'request_parse' block closes before ValidatePathSecurity",
+-              False,
+-              detail=("block found" if rp_block_found else "block missing"))
++    rp_block, rp_decl_match = check_phase(
++        'request_parse', 'ValidateVersion', vv_pos,
++        extra_checks=rp_extra,
++    )
+ 
+-        _test("Production: ValidatePathSecurity outside 'request_parse' block",
+-              False,
+-              detail=("block found" if rp_block_found else "block missing"))
++    if rp_decl_match is None or rp_block is None:
++        if rp_decl_match is None:
++            _test("Production: 'request_parse' block encloses bounded FbxPath extraction",
++                  False, detail="declaration not found")
++            _test("Production: 'request_parse' block closes before ValidatePathSecurity",
++                  False, detail="declaration not found")
++            _test("Production: ValidatePathSecurity outside 'request_parse' block",
++                  False, detail="declaration not found")
++        else:
++            _test("Production: 'request_parse' block encloses bounded FbxPath extraction",
++                  False, detail="standalone block not found")
++            _test("Production: 'request_parse' block closes before ValidatePathSecurity",
++                  False, detail="standalone block not found")
++            _test("Production: ValidatePathSecurity outside 'request_parse' block",
++                  False, detail="standalone block not found")
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -1613,108 +1693,187 @@
+ # works correctly on controlled test data.
+ # ---------------------------------------------------------------------------
+ def _test_scope_extractor_self_test():
+-    """Disposable self-test for _find_dedicated_block.
++    """Disposable self-test for _find_dedicated_block and related helpers.
+     
+     Fixtures:
+-      A: Dedicated block → must be recognized
+-      B: Function body only → must be rejected (not a dedicated block)
+-      C: Nested unrelated block after declaration → must be recognized
+-      D: Braces inside comments/strings → must not affect matching
++      A: Standalone phase block → accepted
++      B: Declaration directly in HandleImport → rejected
++      C: Declaration inside if block → rejected
++      D: Declaration inside loop block → rejected
++      E: Braces in comments/strings → ignored
++      F: Declaration text in comments/string → ignored
++      G: Required work call only in comment/string → ignored
++      H: Two incomplete same-phase declarations must not combine
++      I: Nested control-flow after valid phase declaration remains supported
++      J: Full phase block bounds strictly inside HandleImport
+     """
+ 
+     def run_fixture(fixture_name, test_text, decl_name,
+-                    expected_success, expect_narrower=False):
++                    expected_success):
+         mask = _build_lexical_mask(test_text)
+-        decl_re = r'FFbxScopePhase\s+' + decl_name + r'\s*\('
+-        decl_match = re.search(decl_re, test_text, re.DOTALL)
++        decl_re = r'FFbxScopePhase\s+(?:' + decl_name + r')\s*\('
++        decl_match = None
++        for m in re.finditer(decl_re, test_text):
++            if not mask[m.start()]:
++                decl_match = m
++                break
+         if decl_match:
+             block = _find_dedicated_block(test_text, mask, decl_match.start())
+             found = block is not None
+-            _test(f"Self-test [{fixture_name}]: dedicated block detection",
++            _test(f"Self-test [{fixture_name}]",
+                   found == expected_success,
+-                  detail=f"expected_success={expected_success}, found={found}")
+-            if found and block:
+-                open_pos, close_pos, body = block
+-                if expect_narrower:
+-                    hi_open = _find_handleimport_open(test_text, mask)
+-                    _test(f"Self-test [{fixture_name}]: narrower than HandleImport",
+-                          hi_open >= 0 and open_pos > hi_open,
+-                          detail=f"block@{open_pos} > hi@{hi_open}")
++                  detail=f"expected={expected_success}, found={found}"
++                         f" (block at {block[0]},{block[1]})" if found
++                         else f"expected={expected_success}, found={found}")
+         else:
+-            _test(f"Self-test [{fixture_name}]: dedicated block detection",
++            _test(f"Self-test [{fixture_name}]",
+                   False == expected_success,
+-                  detail="no FFbxScopePhase declaration found in fixture")
++                  detail="no unmasked FFbxScopePhase declaration found")
+ 
+-    # Fixture A: dedicated block with ValidateVersion
+-    fixture_a = """void someFunc() {
++    # Fixture A: standalone { } block with phase work inside HandleImport
++    fixture_a = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
+     {
+-        FFbxScopePhase Scope(guid, TEXT("request_parse"), ...);
+-        ValidateVersion(Request);
++        FFbxScopePhase Scope(guid, TEXT("path_validation"), ...);
++        ValidatePathSecurity(Request);
+     }
++    return true;
+ }"""
+-    run_fixture("A (dedicated block)", fixture_a, "Scope", True)
++    run_fixture("A (standalone block)", fixture_a, "Scope", True)
+ 
+-    # Fixture B: declaration directly in HandleImport body (no dedicated block)
++    # Fixture B: declaration directly in HandleImport (no dedicated block)
+     fixture_b = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+-    FFbxScopePhase Scope(guid, TEXT("request_parse"), ...);
+-    ValidateVersion(Request);
++    FFbxScopePhase Scope(guid, TEXT("path_validation"), ...);
++    ValidatePathSecurity(Request);
+ }"""
+     run_fixture("B (HandleImport body only)", fixture_b, "Scope", False)
+ 
+-    # Fixture C: dedicated block with nested if after declaration
+-    fixture_c = """void someFunc() {
+-    {
+-        FFbxScopePhase Scope(guid, TEXT("request_parse"), ...);
+-        if (condition)
+-        {
+-            ValidateVersion(Request);
+-        }
++    # Fixture C: declaration inside if block → rejected
++    fixture_c = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    if (condition) {
++        FFbxScopePhase Scope(guid, TEXT("path_validation"), ...);
++    }
++    return true;
++}"""
++    run_fixture("C (inside if block)", fixture_c, "Scope", False)
++
++    # Fixture D: declaration inside for loop → rejected
++    fixture_d = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    for (int i = 0; i < 10; ++i) {
++        FFbxScopePhase Scope(guid, TEXT("path_validation"), ...);
+     }
++    return true;
+ }"""
+-    run_fixture("C (nested block after decl)", fixture_c, "Scope", True)
++    run_fixture("D (inside for loop)", fixture_d, "Scope", False)
+ 
+-    # Fixture C2: dedicated block with nested if BEFORE declaration
+-    # (should still be recognized as direct child)
+-    fixture_c2 = """void someFunc() {
++    # Fixture E: braces in comments and strings → ignored
++    fixture_e = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
+     {
+-        if (condition) { DoThing(); }
+-        FFbxScopePhase Scope(guid, TEXT("request_parse"), ...);
+-        ValidateVersion(Request);
++        // this brace { should be ignored
++        FFbxScopePhase Scope(guid, TEXT("path_validation"), ...);
++        /* also ignore } this */
++        const char* s = "a{ b} c";
++        ValidatePathSecurity(Request);
+     }
++    return true;
+ }"""
+-    run_fixture("C2 (nested block before decl)", fixture_c2, "Scope", True)
++    run_fixture("E (braces in comments/strings)", fixture_e, "Scope", True)
+ 
+-    # Fixture C3: declaration inside nested if-block — still a dedicated block
+-    # (declaration is a direct child of the if { }, not the outer { })
+-    fixture_c3 = """void someFunc() {
++    # Fixture F: FFbxScopePhase text in comments → ignored
++    fixture_f = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
+     {
+-        if (condition) {
+-            FFbxScopePhase Scope(guid, TEXT("request_parse"), ...);
+-            ValidateVersion(Request);
+-        }
++        // FFbxScopePhase OldDecl(guid, TEXT("path_validation"), ...);
++        FFbxScopePhase Scope(guid, TEXT("path_validation"), ...);
++        ValidatePathSecurity(Request);
+     }
++    return true;
+ }"""
+-    run_fixture("C3 (decl in nested if block)", fixture_c3, "Scope", True)
++    run_fixture("F (text in comment)", fixture_f, "Scope", True)
+ 
+-    # Fixture D: braces inside comments and string literals
+-    fixture_d = """void someFunc() {
++    # Fixture G: only a comment contains the work call → still a valid block
++    fixture_g = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
+     {
+-        // this brace { should be ignored
+-        FFbxScopePhase Scope(guid, TEXT("request_parse"), ...);
+-        /* also ignore } this */
+-        const char* s = "a{ + b} = c";
+-        ValidateVersion(Request);
++        FFbxScopePhase Scope(guid, TEXT("path_validation"), ...);
++        // ValidatePathSecurity(Request);
+     }
++    return true;
++}"""
++    run_fixture("G (work call in comment)", fixture_g, "Scope", True)
++    # Then separately test that the work-call finder ignores the comment:
++    mask_g = _build_lexical_mask(fixture_g)
++    vps_pos_g = _find_unmasked_call(fixture_g, mask_g, 'ValidatePathSecurity')
++    _test("Self-test [G]: work call masked in comment",
++          vps_pos_g < 0,
++          detail="ValidatePathSecurity inside comment must not match")
++
++    # Fixture H: two incomplete declarations must not combine
++    fixture_h_invocations = (
++        '// The next line has Exclusive but no &PhaseDurations\n'
++        'FFbxScopePhase Alpha(guid, TEXT("path_validation"), '
++        '   EFbxPhaseKind::Exclusive, nullptr);\n'
++        '// The next line has &PhaseDurations but no Exclusive\n'
++        'FFbxScopePhase Beta(guid, TEXT("path_validation"), '
++        '   &PhaseDurations);\n'
++    )
++    # Test the invocation extractor independently
++    mask_h = _build_lexical_mask(fixture_h_invocations)
++    for invoc_name, invoc_text in [("Alpha", "Alpha"), ("Beta", "Beta")]:
++        match = re.search(r'FFbxScopePhase\s+' + invoc_name + r'\s*\(',
++                          fixture_h_invocations)
++        if match and not mask_h[match.start()]:
++            inv = _extract_constructor_invocation(
++                fixture_h_invocations, mask_h, match)
++            has_excl = inv and 'EFbxPhaseKind::Exclusive' in inv
++            has_dur = inv and '&PhaseDurations' in inv
++            if invoc_name == "Alpha":
++                _test(f"Self-test [H]: {invoc_name} has Exclusive",
++                      has_excl, detail="Alpha has Exclusive")
++                _test(f"Self-test [H]: {invoc_name} lacks &PhaseDurations",
++                      not has_dur, detail="Alpha should NOT have &PhaseDurations")
++            else:
++                _test(f"Self-test [H]: {invoc_name} lacks Exclusive",
++                      not has_excl, detail="Beta should NOT have Exclusive")
++                _test(f"Self-test [H]: {invoc_name} has &PhaseDurations",
++                      has_dur, detail="Beta has &PhaseDurations")
++
++    # Fixture I: nested control-flow after valid phase declaration remains OK
++    fixture_i = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    {
++        FFbxScopePhase Scope(guid, TEXT("path_validation"), ...);
++        if (extra) { DoMore(); }
++        ValidatePathSecurity(Request);
++    }
++    return true;
+ }"""
+-    run_fixture("D (braces in comments/strings)", fixture_d, "Scope", True)
++    run_fixture("I (control-flow after decl)", fixture_i, "Scope", True)
+ 
+-    # Extra: verify that HandleImport body itself is NOT a dedicated block
+-    # when declaration is directly in it
+-    fixture_e = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+-    FFbxScopePhase Scope(guid, TEXT("request_parse"), ...);
++    # Fixture J: full phase block bounds strictly inside HandleImport
++    fixture_j = """bool FLiveSyncFBXImporter::HandleImport(Args) {
++    DoSetup();
++    {
++        FFbxScopePhase Scope(guid, TEXT("path_validation"), ...);
++        ValidatePathSecurity(Request);
++    }
++    DoCleanup();
+     return true;
+ }"""
+-    run_fixture("HandleImport body as scope", fixture_e, "Scope", False)
++    mask_j = _build_lexical_mask(fixture_j)
++    decl_j = re.search(r'FFbxScopePhase\s+Scope\s*\(', fixture_j)
++    h_open_j, h_close_j = _find_handleimport_full_bounds(fixture_j, mask_j)
++    block_j = _find_dedicated_block(fixture_j, mask_j, decl_j.start()) if decl_j else None
++    if decl_j and block_j:
++        b_open_j, b_close_j, _ = block_j
++        full_bounds = (h_open_j < b_open_j < decl_j.start() < b_close_j < h_close_j)
++        _test(f"Self-test [J]: full bounds inside HandleImport",
++              full_bounds,
++              detail=f"h@{h_open_j},{h_close_j} b@{b_open_j},{b_close_j}")
++    else:
++        _test(f"Self-test [J]: full bounds inside HandleImport",
++              False, detail="decl or block not found")
+ 
+ 
+ def main():

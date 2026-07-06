@@ -1,0 +1,2 @@
+IMPORTER_EXIT=0 (PASS — no whitespace errors in LiveSyncFBXImporter.cpp)
+TREE_EXIT=2 (FAIL — pre-existing trailing whitespace in Blender_Addon/__init__.py:946,949 unrelated to this slice)

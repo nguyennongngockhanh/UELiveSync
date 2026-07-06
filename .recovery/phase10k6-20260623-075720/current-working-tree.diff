@@ -1,0 +1,2435 @@
+diff --git a/Blender_Addon/__init__.py b/Blender_Addon/__init__.py
+index ab54dfa..f458a63 100755
+--- a/Blender_Addon/__init__.py
++++ b/Blender_Addon/__init__.py
+@@ -937,12 +937,16 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
+             bpy.context.view_layer.objects.active = orig_active
+ 
+ 
+-def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
++def _copy_textures_sidecar(obj, dest_dir, guid_short="?", fingerprint_map=None, stored_manifest=None):
+     """Copy material texture images into dest_dir for UE sidecar import.
+     
+     Iterates obj material slots, finds TEX_IMAGE nodes, and copies
+     referenced images into dest_dir (the FBX cache folder).
+     Handles FILE source (direct copy), packed images, and GENERATED images.
++    
++    When fingerprint_map and stored_manifest are provided, uses per-texture
++    fingerprinting to skip unchanged textures (fast path reuse).
++    
+     Returns (copied_count, sidecar_info_list).
+     """
+     import shutil
+@@ -953,6 +957,17 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
+                  f"object={obj.name} no_material_slots")
+         return 0, []
+ 
++    # Build canonical_key -> (stored_sidecar_info) lookup from manifest
++    stored_sidecar = {}
++    stored_fps = {}
++    if stored_manifest:
++        stored_textures = stored_manifest.get("textures", {})
++        for key, entry in stored_textures.items():
++            si = entry.get("sidecarInfo")
++            if si:
++                stored_sidecar[key] = si
++            stored_fps[key] = entry
++
+     copied_count = 0
+     sidecar_info = []  # list of dicts: {filename, path, source_path, size}
+     for slot in obj.material_slots:
+@@ -968,6 +983,31 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
+             source = getattr(img, "source", "")
+             is_packed = bool(getattr(img, "packed_file", False))
+ 
++            # Compute canonical key for per-texture fast path
++            canonical_key = _get_texture_canonical_key(
++                img, filepath_raw or filepath, source, is_packed)
++
++            # Fast path: if fingerprint matches stored, reuse sidecar info
++            if fingerprint_map and canonical_key and stored_sidecar:
++                fp = fingerprint_map.get(canonical_key)
++                sfp = stored_fps.get(canonical_key)
++                if fp and sfp and canonical_key in stored_sidecar:
++                    if _fingerprint_metadata_matches(fp, sfp):
++                        si = stored_sidecar[canonical_key]
++                        sidecar_info.append(si)
++                        _fbx_log(f"[FBX][TEXTURE_SIDECAR_REUSE] guid={guid_short} "
++                                 f"key={canonical_key} reason=metadata_unchanged")
++                        continue
++                    # Metadata changed — check content hash
++                    current_hash = _compute_content_hash_for_fingerprint(fp, img)
++                    stored_hash = sfp.get("contentHash")
++                    if current_hash and current_hash == stored_hash:
++                        si = stored_sidecar[canonical_key]
++                        sidecar_info.append(si)
++                        _fbx_log(f"[FBX][TEXTURE_SIDECAR_REUSE] guid={guid_short} "
++                                 f"key={canonical_key} reason=content_unchanged")
++                        continue
++
+             _fbx_log(f"[FBX][TEXTURE_SIDECAR_SCAN] guid={guid_short} "
+                      f"object={obj.name} material={mat.name} "
+                      f"image={img.name} source={source} "
+@@ -1077,6 +1117,287 @@ def _copy_textures_sidecar(obj, dest_dir, guid_short="?"):
+     return copied_count, sidecar_info
+ 
+ 
++# Phase 9B.6B.3: persistent sidecar state file name
++SIDECAR_STATE_FILENAME = "sidecar_state.json"
++TEXTURE_MANIFEST_FILENAME = "texture_manifest.json"
++TEXTURE_MANIFEST_SCHEMA_VERSION = 2
++
++
++def _get_texture_canonical_key(img, filepath, source, is_packed):
++    """Derive the canonical key (lowercased basename without extension).
++
++    Must match network.py extract_texture_maps_for_slot logic:
++    - FILE source: use filepath basename without extension
++    - packed/generated: use image.name without extension
++    """
++    if source == 'FILE' and not is_packed and filepath:
++        base = os.path.basename(filepath)
++        if base:
++            return os.path.splitext(base)[0].lower()
++    return os.path.splitext(getattr(img, "name", ""))[0].lower()
++
++
++def _get_texture_channel_name(node, mat):
++    """Determine which material channel a TEX_IMAGE node feeds into."""
++    if not mat or not mat.node_tree:
++        return "Unknown"
++    for n in mat.node_tree.nodes:
++        if n.type == 'BSDF_PRINCIPLED':
++            for sock in n.inputs:
++                if sock.is_linked:
++                    for link in getattr(sock, "links", []):
++                        if link.from_node == node:
++                            return sock.name
++    return "Unknown"
++
++
++def _compute_texture_fingerprints(obj):
++    """Compute per-texture fingerprints for change detection.
++
++    Returns dict: canonical_key -> fingerprint dict with sourceKind-specific fields.
++    Fingerprint fields are metadata-only (no content hash) for fast path.
++    """
++    fps = {}
++    if not obj.material_slots:
++        return fps
++    for slot_idx, slot in enumerate(obj.material_slots):
++        mat = slot.material
++        if not mat or not mat.use_nodes or not mat.node_tree:
++            continue
++        for node in mat.node_tree.nodes:
++            if node.type != 'TEX_IMAGE' or not node.image:
++                continue
++            img = node.image
++            filepath = getattr(img, "filepath", "") or ""
++            filepath_raw = getattr(img, "filepath_raw", "") or ""
++            source = getattr(img, "source", "")
++            is_packed = bool(getattr(img, "packed_file", False))
++
++            key = _get_texture_canonical_key(img, filepath_raw or filepath, source, is_packed)
++            if not key:
++                continue
++
++            fp = {
++                "canonicalKey": key,
++                "slotIndex": slot_idx,
++                "channel": _get_texture_channel_name(node, mat),
++            }
++
++            # Colorspace
++            try:
++                cs = getattr(img, "colorspace_settings", None)
++                fp["colorspace"] = getattr(cs, "name", "sRGB") if cs else "sRGB"
++            except Exception:
++                fp["colorspace"] = "sRGB"
++
++            if source == 'FILE' and not is_packed and (filepath_raw or filepath):
++                fp["sourceKind"] = "external_file"
++                abs_path = bpy.path.abspath(filepath_raw or filepath)
++                fp["sourcePath"] = abs_path
++                if abs_path and os.path.isfile(abs_path):
++                    try:
++                        st = os.stat(abs_path)
++                        fp["sourceSize"] = st.st_size
++                        fp["sourceMtimeNs"] = st.st_mtime_ns
++                    except Exception:
++                        fp["sourceSize"] = 0
++                        fp["sourceMtimeNs"] = 0
++                else:
++                    fp["sourceSize"] = 0
++                    fp["sourceMtimeNs"] = 0
++                fp["contentHash"] = None
++                fp["fileFormat"] = getattr(img, "file_format", "PNG")
++            elif is_packed:
++                fp["sourceKind"] = "packed_image"
++                fp["sourcePath"] = ""
++                fp["sourceSize"] = 0
++                fp["sourceMtimeNs"] = 0
++                fp["contentHash"] = None
++                fp["width"] = getattr(img, "size", [0, 0])[0]
++                fp["height"] = getattr(img, "size", [0, 0])[1]
++                fp["fileFormat"] = getattr(img, "file_format", "PNG")
++            elif source == 'GENERATED':
++                fp["sourceKind"] = "generated_image"
++                fp["sourcePath"] = ""
++                fp["sourceSize"] = 0
++                fp["sourceMtimeNs"] = 0
++                fp["contentHash"] = None
++                fp["width"] = getattr(img, "size", [0, 0])[0]
++                fp["height"] = getattr(img, "size", [0, 0])[1]
++                fp["fileFormat"] = getattr(img, "file_format", "PNG")
++                fp["isFloat"] = getattr(img, "is_float", False)
++                fp["generatedType"] = source
++            else:
++                continue
++
++            fps[key] = fp
++
++    return fps
++
++
++def _compute_fingerprint_metadata_digest(fingerprints):
++    """Compute a single int digest from all fingerprint metadata fields.
++
++    Used as a fast gate: if this matches stored, no texture has changed.
++    Only uses stat-level metadata (no content hash).
++    """
++    parts = []
++    for key in sorted(fingerprints.keys()):
++        fp = fingerprints[key]
++        src_size = fp.get("sourceSize", 0)
++        src_mtime = fp.get("sourceMtimeNs", 0)
++        src_path = fp.get("sourcePath", "")
++        kinds = fp.get("sourceKind", "")
++        cspace = fp.get("colorspace", "sRGB")
++        fmt = fp.get("fileFormat", "PNG")
++        parts.append(f"{key}:{kinds}:{src_size}:{src_mtime}:{src_path}:{cspace}:{fmt}")
++    raw = "|".join(parts)
++    return network.xxh64(raw.encode("utf-8"))
++
++
++def _fingerprint_metadata_matches(fp, stored_fp):
++    """Check if metadata fields match between current and stored fingerprint.
++
++    Returns True if all stat-level fields are identical (fast path eligible).
++    Does NOT compare contentHash.
++    """
++    if stored_fp is None:
++        return False
++    for field in ("sourceKind", "sourcePath", "sourceSize", "sourceMtimeNs",
++                  "slotIndex", "channel", "colorspace", "fileFormat",
++                  "width", "height", "isFloat", "generatedType"):
++        if fp.get(field) != stored_fp.get(field):
++            return False
++    return True
++
++
++def _compute_content_hash_for_fingerprint(fp, img):
++    """Compute content hash for a texture based on its sourceKind.
++
++    For external files: xxh64 of file content (only called when metadata changes).
++    For packed images: xxh64 of raw packed bytes or encoded content.
++    For generated images: xxh64 of pixel buffer or deterministic description.
++    Returns hex string or empty string on failure.
++    """
++    kind = fp.get("sourceKind", "")
++    try:
++        if kind == "external_file":
++            src = fp.get("sourcePath", "")
++            if src and os.path.isfile(src):
++                with open(src, "rb") as f:
++                    return network.xxh64(f.read())
++            return ""
++
++        elif kind == "packed_image":
++            if img and getattr(img, "packed_file", None):
++                try:
++                    packed_bytes = img.packed_file.data
++                    return network.xxh64(packed_bytes)
++                except Exception:
++                    pass
++            return network.xxh64(f"{fp.get('width',0)}:{fp.get('height',0)}:{fp.get('fileFormat','PNG')}")
++
++        elif kind == "generated_image":
++            return network.xxh64(
++                f"{fp.get('width',0)}:{fp.get('height',0)}:"
++                f"{fp.get('fileFormat','PNG')}:{fp.get('isFloat',False)}:"
++                f"{fp.get('generatedType','')}"
++            )
++    except Exception:
++        pass
++    return ""
++
++
++def _load_texture_manifest(obj_dir):
++    """Load the versioned texture manifest from disk.
++
++    Returns manifest dict or None if missing/schema-mismatch/corrupt.
++    Schema mismatch causes safe invalidation (fresh prepare).
++    """
++    import json
++    path = os.path.join(obj_dir, TEXTURE_MANIFEST_FILENAME)
++    if not os.path.isfile(path):
++        return None
++    try:
++        with open(path, "r") as f:
++            data = json.load(f)
++        sv = data.get("schemaVersion", 0)
++        if sv != TEXTURE_MANIFEST_SCHEMA_VERSION:
++            return None
++        return data
++    except Exception:
++        return None
++
++
++def _save_texture_manifest(obj_dir, manifest):
++    """Atomically write the versioned texture manifest to disk."""
++    import json
++    import tempfile
++    import shutil
++    manifest["schemaVersion"] = TEXTURE_MANIFEST_SCHEMA_VERSION
++    path = os.path.join(obj_dir, TEXTURE_MANIFEST_FILENAME)
++    try:
++        fd, tmp = tempfile.mkstemp(suffix=".tmp", prefix="txman_", dir=obj_dir)
++        with os.fdopen(fd, "w") as f:
++            json.dump(manifest, f, indent=2)
++        shutil.move(tmp, path)
++    except Exception:
++        try:
++            os.unlink(tmp)
++        except Exception:
++            pass
++
++
++def _load_sidecar_state(obj_dir):
++    """Load persistent sidecar state from disk (legacy v1 format).
++
++    Returns (digest, sidecar_info) or (None, None) if no state file exists.
++    Legacy format — used for backward compat during transition.
++    """
++    import json
++    state_path = os.path.join(obj_dir, SIDECAR_STATE_FILENAME)
++    if not os.path.isfile(state_path):
++        return None, None
++    try:
++        with open(state_path, "r") as f:
++            data = json.load(f)
++        digest = data.get("sidecar_digest")
++        info = data.get("sidecar_info", [])
++        return digest, info
++    except Exception:
++        return None, None
++
++
++def _save_sidecar_state(obj_dir, digest, sidecar_info):
++    """Atomically write persistent sidecar state to disk (legacy v1 format).
++
++    Uses temp file + rename to prevent partial write corruption.
++    """
++    import json
++    import tempfile
++    import shutil
++    data = {
++        "sidecar_digest": digest,
++        "sidecar_info": sidecar_info,
++        "timestamp": __import__("time").time(),
++    }
++    state_path = os.path.join(obj_dir, SIDECAR_STATE_FILENAME)
++    try:
++        fd, tmp_path = tempfile.mkstemp(
++            suffix=".tmp",
++            prefix="sidecar_state_",
++            dir=obj_dir,
++        )
++        with os.fdopen(fd, "w") as f:
++            json.dump(data, f, indent=2)
++        shutil.move(tmp_path, state_path)
++    except Exception:
++        try:
++            os.unlink(tmp_path)
++        except Exception:
++            pass
++
++
+ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+     bpy.types.Operator
+ ):
+@@ -1106,6 +1427,19 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+ 
+     def execute(self, context):
+ 
++        # Task 9B.5: Blender-side sync timing measurement
++        import time as _time
++        _bl_timer_total_start = _time.perf_counter()
++        _bl_timer_fbx_start = 0.0
++        _bl_timer_sidecar_start = 0.0
++        _bl_timer_matx_start = 0.0
++        _bl_timer_serialize_start = 0.0
++        _bl_timer_send_start = 0.0
++        _fbx_exported = 0
++        _sidecars_prepared = 0
++        _total_ms = 0.0
++        _guid_for_log = ""
++
+         mode = context.mode if context.mode else "UNKNOWN"
+         sel_names = [o.name for o in context.selected_objects]
+         active_obj = context.view_layer.objects.active
+@@ -1169,7 +1503,11 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+ 
+             try:
+                 guid_hex = sync.ensure_guid(obj)
++                _guid_for_log = guid_hex
+                 guid_obj = uuid.UUID(guid_hex)
++                # Task 9B.6B.11: GUID persistence diagnostic
++                if obj.get("ue_guid_persisted", False) is not True:
++                    print(f"[IDENTITY][GUID_NOT_PERSISTED] object={obj.name} guid={guid_hex[:8]} reason=blend_not_saved_after_guid_assignment")
+ 
+                 safe_name = \
+                     "".join(
+@@ -1214,6 +1552,8 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+                 print(f"[SYNC][REQ] seq={seq} guid={guid_hex[:8]} "
+                       f"name={obj.name} mode=FBX reason=manual_sync")
+ 
++                # Task 9B.5: FBX export timing
++                _bl_timer_fbx_start = _time.perf_counter()
+                 # Export with local-pivot helper (Phase 10J)
+                 depsgraph = context.evaluated_depsgraph_get()
+                 if not _export_object_local_fbx(obj, fbx_path, depsgraph):
+@@ -1249,10 +1589,84 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+                 for p, sz, mt in source_stats_before:
+                     _fbx_log(f"[FBX][TEXTURE_SOURCE_STAT_BEFORE] path={p} size={sz} mtime={mt:.6f}")
+ 
+-                # Phase 7H.6: explicit sidecar texture copy for UE import
+-                sidecar_copied, sidecar_info = _copy_textures_sidecar(obj, obj_dir, guid_hex[:8])
++                # Phase 9B.6B.4: per-texture fingerprint change detection
++                _fingerprints = _compute_texture_fingerprints(obj)
++                _combined_digest = _compute_fingerprint_metadata_digest(_fingerprints)
++                # Phase 9B.6B.3: load persistent state from disk if not in memory
++                _prev_sidecar_digest = sync._last_sidecar_digest.get(guid_hex)
++                _stored_manifest = None
++                if _prev_sidecar_digest is None:
++                    _loaded_digest, _loaded_info = _load_sidecar_state(obj_dir)
++                    if _loaded_digest is not None:
++                        sync._last_sidecar_digest[guid_hex] = _loaded_digest
++                        sync._last_sidecar_info[guid_hex] = _loaded_info
++                        _prev_sidecar_digest = _loaded_digest
++                        print(f"[FBX][SIDECAR_STATE_LOADED] guid={guid_hex[:8]} digest={_loaded_digest} textures={len(_loaded_info)}")
++                    # Also try loading v2 texture manifest
++                    _stored_manifest = _load_texture_manifest(obj_dir)
++                    if _stored_manifest:
++                        print(f"[FBX][MANIFEST_V2_LOADED] guid={guid_hex[:8]} textures={len(_stored_manifest.get('textures', {}))}")
++                else:
++                    _stored_manifest = _load_texture_manifest(obj_dir)
++                if _prev_sidecar_digest is not None and _prev_sidecar_digest == _combined_digest:
++                    sidecar_copied = 0
++                    sidecar_info = sync._last_sidecar_info.get(guid_hex, [])
++                    print(f"[FBX][SIDECAR_SKIP] guid={guid_hex[:8]} reason=textures_unchanged digest={_combined_digest}")
++                else:
++                    # Per-texture granular sidecar copy
++                    _bl_timer_sidecar_start = _time.perf_counter()
++                    sidecar_copied, sidecar_info = _copy_textures_sidecar(
++                        obj, obj_dir, guid_hex[:8],
++                        fingerprint_map=_fingerprints,
++                        stored_manifest=_stored_manifest)
++                    sync._last_sidecar_digest[guid_hex] = _combined_digest
++                    sync._last_sidecar_info[guid_hex] = sidecar_info
++                    # Build and save v2 texture manifest
++                    _textures_manifest = {"textures": {}, "guid": guid_hex}
++                    _stored_textures = _stored_manifest.get("textures", {}) if _stored_manifest else {}
++                    _si_idx = 0
++                    for _slot in obj.material_slots:
++                        _mat = _slot.material
++                        if not _mat or not _mat.use_nodes or not _mat.node_tree:
++                            continue
++                        for _node in _mat.node_tree.nodes:
++                            if _node.type != 'TEX_IMAGE' or not _node.image:
++                                continue
++                            _img = _node.image
++                            _filepath = getattr(_img, "filepath", "") or ""
++                            _filepath_raw = getattr(_img, "filepath_raw", "") or ""
++                            _source = getattr(_img, "source", "")
++                            _is_packed = bool(getattr(_img, "packed_file", False))
++                            _key = _get_texture_canonical_key(
++                                _img, _filepath_raw or _filepath, _source, _is_packed)
++                            if not _key:
++                                continue
++                            _fp = _fingerprints.get(_key, {})
++                            _entry = dict(_fp)
++                            # Reuse stored content hash if metadata unchanged
++                            _stored_entry = _stored_textures.get(_key)
++                            if _stored_entry and _fingerprint_metadata_matches(_fp, _stored_entry):
++                                _entry["contentHash"] = _stored_entry.get("contentHash", "")
++                            else:
++                                _entry["contentHash"] = _compute_content_hash_for_fingerprint(_fp, _img)
++                            _si = sidecar_info[_si_idx] if _si_idx < len(sidecar_info) else None
++                            if _si:
++                                _entry["sidecarInfo"] = _si
++                                _entry["destinationFilename"] = _si.get("filename", "")
++                                _entry["destinationSize"] = _si.get("size", 0)
++                            _entry["destinationFilename"] = _entry.get("destinationFilename", "")
++                            _entry["destinationSize"] = _entry.get("destinationSize", 0)
++                            _textures_manifest["textures"][_key] = _entry
++                            _si_idx += 1
++                    _save_texture_manifest(obj_dir, _textures_manifest)
++                    print(f"[FBX][MANIFEST_V2_SAVED] guid={guid_hex[:8]} textures={len(_textures_manifest['textures'])}")
++                    # Also persist legacy sidecar state for backward compat
++                    _save_sidecar_state(obj_dir, _combined_digest, sidecar_info)
++                    print(f"[FBX][SIDECAR_STATE_SAVED] guid={guid_hex[:8]} digest={_combined_digest} textures={len(sidecar_info)}")
++                _sidecars_prepared += sidecar_copied if isinstance(sidecar_copied, int) else 1
+                 # Task A: deterministic ordering log for sidecar readiness
+-                print(f"[FBX][SIDECAR_READY] guid={guid_hex[:8]} copied={sidecar_copied}")
++                _reused_count = len(sidecar_info) - (sidecar_copied if isinstance(sidecar_copied, int) else 0)
++                print(f"[FBX][SIDECAR_READY] guid={guid_hex[:8]} copied={sidecar_copied} reused={_reused_count} total={len(sidecar_info)}")
+ 
+                 # --- Task D: log source texture state AFTER sidecar ---
+                 source_modified = False
+@@ -1457,11 +1871,13 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+ 
+                 if current_prop_sig is not None:
+                     prev_prop_sig = sync._last_material_property_sig.get(guid_hex)
++                    # Task 9B.6B.13: start collecting before first extraction call
++                    network._mtex_start_collecting(seq, guid_hex)
+                     # Phase 7H: include texture hash in dirty detection
+                     current_tex_sigs = {}
+                     for slot_idx, slot in enumerate(obj.material_slots):
+                         if slot and slot.material:
+-                            maps = network.extract_texture_maps_for_slot(slot.material, slot.material.name, slot_idx)
++                            maps = network.extract_texture_maps_for_slot(slot.material, slot.material.name, slot_idx, _collect=True)
+                             if maps:
+                                 tex_hash = network.compute_material_texture_hash(slot_idx, maps)
+                                 current_tex_sigs[slot_idx] = tex_hash
+@@ -1499,18 +1915,22 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+                     # Phase 7H: always extract tex_maps + mat_props so we can send
+                     # even when only texture changed (scalars unchanged).
+                     mat_props = {}
++                    # Task 9B.6B.14: collect material basic properties for transaction summary
++                    network._mt_basic_start_collecting(seq, guid_hex)
+                     for slot_idx, slot in enumerate(obj.material_slots):
+                         if slot and slot.material:
+                             p = network.get_material_basic_properties(slot.material)
+                             if p is not None:
+                                 mat_props[slot_idx] = p
++                                # Task 9B.6B.14: collect for summary
++                                network._mt_basic_collect_slot(slot_idx, p)
+ 
+                     tex_maps = None
+                     try:
+                         tex_maps_dict = {}
+                         for slot_idx, slot in enumerate(obj.material_slots):
+                             if slot and slot.material:
+-                                maps = network.extract_texture_maps_for_slot(slot.material, slot.material.name, slot_idx)
++                                maps = network.extract_texture_maps_for_slot(slot.material, slot.material.name, slot_idx, _collect=True)
+                                 if maps:
+                                     tex_maps_dict[slot_idx] = maps
+                                     for ch, fpath, img_name, flags in maps:
+@@ -1526,6 +1946,61 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+                     except Exception:
+                         tex_maps = None
+ 
++                    # Task 9B.6B.13: emit MTEX extraction summary after collecting records.
++                    _mtex_records = network._mtex_collect_records
++                    if _mtex_records:
++                        unique_keys = set()
++                        for slot_idx, ch, img_name, fpath, flags, is_packed in _mtex_records:
++                            ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
++                            unique_keys.add((guid_hex, seq, slot_idx, ch, img_name))
++                        unique_count = len(unique_keys)
++                        print(
++                            f"[MTEX][EXTRACT_SUMMARY] syncId={seq} guid={guid_hex[:8]} "
++                            f"object={obj.name} slots={len(_mtex_records)} records={len(_mtex_records)} "
++                            f"uniqueRecords={unique_count}"
++                        )
++                        # Emit per-record lines only in verbose mode (one per unique record)
++                        if network.material_verbose_logging:
++                            for slot_idx, ch, img_name, fpath, flags, is_packed in _mtex_records:
++                                ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
++                                _mtex_key = (guid_hex, seq, slot_idx, ch, img_name)
++                                print(
++                                    f"[MTEX][EXTRACT_RECORD] syncId={seq} slot={slot_idx} "
++                                    f"channel={ch_name} key={img_name} image={img_name} "
++                                    f"packed={int(is_packed)}"
++                                )
++                    network._mtex_clear_dedup_state()
++
++                    # Task 9B.6B.14: emit material basic property summary (FBX path)
++                    _mat_records = network.mat_basic_collect_records
++                    if _mat_records and network._mt_basic_collecting:
++                        total_slots = len(_mat_records)
++                        # Count changed fields by comparing with stored property signatures
++                        total_changed = 0
++                        all_changed = []
++                        for si, props in _mat_records:
++                            prev = sync._last_material_property_sig.get(si)
++                            if prev:
++                                for field in props:
++                                    if field in prev and prev[field] != props[field]:
++                                        total_changed += 1
++                                        all_changed.append(f"slot{si}+{field}")
++                        _mat_collect_guid = guid_hex[:8]
++                        _mt_basic_changed_fields_str = ",".join(all_changed[:5]) if all_changed else ""
++                        _append_blender_debug_log(
++                            f"[MATERIAL][BASIC_EXTRACT_SUMMARY] syncId={seq} "
++                            f"guid={_mat_collect_guid} object={obj.name} "
++                            f"materialSlots={total_slots} materialsExamined={total_slots} "
++                            f"materialsChanged={total_changed} fields={_mt_basic_changed_fields_str}"
++                        )
++                        # Emit changed-record lines only when changes exist (one per changed field, limited)
++                        for _ch in all_changed[:5]:
++                            _append_blender_debug_log(
++                                f"[MATERIAL][BASIC_CHANGED] syncId={seq} "
++                                f"guid={_mat_collect_guid} {_ch}"
++                            )
++                    network._mt_basic_clear_state()
++
+                     # Phase 7H: decide whether to send based on scalar OR texture change
+                     if scalar_changed or tex_changed or send_fbx == 1:
+                         if send_fbx == 1:
+@@ -1552,6 +2027,8 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+                             for slot_maps in tex_maps.values():
+                                 total_mtex_records += len(slot_maps)
+ 
++                        # Task 9B.5: MATX extraction timing
++                        _bl_timer_matx_start = _time.perf_counter()
+                         # Build material packet payload
+                         try:
+                             # Task 7B: compute real material identity hashes for PT_Material payload
+@@ -1652,6 +2129,8 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+         # Phase 10J.5J: send PT_Material alongside Sync FBX
+         # when material property signature changed for selected objects.
+         if mat_payloads_to_send:
++            # Task 9B.5: start send timing
++            _bl_timer_send_start = _time.perf_counter()
+             print(f"[MAT][SEND] seq={seq} sending {len(mat_payloads_to_send)} "
+                   f"material packet(s) alongside FBX sync")
+             # Phase 10J.5L: log to Blender debug file
+@@ -1665,6 +2144,9 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+                     version=network.LIVE_SYNC_VERSION_V5,
+                 )
+ 
++        # Task 9B.5: end send timing
++        _bl_timer_send_end = _time.perf_counter()
++
+         # Phase 10K.1A: user notice when texture maps are detected
+         if total_mtex_records > 0:
+             notice = (
+@@ -1697,6 +2179,18 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
+                 "No mesh objects could be FBX-synced"
+             )
+ 
++        # Task 9B.5: emit Blender-side sync timing marker
++        try:
++            _bl_timer_total_ms = (_time.perf_counter() - _bl_timer_total_start) * 1000.0
++            _bl_fbx_ms = (_bl_timer_fbx_start > 0) * (_time.perf_counter() - _bl_timer_fbx_start) * 1000.0 if _bl_timer_fbx_start > 0 else 0.0
++            _bl_sidecar_ms = (_bl_timer_sidecar_start > 0) * (_time.perf_counter() - _bl_timer_sidecar_start) * 1000.0 if _bl_timer_sidecar_start > 0 else 0.0
++            _bl_matx_ms = (_bl_timer_matx_start > 0) * (_time.perf_counter() - _bl_timer_matx_start) * 1000.0 if _bl_timer_matx_start > 0 else 0.0
++            _bl_serialize_ms = 0.0
++            _bl_send_ms = (_bl_timer_send_start > 0) * (_bl_timer_send_end - _bl_timer_send_start) * 1000.0
++            print(f"[MATERIAL][SYNC_TIMING_BLENDER] syncId={seq} guid={_guid_for_log} fbxExportMs={_bl_fbx_ms:.1f} sidecarPrepareMs={_bl_sidecar_ms:.1f} matxExtractMs={_bl_matx_ms:.1f} serializeMs={_bl_serialize_ms:.1f} sendMs={_bl_send_ms:.1f} totalMs={_bl_timer_total_ms:.1f} sidecarsPrepared={_sidecars_prepared}")
++        except Exception:
++            pass
++
+         return {'FINISHED'}
+ 
+ 
+@@ -2361,6 +2855,10 @@ def register():
+ 
+ def unregister():
+ 
++    # Task 9B.6B.13/14: clear MTEX dedup and material basic property collection on reload
++    network._mtex_clear_dedup_state()
++    network._mt_basic_clear_state()
++
+     for cls in reversed(classes):
+         bpy.utils.unregister_class(cls)
+ 
+diff --git a/Blender_Addon/network.py b/Blender_Addon/network.py
+index 29c8dc8..7da446c 100755
+--- a/Blender_Addon/network.py
++++ b/Blender_Addon/network.py
+@@ -846,16 +846,6 @@ def get_material_basic_properties(material):
+         props["Metallic"] = 0.0
+         source = "diffuse_color_no_nodes"
+ 
+-    # Phase 10J.5L: log extraction to debug file
+-    _append_blender_debug_log(
+-        f"[MAT][EXTRACT] mat={mat_name} "
+-        f"use_nodes={material.use_nodes if material else 'N/A'} "
+-        f"source={source} "
+-        f"color=({props.get('BaseColorR', 0):.3f},{props.get('BaseColorG', 0):.3f},{props.get('BaseColorB', 0):.3f},{props.get('Alpha', 1):.3f}) "
+-        f"roughness={props.get('Roughness', 0.5):.3f} "
+-        f"metallic={props.get('Metallic', 0):.3f}"
+-    )
+-
+     return props
+ 
+ 
+@@ -884,6 +874,102 @@ MTEX_FLAG_COLORSPACE_NON_COLOR = 0x08
+ MTEX_MAX_PATH_LEN = 2048
+ MTEX_MAX_IMAGE_NAME_LEN = 255
+ 
++# =========================================================
++# Material texture extraction logging controls (Task 9B.6B.13)
++# =========================================================
++
++# Global verbose flag: when false, only summaries/errors are logged.
++# Set via addon preferences or diagnostic operator.
++material_verbose_logging = False
++
++# Deduplication set for MTEX extraction records.
++# Key: (sync_id, guid, slot_index, channel, canonical_image_key)
++# Cleared on Stop Sync, reconnect, addon reload, or new explicit sync.
++_mtex_extract_dedup_set = set()
++
++# Per-sync collector: list of (slot_index, channel, image_name, filepath, flags, is_packed)
++# Populated when _mtex_collecting is True, cleared when _mtex_collecting is False.
++_mtex_collect_records = []
++_mtex_collecting = False
++
++
++def _mtex_clear_dedup_state():
++    """Clear the MTEX extraction dedup set. Call on Stop Sync, reconnect, reload."""
++    global _mtex_extract_dedup_set, _mtex_collecting, _mtex_collect_records
++    _mtex_extract_dedup_set = set()
++    _mtex_collecting = False
++    _mtex_collect_records = []
++
++
++def _mtex_start_collecting(sync_id, guid):
++    """Enable MTEX record collection for one sync. Call before extract_texture_maps_for_slot()."""
++    global _mtex_collecting, _mtex_collect_records
++    _mtex_collecting = True
++    _mtex_collect_sync_id = sync_id
++    _mtex_collect_guid = guid
++    _mtex_collect_records = []
++
++
++def _mtex_collect_channel(slot_index, channel, image_name, filepath, flags, is_packed):
++    """Append a channel record to the current collection."""
++    global _mtex_collecting, _mtex_collect_records
++    if _mtex_collecting:
++        _mtex_collect_records.append((slot_index, channel, image_name, filepath, flags, is_packed))
++
++
++# =========================================================
++# Phase 10J.5L: Material basic property extraction collection
++# =========================================================
++# Replaces [MAT][EXTRACT] per-call log spam (Task 9B.6B.14).
++# Transaction-scoped summaries only on actual material sends or
++# explicit FBX syncs.
++
++_mat_basic_collecting = False
++_mat_basic_collect_sync_id = 0
++_mat_basic_collect_guid = ""
++_mat_basic_collect_records = []  # list of (slot_index, props_dict)
++
++
++def _mt_basic_clear_state():
++    """Clear material basic property collection state."""
++    global _mat_basic_collecting, _mat_basic_collect_records
++    _mat_basic_collecting = False
++    _mat_basic_collect_records = []
++
++
++def _mt_basic_start_collecting(sync_id, guid):
++    """Enable material basic property collection for one sync."""
++    global _mat_basic_collecting, _mat_basic_collect_sync_id, _mat_basic_collect_guid, _mat_basic_collect_records
++    _mat_basic_collecting = True
++    _mat_basic_collect_sync_id = sync_id
++    _mat_basic_collect_guid = guid
++    _mat_basic_collect_records = []
++
++
++def _mt_basic_collect_slot(slot_index, props):
++    """Append a material slot's basic properties to the current collection."""
++    global _mat_basic_collecting, _mat_basic_collect_records
++    if _mat_basic_collecting and props is not None:
++        _mat_basic_collect_records.append((slot_index, props))
++
++
++# Exposed for sync.py / __init__.py access
++mat_basic_collect_records = _mat_basic_collect_records
++
++
++def compute_material_basic_changed_fields(prev_props, cur_props):
++    """Return a list of field names that changed between prev and cur.
++
++    Only keys present in both dicts are compared.
++    """
++    if prev_props is None or cur_props is None:
++        return []
++    changed = []
++    for key in cur_props:
++        if key in prev_props and prev_props[key] != cur_props[key]:
++            changed.append(key)
++    return changed
++
+ 
+ def _get_image_colorspace_flag(image):
+     """Return MTEX color space flag for a Blender image."""
+@@ -903,7 +989,7 @@ def _get_image_colorspace_flag(image):
+     return 0
+ 
+ 
+-def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
++def extract_texture_maps_for_slot(material, material_name="", slot_index=-1, _collect=False, _suppress_summary=False):
+     """Extract texture map references from a Blender material node tree.
+ 
+     Phase 10K.1: diagnostic-only. Supports direct links from Image Texture
+@@ -1024,7 +1110,20 @@ def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
+             continue
+ 
+         filepath = getattr(image, "filepath", "") or ""
++        # Derive canonical image name from filepath basename (without extension)
++        # to match UE sidecar registration key. This fixes texture replacement
++        # when user re-sources an image data-block to a different file:
++        # image.name stays the same, but filepath basename changes.
+         image_name = getattr(image, "name", "") or ""
++        if filepath:
++            try:
++                base = os.path.basename(filepath)
++                if base:
++                    name_no_ext = os.path.splitext(base)[0]
++                    if name_no_ext:
++                        image_name = name_no_ext
++            except Exception:
++                pass
+         is_packed = getattr(image, "packed_file", None) is not None
+ 
+         flags = 0
+@@ -1052,29 +1151,24 @@ def extract_texture_maps_for_slot(material, material_name="", slot_index=-1):
+ 
+         results.append((channel, filepath, image_name, flags))
+ 
+-        # Diagnostic: channel source tracking.
++        # Diagnostic: channel source tracking (suppress on every tick).
+         is_coat_fallback = sock_name in ("Coat Roughness", "Coat Normal")
+-        print(
+-            f"[MATERIAL][CHANNEL_SOURCE] slot={slot_index} material={material_name} "
+-            f"outputChannel={ch_names.get(channel, str(channel))} "
+-            f"principledInput={sock_name} fallback={int(is_coat_fallback)}"
+-        )
+-
+         if is_coat_fallback:
+             print(
+                 f"[MATERIAL][COAT_FALLBACK] slot={slot_index} material={material_name} "
+                 f"coatInput={sock_name} mappedChannel={ch_names.get(channel, str(channel))}"
+             )
+ 
+-        _append_blender_debug_log(
+-            f"[MTEX][EXTRACT] slot={slot_index} material={material_name} channel={channel} "
+-            f"image={image_name} path={filepath[:80] if filepath else '(none)'} "
+-            f"packed={int(is_packed)} cs_flags={flags}"
+-        )
++        # Task 9B.6B.13: collect channel for transaction-scoped summary (only when _collect=True).
++        # The hot path (timer tick) must never emit per-channel debug lines.
++        if _collect:
++            _mtex_collect_channel(slot_index, channel, image_name, filepath, flags, is_packed)
+ 
+-    # Diagnostic: per-slot/channel extraction summary
+-    detected = [ch_names.get(r[0], f"chan{r[0]}") for r in results]
+-    print(f"[MATERIAL][CHANNEL_EXTRACT_SUMMARY] slot={slot_index} material={material_name} channels={detected}")
++    # Task 9B.6B.13: per-slot/channel extraction summary suppressed on timer ticks.
++    # When _suppress_summary=False (explicit FBX sync), emit for diagnostic visibility.
++    if not _suppress_summary:
++        detected = [ch_names.get(r[0], f"chan{r[0]}") for r in results]
++        print(f"[MATERIAL][CHANNEL_EXTRACT_SUMMARY] slot={slot_index} material={material_name} channels={detected}")
+ 
+     return results
+ 
+@@ -3313,10 +3407,22 @@ class LiveSyncClient:
+             # Set flag bit 0 to indicate sub-header is present
+             flags |= COLLECTION_PACKET_FLAG_HAS_SUBHEADER
+ 
+-        object_count = len(objects_data)
++        # Harden: validate objects_data type and element types.
++        if isinstance(objects_data, (bytes, bytearray, memoryview)):
++            raise TypeError(
++                f"_build_packet: objects_data must be an iterable of serialized "
++                f"records, not a raw bytes-like payload (got {type(objects_data).__name__})"
++            )
+ 
+-        for obj in objects_data:
++        object_count = len(objects_data)
+ 
++        for idx, obj in enumerate(objects_data):
++            if not isinstance(obj, (bytes, bytearray, memoryview)):
++                raise TypeError(
++                    f"_build_packet packet_type={packet_type} index={idx} "
++                    f"expected bytes/bytearray/memoryview but got "
++                    f"{type(obj).__name__} value={repr(obj)[:120]}"
++                )
+             payload.extend(obj)
+ 
+         if version >= LIVE_SYNC_VERSION_V3:
+diff --git a/Blender_Addon/sync.py b/Blender_Addon/sync.py
+index f8b5940..64596bf 100755
+--- a/Blender_Addon/sync.py
++++ b/Blender_Addon/sync.py
+@@ -78,6 +78,15 @@ try:
+         PT_Mesh,
+         extract_evaluated_mesh_data,
+         compute_geometry_version_hash,
++        _mtex_start_collecting,
++        _mtex_collect_records,
++        _mtex_collecting,
++        _mtex_clear_dedup_state,
++        material_verbose_logging,
++        _mt_basic_clear_state,
++        _mt_basic_start_collecting,
++        _mt_basic_collect_slot,
++        mat_basic_collect_records,
+         serialize_mesh_chunk,
+         MESH_CHUNK_FLAG_FIRST_CHUNK,
+         MESH_CHUNK_FLAG_LAST_CHUNK,
+@@ -305,6 +314,13 @@ _last_decision_init_printed = set()
+ # None means "not yet evaluated".
+ _last_geometry_version = {}
+ 
++# Phase 9B.6: Per-GUID last sidecar texture digest for skip-on-unchanged optimization
++# Maps guid -> int hash of current texture state (filepaths + sizes + mtimes)
++_last_sidecar_digest = {}
++
++# Phase 9B.6: Per-GUID last sidecar info list (reused on texture-unchanged skip)
++_last_sidecar_info = {}
++
+ # Phase 6: Per-GUID last object name for rename detection
+ _last_object_names = {}
+ 
+@@ -1269,6 +1285,8 @@ def check_updates():
+         _last_material_property_sig.clear()
+         _last_material_sent_reason.clear()
+         _last_decision_init_printed.clear()
++        _last_sidecar_digest.clear()
++        _last_sidecar_info.clear()
+ 
+         if _verbose_logging:
+             print(
+@@ -1786,6 +1804,12 @@ def check_updates():
+         except Exception:
+             current_prop_sig = None
+ 
++        # Task 9B.6B.14: collect material basic properties for transaction summary
++        _mt_basic_start_collecting(_network_mod._sequence_id, guid)
++
++        # Task 9B.6B.13: start collecting MTEX records for timer tick summary
++        _mtex_start_collecting(_network_mod._sequence_id, guid)
++
+         # Phase 7H: compute per-slot texture hash (exception-isolated)
+         current_tex_maps = None
+         current_tex_sigs = {}
+@@ -1797,7 +1821,8 @@ def check_updates():
+                 current_tex_maps = {}
+                 for slot_index, slot in enumerate(obj.material_slots):
+                     if slot and slot.material:
+-                        maps = extract_texture_maps_for_slot(slot.material, slot.material.name, slot_index)
++                        # Task 9B.6B.13: suppress per-call summary on timer ticks
++                        maps = extract_texture_maps_for_slot(slot.material, slot.material.name, slot_index, _suppress_summary=True, _collect=True)
+                         if maps:
+                             current_tex_maps[slot_index] = maps
+                             tex_hash = compute_material_texture_hash(slot_index, maps)
+@@ -1918,6 +1943,8 @@ def check_updates():
+                             p = get_material_basic_properties(slot.material)
+                             if p is not None:
+                                 mat_props[slot_index] = p
++                                # Task 9B.6B.14: collect for transaction summary
++                                _mt_basic_collect_slot(slot_index, p)
+                 except Exception:
+                     mat_props = None
+ 
+@@ -1936,7 +1963,8 @@ def check_updates():
+                     tex_maps = {}
+                     for slot_index, slot in enumerate(obj.material_slots):
+                         if slot and slot.material:
+-                            maps = extract_texture_maps_for_slot(slot.material, slot.material.name, slot_index)
++                            # Task 9B.6B.13: suppress per-call summary on timer ticks
++                            maps = extract_texture_maps_for_slot(slot.material, slot.material.name, slot_index, _suppress_summary=True, _collect=True)
+                             if maps:
+                                 tex_maps[slot_index] = maps
+                 except Exception:
+@@ -2307,6 +2335,50 @@ def check_updates():
+         )
+         _burst_packet_count += 1
+ 
++        # Task 9B.6B.13: emit MTEX timer tick summary (auto-sync path).
++        _mtex_records = _mtex_collect_records
++        if _mtex_records and _mtex_collecting:
++            unique_keys = set()
++            for slot_idx, ch, img_name, fpath, flags, is_packed in _mtex_records:
++                unique_keys.add((img_name, ch))
++            print(
++                f"[MTEX][EXTRACT_SUMMARY] syncId={_network_mod._sequence_id} "
++                f"object=_auto_sync slots={len(_mtex_records)} records={len(_mtex_records)} "
++                f"uniqueRecords={len(unique_keys)}"
++            )
++        _mtex_clear_dedup_state()
++
++        # Task 9B.6B.14: emit material basic property summary (auto-sync path)
++        _mat_records = mat_basic_collect_records
++        if _mat_records and _mat_basic_collecting:
++            total_slots = len(_mat_records)
++            # Count changed fields by comparing with stored property signatures
++            total_changed = 0
++            all_changed = []
++            for si, props in _mat_records:
++                # _last_material_property_sig is keyed by slot_index
++                prev = sync._last_material_property_sig.get(si)
++                if prev:
++                    for field in props:
++                        if field in prev and prev[field] != props[field]:
++                            total_changed += 1
++                            all_changed.append(f"slot{si}+{field}")
++            _mat_collect_guid = _mat_basic_collect_guid[:8] if _mat_basic_collect_guid else "NONE"
++            _mt_basic_changed_fields_str = ",".join(all_changed[:5]) if all_changed else ""
++            _append_blender_debug_log(
++                f"[MATERIAL][BASIC_EXTRACT_SUMMARY] syncId={_network_mod._sequence_id} "
++                f"guid={_mat_collect_guid} object=_auto_sync "
++                f"materialSlots={total_slots} materialsExamined={total_slots} "
++                f"materialsChanged={total_changed} fields={_mt_basic_changed_fields_str}"
++            )
++            # Emit changed-record lines only when changes exist (one per changed field, limited)
++            for _ch in all_changed[:5]:
++                _append_blender_debug_log(
++                    f"[MATERIAL][BASIC_CHANGED] syncId={_network_mod._sequence_id} "
++                    f"guid={_mat_collect_guid} {_ch}"
++                )
++        _mt_basic_clear_state()
++
+     # =====================================================
+     # SEND MESH CHUNK PACKETS (Phase 7C Stage 1D — PT_Mesh)
+     # =====================================================
+@@ -2844,6 +2916,12 @@ def stop_sync():
+ 
+     disconnect()
+ 
++    # Task 9B.6B.13/14: clear MTEX dedup and material basic property collection on stop
++    import importlib
++    _net_mod = importlib.import_module(".network", "UELiveSync")
++    _net_mod._mtex_clear_dedup_state()
++    _net_mod._mt_basic_clear_state()
++
+     print("UE Live Sync Stopped")
+ 
+ 
+@@ -2889,6 +2967,8 @@ def start_sync():
+     _last_material_property_sig.clear()  # Phase 10J.5I
+     _last_material_sent_reason.clear()  # Phase 7H
+     _last_decision_init_printed.clear()  # Phase 7H
++    _last_sidecar_digest.clear()  # Phase 9B.6
++    _last_sidecar_info.clear()  # Phase 9B.6
+ 
+     print(f"[MATERIAL][SESSION_RESTART_FULL_SNAPSHOT] reason=start_sync material_identity_cleared=1 material_sig_cleared=1")
+ 
+@@ -2928,6 +3008,12 @@ def start_sync():
+     # Disconnect existing connection
+     disconnect()
+ 
++    # Task 9B.6B.13/14: clear MTEX dedup and material basic property collection on restart
++    import importlib
++    _net_mod = importlib.import_module(".network", "UELiveSync")
++    _net_mod._mtex_clear_dedup_state()
++    _net_mod._mt_basic_clear_state()
++
+     # Read host/port from preferences
+     _sync_runtime_config()
+     host = "127.0.0.1"
+diff --git a/UE_Plugin/UELiveSync/Source/UELiveSync/Private/UELiveSyncSubsystem.cpp b/UE_Plugin/UELiveSync/Source/UELiveSync/Private/UELiveSyncSubsystem.cpp
+index 13dea52..d1f7e95 100644
+--- a/UE_Plugin/UELiveSync/Source/UELiveSync/Private/UELiveSyncSubsystem.cpp
++++ b/UE_Plugin/UELiveSync/Source/UELiveSync/Private/UELiveSyncSubsystem.cpp
+@@ -69,6 +69,9 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
+ 
+ #include "AssetRegistry/IAssetRegistry.h"
+ 
++#include "Subsystems/ImportSubsystem.h"
++#include "Factories/TextureFactory.h"
++
+ #endif
+ 
+ #include "FBXImport/LiveSyncFBXImporter.h"
+@@ -97,6 +100,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
+ #include "KismetProceduralMeshLibrary.h"
+ 
+ #include "AssetToolsModule.h"
++#include "AutomatedAssetImportData.h"
+ 
+ #include "Engine/StaticMesh.h"
+ #include "Engine/StaticMeshActor.h"
+@@ -1108,6 +1112,29 @@ void UUELiveSyncSubsystem::Initialize(
+         }
+     }
+ 
++#if WITH_EDITOR
++    // =====================================================
++    // IMPORT SUBSYSTEM HOOK — Per-file texture import
++    // diagnostics (Phase 10K.5)
++    // =====================================================
++    if (GEditor)
++    {
++        UImportSubsystem* ImportSubsystem = GEditor->GetEditorSubsystem<UImportSubsystem>();
++        if (ImportSubsystem)
++        {
++            OnAssetPostImportHandle = ImportSubsystem->OnAssetPostImport.AddUObject(
++                this, &UUELiveSyncSubsystem::OnAssetPostImport);
++            UE_LOG(LogLiveSync, Log,
++                TEXT("[PROBE][DELEGATE] ImportSubsystem.OnAssetPostImport hooked"));
++        }
++        else
++        {
++            UE_LOG(LogLiveSync, Warning,
++                TEXT("[PROBE][DELEGATE] ImportSubsystem not available"));
++        }
++    }
++#endif
++
+     // =====================================================
+     // REGISTER CONSOLE COMMANDS
+     // =====================================================
+@@ -1263,6 +1290,27 @@ void UUELiveSyncSubsystem::Initialize(
+                         ConsoleExportWorldSnapshot),
+             ECVF_Default);
+ 
++    // =====================================================
++    // DISPOSABLE IMPORT PROBE (Phase 10K.5)
++    // =====================================================
++
++    IConsoleManager::Get().
++        RegisterConsoleCommand(
++            TEXT("UE.LiveSync.ImportProbe"),
++            TEXT("Run a disposable texture import probe for cold-import diagnostics.\n"
++                 "Usage: UE.LiveSync.ImportProbe <scenario> [runId]\n"
++                 "Scenarios: A B C D E F G H I\n"
++                 "  A=Marble_BaseColor B=Marble_Roughness C=Marble_Normal\n"
++                 "  D=Wood_BaseColor E=Wood_Roughness F=Wood_Normal\n"
++                 "  G=BaseColorPlusRoughness H=TwoNormals I=AllSix\n"
++                 "Imports into /Game/UELiveSync/Diagnostics/ImportProbe/<runId>/<scenario>"),
++            FConsoleCommandWithArgsDelegate::
++                CreateUObject(
++                    this,
++                    &UUELiveSyncSubsystem::
++                        ConsoleRunImportProbe),
++            ECVF_Default);
++
+     // =====================================================
+     // PHASE 6H — SEMANTIC CONSISTENCY HARDENING
+     // =====================================================
+@@ -1450,6 +1498,24 @@ void UUELiveSyncSubsystem::Deinitialize()
+             nullptr;
+     }
+ 
++#if WITH_EDITOR
++    // Remove ImportSubsystem hook
++    if (OnAssetPostImportHandle.IsValid())
++    {
++        if (GEditor)
++        {
++            UImportSubsystem* ImportSubsystem = GEditor->GetEditorSubsystem<UImportSubsystem>();
++            if (ImportSubsystem)
++            {
++                ImportSubsystem->OnAssetPostImport.Remove(OnAssetPostImportHandle);
++                UE_LOG(LogLiveSync, Log,
++                    TEXT("[PROBE][DELEGATE] ImportSubsystem.OnAssetPostImport unhooked"));
++            }
++        }
++        OnAssetPostImportHandle.Reset();
++    }
++#endif
++
+     Super::Deinitialize();
+ }
+ 
+@@ -4127,8 +4193,49 @@ ProcessBinaryPacket(
+     {
+         TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessMaterialPackets);
+ 
++        // Task 9B.5B: material sync timing accumulator
++        double MatPktBeginCycles = FPlatformTime::Cycles64();
++        // Task 9B.5: use FBX-provided syncId if available (same GUID correlation)
++        int32 ThisPktSyncId = 0;
++        bool bCorrelatedFromFbx = false;
++        const int32 MaterialPacketSize = static_cast<int32>(PacketEnd - PacketData);
++        // Scan for pending FBX-guid correlation
++        {
++            const uint8* ScanPtr = PacketData;
++            const uint8* ScanEnd = PacketData + MaterialPacketSize;
++            uint32 ObjectsScanned = 0;
++            while (ObjectsScanned < ObjectCount && (ScanPtr + 17) <= ScanEnd)
++            {
++                FGuid ScanGuid;
++                FMemory::Memcpy(&ScanGuid, ScanPtr, sizeof(FGuid));
++                if (FBXSyncIdMap.Contains(ScanGuid))
++                {
++                    ThisPktSyncId = FBXSyncIdMap.FindRef(ScanGuid);
++                    bCorrelatedFromFbx = true;
++                    // Remove from map to prevent stale correlation
++                    FBXSyncIdMap.Remove(ScanGuid);
++                    break;
++                }
++                ScanPtr += sizeof(FGuid);
++                if (ScanPtr < ScanEnd) ScanPtr += sizeof(uint8);
++                uint8 Sc = 0;
++                if (ScanPtr < ScanEnd) { FMemory::Memcpy(&Sc, ScanPtr, sizeof(uint8)); ScanPtr += sizeof(uint8); }
++                ScanPtr += Sc * (sizeof(int8) + sizeof(uint64) + sizeof(uint64));
++                ObjectsScanned++;
++            }
++        }
++        if (!bCorrelatedFromFbx)
++        {
++            ThisPktSyncId = ++Stats.MatPktSyncId;
++        }
++        // Task 9B.5: store current syncId for per-save logs
++        Stats.MatPktCurrentSyncId = ThisPktSyncId;
++
+         for (uint32 i = 0; i < ObjectCount; i++)
+         {
++            // Task 9B.5B: per-object phase timing
++            double ObjSidecarBegin = FPlatformTime::Seconds();
++
+             // Minimum: GUID(16) + SlotCount(1)
+             if (Ptr + LIVE_SYNC_V5_MATERIAL_OBJECT_BASE_SIZE > PacketEnd)
+             {
+@@ -4143,6 +4250,12 @@ ProcessBinaryPacket(
+             FMemory::Memcpy(&Guid, Ptr, sizeof(FGuid));
+             Ptr += sizeof(FGuid);
+ 
++            // Task 9B.5: capture first GUID for correlation in timing log
++            if (i == 0)
++            {
++                Stats.MatPktFirstGuid = Guid;
++            }
++
+             uint8 SlotCount = *Ptr;
+             Ptr += sizeof(uint8);
+ 
+@@ -4216,6 +4329,8 @@ ProcessBinaryPacket(
+             HandleMaterialDef(Guid, Slots, ObjectCount);
+ 
+             // Phase 10J.5H+5J: parse MATX extension block (optional properties)
++            // Task 9B.5B: snapshot parse timing
++            double SnapshotParseBegin = FPlatformTime::Seconds();
+             TArray<FMaterialSlotBasicProperties> BasicProps;
+             if (Ptr + (int32)sizeof(uint32) <= PacketEnd)
+             {
+@@ -4452,6 +4567,12 @@ ProcessBinaryPacket(
+                 }
+             }
+ 
++            // Task 9B.5B: snapshot/MATX/MTEX parse timing
++            {
++                double SnapshotParseElapsed = FPlatformTime::Seconds() - SnapshotParseBegin;
++                Stats.MatPktSnapshotParseMs += SnapshotParseElapsed * 1000.0;
++            }
++
+             // Store MTEX in cache (Phase 10K.1: diagnostic only)
+             if (TexMaps.Num() > 0)
+             {
+@@ -4467,22 +4588,137 @@ ProcessBinaryPacket(
+ 
+ #if WITH_EDITOR
+             // Phase 10K.2: import textures from discovered MTEX records
+-            if (TexMaps.Num() > 0)
++            // Task 10K.3: use active map (not persistent cache) for per-sync counters.
++            // The active map contains exactly the current manifest entries.
+             {
+-                ImportTexturesFromMtexRecs(Guid, TexMaps);
++                double SidecarPhaseBegin = FPlatformTime::Seconds();
++                if (TexMaps.Num() > 0)
++                {
++                    double ResultMapBegin = FPlatformTime::Seconds();
++                    ImportTexturesFromMtexRecs(Guid, TexMaps);
++                    double ResultMapElapsed = FPlatformTime::Seconds() - ResultMapBegin;
++                    Stats.MatPktResultMapMs += ResultMapElapsed * 1000.0;
++                }
++                double SidecarPhaseElapsed = FPlatformTime::Seconds() - SidecarPhaseBegin;
++                Stats.MatPktSidecarImportMs += SidecarPhaseElapsed * 1000.0;
++                // Phase 10K.5: Report active and persistent map sizes directly.
++                // The FBX sidecar path (LiveSyncFBXImporter.cpp) sets per-file counters.
++                // MATX map-size delta is not a valid import/reuse counter.
++                {
++                    int32 SidecarAfterCount = 0;
++                    if (ActiveSidecarMapByGuid.Contains(Guid))
++                    {
++                        SidecarAfterCount = ActiveSidecarMapByGuid.FindRef(Guid).Num();
++                    }
++                    Stats.ActiveResultMapEntries = SidecarAfterCount;
++                    if (ImportedSidecarTexturesByGuid.Contains(Guid))
++                    {
++                        Stats.PersistentCacheEntries = ImportedSidecarTexturesByGuid[Guid].Num();
++                    }
++                    UE_LOG(LogLiveSync, Log,
++                        TEXT("[MATX][TEXTURE_APPLY_TIMING] syncId=%d guid=%s "
++                             "lookupMs=%.1f texturesResolved=%d "
++                             "activeResultMapEntries=%d persistentCacheEntries=%d"),
++                        Stats.MatPktCurrentSyncId,
++                        *Guid.ToString(EGuidFormats::Digits),
++                        SidecarPhaseElapsed * 1000.0,
++                        TexMaps.Num(),
++                        Stats.ActiveResultMapEntries.load(std::memory_order_relaxed),
++                        Stats.PersistentCacheEntries.load(std::memory_order_relaxed));
++                }
+             }
+ #endif
+ 
+             // Apply material — persistent if Blender material identity present,
+             // or MID fallback if slot is empty.
+-            for (const FMaterialSlotBasicProperties& BP : BasicProps)
++            // Task 9B.5B: MIC timing
+             {
+-                if (BP.bHasProperties)
++                double MicApplyBegin = FPlatformTime::Seconds();
++                for (const FMaterialSlotBasicProperties& BP : BasicProps)
+                 {
+-                    ParseAndApplyGeneratedMaterial(Guid, BasicProps, Slots);
+-                    break;
++                    if (BP.bHasProperties)
++                    {
++                        ParseAndApplyGeneratedMaterial(Guid, BasicProps, Slots);
++                        break;
++                    }
+                 }
++                double MicApplyElapsed = FPlatformTime::Seconds() - MicApplyBegin;
++                Stats.MatPktMicApplyMs += MicApplyElapsed * 1000.0;
++            }
++        }
++
++        // Task 9B.5B: material sync timing aggregate (per packet)
++        {
++            double TotalElapsedMs = FPlatformTime::ToMilliseconds64(
++                FPlatformTime::Cycles64() - MatPktBeginCycles);
++            // Task 9B.5B: package save timing from stats
++            double TotalPackageSaveMs = Stats.MatPackageSaveMsTotal;
++            int32 TotalPackagesSaved = Stats.MatPackagesSaved.load(std::memory_order_relaxed);
++            // Reset per-packet
++            Stats.MatPackagesSaved.store(0, std::memory_order_relaxed);
++            // Task 9B.5B: Split into three LOGs to avoid UE format string sanitizer
++            FString GuidStr = (Stats.MatPktFirstGuid.IsValid())
++                ? Stats.MatPktFirstGuid.ToString(EGuidFormats::Digits)
++                : TEXT("none");
++            {
++                double TotalFbxMs = Stats.MatPktFbxImportMs;
++                double TotalSidecarMs = Stats.MatPktSidecarImportMs;
++                double TotalSnapshotMs = Stats.MatPktSnapshotParseMs;
++                double TotalMicLookupMs = Stats.MatPktMicLookupMs;
++                double TotalMicApplyMs = Stats.MatPktMicApplyMs;
++                double TotalResultMapMs = Stats.MatPktResultMapMs;
++                double TotalMeshAssignMs = Stats.MatPktMeshAssignMs;
++                FString TimingStr = FString::Printf(
++                    TEXT("[MATERIAL][SYNC_TIMING] syncId=%d guid=%s totalMs=%.1f "
++                         "fbxImportMs=%.1f sidecarImportMs=%.1f "
++                         "snapshotParseMs=%.1f micLookupMs=%.1f micApplyMs=%.1f "
++                         "resultMapMs=%.1f meshAssignMs=%.1f"),
++                    ThisPktSyncId, *GuidStr, TotalElapsedMs,
++                    TotalFbxMs, TotalSidecarMs,
++                    TotalSnapshotMs, TotalMicLookupMs, TotalMicApplyMs,
++                    TotalResultMapMs, TotalMeshAssignMs);
++                UE_LOG(LogLiveSync, Log, TEXT("%s"), *TimingStr);
+             }
++            {
++                double TotalMicParamsChanged = (double)Stats.MatMicParametersChanged.load(std::memory_order_relaxed);
++                FString SaveStr = FString::Printf(
++                    TEXT("[MATERIAL][PACKAGE_SAVE_TIMING] syncId=%d guid=%s packageSaveMs=%.1f packagesSaved=%d "
++                         "micParametersChanged=%.0f fbxImportSkipped=%.0f "
++                         "activeResultMapEntries=%d persistentCacheEntries=%d"),
++                    ThisPktSyncId, *GuidStr, TotalPackageSaveMs,
++                    TotalPackagesSaved, TotalMicParamsChanged,
++                    Stats.MatPktFbxImportSkipped,
++                    Stats.ActiveResultMapEntries.load(std::memory_order_relaxed),
++                    Stats.PersistentCacheEntries.load(std::memory_order_relaxed));
++                UE_LOG(LogLiveSync, Log, TEXT("%s"), *SaveStr);
++            }
++            // Reset per-packet accumulators
++            Stats.MatPktFbxImportMs = 0.0;
++            Stats.MatPktPackageSaveMs = TotalPackageSaveMs;
++            Stats.MatPktSidecarImportMs = 0.0;
++            Stats.MatPktSnapshotParseMs = 0.0;
++            Stats.MatPktMicLookupMs = 0.0;
++            Stats.MatPktMicApplyMs = 0.0;
++            Stats.MatPktSidecarsImported = 0.0;
++            Stats.MatPktSidecarsReused = 0.0;
++            Stats.MatPktMicParametersChanged = 0.0;
++            Stats.MatPktPackagesSaved = 0.0;
++            Stats.MatPktFbxImportSkipped = 0.0;
++            Stats.MatPktResultMapMs = 0.0;
++            Stats.MatPktMeshAssignMs = 0.0;
++            Stats.MatPackageSaveMsTotal = 0.0;
++            Stats.MatMicParametersChanged.store(0, std::memory_order_relaxed);
++            // Note: ActiveResultMapEntries and PersistentCacheEntries are atomic
++            // counters that persist across packets, not reset here.
++        }
++
++        // Task 10K.3: consume active sidecar map — clear after MATX processing.
++        // The active map was populated by the FBX sidecar scan (via OnActiveSidecarMapReady)
++        // and consumed by ImportTexturesFromMtexRecs during this MATX packet.
++        // After consumption, clear to prevent stale maps from persisting.
++        if (Stats.MatPktFirstGuid.IsValid())
++        {
++            ActiveSidecarMapByGuid.Remove(Stats.MatPktFirstGuid);
+         }
+ 
+         Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
+@@ -4751,7 +4987,6 @@ ProcessBinaryPacket(
+ 
+         Stats.FBXImportRequestsReceived.fetch_add(
+             1, std::memory_order_relaxed);
+-
+         int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
+         // Accept both old (680) and new (688) payload sizes
+         constexpr int32 kFBXPayloadSizeMin = 680;
+@@ -4768,14 +5003,25 @@ ProcessBinaryPacket(
+         }
+ 
+         {
++            // Task 9B.5: generate syncId for FBX import request (shared with MATX)
++            int32 FbxSyncId = ++Stats.MatPktSyncId;
+             // Phase 10J.5K: Extract GUID to mark FBX pending before import.
+             FGuid FbxRequestGuid;
+             FMemory::Memcpy(&FbxRequestGuid, Ptr, sizeof(FGuid));
+             FBXPendingGuids.Add(FbxRequestGuid);
++            // Task 9B.5: store syncId for FBX → MATX correlation
++            FBXSyncIdMap.Add(FbxRequestGuid, FbxSyncId);
++            UE_LOG(LogLiveSync, Log,
++                TEXT("[FBX][SYNC_TIMING] syncId=%d guid=%s fbxImportMs=0.0"),
++                FbxSyncId,
++                *FbxRequestGuid.ToString(EGuidFormats::Digits));
+             UE_LOG(LogLiveSync, Log,
+                 TEXT("[FBX][AUTH] mark_pending guid=%s reason=fbx_request_received"),
+                 *FbxRequestGuid.ToString(EGuidFormats::Digits));
+ 
++            // Task 9B.5B: pre-count for FBX changed detection
++            int32 FbxSkippedBefore = Stats.FBXImportSkipped.load(std::memory_order_relaxed);
++
+             FFBXImportContext Ctx;
+             Ctx.World = GetWorld();
+             Ctx.Stats = &Stats;
+@@ -4879,9 +5125,205 @@ ProcessBinaryPacket(
+                     SidecarMap.Add(BaseName, TexPtr);
+                 }
+             };
++            // Task 10K.3: bind active sidecar map callback — populates the
++            // per-sync active map (separate from persistent ImportedSidecarTexturesByGuid).
++            Ctx.OnActiveSidecarMapReady = [this](const FGuid& G,
++                const TMap<FString, TSoftObjectPtr<UTexture2D>>& ActiveMap) -> void
++            {
++                // Clear previous active map for this GUID.
++                ActiveSidecarMapByGuid.Remove(G);
++                // Copy current sync's active entries.
++                ActiveSidecarMapByGuid.Add(G, ActiveMap);
++            };
++            // Task 9B.6B.8: bind OnSkipFbxImport — when FBX import is skipped
++            // (geomHash dedup), scan manifest + disk to update the sidecar map.
++            // This ensures ImportedSidecarTexturesByGuid stays current for the
++            // incoming MATX snapshot even when no new FBX import occurs.
++            Ctx.OnSkipFbxImport = [this](const FGuid& G, const FString& FbxDir, const FString& FbxPath) -> void
++            {
++                // Read manifest.json — derive MeshName from the FBX filename, not the GUID directory.
++                FString MeshName = FPaths::GetCleanFilename(FbxPath);
++                const FString FbxExt = TEXT(".fbx");
++                if (MeshName.EndsWith(FbxExt))
++                {
++                    MeshName = MeshName.Left(MeshName.Len() - FbxExt.Len());
++                }
++                const FString ManifestPath = FbxDir / (MeshName + TEXT(".manifest.json"));
++
++                if (!IFileManager::Get().FileExists(*ManifestPath))
++                {
++                    UE_LOG(LogLiveSync, Log, TEXT("[FBX][SKIP_SIDECAR_NO_MANIFEST] path=%s"), *ManifestPath);
++                    return;
++                }
++
++                FString ManifestContent;
++                if (!FFileHelper::LoadFileToString(ManifestContent, *ManifestPath))
++                {
++                    UE_LOG(LogLiveSync, Log, TEXT("[FBX][SKIP_SIDECAR_READ_FAIL] path=%s"), *ManifestPath);
++                    return;
++                }
++
++                TSharedPtr<FJsonObject> ManifestJson;
++                TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ManifestContent);
++                if (!FJsonSerializer::Deserialize(Reader, ManifestJson) || !ManifestJson.IsValid())
++                {
++                    UE_LOG(LogLiveSync, Log, TEXT("[FBX][SKIP_SIDECAR_PARSE_FAIL] path=%s"), *ManifestPath);
++                    return;
++                }
++
++                if (!ManifestJson->HasTypedField<EJson::Array>(TEXT("sidecar_textures")))
++                {
++                    UE_LOG(LogLiveSync, Log, TEXT("[FBX][SKIP_SIDECAR_NO_TEXTURES_FIELD] path=%s"), *ManifestPath);
++                    return;
++                }
++
++                const TArray<TSharedPtr<FJsonValue>>& SidecarArray = ManifestJson->GetArrayField(TEXT("sidecar_textures"));
++                int32 Found = 0;
++                int32 Skipped = 0;
++
++                for (const TSharedPtr<FJsonValue>& Val : SidecarArray)
++                {
++                    if (Val->Type != EJson::Object)
++                        continue;
++
++                    const TSharedPtr<FJsonObject>* SidecarObj = nullptr;
++                    if (!Val->TryGetObject(SidecarObj) || !SidecarObj)
++                        continue;
++
++                    FString SidecarFile = (*SidecarObj)->GetStringField(TEXT("filename"));
++                    FString SidecarPath = (*SidecarObj)->GetStringField(TEXT("path"));
++
++                    // Wait for file to be ready
++                    bool bFound = false;
++                    int32 WaitAttempts = 0;
++                    const int32 MaxWaitAttempts = 10;
++                    const float WaitMs = 0.1f;
++                    while (WaitAttempts < MaxWaitAttempts)
++                    {
++                        if (IFileManager::Get().FileExists(*SidecarPath))
++                        {
++                            int64 ActualSize = IFileManager::Get().FileSize(*SidecarPath);
++                            if (ActualSize > 0)
++                            {
++                                bFound = true;
++                                break;
++                            }
++                        }
++                        WaitAttempts++;
++                        FPlatformProcess::Sleep(WaitMs);
++                    }
++
++                    if (!bFound)
++                    {
++                        UE_LOG(LogLiveSync, Log,
++                            TEXT("[FBX][SKIP_SIDECAR_MISS] file=%s attempts=%d"), *SidecarFile, WaitAttempts);
++                        Skipped++;
++                        continue;
++                    }
++
++                    // Look up existing texture asset at the import destination.
++                    // Sidecar textures go to /Game/UELiveSync/Imported/Textures/.
++                    FString BaseName = FPaths::GetBaseFilename(SidecarFile);
++                    FString ObjectPath = TEXT("/Game/UELiveSync/Imported/Textures/") + BaseName + TEXT(".") + BaseName;
++                    UObject* ExistingTex = StaticFindObject(UTexture2D::StaticClass(), nullptr, *ObjectPath);
++                    if (ExistingTex && ExistingTex->IsA<UTexture2D>())
++                    {
++                        TSoftObjectPtr<UTexture2D> TexPtr = Cast<UTexture2D>(ExistingTex);
++                        if (!ImportedSidecarTexturesByGuid.Contains(G))
++                        {
++                            ImportedSidecarTexturesByGuid.Add(G, TMap<FString, TSoftObjectPtr<UTexture2D>>());
++                        }
++                        auto& SidecarMap = ImportedSidecarTexturesByGuid[G];
++                        if (!SidecarMap.Contains(BaseName.ToLower()))
++                        {
++                            SidecarMap.Add(BaseName.ToLower(), TexPtr);
++                            Found++;
++                            UE_LOG(LogLiveSync, Log,
++                                TEXT("[FBX][SKIP_SIDECAR_REUSE] file=%s texture=%s"), *SidecarFile, *ObjectPath);
++                        }
++                    }
++                    else if (ExistingTex)
++                    {
++                        // Class mismatch — existing asset at path is not a UTexture2D.
++                        UE_LOG(LogLiveSync, Warning,
++                            TEXT("[FBX][SKIP_SIDECAR_CLASS_MISMATCH] file=%s path=%s assetClass=%s"),
++                            *SidecarFile, *ObjectPath, *ExistingTex->GetClass()->GetName());
++                        Skipped++;
++                    }
++                    else
++                    {
++                        // Texture not in ContentBrowser yet — it's a new texture
++                        // that was added/modified since last FBX import. Import it
++                        // automatically so the sidecar map stays current even when
++                        // FBX is skipped by geomHash dedup.
++                        IAssetTools& AssetTools = FAssetToolsModule::GetModule().Get();
++                        UAutomatedAssetImportData* ImportData = NewObject<UAutomatedAssetImportData>();
++                        ImportData->GroupName = TEXT("UELiveSync-Sidecar-Skip");
++                        ImportData->Filenames = { SidecarPath };
++                        ImportData->DestinationPath = TEXT("/Game/UELiveSync/Imported/Textures");
++                        ImportData->bReplaceExisting = true;
++                        ImportData->bSkipReadOnly = false;
++
++                        TArray<UObject*> ImportResult = AssetTools.ImportAssetsAutomated(ImportData);
++                        if (ImportResult.Num() > 0)
++                        {
++                            if (!ImportedSidecarTexturesByGuid.Contains(G))
++                            {
++                                ImportedSidecarTexturesByGuid.Add(G, TMap<FString, TSoftObjectPtr<UTexture2D>>());
++                            }
++                            auto& SidecarMap = ImportedSidecarTexturesByGuid[G];
++                            if (!SidecarMap.Contains(BaseName.ToLower()))
++                            {
++                                for (UObject* ImpTex : ImportResult)
++                                {
++                                    if (ImpTex && ImpTex->IsA<UTexture2D>())
++                                    {
++                                        TSoftObjectPtr<UTexture2D> TexPtr = Cast<UTexture2D>(ImpTex);
++                                        SidecarMap.Add(BaseName.ToLower(), TexPtr);
++                                        Found++;
++                                        UE_LOG(LogLiveSync, Log,
++                                            TEXT("[FBX][SKIP_SIDECAR_AUTOIMPORT] file=%s texture=%s"),
++                                            *SidecarFile, *ImpTex->GetPathName());
++                                        break;
++                                    }
++                                }
++                            }
++                        }
++                        else
++                        {
++                            UE_LOG(LogLiveSync, Warning,
++                                TEXT("[FBX][SKIP_SIDECAR_AUTOIMPORT_FAIL] file=%s"), *SidecarFile);
++                            Skipped++;
++                        }
++                    }
++                }
++
++                UE_LOG(LogLiveSync, Log,
++                    TEXT("[FBX][SKIP_SIDECAR_SUMMARY] guid=%s syncId=%d "
++                         "manifestTextures=%d reused=%d imported=%d failed=%d "
++                         "persistentCacheEntries=%d"),
++                    *G.ToString(EGuidFormats::Digits),
++                    Stats.MatPktSyncId, SidecarArray.Num(),
++                    Found - Skipped, Found, Skipped,
++                    ImportedSidecarTexturesByGuid.Contains(G)
++                        ? ImportedSidecarTexturesByGuid[G].Num()
++                        : 0);
++            };
++            // Task 9B.5B: wire FBX timing output
++            Ctx.FbxImportMsOut = &Stats.MatPktFbxImportMs;
+             FLiveSyncFBXImporter::HandleImport(Ptr, ObjSize, Ctx);
+         }
+ 
++        // Task 9B.5B: FBX import skipped flag (detect if import was skipped by semantic dedup)
++        {
++            int32 FbxSkippedAfter = Stats.FBXImportSkipped.load(std::memory_order_relaxed);
++            if (FbxSkippedAfter > Stats.FbxImportSkippedBefore)
++            {
++                Stats.MatPktFbxImportSkipped = 1.0;
++            }
++            Stats.FbxImportSkippedBefore = FbxSkippedAfter;
++        }
++
+         Stats.PacketsProcessed.fetch_add(
+             1, std::memory_order_relaxed);
+         return;
+@@ -13910,6 +14352,9 @@ ApplyMaterialSnapshotPerSlot(
+ 
+     const FString GuidStr = Guid.ToString(EGuidFormats::Digits);
+ 
++    // Task 9B.5B: mesh assign timing for this apply call
++    double MeshAssignBegin = FPlatformTime::Seconds();
++
+     // Per-slot dispatch.
+     int32 PersistentApplied = 0;
+     int32 MidApplied = 0;
+@@ -13968,6 +14413,9 @@ ApplyMaterialSnapshotPerSlot(
+                 int32 SlotTexturesApplied = 0;
+                 int32 SlotTextureMisses = 0;
+ 
++                // Task 9B.5B: capture old texture references before sidecar apply (scope outside if)
++                TMap<FString, UTexture*> OldTexMap;
++
+                 if (TexMaps)
+                 {
+                     // Filter TexMaps for this slot and apply sidecar textures.
+@@ -13980,9 +14428,87 @@ ApplyMaterialSnapshotPerSlot(
+                         }
+                     }
+ 
++                    {
++                        static const TCHAR* TexParamNames[] = {
++                            TEXT("BaseColorTexture"), TEXT("RoughnessTexture"), TEXT("MetallicTexture"),
++                            TEXT("NormalTexture"), TEXT("AlphaTexture")
++                        };
++                        static const int32 TexChannelCount = 5;
++                        for (int32 ti = 0; ti < TexChannelCount; ti++)
++                        {
++                            UTexture* OldTex = nullptr;
++                            PersistentMIC->GetTextureParameterValue(FName(TexParamNames[ti]), OldTex);
++                            OldTexMap.Add(FString(TexParamNames[ti]), OldTex);
++                        }
++                    }
++
+                     ApplySidecarTexturesToPersistentMIC(Guid, SlotIdx, PersistentMIC, SlotTexMaps, SlotTexturesApplied, SlotTextureMisses);
+                 }
+ 
++                // Task 9B.5B: micParametersChanged tracking for persistent MIC.
++                int32 LocalParamsChanged = 0;
++                {
++                    float OldRoughness = 0.0f, OldMetallic = 0.0f, OldAlpha = 0.0f;
++                    PersistentMIC->GetScalarParameterValue(FName(TEXT("Roughness")), OldRoughness);
++                    PersistentMIC->GetScalarParameterValue(FName(TEXT("Metallic")), OldMetallic);
++                    PersistentMIC->GetScalarParameterValue(FName(TEXT("Alpha")), OldAlpha);
++                    FLinearColor OldBaseColor;
++                    PersistentMIC->GetVectorParameterValue(FName(TEXT("BaseColor")), OldBaseColor);
++
++                    if (FMath::Abs(OldRoughness - Props.Roughness) > 1e-6) LocalParamsChanged++;
++                    if (FMath::Abs(OldMetallic - Props.Metallic) > 1e-6) LocalParamsChanged++;
++                    if (FMath::Abs(OldAlpha - Props.Alpha) > 1e-6) LocalParamsChanged++;
++                    if (FMath::Abs(OldBaseColor.R - Props.BaseColor.R) > 1e-6) LocalParamsChanged++;
++                    if (FMath::Abs(OldBaseColor.G - Props.BaseColor.G) > 1e-6) LocalParamsChanged++;
++                    if (FMath::Abs(OldBaseColor.B - Props.BaseColor.B) > 1e-6) LocalParamsChanged++;
++                    if (FMath::Abs(OldBaseColor.A - Props.BaseColor.A) > 1e-6) LocalParamsChanged++;
++
++                    // Texture parameter changes (compare old pre-sidecar values against current MIC state).
++                    {
++                        static const TCHAR* TexParamNames[] = {
++                            TEXT("BaseColorTexture"), TEXT("RoughnessTexture"), TEXT("MetallicTexture"),
++                            TEXT("NormalTexture"), TEXT("AlphaTexture")
++                        };
++                        static const TCHAR* UseTexNames[] = {
++                            TEXT("UseBaseColorTexture"), TEXT("UseRoughnessTexture"), TEXT("UseMetallicTexture"),
++                            TEXT("UseNormalTexture"), TEXT("UseAlphaTexture")
++                        };
++                        static const int32 TexChannelCount = 5;
++                        TSet<uint8> PresentChannels;
++                        if (TexMaps)
++                        {
++                            for (const FMaterialTextureMapRef& TexRef : *TexMaps)
++                            {
++                                if (TexRef.SlotIndex == SlotIdx && TexRef.IsValid())
++                                {
++                                    PresentChannels.Add(static_cast<uint8>(TexRef.Channel));
++                                }
++                            }
++                        }
++                        for (int32 t = 0; t < TexChannelCount; t++)
++                        {
++                            uint8 ChanNum = static_cast<uint8>(t) + 1;
++                            bool bHasTex = PresentChannels.Contains(ChanNum);
++                            float OldUseTex = 0.0f;
++                            PersistentMIC->GetScalarParameterValue(FName(UseTexNames[t]), OldUseTex);
++                            float NewUseTex = bHasTex ? 1.0f : 0.0f;
++                            if (FMath::Abs(OldUseTex - NewUseTex) > 0.01f) LocalParamsChanged++;
++                            if (bHasTex)
++                            {
++                                UTexture* NewTex = nullptr;
++                                PersistentMIC->GetTextureParameterValue(FName(TexParamNames[t]), NewTex);
++                                UTexture* OldTex = OldTexMap.FindRef(FString(TexParamNames[t]));
++                                if (OldTex != NewTex) LocalParamsChanged++;
++                            }
++                            else
++                            {
++                                UTexture* OldTex = OldTexMap.FindRef(FString(TexParamNames[t]));
++                                if (OldTex != nullptr) LocalParamsChanged++;
++                            }
++                        }
++                    }
++                }
++
+                 // Apply scalar state (always needed for persistent MIC).
+                 PersistentMIC->SetScalarParameterValueEditorOnly(FName(TEXT("Roughness")), Props.Roughness);
+                 PersistentMIC->SetScalarParameterValueEditorOnly(FName(TEXT("Metallic")), Props.Metallic);
+@@ -13990,6 +14516,11 @@ ApplyMaterialSnapshotPerSlot(
+                 PersistentMIC->SetVectorParameterValueEditorOnly(FName(TEXT("BaseColor")), Props.BaseColor);
+                 PersistentMIC->PostEditChange();
+ 
++                if (LocalParamsChanged > 0)
++                {
++                    Stats.MatMicParametersChanged.fetch_add(LocalParamsChanged, std::memory_order_relaxed);
++                }
++
+                 SMC->SetMaterial(SlotIdx, PersistentMIC);
+                 PersistentApplied++;
+                 TotalTexturesApplied += SlotTexturesApplied;
+@@ -14068,6 +14599,12 @@ ApplyMaterialSnapshotPerSlot(
+             *GuidStr, PersistentApplied);
+     }
+ 
++    // Task 9B.5B: record mesh assign timing
++    {
++        double MeshAssignElapsed = FPlatformTime::Seconds() - MeshAssignBegin;
++        Stats.MatPktMeshAssignMs += MeshAssignElapsed * 1000.0;
++    }
++
+     return TotalApplied > 0;
+ }
+ 
+@@ -14422,7 +14959,20 @@ GetOrCreatePersistentMaterialAsset(
+         FSavePackageArgs SaveArgs;
+         SaveArgs.TopLevelFlags = RF_Standalone;
+         SaveArgs.SaveFlags = SAVE_NoError;
+-        UPackage::SavePackage(Package, NewMIC, *FilePath, SaveArgs);
++        // Task 9B.5B: package save timing
++        {
++            double SaveBegin = FPlatformTime::Seconds();
++            UPackage::SavePackage(Package, NewMIC, *FilePath, SaveArgs);
++            double SaveElapsed = FPlatformTime::Seconds() - SaveBegin;
++            UE_LOG(LogLiveSync, Log,
++                TEXT("[MATERIAL][PACKAGE_SAVE_TIMING] "
++                     "syncId=%d guid=%s slot=%d asset=%s assetType=MIC changed=1 saved=1 saveMs=%.1f"),
++                Stats.MatPktCurrentSyncId,
++                *ObjectGuid.ToString(EGuidFormats::Digits), SlotIndex,
++                *FilePath, SaveElapsed * 1000.0);
++            Stats.MatPackagesSaved.fetch_add(1, std::memory_order_relaxed);
++            Stats.MatPackageSaveMsTotal += SaveElapsed * 1000.0;
++        }
+     }
+ 
+     UE_LOG(LogLiveSync, Log,
+@@ -14449,6 +14999,25 @@ ApplyFullMaterialSnapshotToPersistentAsset(
+         return false;
+     }
+ 
++    // Task 9B.5B: micParametersChanged tracking
++    int32 LocalParamsChanged = 0;
++    {
++        float OldRoughness = 0.0f, OldMetallic = 0.0f, OldAlpha = 0.0f;
++        MaterialAsset->GetScalarParameterValue(FName(TEXT("Roughness")), OldRoughness);
++        MaterialAsset->GetScalarParameterValue(FName(TEXT("Metallic")), OldMetallic);
++        MaterialAsset->GetScalarParameterValue(FName(TEXT("Alpha")), OldAlpha);
++        FLinearColor OldBaseColor;
++        MaterialAsset->GetVectorParameterValue(FName(TEXT("BaseColor")), OldBaseColor);
++
++        if (FMath::Abs(OldRoughness - ScalarState.Roughness) > 1e-6) LocalParamsChanged++;
++        if (FMath::Abs(OldMetallic - ScalarState.Metallic) > 1e-6) LocalParamsChanged++;
++        if (FMath::Abs(OldAlpha - ScalarState.Alpha) > 1e-6) LocalParamsChanged++;
++        if (FMath::Abs(OldBaseColor.R - ScalarState.BaseColor.R) > 1e-6) LocalParamsChanged++;
++        if (FMath::Abs(OldBaseColor.G - ScalarState.BaseColor.G) > 1e-6) LocalParamsChanged++;
++        if (FMath::Abs(OldBaseColor.B - ScalarState.BaseColor.B) > 1e-6) LocalParamsChanged++;
++        if (FMath::Abs(OldBaseColor.A - ScalarState.BaseColor.A) > 1e-6) LocalParamsChanged++;
++    }
++
+     // Apply scalar/color parameters from Blender.
+     MaterialAsset->SetScalarParameterValueEditorOnly(FName(TEXT("Roughness")), ScalarState.Roughness);
+     MaterialAsset->SetScalarParameterValueEditorOnly(FName(TEXT("Metallic")), ScalarState.Metallic);
+@@ -14533,12 +15102,52 @@ ApplyFullMaterialSnapshotToPersistentAsset(
+     MaterialAsset->PostEditChange();
+     MaterialAsset->MarkPackageDirty();
+ 
++    // Task 9B.5B: texture change tracking
++    int32 TexChanged = 0;
++    {
++        static const TCHAR* TexParamNames[] = {
++            TEXT("BaseColorTexture"), TEXT("RoughnessTexture"), TEXT("MetallicTexture"),
++            TEXT("NormalTexture"), TEXT("AlphaTexture")
++        };
++        static const TCHAR* UseTexNames[] = {
++            TEXT("UseBaseColorTexture"), TEXT("UseRoughnessTexture"), TEXT("UseMetallicTexture"),
++            TEXT("UseNormalTexture"), TEXT("UseAlphaTexture")
++        };
++        static const int32 TexChannelCount = 5;
++        for (int32 t = 0; t < TexChannelCount; t++)
++        {
++            bool bHasTex = TextureState.Contains(static_cast<uint8>(t)) && TextureState[static_cast<uint8>(t)];
++            // Compare UseTexture toggle
++            float OldUseTex = 0.0f;
++            MaterialAsset->GetScalarParameterValue(FName(UseTexNames[t]), OldUseTex);
++            float NewUseTex = bHasTex ? 1.0f : 0.0f;
++            if (FMath::Abs(OldUseTex - NewUseTex) > 0.01f) TexChanged++;
++            // Compare texture reference if enabled
++            if (bHasTex)
++            {
++                UTexture* OldTex = nullptr;
++                MaterialAsset->GetTextureParameterValue(FName(TexParamNames[t]), OldTex);
++                if (OldTex != TextureState[static_cast<uint8>(t)]) TexChanged++;
++            }
++            else
++            {
++                UTexture* OldTex = nullptr;
++                MaterialAsset->GetTextureParameterValue(FName(TexParamNames[t]), OldTex);
++                if (OldTex != nullptr) TexChanged++;
++            }
++        }
++    }
++    LocalParamsChanged += TexChanged;
++
+     UE_LOG(LogLiveSync, Log,
+         TEXT("[MAT][PERSISTENT_APPLY] action=apply path=%s "
+-             "roughness=%.3f metallic=%.3f alpha=%.3f textures_applied=%d"),
++             "roughness=%.3f metallic=%.3f alpha=%.3f textures_applied=%d paramsChanged=%d"),
+         *MaterialAsset->GetPathName(),
+         ScalarState.Roughness, ScalarState.Metallic, ScalarState.Alpha,
+-        TextureState.Num());
++        TextureState.Num(), LocalParamsChanged);
++
++    // Task 9B.5B: update micParametersChanged stats
++    Stats.MatMicParametersChanged.fetch_add(LocalParamsChanged, std::memory_order_relaxed);
+ 
+     return true;
+ }
+@@ -14947,13 +15556,19 @@ ImportTexturesFromMtexRecs(
+             }
+             SidecarKey.ToLowerInline();
+ 
++            // Task 10K.3: check active map first (current sync's sidecar results),
++            // then fall back to persistent cache.
++            const TMap<FString, TSoftObjectPtr<UTexture2D>>* PerGuidActive = ActiveSidecarMapByGuid.Find(Guid);
+             const TMap<FString, TSoftObjectPtr<UTexture2D>>* PerGuidSidecar = ImportedSidecarTexturesByGuid.Find(Guid);
+-            if (PerGuidSidecar && PerGuidSidecar->Contains(SidecarKey))
++            const TMap<FString, TSoftObjectPtr<UTexture2D>>* LookupMap = PerGuidActive ? PerGuidActive : PerGuidSidecar;
++            if (LookupMap && LookupMap->Contains(SidecarKey))
+             {
+-                TextureImportCache.Add(EffectivePath, (*PerGuidSidecar)[SidecarKey]);
++                TextureImportCache.Add(EffectivePath, (*LookupMap)[SidecarKey]);
++                bool bFromActive = (LookupMap == PerGuidActive);
+                 UE_LOG(LogLiveSync, Log,
+-                    TEXT("[MTEX][SIDECAR_HIT] guid=%s slot=%d channel=%u key=%s path=%s"),
+-                    *GuidStr, TexRef.SlotIndex, TexRef.Channel, *SidecarKey, *EffectivePath);
++                    TEXT("[MTEX][SIDECAR_HIT] guid=%s slot=%d channel=%u key=%s path=%s source=%s"),
++                    *GuidStr, TexRef.SlotIndex, TexRef.Channel, *SidecarKey, *EffectivePath,
++                    bFromActive ? TEXT("active") : TEXT("persistent"));
+                 TextureCacheHit++;
+                 TextureResolveSkipped++;
+                 continue;
+@@ -15025,11 +15640,17 @@ ImportTexturesFromMtexRecs(
+ 
+             // Set sRGB per channel policy:
+             // BaseColor(1) → sRGB true; Roughness/Metallic/Alpha/Normal → sRGB false
+-            const bool bSRGB = (TexRef.Channel == static_cast<uint8>(EMTEXChannel::BaseColor));
+-            Texture->SRGB = bSRGB;
++            const bool bDesiredSRGB = (TexRef.Channel == static_cast<uint8>(EMTEXChannel::BaseColor));
+ 
+-            // Task 9B.3: enforce TC_Normalmap for Normal channel textures.
+             bool bSettingsChanged = false;
++
++            if (Texture->SRGB != bDesiredSRGB)
++            {
++                Texture->SRGB = bDesiredSRGB;
++                bSettingsChanged = true;
++            }
++
++            // Task 9B.3: enforce TC_Normalmap for Normal channel textures.
+             if (TexRef.Channel == static_cast<uint8>(EMTEXChannel::Normal))
+             {
+                 if (Texture->CompressionSettings != TextureCompressionSettings::TC_Normalmap)
+@@ -15039,13 +15660,16 @@ ImportTexturesFromMtexRecs(
+                 }
+             }
+ 
+-            Texture->PostEditChange();
++            if (bSettingsChanged)
++            {
++                Texture->PostEditChange();
++            }
+ 
+             UE_LOG(LogLiveSync, Log,
+                 TEXT("[NORMAL_TEXTURE_SETTINGS] guid=%s slot=%d channel=%u "
+                      "asset=%s compression=TC_Normalmap srgb=%d changed=%d"),
+                 *GuidStr, TexRef.SlotIndex, TexRef.Channel,
+-                *Texture->GetPathName(), bSRGB ? 0 : 1, bSettingsChanged ? 1 : 0);
++                *Texture->GetPathName(), bDesiredSRGB ? 0 : 1, bSettingsChanged ? 1 : 0);
+ 
+             TextureImportCache.Add(EffectivePath, Texture);
+ 
+@@ -15060,7 +15684,7 @@ ImportTexturesFromMtexRecs(
+                 TEXT("[MTEX][TEX_IMPORT] guid=%s slot=%d channel=%u "
+                      "path=%s sRGB=%d"),
+                 *GuidStr, TexRef.SlotIndex, TexRef.Channel,
+-                *EffectivePath, bSRGB ? 1 : 0);
++                *EffectivePath, bDesiredSRGB ? 1 : 0);
+ 
+             // Phase 10K.5: cache size diagnostic
+             const int32 CacheSize = TextureImportCache.Num();
+@@ -15657,7 +16281,17 @@ UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
+         FSavePackageArgs SaveArgs;
+         SaveArgs.TopLevelFlags = RF_Standalone;
+         SaveArgs.SaveFlags = SAVE_NoError;
+-        UPackage::SavePackage(Package, nullptr, *FilePath, SaveArgs);
++        // Task 9B.5B: master material package save timing
++        {
++            double SaveBegin = FPlatformTime::Seconds();
++            UPackage::SavePackage(Package, Material, *FilePath, SaveArgs);
++            double SaveElapsed = FPlatformTime::Seconds() - SaveBegin;
++            UE_LOG(LogLiveSync, Log,
++                TEXT("[MATERIAL][PACKAGE_SAVE_TIMING] "
++                     "syncId=%d asset=%s assetType=Material changed=1 saved=1 saveMs=%.1f"),
++                Stats.MatPktCurrentSyncId,
++                *FilePath, SaveElapsed * 1000.0);
++        }
+     }
+ 
+     UE_LOG(LogLiveSync, Log,
+@@ -15670,6 +16304,253 @@ UMaterial* UUELiveSyncSubsystem::CreateLiveSyncMasterMaterialAsset()
+ }
+ #endif
+ 
++#if WITH_EDITOR
++
++// =========================================================
++// IMPORT SUBSYSTEM CALLBACK — Per-file texture import
++// diagnostics (Phase 10K.5)
++// =========================================================
++// Fires once per imported texture after the factory completes
++// but before PostEditChange.  Records source filename, timing,
++// and settings before/after normal-map detection.
++// =========================================================
++
++void UUELiveSyncSubsystem::
++OnAssetPostImport(UFactory* Factory, UObject* CreatedObject)
++{
++    if (!Factory || !CreatedObject)
++        return;
++
++    UTexture2D* Texture = Cast<UTexture2D>(CreatedObject);
++    if (!Texture)
++        return;
++
++    FString SourceFilename = UFactory::GetCurrentFilename();
++    if (SourceFilename.IsEmpty())
++        return;
++
++    int32 TransactionId = Stats.DisposableProbeTransactionId.load(std::memory_order_relaxed);
++    if (TransactionId == 0)
++    {
++        // Not in a probe transaction — log as observation only
++        UE_LOG(LogLiveSync, Log,
++            TEXT("[PROBE][OBSERVE] source=%s asset=%s"),
++            *SourceFilename, *Texture->GetPathName());
++        return;
++    }
++
++    // Find or create probe entry for this source file
++    FString BaseName = FPaths::GetBaseFilename(SourceFilename).ToLower();
++
++    // Use the texture asset to detect settings after normal-map detection
++    int32 CompressionVal = static_cast<int32>(Texture->CompressionSettings);
++    int32 LODGroupVal = static_cast<int32>(Texture->LODGroup);
++
++    UE_LOG(LogLiveSync, Log,
++        TEXT("[PROBE][POST_IMPORT] transactionId=%d source=%s asset=%s "
++             "compression=%d sRGB=%d LODGroup=%d resolution=%dx%d"),
++        TransactionId, *SourceFilename, *Texture->GetPathName(),
++        CompressionVal, Texture->SRGB ? 1 : 0, LODGroupVal,
++        Texture->GetSizeX(), Texture->GetSizeY());
++}
++
++// =========================================================
++// DISPOSABLE IMPORT PROBE — Cold-import diagnostics
++// (Phase 10K.5)
++// =========================================================
++// Imports texture copies into disposable content paths and
++// records per-file timing and settings observations.
++// =========================================================
++
++void UUELiveSyncSubsystem::
++ConsoleRunImportProbe(const TArray<FString>& Args)
++{
++    if (Args.Num() < 1)
++    {
++        UE_LOG(LogLiveSync, Warning,
++            TEXT("[PROBE] Usage: UE.LiveSync.ImportProbe <scenario> [runId]"));
++        return;
++    }
++
++    FString Scenario = Args[0].ToUpper();
++    FString RunId = (Args.Num() > 1) ? Args[1] : FString::FromInt(FPlatformTime::Seconds());
++
++    // Map scenario identifier to list of source files
++    // Source files are copies in the sidecar cache
++    FString SidecarCacheDir = FPaths::ProjectSavedDir() / TEXT("UELiveSync") / TEXT("SidecarCache");
++    FString DestBase = TEXT("/Game/UELiveSync/Diagnostics/ImportProbe") / RunId / Scenario;
++
++    // Source files for each scenario — use cached sidecar textures from known paths
++    TArray<FString> SourceFiles;
++    TArray<FString> ChannelLabels;
++
++    auto AddSource = [&](const FString& Name, const FString& Channel)
++    {
++        // Check multiple likely locations: Project Saved dir, Project Content dir, etc.
++        TArray<FString> SearchPaths = {
++            FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("UELiveSync"), TEXT("SidecarCache"), Name + TEXT(".png")),
++            FPaths::Combine(FPaths::ProjectContentDir(), TEXT("UELiveSync"), TEXT("SidecarCache"), Name + TEXT(".png")),
++        };
++        for (const FString& Path : SearchPaths)
++        {
++            if (IFileManager::Get().FileExists(*Path))
++            {
++                SourceFiles.Add(Path);
++                ChannelLabels.Add(Channel);
++                return;
++            }
++        }
++        // File not found — use a placeholder path for the diagnostic
++        UE_LOG(LogLiveSync, Warning,
++            TEXT("[PROBE] Source file not found: %s.png — will log placeholder"),
++            *Name);
++        SourceFiles.Add(Name + TEXT(".png"));
++        ChannelLabels.Add(Channel);
++    };
++
++    switch (Scenario[0])
++    {
++        case TEXT('A'):
++            AddSource(TEXT("Marble"), TEXT("BaseColor"));
++            break;
++        case TEXT('B'):
++            AddSource(TEXT("Marble_Rough"), TEXT("Roughness"));
++            break;
++        case TEXT('C'):
++            AddSource(TEXT("Marble_Normal"), TEXT("Normal"));
++            break;
++        case TEXT('D'):
++            AddSource(TEXT("Wood"), TEXT("BaseColor"));
++            break;
++        case TEXT('E'):
++            AddSource(TEXT("Wood_Rough"), TEXT("Roughness"));
++            break;
++        case TEXT('F'):
++            AddSource(TEXT("Wood_Normal"), TEXT("Normal"));
++            break;
++        case TEXT('G'):
++            AddSource(TEXT("Marble"), TEXT("BaseColor"));
++            AddSource(TEXT("Marble_Rough"), TEXT("Roughness"));
++            break;
++        case TEXT('H'):
++            AddSource(TEXT("Marble_Normal"), TEXT("Normal"));
++            AddSource(TEXT("Wood_Normal"), TEXT("Normal"));
++            break;
++        case TEXT('I'):
++            AddSource(TEXT("Marble"), TEXT("BaseColor"));
++            AddSource(TEXT("Marble_Rough"), TEXT("Roughness"));
++            AddSource(TEXT("Marble_Normal"), TEXT("Normal"));
++            AddSource(TEXT("Wood"), TEXT("BaseColor"));
++            AddSource(TEXT("Wood_Rough"), TEXT("Roughness"));
++            AddSource(TEXT("Wood_Normal"), TEXT("Normal"));
++            break;
++        default:
++            UE_LOG(LogLiveSync, Warning,
++                TEXT("[PROBE] Unknown scenario: %s"), *Scenario);
++            return;
++    }
++
++    if (SourceFiles.Num() == 0)
++    {
++        UE_LOG(LogLiveSync, Warning,
++            TEXT("[PROBE] No source files for scenario %s"), *Scenario);
++        return;
++    }
++
++    // Begin probe transaction
++    int32 TransactionId = ++Stats.DisposableProbeTransactionId;
++
++    UE_LOG(LogLiveSync, Log,
++        TEXT("[PROBE][BEGIN] transactionId=%d scenario=%s runId=%s files=%d dest=%s"),
++        TransactionId, *Scenario, *RunId, SourceFiles.Num(), *DestBase);
++
++    // Record source file metadata
++    for (int32 i = 0; i < SourceFiles.Num(); ++i)
++    {
++        const FString& Src = SourceFiles[i];
++        int64 FileSize = IFileManager::Get().FileSize(*Src);
++        if (FileSize == INDEX_NONE) FileSize = 0;
++
++        FString CanonicalKey = FPaths::GetBaseFilename(Src).ToLower();
++
++        UE_LOG(LogLiveSync, Log,
++            TEXT("[PROBE][INPUT_QUEUED] transactionId=%d probeId=%d canonicalKey=%s "
++                 "sourceFilename=%s channel=%s sourceBytes=%lld"),
++            TransactionId, i, *CanonicalKey, *Src, *ChannelLabels[i], FileSize);
++    }
++
++    // Import each file individually into disposable destinations
++    double BatchBegin = FPlatformTime::Seconds();
++    UE_LOG(LogLiveSync, Log,
++        TEXT("[PROBE][BATCH_BEGIN] transactionId=%d sourceCount=%d"),
++        TransactionId, SourceFiles.Num());
++
++    IAssetTools& AssetTools = FAssetToolsModule::GetModule().Get();
++
++    for (int32 i = 0; i < SourceFiles.Num(); ++i)
++    {
++        const FString& Src = SourceFiles[i];
++
++        // Create a unique destination per file
++        FString FileBase = FPaths::GetBaseFilename(Src);
++        FString UniqueDest = DestBase / FileBase;
++
++        // Prepare automated import data
++        UAutomatedAssetImportData* ImportData = NewObject<UAutomatedAssetImportData>();
++        ImportData->GroupName = TEXT("UELiveSync-Probe");
++        ImportData->Filenames = { Src };
++        ImportData->DestinationPath = UniqueDest;
++        ImportData->bReplaceExisting = false;
++        ImportData->bSkipReadOnly = false;
++
++        double ImportBegin = FPlatformTime::Seconds();
++        TArray<UObject*> ImportedAssets = AssetTools.ImportAssetsAutomated(ImportData);
++        double ImportElapsed = (FPlatformTime::Seconds() - ImportBegin) * 1000.0;
++
++        if (ImportedAssets.Num() > 0 && ImportedAssets[0])
++        {
++            UTexture2D* Tex = Cast<UTexture2D>(ImportedAssets[0]);
++            if (Tex)
++            {
++                int32 CompressionVal = static_cast<int32>(Tex->CompressionSettings);
++                bool bSRGB = Tex->SRGB;
++                int32 LODGroupVal = static_cast<int32>(Tex->LODGroup);
++
++                UE_LOG(LogLiveSync, Log,
++                    TEXT("[PROBE][BATCH_RETURN] transactionId=%d probeId=%d "
++                         "canonicalKey=%s assetPath=%s importMs=%.2f "
++                         "compression=%d sRGB=%d LODGroup=%d resolution=%dx%d"),
++                    TransactionId, i, *FileBase.ToLower(), *Tex->GetPathName(),
++                    ImportElapsed, CompressionVal, bSRGB ? 1 : 0, LODGroupVal,
++                    Tex->GetSizeX(), Tex->GetSizeY());
++            }
++            else
++            {
++                UE_LOG(LogLiveSync, Warning,
++                    TEXT("[PROBE][BATCH_RETURN] transactionId=%d probeId=%d "
++                         "reason=not_a_texture assetClass=%s"),
++                    TransactionId, i, *ImportedAssets[0]->GetClass()->GetName());
++            }
++        }
++        else
++        {
++            UE_LOG(LogLiveSync, Warning,
++                TEXT("[PROBE][BATCH_RETURN] transactionId=%d probeId=%d "
++                     "reason=import_failed"),
++                TransactionId, i);
++        }
++    }
++
++    double BatchElapsed = (FPlatformTime::Seconds() - BatchBegin) * 1000.0;
++
++    UE_LOG(LogLiveSync, Log,
++        TEXT("[PROBE][END] transactionId=%d scenario=%s runId=%s "
++             "files=%d batchMs=%.2f"),
++        TransactionId, *Scenario, *RunId, SourceFiles.Num(), BatchElapsed);
++}
++
++#endif // WITH_EDITOR
++
+ 
+ // =========================================================
+ // HANDLE MATERIAL DEF (Phase 7B Stage 1C)
+diff --git a/UE_Plugin/UELiveSync/Source/UELiveSync/Public/FBXImport/LiveSyncFBXImporter.h b/UE_Plugin/UELiveSync/Source/UELiveSync/Public/FBXImport/LiveSyncFBXImporter.h
+index 5032829..1e8c6d0 100644
+--- a/UE_Plugin/UELiveSync/Source/UELiveSync/Public/FBXImport/LiveSyncFBXImporter.h
++++ b/UE_Plugin/UELiveSync/Source/UELiveSync/Public/FBXImport/LiveSyncFBXImporter.h
+@@ -3,6 +3,25 @@
+ #include "CoreMinimal.h"
+ #include "SyncTypes.h"
+ 
++// Phase 10K.6: Phase metadata for timing hierarchy.
++enum class EFbxPhaseKind : uint8
++{
++    Exclusive,
++    Nested,
++    InclusiveParent,
++    Unobservable,
++};
++
++struct FFbxPhaseMetadata
++{
++    EFbxPhaseKind Kind;
++    const TCHAR* Parent;
++
++    FFbxPhaseMetadata(EFbxPhaseKind InKind, const TCHAR* InParent)
++        : Kind(InKind), Parent(InParent)
++    {}
++};
++
+ class AActor;
+ class UWorld;
+ class AActor;
+@@ -24,8 +43,22 @@ struct FFBXImportContext
+     // Task 9B: Called to register a sidecar texture import result.
+     TFunction<void(const FGuid&, const FString&, const TSoftObjectPtr<UTexture2D>&)>
+         OnSidecarTextureImported;
++    // Task 9B.6B.8: Called when FBX import is skipped (geomHash dedup) to
++    // ensure the sidecar result map is updated even without a new import.
++    // Called before the early-return. FbxDir is the directory containing the
++    // FBX file and its manifest.json.
++    TFunction<void(const FGuid&, const FString&, const FString&)> OnSkipFbxImport;
++    // Task 10K.3: Called when the active sidecar map is ready for the current
++    // sync. Contains only current manifest entries — separate from the
++    // persistent ImportedSidecarTexturesByGuid cache.
++    TFunction<void(const FGuid&, const TMap<FString, TSoftObjectPtr<UTexture2D>>&)> OnActiveSidecarMapReady;
++    // Task 9B.5B: FBX timing output (set by HandleImport)
++    double* FbxImportMsOut = nullptr;
+ };
+ 
++// Phase 10K.6: Exclusive phase registry for timing hierarchy.
++// (defined internally in LiveSyncFBXImporter.cpp)
++
+ class FLiveSyncFBXImporter
+ {
+ public:
+diff --git a/UE_Plugin/UELiveSync/Source/UELiveSync/Public/SyncTypes.h b/UE_Plugin/UELiveSync/Source/UELiveSync/Public/SyncTypes.h
+index c5f67a5..94cbdf1 100644
+--- a/UE_Plugin/UELiveSync/Source/UELiveSync/Public/SyncTypes.h
++++ b/UE_Plugin/UELiveSync/Source/UELiveSync/Public/SyncTypes.h
+@@ -1303,6 +1303,127 @@ struct FLiveSyncStats
+     std::atomic<int32> FBXImportActorsSpawned{0};         // New StaticMeshActor spawned
+     std::atomic<int32> FBXImportActorsUpdated{0};         // Existing StaticMeshActor updated
+     std::atomic<int32> FBXImportSkipped{0};               // Redundant imports skipped (fingerprint match)
++    // Task 9B.5B: material sync performance tracking
++    std::atomic<int32> MatPackagesSaved{0};                 // MIC/material packages saved during sync
++    double MatPackageSaveMsTotal{0.0};                       // Cumulative package save time (ms)
++    std::atomic<int32> MatMicParametersChanged{0};           // MIC parameters actually changed
++    // Task 9B.5B: per-packet material timing (reset per PT_Material packet)
++    double MatPktFbxImportMs{0.0};                           // FBX import time for current MAT packet
++    double MatPktSidecarImportMs{0.0};                       // Sidecar import time
++    double MatPktSnapshotParseMs{0.0};                       // MATX/MTEX parse time
++    double MatPktMicLookupMs{0.0};                           // MIC lookup time
++    double MatPktMicApplyMs{0.0};                            // MIC apply time
++    double MatPktSidecarsImported{0.0};                      // Sidecar textures imported
++    double MatPktSidecarsReused{0.0};                        // Sidecar textures reused
++    double MatPktMicParametersChanged{0.0};                  // MIC params changed
++    double MatPktPackagesSaved{0.0};                         // Packages saved
++    double MatPktFbxImportSkipped{0.0};                      // FBX import skipped (semantic dedup)
++    double MatPktResultMapMs{0.0};                           // Sidecar result-map construction time
++    double MatPktMeshAssignMs{0.0};                          // Material slot-to-mesh assignment time
++    int32 MatPktSyncId{0};                                   // Per-transaction sync ID (shared across FBX+MATX)
++    int32 MatPktPackageSaveMs{0};                            // per-packet package save ms (int to avoid format string issues)
++    FGuid MatPktFirstGuid;                                   // First GUID in current MATX packet (for correlation)
++    int32 MatPktCurrentSyncId{0};                              // Current MATX packet syncId (for per-save logs)
++    // Task 9B.5B: FBX pre-count for unchanged detection
++    int32 FbxImportSkippedBefore{0};                          // FBXImportSkipped before import
++
++    // --- Phase 10K.5: Diagnostic probe counters ---
++    // FBX sidecar transaction counters (set by sidecar import path)
++    std::atomic<int32> FbxSidecarImported{0};                 // New textures imported during FBX sync
++    std::atomic<int32> FbxSidecarReused{0};                   // Existing textures reused (manifest unchanged)
++    std::atomic<int32> FbxSidecarReimported{0};               // Textures reimported (content changed)
++    std::atomic<int32> FbxSidecarFailed{0};                   // Textures that failed to import
++    // MATX texture apply counters (set by MATX texture resolution phase)
++    std::atomic<int32> MatTexturesResolved{0};                // Textures resolved from active/persistent map
++    std::atomic<int32> MatTexturesApplied{0};                 // Textures applied to MIC
++    std::atomic<int32> MatTextureMisses{0};                   // Textures not found in any map
++    // Cache diagnostics
++    std::atomic<int32> ActiveResultMapEntries{0};             // Active sidecar map size (current sync)
++    std::atomic<int32> PersistentCacheEntries{0};             // Persistent sidecar cache size (all prior syncs)
++    // Disposable probe transaction ID (diagnostic imports)
++    std::atomic<int32> DisposableProbeTransactionId{0};       // Auto-incrementing ID for disposable import tests
++
++    // --- Phase 10K.6: Production FBX Transaction Decomposition ---
++    std::atomic<int32> FBXTransactionId{1};                    // Auto-incrementing ID for each FBX transaction (starts at 1)
++};
++
++// =========================================================
++// SIDECAR IMPORT PROBE — Diagnostic-only correlation
++// =========================================================
++// Records per-file timing and settings observations for
++// texture import diagnostics.  Used only in non-production
++// disposable import tests and log correlation.
++// =========================================================
++struct FSidecarImportProbe
++{
++    // Identity
++    int32 TransactionId;
++    int32 ProbeId;
++    FString CanonicalKey;
++    FString SourceFilename;
++    FString Channel;
++    FString Guid;
++
++    // Source file info
++    int64 SourceBytes;
++    int32 Width;
++    int32 Height;
++
++    // Timing
++    double BatchBeginSeconds;
++    double BatchReturnSeconds;
++
++    // Asset observation
++    FString AssetPath;
++    int32 CompressionBefore;
++    int32 CompressionAfter;
++    bool bSRGBBefore;
++    bool bSRGBAfter;
++    int32 LODGroupBefore;
++    int32 LODGroupAfter;
++    bool bNormalDetected;
++    bool bTextureCompilationPending;
++    double AssetPostImportSeconds;
++
++    void LogEvent(const TCHAR* EventName, double Timestamp) const
++    {
++        UE_LOG(LogLiveSync, Log,
++            TEXT("[PROBE] probeId=%d transactionId=%d canonicalKey=%s "
++                 "sourceFilename=%s channel=%s sourceBytes=%lld "
++                 "resolution=%dx%d assetPath=%s event=%s timestamp=%.6f"),
++            ProbeId, TransactionId, *CanonicalKey,
++            *SourceFilename, *Channel, SourceBytes,
++            Width, Height, *AssetPath,
++            EventName, Timestamp);
++    }
++
++    void LogSummary() const
++    {
++        double BatchElapsed = (BatchReturnSeconds > 0.0 && BatchBeginSeconds > 0.0)
++            ? (BatchReturnSeconds - BatchBeginSeconds) * 1000.0
++            : 0.0;
++        double PostImportElapsed = (AssetPostImportSeconds > 0.0 && BatchBeginSeconds > 0.0)
++            ? (AssetPostImportSeconds - BatchBeginSeconds) * 1000.0
++            : 0.0;
++
++        UE_LOG(LogLiveSync, Log,
++            TEXT("[PROBE][SUMMARY] probeId=%d transactionId=%d canonicalKey=%s "
++                 "channel=%s sourceBytes=%lld resolution=%dx%d "
++                 "batchElapsedMs=%.2f postImportCumulativeMs=%.2f "
++                 "compressionBefore=%d compressionAfter=%d "
++                 "sRGBBefore=%d sRGBAfter=%d "
++                 "LODGroupBefore=%d LODGroupAfter=%d "
++                 "normalDetected=%d compilePending=%d "
++                 "assetPath=%s"),
++            ProbeId, TransactionId, *CanonicalKey,
++            *Channel, SourceBytes, Width, Height,
++            BatchElapsed, PostImportElapsed,
++            CompressionBefore, CompressionAfter,
++            bSRGBBefore ? 1 : 0, bSRGBAfter ? 1 : 0,
++            LODGroupBefore, LODGroupAfter,
++            bNormalDetected ? 1 : 0, bTextureCompilationPending ? 1 : 0,
++            *AssetPath);
++    }
+ };
+ 
+ // =========================================================
+diff --git a/UE_Plugin/UELiveSync/Source/UELiveSync/Public/UELiveSyncSubsystem.h b/UE_Plugin/UELiveSync/Source/UELiveSync/Public/UELiveSyncSubsystem.h
+index e6589c8..8178d47 100644
+--- a/UE_Plugin/UELiveSync/Source/UELiveSync/Public/UELiveSyncSubsystem.h
++++ b/UE_Plugin/UELiveSync/Source/UELiveSync/Public/UELiveSyncSubsystem.h
+@@ -839,6 +839,11 @@ private:
+     FDelegateHandle
+         OnActorDestroyedHandle;
+ 
++#if WITH_EDITOR
++    // ImportSubsystem delegate handle for per-file texture import diagnostics
++    FDelegateHandle OnAssetPostImportHandle;
++#endif
++
+     // =====================================================
+     // HEARTBEAT
+     // (timeout sourced from CVar UE.LiveSync.HeartbeatTimeout)
+@@ -923,6 +928,10 @@ private:
+ 
+     void ConsoleExportWorldSnapshot();
+ 
++    // Disposable texture import probe for cold-import diagnostics
++    void ConsoleRunImportProbe(const TArray<FString>& Args);
++    void OnAssetPostImport(UFactory* Factory, UObject* CreatedObject);
++
+     // =====================================================
+     // PHASE 6H — SEMANTIC CONSISTENCY HARDENING
+     // =====================================================
+@@ -1039,11 +1048,16 @@ private:
+     // Path → imported texture cache (Phase 10K.2)
+     TMap<FString, TSoftObjectPtr<UTexture2D>> TextureImportCache;
+ 
+-    // Task 9B: per-GUID sidecar import result map.
++    // Task 9B: per-GUID sidecar import result map (persistent cache).
+     // Canonical key: lowercase basename without extension.
+     // E.g. Wood.png → wood, Wood_Rough.png → wood_rough
+     TMap<FGuid, TMap<FString, TSoftObjectPtr<UTexture2D>>> ImportedSidecarTexturesByGuid;
+ 
++    // Task 10K.3: active transaction sidecar map for current sync.
++    // Contains only current manifest entries — separate from persistent cache.
++    // Cleared at start of each sync, populated during FBX sidecar scan.
++    TMap<FGuid, TMap<FString, TSoftObjectPtr<UTexture2D>>> ActiveSidecarMapByGuid;
++
+     // Phase 10K.3: texture material apply counters
+     int32 TextureMaterialApplyRequests = 0;
+     int32 TextureMaterialApplySucceeded = 0;
+@@ -1068,6 +1082,10 @@ private:
+     // PT_FBXImportRequest and PT_Mesh.
+     TSet<FGuid> FBXPendingGuids;
+ 
++    // Task 9B.5: per-GUID syncId correlation for FBX → MATX transaction tracking.
++    // Generated on FBX request receipt; consumed by MATX handler to share syncId.
++    TMap<FGuid, int32> FBXSyncIdMap;
++
+     // =====================================================
+     // DEFERRED FBX REPAIR (Phase 10J.5D.5)
+     // =====================================================

@@ -1,0 +1,32 @@
+Phase 10K.6 — Production implementation test results
+Timestamp: 2026-06-23T14:30:02+07:00
+
+Authoritative runner: python3 tests/phase10k6_transaction_decomposition.py
+
+Passed: 437
+Failed: 16
+
+Resolved failures (24):
+  path_validation production (10): ALL PASS
+  request_parse production (13): ALL PASS
+  PHASE_END marker: PASS
+
+Remaining failures (16):
+  STALL_SUMMARY log exists
+  STALL_SUMMARY includes transactionId
+  STALL_SUMMARY includes totalMs
+  STALL_SUMMARY includes measuredExclusiveMs
+  STALL_SUMMARY includes coveragePercent
+  STALL_SUMMARY includes largestPhase
+  STALL_SUMMARY includes largestPhaseMs
+  STALL_SUMMARY includes unattributedMs
+  STALL_SUMMARY includes classification
+  STALL_SUMMARY UE_LOG marker exists
+  Source: coveragePercent calculation exists
+  Source: timing validity check exists
+  Classification uses TEXT("exclusive") and TEXT("SINGLE")
+  Classification only computed when timing is valid
+  Phase 10K.5: FBX transaction timing markers present
+  Phase 10K.5: STALL_SUMMARY present
+
+Unexpected fixture/parser/state failures: 0

@@ -1,0 +1,10 @@
+=== /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.pre-slice-0.cpp ===
+BRACES_BALANCED
+Depth: 11
+Unmatched: (none)
+
+=== /home/nguyennongngockhanh/Projects/UELiveSync/UE_Plugin/UELiveSync/Source/UELiveSync/Private/FBXImport/LiveSyncFBXImporter.cpp ===
+BRACES_BALANCED
+Depth: 11
+Unmatched: (none)
+

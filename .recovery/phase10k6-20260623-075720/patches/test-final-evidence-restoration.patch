@@ -1,0 +1,207 @@
+--- /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.pre-final-evidence-fix.py	2026-06-23 14:20:44.729977386 +0700
++++ /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/phase10k6_transaction_decomposition.final-evidence-fixed.py	2026-06-23 14:20:49.380370654 +0700
+@@ -3380,7 +3380,7 @@
+     # ===================================================================
+ 
+     # RP-LC: line-comment false-positive — phase name only in // comment
+-    _rp_lc = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    _rp_lc_fixture = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+         FFbxScopePhase Broken(guid,
+@@ -3397,22 +3397,28 @@
+     }
+     ValidatePathSecurity(Request);
+     return true;
+-}""")
++}"""
++    _rp_lc_broken_pos = _rp_lc_fixture.index("FFbxScopePhase Broken(")
++    _rp_lc_valid_pos = _rp_lc_fixture.index("FFbxScopePhase Scope(")
++    _rp_lc = _parse_and_prepare_rp(_rp_lc_fixture)
+     _test("Setup [RP-LC]: fallback — line-comment-only target",
+           _rp_lc.match_count == 1,
+           detail=f"count={_rp_lc.match_count}")
+     _test("Setup [RP-LC]: single_match is the second decl",
+           _rp_lc.single_match is not None,
+           detail=f"single={_rp_lc.single_match}")
+-    _test("Setup [RP-LC]: no bleed from broken first decl",
+-          _rp_lc.declaration_start > 0,
+-          detail=f"ds={_rp_lc.declaration_start}")
++    _test("Setup [RP-LC]: exact selected position == valid_pos",
++          _rp_lc.declaration_start == _rp_lc_valid_pos,
++          detail=f"ds={_rp_lc.declaration_start}, valid_pos={_rp_lc_valid_pos}")
++    _test("Setup [RP-LC]: selected position > broken_pos",
++          _rp_lc.declaration_start > _rp_lc_broken_pos,
++          detail=f"ds={_rp_lc.declaration_start}, broken_pos={_rp_lc_broken_pos}")
+     _test("Setup [RP-LC]: prerequisites_valid=True",
+           _rp_lc.prerequisites_valid == True,
+           detail=f"pv={_rp_lc.prerequisites_valid}, missing={_rp_lc.missing}")
+ 
+     # RP-BC: block-comment false-positive — phase name only in /* */ comment
+-    _rp_bc = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    _rp_bc_fixture = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+         FFbxScopePhase Broken(guid,
+@@ -3429,16 +3435,25 @@
+     }
+     ValidatePathSecurity(Request);
+     return true;
+-}""")
++}"""
++    _rp_bc_broken_pos = _rp_bc_fixture.index("FFbxScopePhase Broken(")
++    _rp_bc_valid_pos = _rp_bc_fixture.index("FFbxScopePhase Scope(")
++    _rp_bc = _parse_and_prepare_rp(_rp_bc_fixture)
+     _test("Setup [RP-BC]: fallback — block-comment-only target",
+           _rp_bc.match_count == 1,
+           detail=f"count={_rp_bc.match_count}")
++    _test("Setup [RP-BC]: exact selected position == valid_pos",
++          _rp_bc.declaration_start == _rp_bc_valid_pos,
++          detail=f"ds={_rp_bc.declaration_start}, valid_pos={_rp_bc_valid_pos}")
++    _test("Setup [RP-BC]: selected position > broken_pos",
++          _rp_bc.declaration_start > _rp_bc_broken_pos,
++          detail=f"ds={_rp_bc.declaration_start}, broken_pos={_rp_bc_broken_pos}")
+     _test("Setup [RP-BC]: prerequisites_valid=True",
+           _rp_bc.prerequisites_valid == True,
+           detail=f"pv={_rp_bc.prerequisites_valid}, missing={_rp_bc.missing}")
+ 
+     # RP-SL: string-literal false-positive — phase name only in unrelated string
+-    _rp_sl = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    _rp_sl_fixture = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+         FFbxScopePhase Broken(guid, TEXT("other_phase"),
+@@ -3455,10 +3470,19 @@
+     }
+     ValidatePathSecurity(Request);
+     return true;
+-}""")
++}"""
++    _rp_sl_broken_pos = _rp_sl_fixture.index("FFbxScopePhase Broken(")
++    _rp_sl_valid_pos = _rp_sl_fixture.index("FFbxScopePhase Scope(")
++    _rp_sl = _parse_and_prepare_rp(_rp_sl_fixture)
+     _test("Setup [RP-SL]: fallback — unrelated-string-only target",
+           _rp_sl.match_count == 1,
+           detail=f"count={_rp_sl.match_count}")
++    _test("Setup [RP-SL]: exact selected position == valid_pos",
++          _rp_sl.declaration_start == _rp_sl_valid_pos,
++          detail=f"ds={_rp_sl.declaration_start}, valid_pos={_rp_sl_valid_pos}")
++    _test("Setup [RP-SL]: selected position > broken_pos",
++          _rp_sl.declaration_start > _rp_sl_broken_pos,
++          detail=f"ds={_rp_sl.declaration_start}, broken_pos={_rp_sl_broken_pos}")
+     _test("Setup [RP-SL]: prerequisites_valid=True",
+           _rp_sl.prerequisites_valid == True,
+           detail=f"pv={_rp_sl.prerequisites_valid}, missing={_rp_sl.missing}")
+@@ -3518,7 +3542,7 @@
+ 
+     # RP-LD: later-declaration bleed — first decl is broken/incomplete
+     # with NO target phase name.  Second decl is valid request_parse.
+-    _rp_ld = _parse_and_prepare_rp("""bool FLiveSyncFBXImporter::HandleImport(Args) {
++    _rp_ld_fixture = """bool FLiveSyncFBXImporter::HandleImport(Args) {
+     DoSetup();
+     {
+         FFbxScopePhase Broken(
+@@ -3535,16 +3559,22 @@
+     }
+     ValidatePathSecurity(Request);
+     return true;
+-}""")
++}"""
++    _rp_ld_broken_pos = _rp_ld_fixture.index("FFbxScopePhase Broken(")
++    _rp_ld_valid_pos = _rp_ld_fixture.index("FFbxScopePhase Scope(")
++    _rp_ld = _parse_and_prepare_rp(_rp_ld_fixture)
+     _test("Setup [RP-LD]: later-declaration bleed guard — match_count=1",
+           _rp_ld.match_count == 1,
+           detail=f"count={_rp_ld.match_count}")
+     _test("Setup [RP-LD]: single_match is the second decl",
+           _rp_ld.single_match is not None,
+           detail=f"single={_rp_ld.single_match}")
+-    _test("Setup [RP-LD]: selected position > first broken token",
+-          _rp_ld.declaration_start > 0,
+-          detail=f"ds={_rp_ld.declaration_start}")
++    _test("Setup [RP-LD]: exact selected position == valid_pos",
++          _rp_ld.declaration_start == _rp_ld_valid_pos,
++          detail=f"ds={_rp_ld.declaration_start}, valid_pos={_rp_ld_valid_pos}")
++    _test("Setup [RP-LD]: selected position > broken_pos",
++          _rp_ld.declaration_start > _rp_ld_broken_pos,
++          detail=f"ds={_rp_ld.declaration_start}, broken_pos={_rp_ld_broken_pos}")
+     _test("Setup [RP-LD]: invocation_complete=True for selected decl",
+           _rp_ld.invocation_complete == True,
+           detail=f"inv_comp={_rp_ld.invocation_complete}")
+@@ -3553,6 +3583,76 @@
+           detail=f"pv={_rp_ld.prerequisites_valid}, missing={_rp_ld.missing}")
+ 
+     # ===================================================================
++    # Direct _scan_for_phase_name_in_span end_pos fixtures (RP + PV)
++    # Prove that the scanner respects its end_pos parameter.
++    # ===================================================================
++    _scanner_rp_content = """    {
++        FFbxScopePhase Scope(guid, TEXT("request_parse"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations
++    }
++"""
++    _srp_decl = "FFbxScopePhase Scope("
++    _srp_decl_pos = _scanner_rp_content.index(_srp_decl)
++    _srp_start = _srp_decl_pos + len(_srp_decl)  # right after '('
++    _srp_target = _scanner_rp_content.index('TEXT("request_parse")')
++    _srp_cutoff = _srp_target  # end_pos excludes target
++    _srp_full = len(_scanner_rp_content)
++    _srp_mask = _build_lexical_mask(_scanner_rp_content)
++    # Test A: cutoff before target
++    _srp_cutoff_result = _scan_for_phase_name_in_span(
++        _scanner_rp_content, _srp_mask, 'request_parse', _srp_start, _srp_cutoff)
++    _test("Direct scanner [RP-cutoff]: end_pos before TEXT returns False",
++          not _srp_cutoff_result, detail=f"scanner={_srp_cutoff_result}")
++    _test("Direct scanner [RP-cutoff]: start_pos after opening paren",
++          _srp_start > _srp_decl_pos,
++          detail=f"start={_srp_start}, decl_end={_srp_decl_pos + len(_srp_decl)}")
++    _test("Direct scanner [RP-cutoff]: cutoff <= target position",
++          _srp_cutoff <= _srp_target,
++          detail=f"cutoff={_srp_cutoff}, target={_srp_target}")
++    # Test B: full span includes target
++    _srp_full_result = _scan_for_phase_name_in_span(
++        _scanner_rp_content, _srp_mask, 'request_parse', _srp_start, _srp_full)
++    _test("Direct scanner [RP-full]: full end_pos includes target returns True",
++          _srp_full_result, detail=f"scanner={_srp_full_result}")
++    _test("Direct scanner [RP-full]: full end_pos > target position",
++          _srp_full > _srp_target,
++          detail=f"full={_srp_full}, target={_srp_target}")
++
++    _scanner_pv_content = """    {
++        FFbxScopePhase Scope(guid, TEXT("path_validation"),
++                             EFbxPhaseKind::Exclusive,
++                             &PhaseDurations
++    }
++"""
++    _spv_decl = "FFbxScopePhase Scope("
++    _spv_decl_pos = _scanner_pv_content.index(_spv_decl)
++    _spv_start = _spv_decl_pos + len(_spv_decl)
++    _spv_target = _scanner_pv_content.index('TEXT("path_validation")')
++    _spv_cutoff = _spv_target
++    _spv_full = len(_scanner_pv_content)
++    _spv_mask = _build_lexical_mask(_scanner_pv_content)
++    # Test A: cutoff before target
++    _spv_cutoff_result = _scan_for_phase_name_in_span(
++        _scanner_pv_content, _spv_mask, 'path_validation', _spv_start, _spv_cutoff)
++    _test("Direct scanner [PV-cutoff]: end_pos before TEXT returns False",
++          not _spv_cutoff_result, detail=f"scanner={_spv_cutoff_result}")
++    _test("Direct scanner [PV-cutoff]: start_pos after opening paren",
++          _spv_start > _spv_decl_pos,
++          detail=f"start={_spv_start}, decl_end={_spv_decl_pos + len(_spv_decl)}")
++    _test("Direct scanner [PV-cutoff]: cutoff <= target position",
++          _spv_cutoff <= _spv_target,
++          detail=f"cutoff={_spv_cutoff}, target={_spv_target}")
++    # Test B: full span includes target
++    _spv_full_result = _scan_for_phase_name_in_span(
++        _scanner_pv_content, _spv_mask, 'path_validation', _spv_start, _spv_full)
++    _test("Direct scanner [PV-full]: full end_pos includes target returns True",
++          _spv_full_result, detail=f"scanner={_spv_full_result}")
++    _test("Direct scanner [PV-full]: full end_pos > target position",
++          _spv_full > _spv_target,
++          detail=f"full={_spv_full}, target={_spv_target}")
++
++    # ===================================================================
+     # Real incomplete-constructor fallback fixtures (RP)
+     # The FFbxScopePhase token is real and unmasked.  Extraction fails
+     # (no closing ')'), so the fallback scanner must correctly determine

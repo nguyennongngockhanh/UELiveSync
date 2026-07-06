@@ -1,0 +1,44 @@
+Validation-Order Zero-Count Fixture — Test Report
+====================================================
+
+REPORT_TS: 2026-06-23T15:20:35+07:00
+
+Authoritative command:
+  python3 tests/phase10k6_transaction_decomposition.py
+
+Results:
+  461 PASS
+  16 FAIL
+  0 unexpected failures
+
+All 16 remaining FAIL lines:
+  FAIL  Classification uses TEXT("exclusive") and TEXT("SINGLE")
+  FAIL  STALL_SUMMARY log exists
+  FAIL  STALL_SUMMARY includes transactionId
+  FAIL  STALL_SUMMARY includes totalMs
+  FAIL  STALL_SUMMARY includes measuredExclusiveMs
+  FAIL  STALL_SUMMARY includes coveragePercent
+  FAIL  STALL_SUMMARY includes largestPhase
+  FAIL  STALL_SUMMARY includes largestPhaseMs
+  FAIL  STALL_SUMMARY includes unattributedMs
+  FAIL  STALL_SUMMARY includes classification
+  FAIL  Source: coveragePercent calculation exists — CoveragePercent must exist in source (contract: no clamp required)
+  FAIL  Source: timing validity check exists — source must check timing validity before classification
+  FAIL  Phase 10K.5: FBX transaction timing markers present
+  FAIL  Phase 10K.5: STALL_SUMMARY present
+  FAIL  Classification only computed when timing is valid — source must check timing validity before MIXED classification
+  FAIL  STALL_SUMMARY UE_LOG marker exists
+
+Zero-count fixture results:
+  PASS  Self-test [ObjCount-Z-zero]: count == 0
+  PASS  Self-test [ObjCount-Z-zero]: exact-one predicate rejected
+
+Existing ObjectName fixtures:
+  PASS  Self-test [ObjCount-A-one]: count == 1
+  PASS  Self-test [ObjCount-B-duplicate]: count != 1
+  PASS  Self-test [ObjCount-C-comment]: count == 1 (comment ignored)
+  PASS  Self-test [ObjCount-D-unrelated]: count == 1 (unrelated ignored)
+
+Ordering fixture:
+  PASS  Self-test [Ordering-E-missing]: all_positions_present=False
+  PASS  Self-test [Ordering-E-missing]: order_ok=False

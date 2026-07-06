@@ -1,0 +1,107 @@
+UELiveSync — Phase 10K.6 Final Migration Restoration Report
+=============================================================
+Report timestamp: 2026-06-23T12:22:28+07:00
+Test file: tests/phase10k6_transaction_decomposition.py
+
+Production source changed:
+  NO
+
+Authoritative runner:
+  command: python3 tests/phase10k6_transaction_decomposition.py
+  passed: 340
+  failed: 40
+  classified failures: 40
+  classification total: 40
+  classification total equals failed count: YES
+  unexpected fixture/state failures: 0
+
+Classification (40 total):
+  path_validation production (10):
+    - phase declaration uniqueness
+    - total declaration count = 0
+    - complete declaration count = 0
+    - uses EFbxPhaseKind::Exclusive
+    - supplies &PhaseDurations
+    - declared in standalone dedicated block
+    - block bounds inside HandleImport
+    - decl before ValidatePathSecurity
+    - block encloses ValidatePathSecurity
+    - exact ordering chain
+  request_parse production (13):
+    - phase declaration uniqueness
+    - total declaration count = 0
+    - complete declaration count = 0
+    - uses EFbxPhaseKind::Exclusive
+    - supplies &PhaseDurations
+    - declared in standalone dedicated block
+    - block bounds inside HandleImport
+    - decl before ValidateVersion
+    - block encloses ValidateVersion
+    - exact ordering chain
+    - block encloses bounded FbxPath extraction
+    - block closes before ValidatePathSecurity
+    - ValidatePathSecurity outside block
+  STALL_SUMMARY (10):
+    - log exists
+    - includes transactionId
+    - includes totalMs
+    - includes measuredExclusiveMs
+    - includes coveragePercent
+    - includes largestPhase
+    - includes largestPhaseMs
+    - includes unattributedMs
+    - includes classification
+    - UE_LOG marker exists
+  source contract (2):
+    - coveragePercent calculation exists
+    - timing validity check exists
+  classification contract (2):
+    - uses TEXT("exclusive") and TEXT("SINGLE")
+    - only computed when timing valid
+  Phase 10K.5 compatibility (2):
+    - FBX transaction timing markers present
+    - STALL_SUMMARY present
+  path_validation PHASE_END marker (1):
+    - Exclusive phase 'path_validation' has PHASE_END
+
+Parser-to-preparation classification (all PASS):
+  RP absent declaration (A):    missing=["unique declaration", "dedicated block"]
+  RP incomplete constructor (B): missing=["constructor bounds"]
+  RP complete, no FbxPath (C):  missing=["FbxPath invocation"]
+  RP complete, no VV (C):       missing=["ValidateVersion call"]
+  RP complete, no VPS (C):      missing=["ValidatePathSecurity call"]
+  PV absent declaration (A):    missing=["unique declaration", "dedicated block"]
+  PV incomplete constructor (B): missing=["constructor bounds"]
+  PV complete, no VPS (C):      missing=["ValidatePathSecurity call"]
+
+Preparation state (all PASS):
+  missing constructor end:  RP-no-decl-end=constructor bounds, PV-no-decl-end=constructor bounds
+  bad ordering:  RP-bad-order=fbx_path_invocation_end<VV, PV-bad-order=VPS<phase_close
+  good ordering: RP-good-order=valid, PV-good-order=valid
+
+Pytest informational:
+  passed: 50
+  failed: 0
+
+Report timestamps:
+  value: 2026-06-23T12:22:28+07:00
+  restoration report contains value: YES
+  audit report contains value: YES
+
+Artifacts:
+  base:   snapshots/phase10k6_transaction_decomposition.pre-final-migration-fix.py
+  result: snapshots/phase10k6_transaction_decomposition.final-migration-fixed.py
+  unified patch: patches/test-final-migration-restoration.patch (216 lines)
+  report: reports/test-final-migration-restoration.txt
+  audit:  reports/test-final-migration-audit.md
+
+Test migration: PASS
+  Incomplete constructors distinguished from absent declarations:
+    RP absent → unique declaration, RP incomplete → constructor bounds
+    PV absent → unique declaration, PV incomplete → constructor bounds
+  All 40 authoritative failures classified exactly.
+  classification_total == failed_count: 40 == 40.
+  Both reports contain actual timestamp 2026-06-23T12:22:28+07:00.
+
+Ready for request_parse/path_validation implementation:
+  YES

@@ -1,0 +1,16 @@
+231:def test_sanitized_name():
+232-    content = _read(FBX_IMPORTER_CPP)
+233-    has_txn = re.search(r'TxnObjNameSanitized', content) is not None
+234-    has_direct = re.search(r'TxnObjNameSanitized\s*=.*SanitizeObjectName', content) is not None
+235-    has_indirect = (
+236-        re.search(r'SafeName\s*=.*SanitizeObjectName', content) is not None and
+237-        re.search(r'TxnObjNameSanitized\s*=\s*SafeName', content) is not None
+238-    )
+239-    _test("TxnObjNameSanitized derived from SanitizeObjectName",
+240-          has_txn and (has_direct or has_indirect))
+241-
+242-
+243-# ---------------------------------------------------------------------------
+244-# 12. No protocol or packet changes
+245-# ---------------------------------------------------------------------------
+246-def test_no_protocol_changes():

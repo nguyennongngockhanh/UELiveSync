@@ -1,0 +1,11 @@
+=== Patch ===
+1e7043627e168ab32b11b5ad2e4e1b753b684d7a7b4ddba18c234f9634865f1e  /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/patches/slice-0.patch
+=== Snapshot ===
+3885d5da6f3f64d4f85a72903a17e45add6820dc4ef693acc2bdcf8bfdc79739  /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.slice-0.cpp
+
+=== HandleImport extraction ===
+108b9a3c3e985e44e27d5ac3abe7477f79479b09522929bbf435b37bc149b730  /tmp/HandleImport.pre-slice-0.cpp
+495ab676b1d8bbe462879d037e21887466a6b17ace8f97fb68789d30b1bb23b5  /tmp/HandleImport.slice-0.cpp
+
+=== Pre-slice snapshot ===
+261c33fa4225098decc6a3c8e959db4ee13ec9ce87e54fb000583784dea231cb  /home/nguyennongngockhanh/Projects/UELiveSync/.recovery/phase10k6-20260623-075720/snapshots/LiveSyncFBXImporter.pre-slice-0.cpp
