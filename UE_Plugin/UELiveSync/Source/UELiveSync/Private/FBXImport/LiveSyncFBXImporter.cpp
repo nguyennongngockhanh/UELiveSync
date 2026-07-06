@@ -1356,6 +1356,9 @@ bool FLiveSyncFBXImporter::HandleImport(
 
 #if WITH_EDITOR
     // Phase 10J.5F: Compute semantic signature (incl. geometry hash) and check cache before import.
+    // Task 3A.2: when mesh geometry is unchanged, skip FBX factory import
+    // but still run sidecar texture import.
+    bool bSkipFbxImport = false;
     {
         FFBXImportSemanticSignature CurrentSig = ComputeFBXSemanticSignature(FbxPathStr, Request);
         const FFBXImportSemanticSignature* CachedSig = GSemanticSignatureCache.Find(Request.ObjectGUID);
@@ -1420,7 +1423,7 @@ bool FLiveSyncFBXImporter::HandleImport(
                         CurrentSig.MatSlotCount,
                         CurrentSig.GeometryHash);
                     Context.Stats->FBXImportSkipped.fetch_add(1, std::memory_order_relaxed);
-                    return true;
+                    bSkipFbxImport = true;
                 }
                 else if (CachedSig)
                 {
@@ -1462,56 +1465,60 @@ bool FLiveSyncFBXImporter::HandleImport(
 
     const FString FullPendingPath =
         FString::Printf(TEXT("%s.%s"), *PendingPackagePath, *PendingAssetName);
-
-    // === Phase 10J.5Q: Import to pending path ===
-    UAssetImportTask* ImportTask = NewObject<UAssetImportTask>();
-    if (!ImportTask)
-    {
-        Context.Stats->FBXImportFailed.fetch_add(
-            1, std::memory_order_relaxed);
-        UE_LOG(LogLiveSync, Error,
-            TEXT("[FBX] Failed to create AssetImportTask"));
-        return false;
-    }
-
-    ImportTask->Filename = FbxPathStr;
-    ImportTask->DestinationPath = AssetBasePath;
-    // Phase 10J.5Q: Import to pending path with bReplaceExisting=false
-    // so the existing asset is never mutated in-place.
-    ImportTask->DestinationName = PendingAssetName;
-    ImportTask->bReplaceExisting = false;
-    ImportTask->bReplaceExistingSettings = false;
-    ImportTask->bAutomated = true;
-    ImportTask->bSave = false;
-    ImportTask->bAsync = false;
-
-    UFbxFactory* FbxFactory = NewObject<UFbxFactory>();
-    if (FbxFactory)
-    {
-        UFbxImportUI* ImportUI = FbxFactory->ImportUI;
-        ImportUI->bAutomatedImportShouldDetectType = true;
-        ImportUI->bImportMaterials = true;
-        // Task 9B: disable FBX texture import — sidecar lane is sole texture authority.
-        ImportUI->bImportTextures = false;
-        // Phase 10J.5O: Blender exports vertex data in meters; FBX_SCALE_UNITS
-        // sets the FBX file unit metadata. UE converts via bConvertSceneUnit=true.
-        ImportUI->StaticMeshImportData->bConvertSceneUnit = true;
-        ImportTask->Factory = FbxFactory;
-
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[FBX][IMPORT_OPTIONS] guid=%s bImportMaterials=1 bImportTextures=0 bConvertSceneUnit=1 importScale=1"),
-            *Request.ObjectGUID.ToString(EGuidFormats::Digits));
-    }
-
     IAssetTools& AssetTools =
         FAssetToolsModule::GetModule().Get();
-    AssetTools.ImportAssetTasks({ ImportTask });
-
-    // === Phase 10J.5Q: Check pending import result ===
-    TArray<UObject*> ImportedObjects = ImportTask->GetObjects();
-
+    TArray<UObject*> ImportedObjects;
+    if (!bSkipFbxImport)
     {
-        int32 MeshCount = 0, MatCount = 0, TexCount = 0;
+        // === Phase 10J.5Q: Import to pending path ===
+        UAssetImportTask* ImportTask = NewObject<UAssetImportTask>();
+        if (!ImportTask)
+        {
+            Context.Stats->FBXImportFailed.fetch_add(
+                1, std::memory_order_relaxed);
+            UE_LOG(LogLiveSync, Error,
+                TEXT("[FBX] Failed to create AssetImportTask"));
+            return false;
+        }
+
+        ImportTask->Filename = FbxPathStr;
+        ImportTask->DestinationPath = AssetBasePath;
+        // Phase 10J.5Q: Import to pending path with bReplaceExisting=false
+        // so the existing asset is never mutated in-place.
+        ImportTask->DestinationName = PendingAssetName;
+        ImportTask->bReplaceExisting = false;
+        ImportTask->bReplaceExistingSettings = false;
+        ImportTask->bAutomated = true;
+        ImportTask->bSave = false;
+        ImportTask->bAsync = false;
+
+        UFbxFactory* FbxFactory = NewObject<UFbxFactory>();
+        if (FbxFactory)
+        {
+            UFbxImportUI* ImportUI = FbxFactory->ImportUI;
+            ImportUI->bAutomatedImportShouldDetectType = true;
+            ImportUI->bImportMaterials = true;
+            // Task 9B: disable FBX texture import — sidecar lane is sole texture authority.
+            ImportUI->bImportTextures = false;
+            // Phase 10J.5O: Blender exports vertex data in meters; FBX_SCALE_UNITS
+            // sets the FBX file unit metadata. UE converts via bConvertSceneUnit=true.
+            ImportUI->StaticMeshImportData->bConvertSceneUnit = true;
+            ImportTask->Factory = FbxFactory;
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX][IMPORT_OPTIONS] guid=%s bImportMaterials=1 bImportTextures=0 bConvertSceneUnit=1 importScale=1"),
+                *Request.ObjectGUID.ToString(EGuidFormats::Digits));
+        }
+
+        AssetTools.ImportAssetTasks({ ImportTask });
+
+        // === Phase 10J.5Q: Check pending import result ===
+        ImportedObjects = ImportTask->GetObjects();
+    }
+
+    int32 MeshCount = 0, MatCount = 0, TexCount = 0;
+    if (!bSkipFbxImport)
+    {
         for (UObject* Obj : ImportedObjects)
         {
             if (Obj->IsA<UStaticMesh>()) ++MeshCount;
@@ -1533,6 +1540,7 @@ bool FLiveSyncFBXImporter::HandleImport(
                     *Obj->GetPathName());
             }
         }
+    }
 
         // Phase 7H.6 / Task 9B.1: sidecar texture import (always runs).
         // Even when FBX import produces textures (embedded media), sidecar
@@ -2171,6 +2179,13 @@ bool FLiveSyncFBXImporter::HandleImport(
                     TEXT("[FBX][SIDECAR_TEXTURE_SCAN] folder=%s count=0 reason=no_image_files_found"),
                     *FbxDir);
             }
+
+    if (bSkipFbxImport)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][SKIP_MESH] guid=%s reason=semantic_signature_unchanged sidecar_import=1"),
+            *Request.ObjectGUID.ToString(EGuidFormats::Digits));
+        return true;
     }
 
     UObject* PendingAsset = nullptr;

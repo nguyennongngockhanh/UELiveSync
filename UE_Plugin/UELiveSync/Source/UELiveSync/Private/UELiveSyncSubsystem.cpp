@@ -5073,8 +5073,25 @@ ProcessBinaryPacket(
                 const FGuid& G, const FString& SourceFilename, const TSoftObjectPtr<UTexture2D>& TexPtr)
             {
                 if (!TexPtr.IsValid()) return;
-                // Canonical key: lowercase basename without extension.
+                // Canonical key: lowercase basename without extension or hash suffix.
+                // Must match the MTEX lookup key (TexRef.ImageName, dot-stripped, lowercased).
                 FString BaseName = FPaths::GetBaseFilename(SourceFilename).ToLower();
+                {
+                    // Strip __{hash} suffix (sidecar naming convention)
+                    int32 UnderscorePos = BaseName.Find(TEXT("__"));
+                    if (UnderscorePos != INDEX_NONE)
+                    {
+                        BaseName = BaseName.Left(UnderscorePos);
+                    }
+                }
+                {
+                    // Strip any remaining dots (e.g. "marble.png" -> "marble")
+                    int32 DotPos = INDEX_NONE;
+                    if (BaseName.FindChar(TEXT('.'), DotPos))
+                    {
+                        BaseName = BaseName.Left(DotPos);
+                    }
+                }
                 if (!ImportedSidecarTexturesByGuid.Contains(G))
                 {
                     ImportedSidecarTexturesByGuid.Add(G, TMap<FString, TSoftObjectPtr<UTexture2D>>());
