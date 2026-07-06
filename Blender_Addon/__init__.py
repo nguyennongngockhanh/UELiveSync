@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from . import network
 from . import sync
 from . import manifest_v3 as _mv3
+from . import manifest_reuse as _mr
 
 
 # Phase 10J.5M: dual-logging helper for FBX diagnostics.
@@ -1253,6 +1254,33 @@ def _register_sidecar_key(registry, dest_dir, sidecar_key, canonical_locator):
     return True, None
 
 
+def _detect_content_ext(filepath):
+    """Detect image format from file header magic bytes.
+
+    Returns extension string (e.g. '.png', '.jpg') or None if unknown.
+    """
+    try:
+        with open(filepath, 'rb') as f:
+            magic = f.read(16)
+        if magic[:8] == b'\x89PNG\r\n\x1a\n':
+            return '.png'
+        if magic[:2] == b'\xff\xd8':
+            return '.jpg'
+        if magic[:4] in (b'\x49\x49\x2a\x00', b'\x4d\x4d\x00\x2a'):
+            return '.tif'
+        if magic[:2] == b'\x42\x4d':
+            return '.bmp'
+        if magic[:4] in (b'\x76\x2f\x31\x01', b'\x76\x2f\x31\x00', b'\x4f\x70\x65\x6e'):
+            return '.exr'
+        if magic[:2] == b'\x1a\x1a':
+            return '.hdr'
+        if magic[:4] in (b'\x6a\x50\x20\x20', b'\x66\x74\x79\x70'):
+            return '.jp2'
+        return None
+    except Exception:
+        return None
+
+
 def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"):
     """Prepare sidecar file for one TextureAssetSource.
 
@@ -1283,6 +1311,21 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
         "BMP": ".bmp", "HDR": ".hdr",
     }
     ext = ext_map.get(source.file_format, ".png")
+
+    # Content-based extension correction for FILE sources.
+    # Blender's source.file_format may reflect the filename extension rather
+    # than the actual byte content (e.g., a PNG file named .jpg).
+    # UE's ImportAssetsAutomated dispatches imports by file extension and
+    # will reject the file if the extension does not match the content.
+    if source.source_kind == 'FILE' and not source.is_packed:
+        abs_path = bpy.path.abspath(source.filepath_raw or source.filepath)
+        if os.path.isfile(abs_path):
+            content_ext = _detect_content_ext(abs_path)
+            if content_ext and content_ext != ext:
+                _fbx_log(f"[FBX][SIDECAR_EXT_CORRECT] guid={guid_short} "
+                         f"source=({source.mat_name}:{source.node_name}) "
+                         f"file_format={source.file_format} ext={ext} content_ext={content_ext}")
+                ext = content_ext
 
     # Resolve locator (for logging and failure results)
     if source.source_kind == 'FILE' and not source.is_packed:
@@ -1365,6 +1408,9 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
             img = bpy.data.images.get(source.image_name)
             if img is None:
                 return _make_failure("image_not_found", "blender_image_not_found")
+            # save_render always produces PNG-compatible output (RGBA).
+            # Override ext to .png so the sidecar filename matches the content.
+            ext = '.png'
             with _tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir) as tf:
                 temp_path = tf.name
             try:
@@ -1385,7 +1431,7 @@ def _prepare_source_sidecar(source, dest_dir, collision_registry, guid_short="?"
             return _make_failure("unsupported_source", f"unsupported_source_kind:{source.source_kind}")
 
         # === Phase 2: Filename from content hash ===
-        display_prefix = source.image_name
+        display_prefix = os.path.splitext(source.image_name)[0] or source.image_name
         filename, sidecar_key, _ = network.make_sidecar_key(
             display_prefix, content_hex, ext, dest_dir,
         )
@@ -1500,7 +1546,6 @@ def _prepare_and_persist_manifest_v3(
     obj_dir, guid_hex, sources, usages, collision_registry, guid_short="?",
 ):
     """Delegate to manifest_v3.run_prepare_and_persist_v3 with real production callables."""
-    import manifest_v3 as _mv3
     return _mv3.run_prepare_and_persist_v3(
         sources, usages, obj_dir, guid_hex,
         collision_registry,
@@ -1525,8 +1570,6 @@ def _evaluate_and_materialize_manifest_v3(
         (ManifestV3IntegrationResult, list[SidecarPreparationResult])
         Same signature as _prepare_and_persist_manifest_v3 for compatibility.
     """
-    import manifest_v3 as _mv3
-    import manifest_reuse as _mr
     from dataclasses import asdict
 
     sidecar_dir = obj_dir
@@ -1693,7 +1736,6 @@ def _reuse_prepare_fn(source_desc, sidecar_dir, collision_registry, guid_short):
     Prepares a sidecar via the existing _prepare_source_sidecar function
     and returns (ReuseDecision, asset_dict).
     """
-    import manifest_reuse as _mr
     source = source_desc["source"]
     result = _prepare_source_sidecar(source, sidecar_dir, collision_registry, guid_short)
 
@@ -2392,7 +2434,9 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
 
                 # A3.6: Safe orphan sidecar pruning
                 from . import manifest_prune as _mp
-                _mp.prune_after_successful_send(send_succeeded=True)
+                _mp.prune_after_successful_send(
+                    manifest_result, send_succeeded=should_send_after_pipeline, obj_dir=obj_dir,
+                )
 
                 # Phase 10J.5J: material property dirty detection for Sync FBX
                 # Collect current material property signature
@@ -2668,9 +2712,12 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 synced_count += 1
 
             except Exception as e:
-                print(
-                    f"[FBX] ERROR: {obj.name} — {e}"
-                )
+                _err_msg = f"[FBX] ERROR: {obj.name} — {e}"
+                import traceback as _tb_mod
+                _err_tb = _tb_mod.format_exc()
+                for _tb_line in _err_tb.splitlines():
+                    _fbx_log(f"[FBX][TRACEBACK] {_tb_line}")
+                _fbx_log(_err_msg)
 
         # Phase 10J.5J: send PT_Material alongside Sync FBX
         # when material property signature changed for selected objects.

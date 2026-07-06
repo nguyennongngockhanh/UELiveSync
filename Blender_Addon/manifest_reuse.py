@@ -112,13 +112,13 @@ def validate_path_safety(
 
 def compute_file_hash_hex(path: str, chunk_size: int = 1048576) -> str:
     """Compute xxh64 of file bytes, returning 16-char lowercase hex."""
-    from Blender_Addon import network
+    from . import network
     return network._xxh64_file_hex(path, chunk_size)
 
 
 def compute_bytes_hash_hex(data: bytes) -> str:
     """Compute xxh64 of in-memory bytes, returning 16-char lowercase hex."""
-    from Blender_Addon import network
+    from . import network
     return format(network.xxh64(data), '016x')
 # ──────────────────────────────────────────────────────────────────────
 # Source-level: extract current content identity without materialization
@@ -196,7 +196,7 @@ def compute_source_content_hex(
     FILE: reads from disk. PACKED: extracts from Blender image.
     GENERATED: renders to temp, reads bytes, cleans up temp.
     """
-    from Blender_Addon import network
+    from . import network
     if source_kind == "FILE" and not source.is_packed:
         raw = extract_source_bytes_file(source.filepath_raw, source.filepath)
         if raw is None:
@@ -243,7 +243,7 @@ def validate_prior_manifest_schema(
     expected_guid: Optional[str] = None,
 ) -> tuple:
     """Validate prior manifest schema. Returns (is_valid, error_reason)."""
-    from Blender_Addon.manifest_v3 import (
+    from .manifest_v3 import (
         MANIFEST_V3_SCHEMA_VERSION,
         _MANIFEST_V3_TOP_KEYS,
         _validate_hex_lower,
@@ -303,7 +303,7 @@ def compute_occurrence_id_for_current(
     channel: int,
 ) -> str:
     """Compute the occurrence ID for the current object."""
-    from Blender_Addon.manifest_v3 import compute_occurrence_id
+    from .manifest_v3 import compute_occurrence_id
     return compute_occurrence_id(
         guid=guid_hex,
         slot_index=slot_index,
@@ -470,6 +470,15 @@ def evaluate_asset_reuse(
             occurrence_id="", asset_id=asset_id, source_kind="",
             destination_path="",
             error=f"asset key != contentHash: key={asset_id!r} hash={asset_content_hash!r}",
+        )
+
+    # Current source content must match asset content hash
+    if current_content_hex and current_content_hex != asset_content_hash:
+        return ReuseDecision(
+            decision=_DECISION_PREPARE, action=_ACT_SOURCE_IDENTITY_CHANGED,
+            occurrence_id="", asset_id=asset_id, source_kind="",
+            destination_path="",
+            error=f"source content changed: current={current_content_hex} vs asset={asset_content_hash}",
         )
 
     # Check asset status

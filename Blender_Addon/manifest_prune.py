@@ -23,8 +23,8 @@ import stat
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
-import manifest_v3
-import network
+from . import manifest_v3
+from . import network
 
 
 # ================================================================
