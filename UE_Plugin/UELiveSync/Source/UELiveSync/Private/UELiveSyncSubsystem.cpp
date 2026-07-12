@@ -1676,11 +1676,6 @@ bool UUELiveSyncSubsystem::Tick(
             else DeadActors++;
         }
 
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[TICK][DIAG] frame=%lld ActorCache=%d (alive=%d dead=%d) TransformStates=%d"),
-            (long long)VerboseFrameCounter,
-            CacheSize, AliveActors, DeadActors,
-            StateSize);
     }
 
     // =====================================================
@@ -2816,17 +2811,6 @@ ProcessQueuedPackets()
             Packet))
     {
         DequeueCount++;
-
-        // [DIAG][QUEUE_POP] log each dequeued packet (verbose only)
-        if (ShouldLogVerbose() && Packet.RawData.Num() >= 24)
-        {
-            uint8 _popType = *(Packet.RawData.GetData() + 6);
-            uint64 _popSeq = 0;
-            FMemory::Memcpy(&_popSeq, Packet.RawData.GetData() + 8, sizeof(uint64));
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[QUEUE_POP] type=0x%02x seq=%llu depth=%d"),
-                _popType, _popSeq, PacketQueue.Size());
-        }
 
         if (DequeueCount <=
             MaxRate)
@@ -6409,17 +6393,9 @@ InterpolateTransforms(
     CHECK_GAME_THREAD();
         TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_InterpolateTransforms);
 
-    static int InterpFreezeIter = 0;
-    InterpFreezeIter++;
-
-    // [DIAG][INTERP_PROBE] entry
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[INTERP_PROBE] delta=%.4f freezeIter=%d"),
-        DeltaTime, InterpFreezeIter);
-
     if (bEnableVerboseSyncLogs)
     {
-        UE_LOG(LogLiveSync, Log, TEXT("BEGIN InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
+        UE_LOG(LogLiveSync, Log, TEXT("BEGIN InterpolateTransforms"));
     }
 
     // Skip interpolation during snapshot build — all transforms
@@ -7337,13 +7313,8 @@ InterpolateTransforms(
 
     if (bEnableVerboseSyncLogs)
     {
-        UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
+        UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms"));
     }
-
-    // [DIAG][INTERP_SUMMARY] exit
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[INTERP_SUMMARY] applied=%d freezeIter=%d"),
-        InterpCount, InterpFreezeIter);
 }
 
 

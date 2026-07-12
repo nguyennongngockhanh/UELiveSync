@@ -924,15 +924,6 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
             _fbx_log(f"[FBX] Export failed: {e}")
             return False
 
-        # DIAG: mark exact moment FBX export returns
-        _post_export_ts = time.time()
-        _post_export_mono = time.monotonic()
-        try:
-            with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _pef:
-                _pef.write(f"[DIAG][FBX_EXPORT_DONE] ts={_post_export_ts:.6f} mono={_post_export_mono:.6f} obj={obj.name} guid={guid_short}\n")
-        except Exception:
-            pass
-
         return True
 
     finally:
@@ -2831,15 +2822,6 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
             _bl_serialize_ms = 0.0
             _bl_send_ms = (_bl_timer_send_start > 0) * (_bl_timer_send_end - _bl_timer_send_start) * 1000.0
             print(f"[MATERIAL][SYNC_TIMING_BLENDER] syncId={seq} guid={_guid_for_log} fbxExportMs={_bl_fbx_ms:.1f} sidecarPrepareMs={_bl_sidecar_ms:.1f} matxExtractMs={_bl_matx_ms:.1f} serializeMs={_bl_serialize_ms:.1f} sendMs={_bl_send_ms:.1f} totalMs={_bl_timer_total_ms:.1f} sidecarsPrepared={_sidecars_prepared}")
-        except Exception:
-            pass
-
-        # DIAG: mark exact moment FBX sync operator completes (all phases)
-        try:
-            _op_done_ts = time.time()
-            _op_done_mono = time.monotonic()
-            with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _odf:
-                _odf.write(f"[DIAG][FBX_OP_DONE] ts={_op_done_ts:.6f} mono={_op_done_mono:.6f} obj={_guid_for_log} totalMs={_bl_timer_total_ms:.1f}\n")
         except Exception:
             pass
 

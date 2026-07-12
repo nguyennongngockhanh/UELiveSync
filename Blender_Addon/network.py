@@ -104,7 +104,6 @@ _timeline_enabled = False
 
 def set_timeline_enabled(enabled):
     global _timeline_enabled, _last_timeline_sent, _timeline_sequence
-    _append_blender_debug_log(f"[DIAG][TL] set_timeline_enabled({enabled})")
     _timeline_enabled = enabled
     _last_timeline_sent = None
     _timeline_sequence = 0
@@ -112,23 +111,16 @@ def set_timeline_enabled(enabled):
 
 def is_timeline_effective():
     global _client
-    _append_blender_debug_log(f"[DIAG][TL] is_timeline_effective: _timeline_enabled={_timeline_enabled}")
     if not _timeline_enabled:
-        _append_blender_debug_log("[DIAG][TL]  FAIL: _timeline_enabled=False")
         return False
     if _client is None:
-        _append_blender_debug_log("[DIAG][TL]  FAIL: _client=None")
         return False
     if not getattr(_client, 'connected', False):
-        _append_blender_debug_log("[DIAG][TL]  FAIL: not connected")
         return False
     if not getattr(_client, '_capability_response_received', False):
-        _append_blender_debug_log("[DIAG][TL]  FAIL: no cap response")
         return False
     remote = getattr(_client, '_remote_capabilities', 0)
-    ok = bool(remote & CAP_SUPPORTS_TIMELINE_SYNC)
-    _append_blender_debug_log(f"[DIAG][TL]  remote=0x{remote:x} TIMELINE_SYNC=0x{CAP_SUPPORTS_TIMELINE_SYNC:x} bit4={bool(remote & CAP_SUPPORTS_TIMELINE_SYNC)} => {ok}")
-    return ok
+    return bool(remote & CAP_SUPPORTS_TIMELINE_SYNC)
 
 
 # Phase 7B: timeline sync state globals
