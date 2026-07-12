@@ -1636,6 +1636,11 @@ bool UUELiveSyncSubsystem::Tick(
     VerboseFrameCounter++;
     LastTickExecutionTime = FPlatformTime::Seconds();
 
+    // [DIAG][TICK_PROBE] entry
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[TICK_PROBE] frame=%d delta=%.4f"),
+        VerboseFrameCounter, DeltaTime);
+
     // =====================================================
     // SYNC CVARS
     // =====================================================
