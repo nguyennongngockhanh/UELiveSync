@@ -6404,6 +6404,11 @@ InterpolateTransforms(
     static int InterpFreezeIter = 0;
     InterpFreezeIter++;
 
+    // [DIAG][INTERP_PROBE] entry
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[INTERP_PROBE] delta=%.4f freezeIter=%d"),
+        DeltaTime, InterpFreezeIter);
+
     if (bEnableVerboseSyncLogs)
     {
         UE_LOG(LogLiveSync, Log, TEXT("BEGIN InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
@@ -7326,6 +7331,11 @@ InterpolateTransforms(
     {
         UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
     }
+
+    // [DIAG][INTERP_SUMMARY] exit
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[INTERP_SUMMARY] applied=%d freezeIter=%d"),
+        InterpCount, InterpFreezeIter);
 }
 
 
