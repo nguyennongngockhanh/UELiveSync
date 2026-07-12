@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- **Status**: Active
+- **Status**: Suspended pending reproduction
 - **Owner**: Khanh
 - **Started**: 2026-07-03
 - **Closed**: —
@@ -34,7 +34,7 @@ After Disconnect/Reconnect cycle, FBX import packet never reaches UE despite Ble
 |----|-----------|--------|
 | H1 | Sender thread dies after reconnect | Disproved — thread ownership verified |
 | H2 | Socket ownership race | Disproved — socket fd/ownership correct |
-| H3 | Packet lost after QUEUE_POP | Active — intermittent, requires reproduction |
+| H3 | Packet not processed after SEND_RETURN | Inconclusive — original failure occurred before instrumentation; current sessions show full pipeline passing; failure domain unknown |
 | H4 | UE parser rejects packet | Disproved — parser unchanged, works on fresh connect |
 | H5 | Importer skipped due to state | Disproved — importer state clean after reconnect |
 
@@ -67,26 +67,30 @@ QUEUE_PUSH?  →  Yes (E1)
 SEND_RETURN?  →  Yes ret>0 errno=0 (E2)
       │
       ▼
-SOCKET_RECV?  →  Absent in some sessions (E4)
+SOCKET_RECV?  →  Unknown (no data from original failure session)
       │
       ▼
-PACKET_DISPATCH?  →  Absent (follows from E4)
+PACKET_DISPATCH?  →  Unknown
       │
       ▼
-FBX_IMPORT?  →  Absent (follows from E4)
+FBX_IMPORT?  →  Unknown
 ```
 
 **Decision tree is immutable within this version. Update only with new evidence.**
 
 ## Root Cause
 
-**Confidence**: Medium
+**Status**: Unknown
 
-Transport ownership (thread, socket, queue) is proven correct. The packet is lost somewhere between kernel send acceptance (`SEND_RETURN`) and UE receive (`SOCKET_RECV`). The bug is intermittent — 3/3 subsequent sessions passed. Root cause cannot be confirmed without a failure event.
+No reproducible failure. The original failure occurred before instrumentation was added, so no logs exist from the failing session. All subsequent sessions with instrumentation show the full pipeline passing (SEND_RETURN → SOCKET_RECV → QUEUE_POP → PACKET_DISPATCH → FBX_IMPORT_BEGIN → FBX_IMPORT_END). Failure domain cannot be determined because the failing session predates instrumentation. Root cause remains unknown.
+
+**Confidence**: N/A — insufficient evidence to form a root cause hypothesis.
+
+Investigation suspended pending reproduction.
 
 ## Fix
 
-Not yet applied. Investigation ongoing.
+Not applicable. Investigation suspended.
 
 ## Regression
 
@@ -109,9 +113,15 @@ Not yet applied. Investigation ongoing.
 
 ## Remaining Unknowns
 
-- Exact loss layer between `SEND_RETURN` and `SOCKET_RECV` not identified
-- Bug is intermittent — no failure event captured with full marker set
-- Whether loss is in kernel, network, or UE socket handling unknown
+- Original failure location is unknown because no instrumentation existed during the failing session
+- Whether the bug is truly gone or just intermittent cannot be determined without a new failure event
+- No root cause hypothesis can be formed with current evidence
+
+## Decision Log
+
+| ID | Decision | Based on | Accepted | Rejected | Reason |
+|----|----------|----------|----------|----------|--------|
+| D1 | Suspend investigation | E1-E7 verified; bug not reproducing | Suspended pending reproduction | Continue code analysis (speculative) | No failure event captured; code analysis without reproduction leads to speculative debugging |
 
 ## Lessons Learned
 
