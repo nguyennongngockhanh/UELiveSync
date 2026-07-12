@@ -84,7 +84,7 @@ Done
 
 ### E8 Detail: Equivalent Workload Reproduction (2026-07-12)
 
-Original reproduction workload has been successfully recreated under cold-start conditions and completed successfully with full instrumentation.
+The original reported workload was reproduced as closely as possible under controlled conditions and completed successfully with full instrumentation.
 
 Equivalent workload reproduction matched the original report in:
 
@@ -153,7 +153,7 @@ DONE?  →  Yes (E8 — no stall)
 
 INV-2026-001 (UE editor stall during first Sync Selected Mesh to UE (FBX)) was not reproducible on the current build.
 
-Original reproduction workload has been successfully recreated under cold-start conditions and completed successfully with full instrumentation.
+The original reported workload was reproduced as closely as possible under controlled conditions and completed successfully with full instrumentation.
 
 Equivalent workload reproduction matched the original report in:
 
