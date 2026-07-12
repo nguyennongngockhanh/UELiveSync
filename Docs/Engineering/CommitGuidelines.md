@@ -94,4 +94,14 @@ Scopes for this project:
 | `blender` | Blender addon (general) |
 | `camera` | Camera synchronization |
 | `sequence` | Sequencer/keyframe pipeline |
-| `inves` | Investigation-specific |
+| `investigation` | Investigation-specific |
+
+## Branch Policy
+
+| Branch | Purpose |
+|--------|---------|
+| `main` | Production-ready commits only |
+| `debug/*` | Temporary debugging and investigation branches |
+| `investigation/*` | Root-cause analysis |
+| `feature/*` | New feature development |
+| `hotfix/*` | Emergency fixes |
