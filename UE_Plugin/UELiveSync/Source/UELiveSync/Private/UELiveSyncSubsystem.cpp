@@ -1636,14 +1636,6 @@ bool UUELiveSyncSubsystem::Tick(
     VerboseFrameCounter++;
     LastTickExecutionTime = FPlatformTime::Seconds();
 
-    // [DIAG][TICK_PROBE] entry (throttled: every ~5s at 60fps)
-    if ((VerboseFrameCounter % 300) == 0)
-    {
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[TICK_PROBE] frame=%d delta=%.4f"),
-            VerboseFrameCounter, DeltaTime);
-    }
-
     // =====================================================
     // SYNC CVARS
     // =====================================================
@@ -2803,9 +2795,6 @@ ProcessQueuedPackets()
         LastReportedDrops = CurrentDrops;
     }
 
-    // [DIAG][QUEUE] snapshot before dequeue
-    const int32 QBefore = PacketQueue.Size();
-
     while (
         PacketQueue.Dequeue(
             Packet))
@@ -2818,15 +2807,6 @@ ProcessQueuedPackets()
             PacketsThisTick.Add(
                 MoveTemp(Packet));
         }
-    }
-
-    // [DIAG][QUEUE_PROBE] snapshot after dequeue
-    const int32 QAfter = PacketQueue.Size();
-    if (QBefore > 0 || QAfter > 5)
-    {
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[QUEUE_PROBE] before=%d after=%d dequeued=%d"),
-            QBefore, QAfter, DequeueCount);
     }
 
     if (DequeueCount > 0 && ShouldLogVerbose())
@@ -5905,12 +5885,6 @@ UpdateTargetTransform(
     CHECK_GAME_THREAD();
     TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_UpdateTargetTransform);
 
-    // [DIAG][TARGET_UPDATE] entry
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[TARGET_UPDATE] guid=%s loc=%s"),
-        *Guid.ToString(EGuidFormats::Digits),
-        *Location.ToString());
-
     if (bEnableVerboseSyncLogs)
     {
         UE_LOG(
@@ -6150,12 +6124,6 @@ UpdateTargetTransform(
         ScaleDistance >=
         SclThreshold;
 
-    // [DIAG][TRANSFORM_DECISION] decision point
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[TRANSFORM_DECISION] guid=%s loc=%d rot=%d scl=%d parent=%d"),
-        *Guid.ToString(EGuidFormats::Digits),
-        bLocationChanged, bRotationChanged, bScaleChanged, bParentChanged);
-
     if (!bLocationChanged &&
         !bRotationChanged &&
         !bScaleChanged)
@@ -6374,11 +6342,6 @@ UpdateTargetTransform(
             *Guid.ToString(
                 EGuidFormats::Digits));
     }
-
-    // [DIAG][TARGET_UPDATE_DONE] exit
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[TARGET_UPDATE_DONE] guid=%s"),
-        *Guid.ToString(EGuidFormats::Digits));
 }
 
 
@@ -7551,11 +7514,6 @@ void UUELiveSyncSubsystem::
 OnActorDestroyed(
     AActor* Actor)
 {
-    // [DIAG][ACTOR_DESTROY_BEGIN]
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[ACTOR_DESTROY_BEGIN] actor=%s"),
-        *Actor->GetName());
-
     FGuid Guid =
         FindGuidForActor(Actor);
 
@@ -7619,11 +7577,6 @@ OnActorDestroyed(
             It.RemoveCurrent();
         }
     }
-
-    // [DIAG][ACTOR_DESTROY_END]
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[ACTOR_DESTROY_END] actor=%s"),
-        *Actor->GetName());
 }
 
 
