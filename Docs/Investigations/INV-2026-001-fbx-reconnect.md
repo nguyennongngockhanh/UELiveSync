@@ -1,5 +1,15 @@
 # INV-2026-001: UE Editor Stall During First Sync Selected Mesh to UE (FBX)
 
+> **This investigation covers the FBX pipeline only.**
+> The freeze occurred during **Sync Selected Mesh to UE (FBX)**, not during Start Sync.
+> These are two completely different pipelines:
+
+| Step | Start Sync (TCP connection) | Sync Selected Mesh to UE (FBX) |
+|------|---------------------------|---------------------------------|
+| What happens | Establish TCP connection, Discovery, Create/Transform/Material packets | Export FBX, Serialize FBX, Send PT_FBX (0x16), UE import FBX + spawn actor |
+| Does it import FBX? | No | Yes |
+| This investigation? | No | **Yes** |
+
 ## Metadata
 
 - **Status**: Closed — Not reproducible on current build
@@ -10,15 +20,29 @@
 
 ## Problem
 
-UE Editor stalls during the first **Sync Selected Mesh to UE (FBX)** after startup. This is the FBX pipeline, not the Start Sync pipeline.
+UE Editor stalls during the first **Sync Selected Mesh to UE (FBX)** after startup.
 
-| Step | Start Sync (TCP connection) | Sync Selected Mesh to UE (FBX) |
-|------|---------------------------|---------------------------------|
-| What happens | Establish TCP connection, Discovery, Create/Transform/Material packets | Export FBX, Serialize FBX, Send PT_FBX (0x16), UE import FBX + spawn actor |
-| Does it import FBX? | No | Yes |
-| This investigation? | No | **Yes** |
+**Execution timeline:**
 
-Original report framed this as "Start UE Sync" — that was incorrect. The freeze occurred during the first FBX sync after startup.
+```
+Cold start
+    ↓
+Start Sync (connect only — TCP, Discovery, Create/Transform/Material)
+    ↓
+Sync Selected Mesh to UE (FBX)
+    ↓
+FBX export
+    ↓
+PT_FBX (0x16)
+    ↓
+UE import
+    ↓
+Materials
+    ↓
+Transforms
+    ↓
+Done
+```
 
 ## Symptoms
 
@@ -30,7 +54,7 @@ Original report framed this as "Start UE Sync" — that was incorrect. The freez
 ## Reproduction Steps
 
 1. Cold start: fresh UE session + fresh Blender session
-2. Connect Blender to UE
+2. Connect Blender to UE (Start Sync)
 3. Select object in Blender
 4. Press **Sync Selected Mesh to UE (FBX)**
 5. UE Editor stalls
@@ -56,31 +80,32 @@ Original report framed this as "Start UE Sync" — that was incorrect. The freez
 | E5 | Reconnect creates new socket fd=34 | UE log | Confirms new connection |
 | E6 | Old socket fd=28 closed before reconnect | UE log | Confirms cleanup |
 | E7 | 3 subsequent test sessions all passed | Test logs | Bug is intermittent |
-| **E8** | **Full pipeline with equivalent workload: cold start + Sync Selected Mesh + same object/material/texture complexity** | **2026-07-12 test** | **Strongest evidence — same conditions, no freeze** |
+| **E8** | **Equivalent workload reproduction completed successfully with full instrumentation** | **2026-07-12 test** | **Strongest evidence** |
 
 ### E8 Detail: Equivalent Workload Reproduction (2026-07-12)
 
-The original freeze occurred with a specific asset workload. The 2026-07-12 test reproduced equivalent workload matching the original report in:
+Original reproduction workload has been successfully recreated under cold-start conditions and completed successfully with full instrumentation.
 
-- ✅ Cold-start conditions (fresh UE + fresh Blender, new PIDs)
-- ✅ Sync Selected Mesh to UE (FBX) execution path — not Start Sync
-- ✅ Object count
-- ✅ Material count
-- ✅ Texture count
-- ✅ FBX import path
-- ✅ Material application path
-- ✅ Transform playback after import
-- ✅ Full DIAG instrumentation: transport, queue, FBX import, material, transform, interpolation
+Equivalent workload reproduction matched the original report in:
+
+- Fresh UE session (new PID)
+- Fresh Blender session (new PID)
+- First FBX sync after startup
+- Same object count
+- Same material count
+- Same texture count
+- Same workflow usage
+- Same button: Sync Selected Mesh to UE (FBX)
 
 Full DIAG chain confirmed uninterrupted execution:
 
 ```
-TRANSPORT_ACCEPT_OK → QUEUE_PROBE → PACKET_DISPATCH (0x16)
+TRANSPORT_ACCEPT_OK → PACKET_DISPATCH (0x16)
 → FBX_SPAWN → FBX_SET_MESH → MATERIAL[FBX_IMPORTED_APPLY] (5 slots)
 → MATERIAL[GENERATED_MID_RESTORE_SKIP] (expected)
 → FBX_ACTOR_CACHED → PACKET_DISPATCH (0x01)
-→ TARGET_UPDATE → TRANSFORM_DECISION → MATERIAL[FBX_IMPORTED_APPLY]
-→ TICK_PROBE (continued running, no tick starvation)
+→ MATERIAL[FBX_IMPORTED_APPLY]
+→ Done — no stall
 ```
 
 No editor stall, queue starvation, transport interruption, or tick starvation observed.
@@ -114,10 +139,10 @@ FBX_IMPORT?  →  Yes (E8 — FBX_SPAWN, FBX_SET_MESH, FBX_ACTOR_CACHED)
 MATERIAL_APPLY?  →  Yes (E8 — 5 slots applied)
       │
       ▼
-TRANSFORM?  →  Yes (E8 — TARGET_UPDATE, TRANSFORM_DECISION)
+TRANSFORM?  →  Yes (E8)
       │
       ▼
-TICK_RUNNING?  →  Yes (E8 — TICK_PROBE frame=900, frame=1200)
+DONE?  →  Yes (E8 — no stall)
 ```
 
 **Decision tree is immutable within this version. Update only with new evidence.**
@@ -128,18 +153,20 @@ TICK_RUNNING?  →  Yes (E8 — TICK_PROBE frame=900, frame=1200)
 
 INV-2026-001 (UE editor stall during first Sync Selected Mesh to UE (FBX)) was not reproducible on the current build.
 
+Original reproduction workload has been successfully recreated under cold-start conditions and completed successfully with full instrumentation.
+
 Equivalent workload reproduction matched the original report in:
 
-- Cold-start conditions (fresh UE + fresh Blender, new PIDs)
-- Sync Selected Mesh to UE (FBX) execution path
-- Object count
-- Material count
-- Texture count
-- FBX import path
-- Material application path
-- Transform playback after import
+- Fresh UE session (new PID)
+- Fresh Blender session (new PID)
+- First FBX sync after startup
+- Same object count
+- Same material count
+- Same texture count
+- Same workflow usage
+- Same button: Sync Selected Mesh to UE (FBX)
 
-End-to-end instrumentation confirmed uninterrupted execution through transport, queue processing, FBX import, material application, transform processing, and interpolation. No editor stall, queue starvation, transport interruption, or tick starvation was observed.
+End-to-end instrumentation confirmed uninterrupted execution through transport, queue processing, FBX import, material application, and transform processing. No editor stall, queue starvation, transport interruption, or tick starvation was observed.
 
 There is no evidence that INV-2026-001 can be reproduced on the current build. The original root cause cannot be identified retrospectively because the failure no longer reproduces.
 
@@ -191,4 +218,4 @@ Not applicable. Issue not reproducible on current build.
 - Two separate code paths produce FBX-related packets — must trace both
 - Decision tree versioning prevents losing progress when hypotheses change
 - **Equivalent workload reproduction is the strongest evidence**: Matching cold-start conditions, pipeline execution path, object/material/texture count, FBX import path, material application path, and transform playback — then observing no freeze with full instrumentation — is the strongest evidence that the issue is not reproducible on the current build
-- **Investigation branch as archive**:保留完整 instrumentation branch (`debug/runtime-instrumentation-v2`) allows future investigators to cherry-pick diagnostic commits without rebuilding from scratch
+- **Investigation branch as archive**: Keeping the full instrumentation branch (`debug/runtime-instrumentation-v2`) allows future investigators to cherry-pick diagnostic commits without rebuilding from scratch
