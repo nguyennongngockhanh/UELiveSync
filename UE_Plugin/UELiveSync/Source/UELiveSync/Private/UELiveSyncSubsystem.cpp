@@ -1819,10 +1819,20 @@ bool UUELiveSyncSubsystem::Tick(
 
                     BuildActorCache();
 
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[TRANSPORT_ACCEPT_OK] conn=%d"),
+                        ConnectionGeneration + 1);
+
                     StartNetworkThread();
                 }
                 else
                 {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[TRANSPORT_ACCEPT_FAIL] state=%d"),
+                        static_cast<int32>(
+                            NewSocket->
+                                GetConnectionState()));
+
                     UE_LOG(
                         LogLiveSync,
                         Warning,
@@ -1894,6 +1904,13 @@ bool UUELiveSyncSubsystem::Tick(
         FPlatformTime::Seconds() - LastHeartbeatTime >
         HeartbeatTimeoutVal)
     {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("[HEARTBEAT_TIMEOUT] secondsSince=%.2f timeout=%.2f"),
+            FPlatformTime::Seconds() - LastHeartbeatTime,
+            HeartbeatTimeoutVal);
+
         UE_LOG(
             LogLiveSync,
             Log,
@@ -2542,6 +2559,10 @@ StartNetworkThread()
 void UUELiveSyncSubsystem::
 StopNetworkThread()
 {
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[TRANSPORT_DISCONNECT] conn=%d"),
+        ConnectionGeneration);
+
     bNetworkThreadStarting = false;
 
     if (!NetworkRunnable &&
