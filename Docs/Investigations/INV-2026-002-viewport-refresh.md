@@ -35,12 +35,48 @@ Slate tick / viewport invalidate
 Actor appears in viewport
 ```
 
+## Hypotheses
+
+| ID | Hypothesis | Status |
+|----|-----------|--------|
+| H1 | Viewport not invalidated after spawn | Pending — code audit suggestive |
+| H2 | Slate tick not running when window inactive | Pending |
+| H3 | Component not registered / render state dirty | Pending — less likely |
+| H4 | Transport / packet / queue issue | Disproved — actor spawns, Outliner updates |
+| H5 | Actor spawned into correct World but LevelViewportClient isn't viewing that World yet | Pending — low probability but cheap to rule out |
+
+## Phase 0A — Verify Actual Runtime Packet Path
+
+**Do NOT assume Start UE Sync enters the FBX importer.**
+
+Start UE Sync may use:
+- PT_Create → HandleCreateObject() → SpawnActor()
+- PT_FBX → HandleImport() → SpawnActor()
+- Both
+
+Capture the first packet dispatch sequence after Start UE Sync:
+
+1. Fresh UE session + fresh Blender session
+2. Clear UE log
+3. Press **Start UE Sync**
+4. Check UE log for first packet type after connection:
+   - PT_Create = 0x01
+   - PT_FBX = 0x16
+   - Other
+5. Record exact dispatch order
+
+**Only then audit the corresponding execution path.**
+
+If PT_Create drives actor creation, the FBX importer audit (Phase 0) is irrelevant.
+
 ## Phase 0 — Code Audit
 
 **Audit date**: 2026-07-12
 **Files audited**: LiveSyncFBXImporter.cpp, UELiveSyncSubsystem.cpp
 
-### Spawn path (what the plugin does)
+**Condition**: Phase 0 audit covers FBX spawn path (PT_FBX / 0x16). Only relevant if Phase 0A confirms FBX is the entry point.
+
+### FBX spawn path
 
 ```
 ProcessBinaryPacket (type=0x16)
@@ -84,11 +120,11 @@ return true
 - "Not called" ≠ "Needs to be called"
 - Many UE editor spawn paths don't call RedrawAllViewports() — viewport still updates via Slate tick / editor notification
 - MarkRenderStateDirty() affects render state, not viewport invalidation
-- Audit only covers the FBX spawn path, not the full Start UE Sync execution (Socket → Queue → Tick → HandleCreateObject → Spawn → Tick Return → Slate → Viewport)
+- Audit only covers the FBX spawn path, not the full Start UE Sync execution
 
 ### What this audit suggests (hypothesis only)
 
-The spawn path does not explicitly invalidate the editor viewport. Combined with the symptom (actor visible in Outliner but not in Viewport until window focus), this suggests the issue may be related to editor viewport invalidation or Slate tick timing. **This is a hypothesis, not a confirmed root cause.**
+If Phase 0A confirms FBX is the entry point: the spawn path does not explicitly invalidate the editor viewport. Combined with the symptom, this suggests the issue may be related to editor viewport invalidation or Slate tick timing. **This is a hypothesis, not a confirmed root cause.**
 
 **Confidence**: Medium — code audit provides suggestive evidence but runtime validation is required.
 
@@ -136,6 +172,17 @@ Do NOT click viewport. Only:
 | Actor does NOT appear on window activate | Need click in viewport → different issue (viewport invalidation) |
 
 **These are two very different bugs.** Must test before any conclusion.
+
+### B-F — Frame Selected Test (low-cost validation)
+
+1. Ctrl+Shift+P or click actor in World Outliner
+2. Details panel updates?
+3. Press F (Frame Selected)
+
+| Result | Interpretation |
+|--------|---------------|
+| Camera frames actor immediately | Actor fully spawned and registered → viewport update issue |
+| F does not frame actor | Spawn path incomplete — different bug |
 
 ### B1-B5 — Additional Tests
 
@@ -200,13 +247,19 @@ Do NOT add markers until Phase C identifies the missing API.
 
 ## Decision Tree
 
-**v3** (after Phase 0 audit, corrected)
+**v4** (after Phase 0A + H5 + F test)
 
 ```
 Start UE Sync
       │
       ▼
-Actor spawns?  →  Yes (Outliner visible)
+Phase 0A: First packet dispatch?
+      │
+      ├─ PT_Create → audit HandleCreateObject path
+      │
+      ├─ PT_FBX → audit FBXImporter path (Phase 0)
+      │
+      └─ Both → audit both paths
       │
       ▼
 Phase A: Reproduce
@@ -223,20 +276,26 @@ Phase B0: Alt+Tab to UE (no click)
             │                   → Phase C: audit viewport notification
             │
             └─ Actor does not appear → spawn issue (different bug)
+      │
+      ▼
+Phase B-F: Select actor in Outliner → Press F
+      │
+      ├─ Camera frames actor → actor fully spawned → viewport update issue
+      │
+      └─ F does not frame → spawn path incomplete
 ```
 
 ## Root Cause
 
 **Status**: Strong hypothesis — pending runtime confirmation
 
-Code audit shows the spawn path (`LiveSyncFBXImporter.cpp:2570-2683`) does not call any editor viewport invalidation API. Combined with the symptom (actor in Outliner but not in Viewport until window focus), this suggests the issue may be related to editor viewport invalidation or Slate tick timing.
-
-**However:**
-- "Not called" ≠ "Needs to be called" — many editor spawn paths don't call RedrawAllViewports()
-- Audit only covers FBX spawn path, not the full Start UE Sync execution
+Code audit shows the FBX spawn path does not call any editor viewport invalidation API. However:
+- "Not called" ≠ "Needs to be called"
+- Phase 0A may reveal the entry point is PT_Create, not PT_FBX — making the FBX audit irrelevant
+- H5 (wrong World) is possible but low probability
 - Runtime behavior may differ from what audit suggests
 
-**Confidence**: Medium — hypothesis supported by code audit, requires Phase A/B/C runtime validation.
+**Confidence**: Medium — hypothesis supported by code audit, requires Phase 0A/A/B/C runtime validation.
 
 ## Fix
 
@@ -246,7 +305,7 @@ Not applicable. Investigation in progress.
 
 | Scenario | Result |
 |----------|--------|
-| Pending Phase A | — |
+| Pending Phase 0A + Phase A | — |
 
 ## Decision Log
 
@@ -254,11 +313,15 @@ Not applicable. Investigation in progress.
 |----|----------|----------|----------|----------|--------|
 | D1 | Open investigation | User report: actor in Outliner but not in Viewport | Opened | — | Clear symptom, distinct from INV-2026-001 |
 | D2 | Phase 0 code audit before reproduce | Low cost, may identify subsystem quickly | Accepted | Jump to reproduce | Audit provides hypothesis without runtime tests |
-| D3 | Phase 0 is hypothesis only, not root cause | "Not called" ≠ "Needs to be called"; many spawn paths don't call RedrawAllViewports() | Accepted | Claim root cause identified | Confirmation bias — must validate with runtime evidence |
+| D3 | Phase 0 is hypothesis only, not root cause | "Not called" ≠ "Needs to be called" | Accepted | Claim root cause identified | Confirmation bias |
+| D4 | Add Phase 0A: verify entry point | Don't assume Start UE Sync enters FBX importer | Accepted | — | Wrong entry point → wrong audit |
+| D5 | Add H5: wrong World hypothesis | Cheap to rule out, known UE issue | Accepted | — | PIE/Editor/Preview World confusion |
+| D6 | Add F test: cheap spawn validation | Select in Outliner + Press F | Accepted | — | Confirms actor fully spawned vs viewport issue |
 
 ## Lessons Learned
 
-- **"Not called" ≠ "Needs to be called"**: Code audit can identify what APIs are absent, but cannot prove they are required. Many UE editor spawn paths don't call viewport invalidation APIs — viewport still updates via Slate tick.
-- **Audit must cover the full execution path**: Not just SpawnActor, but Socket → Queue → Tick → HandleCreateObject → Spawn → Tick Return → Slate → Viewport.
+- **Verify entry point before auditing**: Don't assume Start UE Sync uses FBX importer — it may use PT_Create. Audit the wrong path = wasted effort.
+- **"Not called" ≠ "Needs to be called"**: Code audit can identify what APIs are absent, but cannot prove they are required.
 - **Distinguish Alt+Tab from click viewport**: Two very different bugs — Slate activation vs viewport invalidation.
-- **Avoid confirmation bias**: Don't assume a missing API is the root cause without runtime evidence.
+- **Cheap tests first**: Ctrl+Shift+P + F costs nothing and immediately distinguishes spawn issue from viewport issue.
+- **H5 (wrong World)**: Unlikely but cheap to rule out — actor may exist in a different editor world than the active viewport.
