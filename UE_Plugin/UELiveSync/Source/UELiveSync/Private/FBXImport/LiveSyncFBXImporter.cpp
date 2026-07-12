@@ -691,6 +691,9 @@ static void RefreshFBXStaticMeshComponent(
     SMC->SetHiddenInGame(false, true);
     SMC->UpdateBounds();
     SMC->MarkRenderStateDirty();
+    UE_LOG(LogLiveSync, Verbose,
+        TEXT("[FBX_RENDER_DIRTY] actor=%s reason=refresh"),
+        OwnerActor ? *OwnerActor->GetName() : TEXT("null"));
     OwnerActor->SetActorHiddenInGame(false);
 }
 
@@ -2421,6 +2424,10 @@ bool FLiveSyncFBXImporter::HandleImport(
             }
 
             SMC->SetStaticMesh(StaticMesh);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX_SET_MESH] guid=%s mesh=%s path=update"),
+                *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                *StaticMesh->GetName());
 
             // Phase 10J.5B.2: restore non-null material overrides.
             const int32 NumMatSlots = SMC->GetNumMaterials();
@@ -2576,6 +2583,10 @@ bool FLiveSyncFBXImporter::HandleImport(
 
         MeshActor = World->SpawnActor<AStaticMeshActor>(
             SpawnParams);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX_SPAWN] guid=%s actor=%s"),
+            *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+            MeshActor ? *MeshActor->GetName() : TEXT("null"));
         if (!MeshActor)
         {
             Context.Stats->FBXImportFailed.fetch_add(
@@ -2607,6 +2618,10 @@ bool FLiveSyncFBXImporter::HandleImport(
                 PendingExtent.X, PendingExtent.Y, PendingExtent.Z);
 
             SMC->SetStaticMesh(StaticMesh);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX_SET_MESH] guid=%s mesh=%s path=spawn"),
+                *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                *StaticMesh->GetName());
 
             // Phase 10J.5B.2: refresh after initial mesh assignment.
             RefreshFBXStaticMeshComponent(SMC, MeshActor);
@@ -2662,6 +2677,10 @@ bool FLiveSyncFBXImporter::HandleImport(
         if (Context.OnActorCached)
         {
             Context.OnActorCached(Request.ObjectGUID, MeshActor);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX_ACTOR_CACHED] guid=%s actor=%s"),
+                *Request.ObjectGUID.ToString(EGuidFormats::Digits),
+                *MeshActor->GetName());
         }
 
         // Phase 10J.5E: Mark GUID as FBX-authoritative (spawn path).
