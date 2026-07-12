@@ -1828,7 +1828,7 @@ bool UUELiveSyncSubsystem::Tick(
                     BuildActorCache();
 
                     UE_LOG(LogLiveSync, Log,
-                        TEXT("[TRANSPORT_ACCEPT_OK] conn=%d"),
+                        TEXT("[TRANSPORT_ACCEPT_OK] generation=%d"),
                         ConnectionGeneration + 1);
 
                     StartNetworkThread();
