@@ -2779,11 +2779,25 @@ ProcessQueuedPackets()
         LastReportedDrops = CurrentDrops;
     }
 
+    // [DIAG][QUEUE] snapshot before dequeue
+    const int32 QBefore = PacketQueue.Size();
+
     while (
         PacketQueue.Dequeue(
             Packet))
     {
         DequeueCount++;
+
+        // [DIAG][QUEUE_POP] log each dequeued packet
+        if (Packet.RawData.Num() >= 24)
+        {
+            uint8 _popType = *(Packet.RawData.GetData() + 6);
+            uint64 _popSeq = 0;
+            FMemory::Memcpy(&_popSeq, Packet.RawData.GetData() + 8, sizeof(uint64));
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[QUEUE_POP] type=0x%02x seq=%llu depth=%d"),
+                _popType, _popSeq, PacketQueue.Size());
+        }
 
         if (DequeueCount <=
             MaxRate)
@@ -2791,6 +2805,15 @@ ProcessQueuedPackets()
             PacketsThisTick.Add(
                 MoveTemp(Packet));
         }
+    }
+
+    // [DIAG][QUEUE_PROBE] snapshot after dequeue
+    const int32 QAfter = PacketQueue.Size();
+    if (QBefore > 0 || QAfter > 5)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[QUEUE_PROBE] before=%d after=%d dequeued=%d"),
+            QBefore, QAfter, DequeueCount);
     }
 
     if (DequeueCount > 0 && ShouldLogVerbose())
@@ -2880,6 +2903,16 @@ ProcessQueuedPackets()
                 &PktObjCount,
                 Pkt.RawData.GetData() + 20,
                 sizeof(int32));
+        }
+
+        // [DIAG][PACKET_DISPATCH] log packet type and sequence
+        if (PktSize >= 24)
+        {
+            uint64 _pktSeq = 0;
+            FMemory::Memcpy(&_pktSeq, Pkt.RawData.GetData() + 8, sizeof(uint64));
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[PACKET_DISPATCH] type=0x%02x seq=%llu size=%d"),
+                PktType, _pktSeq, PktSize);
         }
 
         uint64 PktBeginCycles =
