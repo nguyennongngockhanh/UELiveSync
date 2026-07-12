@@ -44,7 +44,8 @@ Actor appears in viewport
 | H3 | Component not registered / render state dirty | Pending — less likely |
 | H4 | Transport / packet / queue issue | Disproved — actor spawns, Outliner updates |
 | H5 | Actor spawned into correct World but LevelViewportClient isn't viewing that World yet | Pending — low probability but cheap to rule out |
-| H6 | Tick starvation — Editor update loop delayed, SpawnActor happens in Tick but Tick doesn't complete full editor update cycle | Pending — more likely than H5 |
+| H6 | Spawn occurs during a frame where viewport redraw is deferred or suppressed | Pending |
+| H7 | Realtime viewport disabled or viewport client not marked realtime | Pending — known UE issue, cheap to check |
 
 ## Phase 0A — Verify Actual Runtime Packet Path
 
@@ -150,9 +151,8 @@ Verify:
 - Spawn happens inside Tick()?
 - Tick returns normally?
 - Any async task holding Editor thread?
-- Does Tick() complete the full editor update cycle?
 
-If Tick doesn't complete, Slate has no opportunity to redraw.
+Do NOT assume Tick doesn't complete — if Tick truly doesn't return, many other subsystems would stall too.
 
 ## Phase A — Reproduce
 
@@ -199,6 +199,20 @@ Do NOT click viewport. Only:
 
 **These are two very different bugs.** Must test before any conclusion.
 
+### B6' — Details Panel Update Test
+
+After actor spawns but BEFORE clicking viewport:
+
+1. Click actor in World Outliner
+2. Check: Details panel updates immediately?
+
+| Result | Interpretation |
+|--------|---------------|
+| Details Panel updates | Editor transaction running normally → issue is viewport-specific, not systemic |
+| Details Panel does NOT update | Systemic editor issue |
+
+This narrows the scope: if Outliner + Details Panel work but Viewport doesn't, the problem is viewport client redraw/realtime — not Slate or editor tick globally.
+
 ### B-F — Frame Selected Test (low-cost validation)
 
 1. Ctrl+Shift+P or click actor in World Outliner
@@ -209,27 +223,6 @@ Do NOT click viewport. Only:
 |--------|---------------|
 | Camera frames actor immediately | Actor fully spawned and registered → viewport update issue |
 | F does not frame actor | Spawn path incomplete — different bug |
-
-### B6 — stat fps / stat unit Test
-
-After actor spawns but BEFORE clicking UE, type in UE console:
-
-```
-stat fps
-```
-
-or
-
-```
-stat unit
-```
-
-| Result | Interpretation |
-|--------|---------------|
-| Overlay appears immediately | Viewport is still redrawing — issue is actor-specific invalidation |
-| Overlay does NOT appear | Entire viewport/Slate loop is not repainting — systemic issue |
-
-This distinguishes "viewport invalidate" from "entire Slate/Viewport loop stalled."
 
 ### B1-B5 — Additional Tests
 
@@ -270,7 +263,6 @@ Identify:
 - Does Slate tick after Tick() returns?
 - Does the editor viewport receive any notification after actor spawn?
 - Is there a deferred redraw or notification queue?
-- Is Tick() completing the full editor update cycle?
 
 ## Phase D — Find Appropriate API (after Phase C)
 
@@ -295,7 +287,7 @@ Do NOT add markers until Phase C identifies the missing API.
 
 ## Decision Tree
 
-**v5** (after H6 + Phase 0B + B6)
+**v6** (after H6/H7, B6' replacing B6)
 
 ```
 Start UE Sync
@@ -326,11 +318,12 @@ Phase B0: Alt+Tab to UE (no click)
             └─ Actor does not appear → spawn issue (different bug)
       │
       ▼
-Phase B6: stat fps / stat unit (no click)
+Phase B6': Click actor in Outliner → Details Panel updates?
       │
-      ├─ Overlay appears → viewport redrawing, actor-specific issue
+      ├─ YES → editor transaction normal → viewport-specific issue
+      │          → Phase C: audit viewport client / realtime
       │
-      └─ Overlay missing → entire Slate/Viewport loop stalled
+      └─ NO → systemic editor issue → Phase 0B: audit Tick lifecycle
       │
       ▼
 Phase B-F: Select actor in Outliner → Press F
@@ -348,7 +341,8 @@ Code audit shows the FBX spawn path does not call any editor viewport invalidati
 - "Not called" ≠ "Needs to be called"
 - Phase 0A may reveal the entry point is PT_Create, not PT_FBX — making the FBX audit irrelevant
 - H5 (wrong World) is possible but low probability
-- H6 (Tick starvation) is more likely — SpawnActor may happen in Tick but Tick doesn't complete full editor update cycle
+- H6 (viewport redraw deferred) — spawn occurs during a frame where viewport redraw is deferred
+- H7 (realtime disabled) — viewport client may not be marked realtime
 - Runtime behavior may differ from what audit suggests
 
 **Confidence**: Medium — hypothesis supported by code audit, requires Phase 0A/0B/A/B/C runtime validation.
@@ -373,16 +367,19 @@ Not applicable. Investigation in progress.
 | D4 | Add Phase 0A: verify entry point | Don't assume Start UE Sync enters FBX importer | Accepted | — | Wrong entry point → wrong audit |
 | D5 | Add H5: wrong World hypothesis | Cheap to rule out, known UE issue | Accepted | — | PIE/Editor/Preview World confusion |
 | D6 | Add F test: cheap spawn validation | Select in Outliner + Press F | Accepted | — | Confirms actor fully spawned vs viewport issue |
-| D7 | Add H6: Tick starvation | More likely than H5 — SpawnActor in Tick but Tick doesn't complete full cycle | Accepted | — | Explains Outliner update without viewport redraw |
-| D8 | Add Phase 0B: audit Tick lifecycle | Verify Spawn runs on Game Thread, inside Tick, Tick returns normally | Accepted | — | If Tick doesn't complete, Slate can't redraw |
-| D9 | Add B6: stat fps/unit test | Distinguishes actor-specific invalidation from systemic viewport stall | Accepted | — | Cheap, high diagnostic value |
+| D7 | Add H6: viewport redraw deferred | Spawn occurs during a frame where viewport redraw is deferred | Accepted | — | Explains Outliner update without viewport redraw |
+| D8 | Add Phase 0B: audit Tick lifecycle | Verify Spawn runs on Game Thread, inside Tick, Tick returns normally | Accepted | — | Don't assume Tick doesn't complete |
+| D9 | Add H7: realtime viewport disabled | Viewport client may not be marked realtime — known UE issue | Accepted | — | Cheap to check, common cause of this symptom |
+| D10 | Add B6': Details Panel update test | Distinguishes viewport-specific from systemic editor issue | Accepted | — | Cheaper and more reliable than stat fps |
 
 ## Lessons Learned
 
 - **Verify entry point before auditing**: Don't assume Start UE Sync uses FBX importer — it may use PT_Create. Audit the wrong path = wasted effort.
 - **"Not called" ≠ "Needs to be called"**: Code audit can identify what APIs are absent, but cannot prove they are required.
 - **Distinguish Alt+Tab from click viewport**: Two very different bugs — Slate activation vs viewport invalidation.
-- **Cheap tests first**: Ctrl+Shift+P + F + stat fps costs nothing and immediately distinguishes spawn issue from viewport issue.
+- **Cheap tests first**: Ctrl+Shift+P + F + Details Panel update costs nothing and immediately distinguishes spawn issue from viewport issue.
 - **H5 (wrong World)**: Unlikely but cheap to rule out — actor may exist in a different editor world than the active viewport.
-- **H6 (Tick starvation)**: SpawnActor may happen in Tick but Tick doesn't complete full editor update cycle. This is more likely than viewport invalidation and explains why Outliner updates but viewport doesn't.
-- **Don't use RedrawAllViewports() as hammer fix**: If the issue is Tick/Slate lifecycle or World context, adding RedrawAllViewports() only masks symptoms.
+- **H6 (viewport redraw deferred)**: Spawn may occur during a frame where viewport redraw is deferred or suppressed — not the same as Tick not completing.
+- **H7 (realtime disabled)**: Viewport client may not be marked realtime — known cause of this exact symptom pattern.
+- **B6' > B6**: Details Panel update test is cheaper and more reliable than stat fps — it directly tests whether editor transactions are running.
+- **Don't use RedrawAllViewports() as hammer fix**: If the issue is viewport client realtime state or World context, adding RedrawAllViewports() only masks symptoms.
