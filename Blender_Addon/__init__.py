@@ -924,6 +924,15 @@ def _export_object_local_fbx(obj, filepath, depsgraph):
             _fbx_log(f"[FBX] Export failed: {e}")
             return False
 
+        # DIAG: mark exact moment FBX export returns
+        _post_export_ts = time.time()
+        _post_export_mono = time.monotonic()
+        try:
+            with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _pef:
+                _pef.write(f"[DIAG][FBX_EXPORT_DONE] ts={_post_export_ts:.6f} mono={_post_export_mono:.6f} obj={obj.name} guid={guid_short}\n")
+        except Exception:
+            pass
+
         return True
 
     finally:
@@ -2396,12 +2405,22 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 # Phase 10J.5J: log geometry decision
                 prev_geom = sync._last_geometry_version.get(guid_hex)
                 send_fbx = 1
+                _fbx_reason = "no_previous_hash"
                 if prev_geom is not None and geometry_hash != 0:
                     if prev_geom == geometry_hash:
                         send_fbx = 0
-                print(f"[SYNC][DECIDE] seq={seq} guid={guid_hex[:8]} "
-                      f"sendFBX={send_fbx} reason={'geometry_changed' if geometry_hash != prev_geom else 'unchanged'} "
-                      f"oldGeomHash={prev_geom or 0} newGeomHash={geometry_hash}")
+                        _fbx_reason = "geometry_unchanged"
+                    else:
+                        _fbx_reason = "geometry_changed"
+                elif prev_geom is not None and geometry_hash == 0:
+                    _fbx_reason = "geometry_hash_zero_with_prev"
+                network._append_blender_debug_log(
+                    f"[FBX_SEND_DECISION] guid={guid_hex[:8]} "
+                    f"geometry_hash={geometry_hash} "
+                    f"prev_geometry_hash={prev_geom} "
+                    f"prev_exists={int(prev_geom is not None)} "
+                    f"send_fbx={send_fbx} reason={_fbx_reason}"
+                )
 
                 # Phase 3.5: serialize and send via manifest v3 helper
 
@@ -2424,7 +2443,16 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     packet_type=network.PT_FBXImportRequest,
                     version=network.LIVE_SYNC_VERSION_V5,
                 )
+                print(
+                    f"[FBX][SEND_RESULT] "
+                    f"sent={send_result.sent} "
+                    f"status={send_result.status} "
+                    f"action={send_result.action}"
+                )
                 should_send_after_pipeline = send_result.sent
+                print(
+                    f"[FBX][DIAG] should_send={should_send_after_pipeline}"
+                )
 
                 if should_send_after_pipeline:
                     print(
@@ -2806,11 +2834,16 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
         except Exception:
             pass
 
+        # DIAG: mark exact moment FBX sync operator completes (all phases)
+        try:
+            _op_done_ts = time.time()
+            _op_done_mono = time.monotonic()
+            with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _odf:
+                _odf.write(f"[DIAG][FBX_OP_DONE] ts={_op_done_ts:.6f} mono={_op_done_mono:.6f} obj={_guid_for_log} totalMs={_bl_timer_total_ms:.1f}\n")
+        except Exception:
+            pass
+
         return {'FINISHED'}
-
-
-# =========================================================
-# PHASE 7H / 7G.5: SYNC ACTIVE CAMERA TO UE
 # =========================================================
 
 class UELIVESYNC_OT_sync_active_camera_to_ue(
