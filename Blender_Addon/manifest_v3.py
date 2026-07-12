@@ -1293,7 +1293,11 @@ def serialize_and_send_fbx_request(
 
     The operator calls this after all mesh evaluation and sidecar work.
     """
+    from . import network as _net
     if not should_send_after_pipeline(manifest_result):
+        _net._append_blender_debug_log(
+            f"[FBX_ENQUEUE_SKIP] guid={str(guid_obj)[:8]} reason=manifest_not_durable"
+        )
         return FBXPacketTransactionResult(
             status="suppressed",
             action="manifest_not_durable",
@@ -1311,7 +1315,14 @@ def serialize_and_send_fbx_request(
             timestamp=timestamp,
             geometry_hash=geometry_hash,
         )
+        _net._append_blender_debug_log(
+            f"[FBX_ENQUEUE] guid={str(guid_obj)[:8]} payload_bytes={len(payload)} "
+            f"packet_type=0x{packet_type:02x} version={version}"
+        )
     except Exception as exc:
+        _net._append_blender_debug_log(
+            f"[FBX_ENQUEUE_FAIL] guid={str(guid_obj)[:8]} reason=serialization_failed error={exc}"
+        )
         return FBXPacketTransactionResult(
             status="failure",
             action="serialization_failed",
@@ -1325,7 +1336,13 @@ def serialize_and_send_fbx_request(
             packet_type=packet_type,
             version=version,
         )
+        _net._append_blender_debug_log(
+            f"[FBX_ENQUEUE_SENT] guid={str(guid_obj)[:8]} status=send_fn_returned"
+        )
     except Exception as exc:
+        _net._append_blender_debug_log(
+            f"[FBX_ENQUEUE_FAIL] guid={str(guid_obj)[:8]} reason=send_failed error={exc}"
+        )
         return FBXPacketTransactionResult(
             status="failure",
             action="send_failed",
