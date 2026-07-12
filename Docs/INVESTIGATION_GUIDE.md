@@ -679,6 +679,7 @@ These are common mistakes. Recognizing them early saves days of wasted effort.
 ---
 
 *Last updated: 2026-07-12*
+*Version: 1.0*
 *This guide applies to all investigations in this repository.*
 
 ---
