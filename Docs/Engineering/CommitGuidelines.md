@@ -1,9 +1,13 @@
 # Commit Guidelines
 
-*Version: 1.0*
+*Version: 1.1*
 *Last updated: 2026-07-12*
 
-## Commit Guideline
+## Mandatory Rules
+
+These rules apply to every commit. No exceptions.
+
+### One Concern Per Commit
 
 Every commit must represent one logical concern and be:
 
@@ -14,48 +18,33 @@ Every commit must represent one logical concern and be:
 
 File boundaries do not define a concern. A single concern may legitimately span multiple files if they implement the same logical change.
 
-## Diagnostic Commit Guideline
+### Diagnostic Isolation
 
 Each `diag(<subsystem>): ...` commit must instrument exactly one subsystem or investigation concern.
 
-Diagnostic commits must be independently revertable without breaking:
+Diagnostic commits must:
 
-- Production behavior
-- Other diagnostic instrumentation
-- Buildability
-- Ongoing investigations
+- Be independently revertable without breaking production behavior, other diagnostics, buildability, or ongoing investigations
+- **Never intentionally change production behavior** — allowed: log, counter, timer, marker, tracing. Forbidden: logic changes, timing changes, queue behavior changes, retry policy changes
 
-Example split for runtime instrumentation:
-
-```
-diag(queue): packet queue lifecycle
-diag(transport): connection lifecycle
-diag(transform): transform pipeline
-diag(interp): interpolation decisions
-diag(actor): actor destruction
-diag(tick): periodic runtime probes
-```
-
-When an investigation ends, individual subsystem diagnostics can be reverted independently:
-
-```bash
-git revert diag(interp)   # remove interpolation probes
-# queue, transport, transform, actor, tick remain
-```
-
-## Working Tree Safety
+### Working Tree Safety
 
 Never overwrite an uncommitted working tree to isolate production changes.
 
 If production and diagnostic changes are mixed:
 
+0. Check `git status` to understand the full state.
 1. Split them with `git add -p` whenever possible.
 2. If they cannot be separated safely, create a temporary backup branch or stash before rewriting the working tree.
 3. Do not rely on reflog or editor recovery as a backup strategy.
 
 This is a process invariant. Violating it risks losing uncommitted instrumentation that was never stashed or committed.
 
-## Commit Naming Convention
+## Recommended Conventions
+
+These conventions improve consistency but may be adapted per project needs.
+
+### Commit Naming
 
 ```
 <type>(<scope>): <description>
@@ -96,7 +85,7 @@ Scopes for this project:
 | `sequence` | Sequencer/keyframe pipeline |
 | `investigation` | Investigation-specific |
 
-## Branch Policy
+### Branch Naming
 
 | Branch | Purpose |
 |--------|---------|
@@ -105,3 +94,5 @@ Scopes for this project:
 | `investigation/*` | Root-cause analysis |
 | `feature/*` | New feature development |
 | `hotfix/*` | Emergency fixes |
+
+Additional prefixes may be added as the project evolves (e.g. `release/*`, `experiment/*`, `perf/*`, `spike/*`).
