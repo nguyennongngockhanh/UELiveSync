@@ -45,7 +45,6 @@ Actor appears in viewport
 | H4 | Transport / packet / queue issue | Disproved — actor spawns, Outliner updates |
 | H5 | Actor spawned into correct World but LevelViewportClient isn't viewing that World yet | Pending — low probability but cheap to rule out |
 | H6 | Spawn occurs during a frame where viewport redraw is deferred or suppressed | Pending |
-| H7 | Realtime viewport disabled or viewport client not marked realtime | Pending — known UE issue, cheap to check |
 
 ## Phase 0A — Verify Actual Runtime Packet Path
 
@@ -128,7 +127,7 @@ return true
 
 If Phase 0A confirms FBX is the entry point: the spawn path does not explicitly invalidate the editor viewport. Combined with the symptom, this suggests the issue may be related to editor viewport invalidation or Slate tick timing. **This is a hypothesis, not a confirmed root cause.**
 
-**Confidence**: Medium — code audit provides suggestive evidence but runtime validation is required.
+**Confidence**: Low (runtime evidence pending) — code audit provides suggestive evidence but no runtime validation has been performed yet.
 
 ## Phase 0B — Audit Tick Lifecycle
 
@@ -198,6 +197,16 @@ Do NOT click viewport. Only:
 | Actor does NOT appear on window activate | Need click in viewport → different issue (viewport invalidation) |
 
 **These are two very different bugs.** Must test before any conclusion.
+
+### B0.5 — Viewport Configuration Check
+
+Before deeper investigation, verify basic viewport configuration:
+
+- [ ] Viewport Realtime enabled (not throttled)
+- [ ] Game View off (not in game view mode)
+- [ ] Correct viewport (not a secondary/preview viewport)
+
+If Realtime is disabled, this is not a plugin bug — it's a user configuration issue.
 
 ### B6' — Details Panel Update Test
 
@@ -345,7 +354,7 @@ Code audit shows the FBX spawn path does not call any editor viewport invalidati
 - H7 (realtime disabled) — viewport client may not be marked realtime
 - Runtime behavior may differ from what audit suggests
 
-**Confidence**: Medium — hypothesis supported by code audit, requires Phase 0A/0B/A/B/C runtime validation.
+**Confidence**: Low (runtime evidence pending) — hypothesis supported by code audit, requires Phase 0A/0B/A/B/C runtime validation.
 
 ## Fix
 
