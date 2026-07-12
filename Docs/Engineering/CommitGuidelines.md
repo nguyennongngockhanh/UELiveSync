@@ -1,6 +1,6 @@
 # Commit Guidelines
 
-*Version: 1.3*
+*Version: 1.4*
 *Last updated: 2026-07-12*
 
 ## Mandatory Rules
@@ -31,7 +31,7 @@ Each `diag(<subsystem>): ...` commit must instrument exactly one subsystem or in
 Diagnostic commits must:
 
 - Be independently revertable without breaking production behavior, other diagnostics, buildability, or ongoing investigations
-- **Never intentionally change observable production behavior** — allowed: log, counter, timer, marker, tracing. Forbidden: logic changes, timing changes, queue behavior changes, retry policy changes
+- **Never intentionally change observable production behavior** — allowed: log, counter, timer, marker, tracing. Forbidden: logic changes, timing changes, queue behavior changes, retry policy changes. Observable behavior includes program output, network traffic, timing guarantees, ordering guarantees, persistence, API behavior, and user-visible behavior.
 - **Must not become a hidden dependency of production logic** — production code must not rely on diagnostic state (e.g. `if (DiagEnabled)`) to function correctly
 
 ### Working Tree Safety
@@ -46,6 +46,10 @@ If production and diagnostic changes are mixed:
 3. Do not rely on reflog or editor recovery as a backup strategy.
 
 This is a process invariant. Violating it risks losing uncommitted instrumentation that was never stashed or committed.
+
+### Documentation Follows Code
+
+If a commit changes an engineering policy or workflow, the corresponding documentation should be updated in the same commit whenever practical.
 
 ## Recommended Conventions
 
@@ -156,3 +160,4 @@ Diagnostic commits that remain useful after the investigation may stay in the co
 | v1.1 | Separate mandatory rules from recommended conventions. Add diagnostic behavior invariant. Add Working Tree step 0. |
 | v1.2 | Define "concern" explicitly. Refine diagnostic invariant to "observable behavior". Add investigation lifecycle. Clarify diag vs debug semantics. |
 | v1.3 | Add atomic commit rule. Add "history should tell a story". Add diagnostic naming convention. Add production hidden dependency invariant. |
+| v1.4 | Define observable behavior. Add documentation follows code rule. |
