@@ -7572,6 +7572,11 @@ void UUELiveSyncSubsystem::
 OnActorDestroyed(
     AActor* Actor)
 {
+    // [DIAG][ACTOR_DESTROY_BEGIN]
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[ACTOR_DESTROY_BEGIN] actor=%s"),
+        *Actor->GetName());
+
     FGuid Guid =
         FindGuidForActor(Actor);
 
@@ -7635,6 +7640,11 @@ OnActorDestroyed(
             It.RemoveCurrent();
         }
     }
+
+    // [DIAG][ACTOR_DESTROY_END]
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[ACTOR_DESTROY_END] actor=%s"),
+        *Actor->GetName());
 }
 
 
