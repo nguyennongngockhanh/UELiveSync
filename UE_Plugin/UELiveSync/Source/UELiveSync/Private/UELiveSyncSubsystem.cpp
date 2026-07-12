@@ -2817,8 +2817,8 @@ ProcessQueuedPackets()
     {
         DequeueCount++;
 
-        // [DIAG][QUEUE_POP] log each dequeued packet
-        if (Packet.RawData.Num() >= 24)
+        // [DIAG][QUEUE_POP] log each dequeued packet (verbose only)
+        if (ShouldLogVerbose() && Packet.RawData.Num() >= 24)
         {
             uint8 _popType = *(Packet.RawData.GetData() + 6);
             uint64 _popSeq = 0;
