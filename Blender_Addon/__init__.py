@@ -9,6 +9,7 @@ bl_info = {
 
 import bpy
 import os
+import time
 
 from bpy.props import (
     IntProperty,
@@ -2431,6 +2432,22 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         f"({tri_count} tri, "
                         f"{vert_count} vert)"
                     )
+
+                    # Phase B: send PT_Transform so UE applies correct TRS
+                    print("[FBX][TRANSFORM] BEFORE SEND")
+                    try:
+                        _xform = sync.get_transform(obj)
+                        _xform_payload = network.serialize_object_v3(
+                            guid_obj,
+                            _xform,
+                            time.time(),
+                            parent_guid_obj=None,
+                            primitive_type=network.PRIMITIVE_CUBE,
+                        )
+                        network.send_objects([_xform_payload])
+                        print("[FBX][TRANSFORM] AFTER SEND")
+                    except Exception as _xform_exc:
+                        print(f"[FBX][TRANSFORM] EXCEPTION: {_xform_exc}")
 
                 # A3.6: Safe orphan sidecar pruning
                 from . import manifest_prune as _mp
