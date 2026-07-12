@@ -464,120 +464,29 @@ A fix is not complete until all applicable rows pass.
 
 ---
 
-## 11. Postmortem Template
+## 11. Investigation Template
 
-Every investigation must produce a postmortem. Save as:
-`Docs/Investigations/INV-YYYY-NNN-<slug>.md`
+Use `Docs/Templates/Investigation.md` as the canonical template for all investigations.
 
-```markdown
-# INV-YYYY-NNN: <Title>
+Required sections:
 
-## Metadata
+- **Metadata** — Status, Owner, Started, Closed, Guide Version, Classification
+- **Problem** — One-sentence bug description
+- **Symptoms** — What was observed, when, logs
+- **Reproduction Steps** — Numbered steps
+- **Hypotheses** — ID, text, status (Active/Disproved/Confirmed/Inconclusive)
+- **Evidence Collected** — ID, description, source, classification
+- **Decision Log** — ID, decision, basis, accepted, rejected, reason
+- **Decision Tree** — Versioned ASCII tree
+- **Root Cause** — What caused it, with confidence level
+- **Why Existing Tests Missed It**
+- **Fix** — Changes with commit references
+- **Prevent Recurrence** — Invariant, test, or process change
+- **Regression** — Results of regression matrix
+- **Remaining Unknowns**
+- **Investigation Retrospective** — What worked, what wasted time, what assumptions were wrong
 
-- **Status**: Open | Closed
-- **Owner**: <name>
-- **Started**: YYYY-MM-DD
-- **Closed**: YYYY-MM-DD
-- **Classification**: Transport | Protocol | Threading | Lifetime | Ownership | Logic | Engine bug
-
-## Problem
-
-<One-sentence description of the bug.>
-
-## Symptoms
-
-- <What the user saw>
-- <What the logs showed>
-- <When it happens>
-
-## Reproduction Steps
-
-1. <step>
-2. <step>
-3. <step>
-
-## Hypotheses
-
-| ID | Hypothesis | Status |
-|----|-----------|--------|
-| H1 | <hypothesis> | Disproved by E(n) |
-| H2 | <hypothesis> | Confirmed by E(m) |
-| H3 | <hypothesis> | Active |
-
-## Evidence Collected
-
-| ID | Description | Source | Classification |
-|----|-------------|--------|----------------|
-| E1 | <observation> | <log/file/marker> | Supports H(x) |
-| E2 | <observation> | <log/file/marker> | Disproves H(y) |
-
-## Decision Log
-
-| ID | Decision | Based on | Accepted | Rejected | Reason |
-|----|----------|----------|----------|----------|--------|
-| D1 | <decision> | E(x), E(y) | <choice> | <alt> | <why> |
-
-## Decision Tree
-
-<Version number>
-<ASCII tree or reference to file>
-
-## Root Cause
-
-<What actually caused the bug. Cite evidence.>
-
-**Confidence**: Low | Medium | High | Proven
-
-- **Low**: plausible hypothesis, limited supporting evidence
-- **Medium**: multiple evidence points support, no contradictions found
-- **High**: strong evidence chain, only one explanation fits
-- **Proven**: reproduced with targeted instrumentation, fix validated
-
-## Why Existing Tests Missed It
-
-<What gap in the test suite allowed this bug to exist?>
-
-## Fix
-
-<What was changed. Reference commits.>
-
-| Commit | Description |
-|--------|-------------|
-| C1 | feat(subsystem): ... |
-| C2 | fix(subsystem): ... |
-
-## Prevent Recurrence
-
-<What test, invariant, or process change ensures this class of bug cannot return?>
-
-## Regression
-
-<Results of regression matrix.>
-
-## Remaining Unknowns
-
-- <Anything not fully resolved>
-
-## Investigation Retrospective
-
-### What worked
-- <practices that were effective>
-
-### What wasted time
-- <activities that did not contribute to the solution>
-
-### What assumptions were wrong
-- <initial beliefs that were disproven>
-
-### What evidence was missing initially
-- <evidence that should have been collected earlier>
-
-### Which instrumentation became permanent
-- <markers that proved useful long-term>
-
-### Which instrumentation was deleted
-- <markers that were removed after investigation>
-```
+Save as: `Docs/Investigations/INV-YYYY-NNN-<slug>.md`
 
 ---
 
