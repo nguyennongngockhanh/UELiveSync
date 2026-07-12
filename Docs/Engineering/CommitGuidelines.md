@@ -1,6 +1,6 @@
 # Commit Guidelines
 
-*Version: 1.1*
+*Version: 1.2*
 *Last updated: 2026-07-12*
 
 ## Mandatory Rules
@@ -9,7 +9,11 @@ These rules apply to every commit. No exceptions.
 
 ### One Concern Per Commit
 
-Every commit must represent one logical concern and be:
+Every commit must represent one logical concern.
+
+A concern is a single logical change that can be understood, reviewed, tested, and reverted independently.
+
+Every commit must be:
 
 - **Independently reviewable** — reviewable without reading other commits in the sequence
 - **Independently buildable** — when applicable, the commit alone compiles/passes
@@ -25,7 +29,7 @@ Each `diag(<subsystem>): ...` commit must instrument exactly one subsystem or in
 Diagnostic commits must:
 
 - Be independently revertable without breaking production behavior, other diagnostics, buildability, or ongoing investigations
-- **Never intentionally change production behavior** — allowed: log, counter, timer, marker, tracing. Forbidden: logic changes, timing changes, queue behavior changes, retry policy changes
+- **Never intentionally change observable production behavior** — allowed: log, counter, timer, marker, tracing. Forbidden: logic changes, timing changes, queue behavior changes, retry policy changes
 
 ### Working Tree Safety
 
@@ -58,10 +62,10 @@ Types:
 | `fix` | Bug fix |
 | `perf` | Performance improvement |
 | `refactor` | Code restructuring without behavior change |
-| `diag` | Diagnostic instrumentation |
+| `diag` | Structured instrumentation intended to aid investigation. May remain in the codebase if useful. |
 | `docs` | Documentation only |
 | `test` | Test addition or correction |
-| `debug` | Temporary debugging (must not be merged to main) |
+| `debug` | Temporary debugging changes. Must be removed or squashed before merging to main. |
 
 Scopes for this project:
 
@@ -96,3 +100,31 @@ Scopes for this project:
 | `hotfix/*` | Emergency fixes |
 
 Additional prefixes may be added as the project evolves (e.g. `release/*`, `experiment/*`, `perf/*`, `spike/*`).
+
+## Investigation Lifecycle
+
+Every investigation follows a consistent lifecycle:
+
+```
+Investigation
+    ↓
+Diagnostic commits (diag)
+    ↓
+Root cause confirmed
+    ↓
+Production fix (feat/fix)
+    ↓
+Regression tests (test)
+    ↓
+Remove temporary diagnostics (if no longer needed)
+```
+
+Diagnostic commits that remain useful after the investigation may stay in the codebase. Remove only what no longer serves a purpose.
+
+## Revision History
+
+| Version | Changes |
+|---------|---------|
+| v1.0 | Initial commit guidelines |
+| v1.1 | Separate mandatory rules from recommended conventions. Add diagnostic behavior invariant. Add Working Tree step 0. |
+| v1.2 | Define "concern" explicitly. Refine diagnostic invariant to "observable behavior". Add investigation lifecycle. Clarify diag vs debug semantics. |
