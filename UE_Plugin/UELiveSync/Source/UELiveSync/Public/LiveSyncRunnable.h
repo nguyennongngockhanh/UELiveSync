@@ -74,4 +74,6 @@ public:
     std::atomic<double> LastThreadLoopTime{0.0};
 
     std::atomic<double> LastPacketReceiveTime{0.0};
+
+    int32 ConnectionGeneration = 0;
 };
