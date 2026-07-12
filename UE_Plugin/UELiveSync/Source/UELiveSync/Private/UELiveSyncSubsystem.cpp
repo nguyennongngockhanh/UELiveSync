@@ -1792,11 +1792,12 @@ bool UUELiveSyncSubsystem::Tick(
                             LogLiveSync,
                             Log,
                             TEXT("Accept: Blender connected "
-                                 "from %s:%d"),
+                                 "from %s:%d conn=%d"),
                             *RemoteAddr->
                                 ToString(false),
                             RemoteAddr->
-                                GetPort());
+                                GetPort(),
+                            ConnectionGeneration + 1);
                     }
                     else
                     {
@@ -2462,6 +2463,8 @@ StartNetworkThread()
     // CREATE RUNNABLE
     // =====================================================
 
+    ConnectionGeneration++;
+
     NetworkRunnable =
         new FLiveSyncRunnable(
 
@@ -2469,6 +2472,9 @@ StartNetworkThread()
 
             &PacketQueue
         );
+
+    NetworkRunnable->ConnectionGeneration =
+        ConnectionGeneration;
 
     NetworkRunnable->SetStats(
         &Stats);
