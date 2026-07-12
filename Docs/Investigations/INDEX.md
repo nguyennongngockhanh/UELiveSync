@@ -1,0 +1,5 @@
+# Investigation Registry
+
+| ID | Title | Status | Priority | Guide Version | Started | Owner |
+|----|-------|--------|----------|---------------|---------|-------|
+| INV-2026-001 | FBX Reconnect Import Failure | Suspended | P0 | v1.0 | 2026-07-03 | Khanh |

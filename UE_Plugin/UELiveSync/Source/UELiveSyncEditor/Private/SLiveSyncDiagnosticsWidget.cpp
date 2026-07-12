@@ -139,8 +139,7 @@ RefreshText()
 
     Report +=
         FString::Printf(
-            TEXT("=== Live Sync Diagnostics ===\n\n"),
-            *ConnText.ToString());
+            TEXT("=== Live Sync Diagnostics ===\n\n"));
 
     Report +=
         FString::Printf(

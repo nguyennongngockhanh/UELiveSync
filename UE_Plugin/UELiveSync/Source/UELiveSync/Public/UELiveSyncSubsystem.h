@@ -806,6 +806,8 @@ private:
     FSocket* ConnectionSocket =
         nullptr;
 
+    int32 ConnectionGeneration = 0;
+
     // =====================================================
     // THREADING
     // =====================================================

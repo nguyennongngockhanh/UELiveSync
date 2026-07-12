@@ -9,6 +9,7 @@ bl_info = {
 
 import bpy
 import os
+import time
 
 from bpy.props import (
     IntProperty,
@@ -2395,12 +2396,22 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 # Phase 10J.5J: log geometry decision
                 prev_geom = sync._last_geometry_version.get(guid_hex)
                 send_fbx = 1
+                _fbx_reason = "no_previous_hash"
                 if prev_geom is not None and geometry_hash != 0:
                     if prev_geom == geometry_hash:
                         send_fbx = 0
-                print(f"[SYNC][DECIDE] seq={seq} guid={guid_hex[:8]} "
-                      f"sendFBX={send_fbx} reason={'geometry_changed' if geometry_hash != prev_geom else 'unchanged'} "
-                      f"oldGeomHash={prev_geom or 0} newGeomHash={geometry_hash}")
+                        _fbx_reason = "geometry_unchanged"
+                    else:
+                        _fbx_reason = "geometry_changed"
+                elif prev_geom is not None and geometry_hash == 0:
+                    _fbx_reason = "geometry_hash_zero_with_prev"
+                network._append_blender_debug_log(
+                    f"[FBX_SEND_DECISION] guid={guid_hex[:8]} "
+                    f"geometry_hash={geometry_hash} "
+                    f"prev_geometry_hash={prev_geom} "
+                    f"prev_exists={int(prev_geom is not None)} "
+                    f"send_fbx={send_fbx} reason={_fbx_reason}"
+                )
 
                 # Phase 3.5: serialize and send via manifest v3 helper
 
@@ -2423,7 +2434,16 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     packet_type=network.PT_FBXImportRequest,
                     version=network.LIVE_SYNC_VERSION_V5,
                 )
+                print(
+                    f"[FBX][SEND_RESULT] "
+                    f"sent={send_result.sent} "
+                    f"status={send_result.status} "
+                    f"action={send_result.action}"
+                )
                 should_send_after_pipeline = send_result.sent
+                print(
+                    f"[FBX][DIAG] should_send={should_send_after_pipeline}"
+                )
 
                 if should_send_after_pipeline:
                     print(
@@ -2431,6 +2451,22 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                         f"({tri_count} tri, "
                         f"{vert_count} vert)"
                     )
+
+                    # Phase B: send PT_Transform so UE applies correct TRS
+                    print("[FBX][TRANSFORM] BEFORE SEND")
+                    try:
+                        _xform = sync.get_transform(obj)
+                        _xform_payload = network.serialize_object_v3(
+                            guid_obj,
+                            _xform,
+                            time.time(),
+                            parent_guid_obj=None,
+                            primitive_type=network.PRIMITIVE_CUBE,
+                        )
+                        network.send_objects([_xform_payload])
+                        print("[FBX][TRANSFORM] AFTER SEND")
+                    except Exception as _xform_exc:
+                        print(f"[FBX][TRANSFORM] EXCEPTION: {_xform_exc}")
 
                 # A3.6: Safe orphan sidecar pruning
                 from . import manifest_prune as _mp
@@ -2462,134 +2498,139 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     prev_prop_sig = sync._last_material_property_sig.get(guid_hex)
                     # Task 9B.6B.13: start collecting before first extraction call
                     network._mtex_start_collecting(seq, guid_hex)
-                    # Phase 3.2: use A3.1 extraction pipeline
-                    _all_sources, _all_usages = _extract_texture_usages_and_sources(obj)
-                    _tex_maps_dict = {}
-                    for _usage in _all_usages:
-                        _tex_maps_dict.setdefault(_usage.slot_index, []).append(
-                            (_usage.channel, _usage.source.filepath, _usage.source.image_name, _usage.flags)
-                        )
-                    # Phase 7H: include texture hash in dirty detection
-                    current_tex_sigs = {}
-                    for slot_idx, maps in _tex_maps_dict.items():
-                        if maps:
-                            tex_hash = network.compute_material_texture_hash(slot_idx, maps)
-                            current_tex_sigs[slot_idx] = tex_hash
-
-                    # Compute dirty hashes for logging
-                    scalar_hash_val, tex_hash_val, combined_hash_val = (
-                        network.compute_material_dirty_sig(current_prop_sig, current_tex_sigs)
-                    )
-                    print(f"[MATERIAL][DIRTY_HASH] guid={guid_hex[:8]} "
-                          f"scalarHash={scalar_hash_val} textureHash={tex_hash_val} "
-                          f"combinedHash={combined_hash_val}")
-
-                    scalar_changed = True
-                    if prev_prop_sig is not None:
-                        _scalar_len = len(next(iter(current_prop_sig.values())))
-                        prev_scalar = {si: vals[:_scalar_len] for si, vals in prev_prop_sig.items()}
-                        scalar_changed = current_prop_sig != prev_scalar
-                    tex_changed = False
-                    if prev_prop_sig is not None and len(prev_prop_sig) == len(current_prop_sig):
-                        prev_tex_sigs = {}
-                        for si in prev_prop_sig:
-                            prev_tex = prev_prop_sig[si][6:] if len(prev_prop_sig[si]) > 6 else ()
-                            if si in current_tex_sigs or any(v != 0 for v in prev_tex):
-                                prev_tex_sigs[si] = prev_tex
-                        tex_changed = (current_tex_sigs != prev_tex_sigs)
-
-                    # Phase 7H: log signature comparison outcome for diagnostics
-                    # Only log when something changed or cache missing (suppress noise on unchanged ticks)
-                    if scalar_changed or tex_changed or prev_prop_sig is None:
-                        print(f"[MATERIAL][SIG_COMPARE] guid={guid_hex[:8]} "
-                              f"prevExists={int(prev_prop_sig is not None)} "
-                              f"scalarChanged={int(scalar_changed)} "
-                              f"texChanged={int(tex_changed)}")
-
-                    # Phase 7H: always extract tex_maps + mat_props so we can send
-                    # even when only texture changed (scalars unchanged).
-                    mat_props = {}
-                    # Task 9B.6B.14: collect material basic properties for transaction summary
                     network._mt_basic_start_collecting(seq, guid_hex)
-                    for slot_idx, slot in enumerate(obj.material_slots):
-                        if slot and slot.material:
-                            p = network.get_material_basic_properties(slot.material)
-                            if p is not None:
-                                mat_props[slot_idx] = p
-                                # Task 9B.6B.14: collect for summary
-                                network._mt_basic_collect_slot(slot_idx, p)
-
-                    tex_maps = None
                     try:
-                        if _tex_maps_dict:
-                            for slot_idx, maps in _tex_maps_dict.items():
-                                for ch, fpath, img_name, flags in maps:
-                                    abs_path = bpy.path.abspath(fpath) if fpath else ""
-                                    file_exists = os.path.isfile(abs_path) if abs_path else False
-                                    source = "PACKED" if (flags & network.MTEX_FLAG_IMAGE_PACKED) else "FILE"
-                                    ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
-                                    has_tex = "1" if abs_path else "0"
-                                    exists_str = "1" if file_exists else "0"
-                                    mat_name = obj.material_slots[slot_idx].material.name if slot_idx < len(obj.material_slots) and obj.material_slots[slot_idx] and obj.material_slots[slot_idx].material else "?"
-                                    print(f"[MATERIAL][TEXTURE_CHANNEL_SCAN] object={obj.name} slot={slot_idx} material={mat_name} channel={ch_name} hasTexture={has_tex} image={img_name} path={abs_path[:200] if abs_path else ''} exists={exists_str} source={source}")
-                            tex_maps = _tex_maps_dict
-                    except Exception:
-                        tex_maps = None
+                        # Phase 3.2: use A3.1 extraction pipeline
+                        _all_sources, _all_usages = _extract_texture_usages_and_sources(obj)
+                        _tex_maps_dict = {}
+                        for _usage in _all_usages:
+                            _tex_maps_dict.setdefault(_usage.slot_index, []).append(
+                                (_usage.channel, _usage.source.filepath, _usage.source.image_name, _usage.flags)
+                            )
+                        # Phase 7H: include texture hash in dirty detection
+                        current_tex_sigs = {}
+                        for slot_idx, maps in _tex_maps_dict.items():
+                            if maps:
+                                tex_hash = network.compute_material_texture_hash(slot_idx, maps)
+                                current_tex_sigs[slot_idx] = tex_hash
 
-                    # Task 9B.6B.13: emit MTEX extraction summary after collecting records.
-                    _mtex_records = network._mtex_collect_records
-                    if _mtex_records:
-                        unique_keys = set()
-                        for slot_idx, ch, img_name, fpath, flags, is_packed in _mtex_records:
-                            ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
-                            unique_keys.add((guid_hex, seq, slot_idx, ch, img_name))
-                        unique_count = len(unique_keys)
-                        print(
-                            f"[MTEX][EXTRACT_SUMMARY] syncId={seq} guid={guid_hex[:8]} "
-                            f"object={obj.name} slots={len(_mtex_records)} records={len(_mtex_records)} "
-                            f"uniqueRecords={unique_count}"
+                        # Compute dirty hashes for logging
+                        scalar_hash_val, tex_hash_val, combined_hash_val = (
+                            network.compute_material_dirty_sig(current_prop_sig, current_tex_sigs)
                         )
-                        # Emit per-record lines only in verbose mode (one per unique record)
-                        if network.material_verbose_logging:
+                        print(f"[MATERIAL][DIRTY_HASH] guid={guid_hex[:8]} "
+                              f"scalarHash={scalar_hash_val} textureHash={tex_hash_val} "
+                              f"combinedHash={combined_hash_val}")
+
+                        scalar_changed = True
+                        if prev_prop_sig is not None:
+                            _scalar_len = len(next(iter(current_prop_sig.values())))
+                            prev_scalar = {si: vals[:_scalar_len] for si, vals in prev_prop_sig.items()}
+                            scalar_changed = current_prop_sig != prev_scalar
+                        tex_changed = False
+                        if prev_prop_sig is not None and len(prev_prop_sig) == len(current_prop_sig):
+                            prev_tex_sigs = {}
+                            for si in prev_prop_sig:
+                                prev_tex = prev_prop_sig[si][6:] if len(prev_prop_sig[si]) > 6 else ()
+                                if si in current_tex_sigs or any(v != 0 for v in prev_tex):
+                                    prev_tex_sigs[si] = prev_tex
+                            tex_changed = (current_tex_sigs != prev_tex_sigs)
+
+                        # Phase 7H: log signature comparison outcome for diagnostics
+                        # Only log when something changed or cache missing (suppress noise on unchanged ticks)
+                        if scalar_changed or tex_changed or prev_prop_sig is None:
+                            print(f"[MATERIAL][SIG_COMPARE] guid={guid_hex[:8]} "
+                                  f"prevExists={int(prev_prop_sig is not None)} "
+                                  f"scalarChanged={int(scalar_changed)} "
+                                  f"texChanged={int(tex_changed)}")
+
+                        # Phase 7H: always extract tex_maps + mat_props so we can send
+                        # even when only texture changed (scalars unchanged).
+                        mat_props = {}
+                        # Task 9B.6B.14: collect material basic properties for transaction summary
+                        network._mt_basic_start_collecting(seq, guid_hex)
+                        for slot_idx, slot in enumerate(obj.material_slots):
+                            if slot and slot.material:
+                                p = network.get_material_basic_properties(slot.material)
+                                if p is not None:
+                                    mat_props[slot_idx] = p
+                                    # Task 9B.6B.14: collect for summary
+                                    network._mt_basic_collect_slot(slot_idx, p)
+
+                        tex_maps = None
+                        try:
+                            if _tex_maps_dict:
+                                for slot_idx, maps in _tex_maps_dict.items():
+                                    for ch, fpath, img_name, flags in maps:
+                                        abs_path = bpy.path.abspath(fpath) if fpath else ""
+                                        file_exists = os.path.isfile(abs_path) if abs_path else False
+                                        source = "PACKED" if (flags & network.MTEX_FLAG_IMAGE_PACKED) else "FILE"
+                                        ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
+                                        has_tex = "1" if abs_path else "0"
+                                        exists_str = "1" if file_exists else "0"
+                                        mat_name = obj.material_slots[slot_idx].material.name if slot_idx < len(obj.material_slots) and obj.material_slots[slot_idx] and obj.material_slots[slot_idx].material else "?"
+                                        print(f"[MATERIAL][TEXTURE_CHANNEL_SCAN] object={obj.name} slot={slot_idx} material={mat_name} channel={ch_name} hasTexture={has_tex} image={img_name} path={abs_path[:200] if abs_path else ''} exists={exists_str} source={source}")
+                                tex_maps = _tex_maps_dict
+                        except Exception:
+                            tex_maps = None
+
+                        # Task 9B.6B.13: emit MTEX extraction summary after collecting records.
+                        _mtex_records = network._mtex_collect_records
+                        if _mtex_records:
+                            unique_keys = set()
                             for slot_idx, ch, img_name, fpath, flags, is_packed in _mtex_records:
                                 ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
-                                _mtex_key = (guid_hex, seq, slot_idx, ch, img_name)
-                                print(
-                                    f"[MTEX][EXTRACT_RECORD] syncId={seq} slot={slot_idx} "
-                                    f"channel={ch_name} key={img_name} image={img_name} "
-                                    f"packed={int(is_packed)}"
-                                )
-                    network._mtex_clear_dedup_state()
-
-                    # Task 9B.6B.14: emit material basic property summary (FBX path)
-                    _mat_records = network.mat_basic_collect_records
-                    if _mat_records and network._mt_basic_collecting:
-                        total_slots = len(_mat_records)
-                        # Count changed fields by comparing with stored property signatures
-                        total_changed = 0
-                        all_changed = []
-                        for si, props in _mat_records:
-                            prev = sync._last_material_property_sig.get(si)
-                            if prev:
-                                for field in props:
-                                    if field in prev and prev[field] != props[field]:
-                                        total_changed += 1
-                                        all_changed.append(f"slot{si}+{field}")
-                        _mat_collect_guid = guid_hex[:8]
-                        _mt_basic_changed_fields_str = ",".join(all_changed[:5]) if all_changed else ""
-                        _append_blender_debug_log(
-                            f"[MATERIAL][BASIC_EXTRACT_SUMMARY] syncId={seq} "
-                            f"guid={_mat_collect_guid} object={obj.name} "
-                            f"materialSlots={total_slots} materialsExamined={total_slots} "
-                            f"materialsChanged={total_changed} fields={_mt_basic_changed_fields_str}"
-                        )
-                        # Emit changed-record lines only when changes exist (one per changed field, limited)
-                        for _ch in all_changed[:5]:
-                            _append_blender_debug_log(
-                                f"[MATERIAL][BASIC_CHANGED] syncId={seq} "
-                                f"guid={_mat_collect_guid} {_ch}"
+                                unique_keys.add((guid_hex, seq, slot_idx, ch, img_name))
+                            unique_count = len(unique_keys)
+                            print(
+                                f"[MTEX][EXTRACT_SUMMARY] syncId={seq} guid={guid_hex[:8]} "
+                                f"object={obj.name} slots={len(_mtex_records)} records={len(_mtex_records)} "
+                                f"uniqueRecords={unique_count}"
                             )
-                    network._mt_basic_clear_state()
+                            # Emit per-record lines only in verbose mode (one per unique record)
+                            if network.material_verbose_logging:
+                                for slot_idx, ch, img_name, fpath, flags, is_packed in _mtex_records:
+                                    ch_name = {1: "BaseColor", 2: "Roughness", 3: "Metallic", 4: "Alpha", 5: "Normal"}.get(ch, "Unknown")
+                                    _mtex_key = (guid_hex, seq, slot_idx, ch, img_name)
+                                    print(
+                                        f"[MTEX][EXTRACT_RECORD] syncId={seq} slot={slot_idx} "
+                                        f"channel={ch_name} key={img_name} image={img_name} "
+                                        f"packed={int(is_packed)}"
+                                    )
+
+                        # Task 9B.6B.14: emit material basic property summary (FBX path)
+                        _mat_records = network.mat_basic_collect_records
+                        if _mat_records and network._mt_basic_collecting:
+                            total_slots = len(_mat_records)
+                            # Count changed fields by comparing with stored property signatures
+                            total_changed = 0
+                            all_changed = []
+                            for si, props in _mat_records:
+                                prev = sync._last_material_property_sig.get(si)
+                                if prev:
+                                    for field in props:
+                                        if field in prev and prev[field] != props[field]:
+                                            total_changed += 1
+                                            all_changed.append(f"slot{si}+{field}")
+                            _mat_collect_guid = guid_hex[:8]
+                            _mt_basic_changed_fields_str = ",".join(all_changed[:5]) if all_changed else ""
+                            _append_blender_debug_log(
+                                f"[MATERIAL][BASIC_EXTRACT_SUMMARY] syncId={seq} "
+                                f"guid={_mat_collect_guid} object={obj.name} "
+                                f"materialSlots={total_slots} materialsExamined={total_slots} "
+                                f"materialsChanged={total_changed} fields={_mt_basic_changed_fields_str}"
+                            )
+                            # Emit changed-record lines only when changes exist (one per changed field, limited)
+                            for _ch in all_changed[:5]:
+                                _append_blender_debug_log(
+                                    f"[MATERIAL][BASIC_CHANGED] syncId={seq} "
+                                    f"guid={_mat_collect_guid} {_ch}"
+                                )
+                    finally:
+                        if network._mtex_collecting:
+                            network._mtex_clear_dedup_state()
+                        if network._mt_basic_collecting:
+                            network._mt_basic_clear_state()
 
                     # Phase 7H: decide whether to send based on scalar OR texture change
                     if scalar_changed or tex_changed or send_fbx == 1:
@@ -2785,10 +2826,6 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
             pass
 
         return {'FINISHED'}
-
-
-# =========================================================
-# PHASE 7H / 7G.5: SYNC ACTIVE CAMERA TO UE
 # =========================================================
 
 class UELIVESYNC_OT_sync_active_camera_to_ue(

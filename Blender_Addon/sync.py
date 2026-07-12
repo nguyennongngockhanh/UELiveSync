@@ -1419,7 +1419,22 @@ def check_updates():
     if not timer_running:
         return 0.016
 
-
+    # DIAG: log every timer invocation (timestamp + monotonic tick count)
+    try:
+        _diag_ts = time.time()
+        _diag_mono = time.monotonic()
+        _diag_qsize = 0
+        try:
+            from . import network as _net_diag
+            _cl = getattr(_net_diag, '_client', None)
+            if _cl is not None:
+                _diag_qsize = _cl._send_queue.qsize()
+        except Exception:
+            pass
+        with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _df:
+            _df.write(f"[DIAG][TIMER] ts={_diag_ts:.6f} mono={_diag_mono:.6f} qsize={_diag_qsize}\n")
+    except Exception:
+        pass
 
     # First-tick diagnostic
     if _sync_start_time > 0 and time.time() - _sync_start_time < 0.1:
@@ -2615,7 +2630,16 @@ def check_updates():
     # =====================================================
 
     if objects_to_send:
-
+        # DIAG: log transform send with timestamp and count
+        try:
+            _xf_ts = time.time()
+            _xf_mono = time.monotonic()
+            _xf_count = len(objects_to_send)
+            _xf_child_count = len(children_to_send)
+            with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _xf_f:
+                _xf_f.write(f"[DIAG][XFORM_SEND] ts={_xf_ts:.6f} mono={_xf_mono:.6f} roots={_xf_count} children={_xf_child_count}\n")
+        except Exception:
+            pass
         send_objects(
             objects_to_send
         )

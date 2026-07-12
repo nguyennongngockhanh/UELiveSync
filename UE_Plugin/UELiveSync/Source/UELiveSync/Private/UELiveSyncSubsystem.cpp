@@ -1636,6 +1636,14 @@ bool UUELiveSyncSubsystem::Tick(
     VerboseFrameCounter++;
     LastTickExecutionTime = FPlatformTime::Seconds();
 
+    // [DIAG][TICK_PROBE] entry (throttled: every ~5s at 60fps)
+    if ((VerboseFrameCounter % 300) == 0)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[TICK_PROBE] frame=%d delta=%.4f"),
+            VerboseFrameCounter, DeltaTime);
+    }
+
     // =====================================================
     // SYNC CVARS
     // =====================================================
@@ -1668,11 +1676,6 @@ bool UUELiveSyncSubsystem::Tick(
             else DeadActors++;
         }
 
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[TICK][DIAG] frame=%lld ActorCache=%d (alive=%d dead=%d) TransformStates=%d"),
-            (long long)VerboseFrameCounter,
-            CacheSize, AliveActors, DeadActors,
-            StateSize);
     }
 
     // =====================================================
@@ -1792,11 +1795,12 @@ bool UUELiveSyncSubsystem::Tick(
                             LogLiveSync,
                             Log,
                             TEXT("Accept: Blender connected "
-                                 "from %s:%d"),
+                                 "from %s:%d conn=%d"),
                             *RemoteAddr->
                                 ToString(false),
                             RemoteAddr->
-                                GetPort());
+                                GetPort(),
+                            ConnectionGeneration + 1);
                     }
                     else
                     {
@@ -1818,10 +1822,20 @@ bool UUELiveSyncSubsystem::Tick(
 
                     BuildActorCache();
 
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[TRANSPORT_ACCEPT_OK] generation=%d"),
+                        ConnectionGeneration + 1);
+
                     StartNetworkThread();
                 }
                 else
                 {
+                    UE_LOG(LogLiveSync, Warning,
+                        TEXT("[TRANSPORT_ACCEPT_FAIL] state=%d"),
+                        static_cast<int32>(
+                            NewSocket->
+                                GetConnectionState()));
+
                     UE_LOG(
                         LogLiveSync,
                         Warning,
@@ -1893,6 +1907,13 @@ bool UUELiveSyncSubsystem::Tick(
         FPlatformTime::Seconds() - LastHeartbeatTime >
         HeartbeatTimeoutVal)
     {
+        UE_LOG(
+            LogLiveSync,
+            Log,
+            TEXT("[HEARTBEAT_TIMEOUT] secondsSince=%.2f timeout=%.2f"),
+            FPlatformTime::Seconds() - LastHeartbeatTime,
+            HeartbeatTimeoutVal);
+
         UE_LOG(
             LogLiveSync,
             Log,
@@ -2462,6 +2483,8 @@ StartNetworkThread()
     // CREATE RUNNABLE
     // =====================================================
 
+    ConnectionGeneration++;
+
     NetworkRunnable =
         new FLiveSyncRunnable(
 
@@ -2469,6 +2492,9 @@ StartNetworkThread()
 
             &PacketQueue
         );
+
+    NetworkRunnable->ConnectionGeneration =
+        ConnectionGeneration;
 
     NetworkRunnable->SetStats(
         &Stats);
@@ -2536,6 +2562,10 @@ StartNetworkThread()
 void UUELiveSyncSubsystem::
 StopNetworkThread()
 {
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[TRANSPORT_DISCONNECT] conn=%d"),
+        ConnectionGeneration);
+
     bNetworkThreadStarting = false;
 
     if (!NetworkRunnable &&
@@ -2773,6 +2803,9 @@ ProcessQueuedPackets()
         LastReportedDrops = CurrentDrops;
     }
 
+    // [DIAG][QUEUE] snapshot before dequeue
+    const int32 QBefore = PacketQueue.Size();
+
     while (
         PacketQueue.Dequeue(
             Packet))
@@ -2785,6 +2818,15 @@ ProcessQueuedPackets()
             PacketsThisTick.Add(
                 MoveTemp(Packet));
         }
+    }
+
+    // [DIAG][QUEUE_PROBE] snapshot after dequeue
+    const int32 QAfter = PacketQueue.Size();
+    if (QBefore > 0 || QAfter > 5)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[QUEUE_PROBE] before=%d after=%d dequeued=%d"),
+            QBefore, QAfter, DequeueCount);
     }
 
     if (DequeueCount > 0 && ShouldLogVerbose())
@@ -2874,6 +2916,16 @@ ProcessQueuedPackets()
                 &PktObjCount,
                 Pkt.RawData.GetData() + 20,
                 sizeof(int32));
+        }
+
+        // [DIAG][PACKET_DISPATCH] log packet type and sequence
+        if (PktSize >= 24)
+        {
+            uint64 _pktSeq = 0;
+            FMemory::Memcpy(&_pktSeq, Pkt.RawData.GetData() + 8, sizeof(uint64));
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[PACKET_DISPATCH] type=0x%02x seq=%llu size=%d"),
+                PktType, _pktSeq, PktSize);
         }
 
         uint64 PktBeginCycles =
@@ -5853,6 +5905,12 @@ UpdateTargetTransform(
     CHECK_GAME_THREAD();
     TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_UpdateTargetTransform);
 
+    // [DIAG][TARGET_UPDATE] entry
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[TARGET_UPDATE] guid=%s loc=%s"),
+        *Guid.ToString(EGuidFormats::Digits),
+        *Location.ToString());
+
     if (bEnableVerboseSyncLogs)
     {
         UE_LOG(
@@ -6092,6 +6150,12 @@ UpdateTargetTransform(
         ScaleDistance >=
         SclThreshold;
 
+    // [DIAG][TRANSFORM_DECISION] decision point
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[TRANSFORM_DECISION] guid=%s loc=%d rot=%d scl=%d parent=%d"),
+        *Guid.ToString(EGuidFormats::Digits),
+        bLocationChanged, bRotationChanged, bScaleChanged, bParentChanged);
+
     if (!bLocationChanged &&
         !bRotationChanged &&
         !bScaleChanged)
@@ -6310,6 +6374,11 @@ UpdateTargetTransform(
             *Guid.ToString(
                 EGuidFormats::Digits));
     }
+
+    // [DIAG][TARGET_UPDATE_DONE] exit
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[TARGET_UPDATE_DONE] guid=%s"),
+        *Guid.ToString(EGuidFormats::Digits));
 }
 
 
@@ -6324,12 +6393,9 @@ InterpolateTransforms(
     CHECK_GAME_THREAD();
         TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_InterpolateTransforms);
 
-    static int InterpFreezeIter = 0;
-    InterpFreezeIter++;
-
     if (bEnableVerboseSyncLogs)
     {
-        UE_LOG(LogLiveSync, Log, TEXT("BEGIN InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
+        UE_LOG(LogLiveSync, Log, TEXT("BEGIN InterpolateTransforms"));
     }
 
     // Skip interpolation during snapshot build — all transforms
@@ -7247,7 +7313,7 @@ InterpolateTransforms(
 
     if (bEnableVerboseSyncLogs)
     {
-        UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms freezeIter=%d"), InterpFreezeIter);
+        UE_LOG(LogLiveSync, Log, TEXT("END   InterpolateTransforms"));
     }
 }
 
@@ -7485,6 +7551,11 @@ void UUELiveSyncSubsystem::
 OnActorDestroyed(
     AActor* Actor)
 {
+    // [DIAG][ACTOR_DESTROY_BEGIN]
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[ACTOR_DESTROY_BEGIN] actor=%s"),
+        *Actor->GetName());
+
     FGuid Guid =
         FindGuidForActor(Actor);
 
@@ -7548,6 +7619,11 @@ OnActorDestroyed(
             It.RemoveCurrent();
         }
     }
+
+    // [DIAG][ACTOR_DESTROY_END]
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[ACTOR_DESTROY_END] actor=%s"),
+        *Actor->GetName());
 }
 
 
