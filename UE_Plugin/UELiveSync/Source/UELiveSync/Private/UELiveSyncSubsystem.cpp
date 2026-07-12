@@ -5913,6 +5913,12 @@ UpdateTargetTransform(
     CHECK_GAME_THREAD();
     TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_UpdateTargetTransform);
 
+    // [DIAG][TARGET_UPDATE] entry
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[TARGET_UPDATE] guid=%s loc=%s"),
+        *Guid.ToString(EGuidFormats::Digits),
+        *Location.ToString());
+
     if (bEnableVerboseSyncLogs)
     {
         UE_LOG(
@@ -6152,6 +6158,12 @@ UpdateTargetTransform(
         ScaleDistance >=
         SclThreshold;
 
+    // [DIAG][TRANSFORM_DECISION] decision point
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[TRANSFORM_DECISION] guid=%s loc=%d rot=%d scl=%d parent=%d"),
+        *Guid.ToString(EGuidFormats::Digits),
+        bLocationChanged, bRotationChanged, bScaleChanged, bParentChanged);
+
     if (!bLocationChanged &&
         !bRotationChanged &&
         !bScaleChanged)
@@ -6370,6 +6382,11 @@ UpdateTargetTransform(
             *Guid.ToString(
                 EGuidFormats::Digits));
     }
+
+    // [DIAG][TARGET_UPDATE_DONE] exit
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[TARGET_UPDATE_DONE] guid=%s"),
+        *Guid.ToString(EGuidFormats::Digits));
 }
 
 
