@@ -1132,7 +1132,9 @@ If the experiment fails or is abandoned:
 - Never manually restore binaries by copying artifacts
 - Always regenerate binaries through the appropriate Unreal Build Tool target
 - Verify `git status` is clean
-- Verify instrumentation no longer appears in runtime logs
+- Verify runtime behavior matches the pre-experiment baseline
+- Verify experiment-specific instrumentation is absent
+- Verify no new warnings/errors introduced by the rollback
 - Report rollback completion before continuing
 
 Do not leave experimental patches in the codebase without explicit user instruction to keep them.
@@ -1358,6 +1360,21 @@ Every permanent fix must identify:
 - Why the previous implementation failed
 
 If a fix does not explain why the bug occurred, it is not ready to ship.
+
+---
+
+# Playbook Evolution
+
+New rules may only be added when:
+
+- A real incident exposed a missing safeguard, or
+- An existing rule proved insufficient
+
+Do not add speculative rules.
+
+Each new rule should reference the incident that motivated it.
+
+The playbook grows by learning, not by anticipation.
 
 ---
 
