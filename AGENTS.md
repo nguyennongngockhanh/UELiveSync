@@ -1,5 +1,12 @@
 # AGENTS.md — UELiveSync Local Agent Rules
 
+## Playbook History
+
+- **v1.0** — Initial engineering playbook (commit `a70fcc7`)
+- **v1.1** — Added Observation Completeness
+- **v1.2** — Added Evidence Ownership, Experiment IDs, Rollback Verification
+- **v1.3** — Generalized Rollback Verification, added Playbook Evolution
+
 ## Project
 
 UELiveSync is a Blender ↔ Unreal Engine live sync system.
