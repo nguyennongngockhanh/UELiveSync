@@ -1312,6 +1312,20 @@ Do not consider a fix done merely because "build succeeded" or "no more crashes.
 
 ---
 
+# Observation Completeness
+
+Every experiment must collect all observations required to prove or disprove its stated hypothesis.
+
+If the hypothesis requires comparing two states (before/after, click/no-click, frame N/frame N+1), the instrumentation must capture both states.
+
+Do not claim an experiment can validate a comparison if only one side of the comparison is observed.
+
+Bad: "Expected: before != after" when the patch only logs "before."
+
+Good: "Expected: HiddenEd == true" when the patch logs HiddenEd at one point in time.
+
+---
+
 ## Commit Policy
 
 Follow the repository engineering policy documented in:
