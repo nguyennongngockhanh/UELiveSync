@@ -1132,6 +1132,7 @@ If the experiment fails or is abandoned:
 - Never manually restore binaries by copying artifacts
 - Always regenerate binaries through the appropriate Unreal Build Tool target
 - Verify `git status` is clean
+- Verify instrumentation no longer appears in runtime logs
 - Report rollback completion before continuing
 
 Do not leave experimental patches in the codebase without explicit user instruction to keep them.
@@ -1188,6 +1189,7 @@ Every investigation must maintain a running journal.
 Each experiment records:
 
 ```
+Experiment ID:
 Hypothesis:
 Variable changed:
 Expected result:
@@ -1196,6 +1198,18 @@ Conclusion:
 Confidence:
 Rollback:
 ```
+
+Experiment IDs follow the pattern: EXP-A, EXP-B, EXP-C, ...
+
+Keep a summary at the top of the journal:
+
+```
+EXP-A: Eliminated — wrong level
+EXP-B: Pending — visibility flags
+EXP-C: Not started
+```
+
+This enables quick status review without reading full entries.
 
 Confidence values:
 
@@ -1284,6 +1298,34 @@ Clearly distinguish between them. Avoid language implying certainty when only an
 
 Bad: "Selection is likely the cause."
 Good: "Observation: SelectActor() runs in the click path. Inference: selection may trigger visibility. Not yet confirmed."
+
+---
+
+# Evidence Ownership
+
+Every observation must identify its source.
+
+Possible sources:
+
+- Runtime log
+- Debugger
+- Engine source (read-only)
+- Documentation
+- UE API contract
+- User observation
+
+Do not mix evidence from different sources without stating it.
+
+Example:
+
+```
+Observation (Runtime log): proxy != nullptr
+Observation (Engine source): SceneProxy is created during CreateRenderState_Concurrent()
+Inference: Primitive probably entered scene initialization.
+Conclusion: Not yet established.
+```
+
+This prevents reasoning drift from a single runtime log to conclusions about engine internals.
 
 ---
 
