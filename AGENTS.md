@@ -1070,25 +1070,14 @@ Each level must be attempted or explicitly ruled out before moving to the next.
 
 # Approval Gate
 
-Before modifying any source code outside:
+Default writable scope:
 
 - `Blender_Addon/`
 - `UE_Plugin/`
 
-The agent MUST stop and request approval.
-
-This includes but is not limited to:
-
-- `Engine/`
-- `Config/`
-- `Build/`
-- `Scripts/`
-- `CI/`
-- `tests/`
+Everything else is read-only unless explicitly approved by the user.
 
 Documentation updates (Docs/, STATUS.md, AGENTS.md, README.md) do not require approval.
-
-Default assumption: modify only plugin and addon code unless told otherwise.
 
 ---
 
@@ -1127,6 +1116,8 @@ Never rebuild unrelated targets.
 
 Only build the smallest target affected by the current change.
 
+Never perform a build merely to "be safe." Every build must have a stated purpose.
+
 Example: plugin change → build `UELiveSync_Test58Editor` only. Do not build `UnrealEditor` unless engine source was modified (which requires approval per Engine Immutability Policy).
 
 ---
@@ -1144,6 +1135,26 @@ If the experiment fails or is abandoned:
 - Report rollback completion before continuing
 
 Do not leave experimental patches in the codebase without explicit user instruction to keep them.
+
+---
+
+# Artifact Ownership
+
+Each build artifact has an owning target.
+
+- `Engine/Binaries/` — owner: Epic (read-only)
+- `Binaries/` (project) — owner: project build target
+- `UE_Plugin/` — owner: UELiveSync plugin build
+- `Blender_Addon/` — owner: addon distribution
+- Experiment logs / scratch — disposable
+
+Never overwrite an artifact owned by another target.
+
+Examples:
+
+- `cp Engine .so into project` — VIOLATION
+- `cp project binary into Engine` — VIOLATION
+- `rebuild using the owning build target` — CORRECT
 
 ---
 
@@ -1166,6 +1177,8 @@ Investigations should prefer adding diagnostics rather than changing runtime beh
 
 If a proposed fix touches any of these subsystems, the Implementation Contract must explicitly justify why the change is safe and scoped.
 
+Crossing a Runtime Invariant boundary requires a separate Implementation Contract.
+
 ---
 
 # Investigation Journal
@@ -1180,8 +1193,16 @@ Variable changed:
 Expected result:
 Observed result:
 Conclusion:
+Confidence:
 Rollback:
 ```
+
+Confidence values:
+
+- `Low` — initial hypothesis, no direct evidence yet
+- `High` — supported by direct observation, not yet conclusive
+- `Eliminated` — disproved by direct evidence
+- `Confirmed` — proven by direct evidence
 
 The journal is the authoritative record of what was tried and what was eliminated.
 
@@ -1223,8 +1244,11 @@ Once an investigation scope is established:
 
 - Do not expand scope without user approval
 - Do not fix unrelated issues encountered during investigation
+- Do not improve code quality while investigating a bug
 - Record unrelated findings separately
 - One investigation = one primary bug
+
+Refactoring is a separate task.
 
 ---
 
@@ -1284,6 +1308,12 @@ Do not ship fixes that only hide the symptom.
 Temporary mitigations are acceptable only as experiments.
 
 Permanent fixes must explain the underlying root cause.
+
+Every permanent fix must identify:
+
+- Root cause
+- Triggering condition
+- Why the previous implementation failed
 
 If a fix does not explain why the bug occurred, it is not ready to ship.
 
