@@ -4817,9 +4817,82 @@ ProcessBinaryPacket(
                 return;
             }
 
-            // Remaining bytes after header = payload
+            // Compute actual per-object payload size from wire format.
+            // V5: VertCount(4) + Verts(N*12) + TriCount(4) + Tris(N*12) + MatCount(4) + Mats(N*4)
+            // V1: [SchemaVersion(4,chunk0)] VertexStride(4) VertexCount(4) Verts(N*S)
+            //     IndexCount(4) Indices(N*4) MaterialSlotCount(4) MaterialSlots(N*4)
+            const bool bHasFullAttr = (Flags & MESH_CHUNK_FLAG_FULL_ATTR) != 0;
+            int32 ComputedPayloadSize = -1;
+            {
+                const uint8* P = Ptr;
+                const uint8* End = PacketEnd;
+
+                if (bHasFullAttr)
+                {
+                    // V1 wire format
+                    if (ChunkIndex == 0 && P + 4 <= End) { P += 4; } // skip SchemaVersion
+                    if (P + 4 <= End)
+                    {
+                        uint32 VS = 0; FMemory::Memcpy(&VS, P, sizeof(uint32)); P += 4;
+                        if ((VS == 32 || VS == 48) && P + 4 <= End)
+                        {
+                            uint32 VC = 0; FMemory::Memcpy(&VC, P, sizeof(uint32)); P += 4;
+                            int64 VB = static_cast<int64>(VC) * VS;
+                            if (P + VB + 4 <= End)
+                            {
+                                P += VB;
+                                uint32 IC = 0; FMemory::Memcpy(&IC, P, sizeof(uint32)); P += 4;
+                                int64 IB = static_cast<int64>(IC) * 4;
+                                if (P + IB + 4 <= End)
+                                {
+                                    P += IB;
+                                    uint32 MC = 0; FMemory::Memcpy(&MC, P, sizeof(uint32)); P += 4;
+                                    int64 MB = static_cast<int64>(MC) * 4;
+                                    if (P + MB <= End) { P += MB; ComputedPayloadSize = static_cast<int32>(P - Ptr); }
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // V5 wire format
+                    if (P + 4 <= End)
+                    {
+                        uint32 VC = 0; FMemory::Memcpy(&VC, P, sizeof(uint32)); P += 4;
+                        int64 VB = static_cast<int64>(VC) * 12;
+                        if (P + VB + 4 <= End)
+                        {
+                            P += VB;
+                            uint32 TC = 0; FMemory::Memcpy(&TC, P, sizeof(uint32)); P += 4;
+                            int64 TB = static_cast<int64>(TC) * 12;
+                            if (P + TB + 4 <= End)
+                            {
+                                P += TB;
+                                uint32 MC = 0; FMemory::Memcpy(&MC, P, sizeof(uint32)); P += 4;
+                                int64 MB = static_cast<int64>(MC) * 4;
+                                if (P + MB <= End) { P += MB; ComputedPayloadSize = static_cast<int32>(P - Ptr); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Use computed size if valid, otherwise fall back to remaining bytes
             const int32 PayloadSize =
-                static_cast<int32>(PacketEnd - Ptr);
+                (ComputedPayloadSize > 0 && Ptr + ComputedPayloadSize <= PacketEnd)
+                ? ComputedPayloadSize
+                : static_cast<int32>(PacketEnd - Ptr);
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH-PARSE] obj=%u/%u GUID=%s "
+                     "OffsetBefore=%lld OffsetAfterHeader=%lld "
+                     "PayloadSize=%d Computed=%d BytesAfterPayload=%lld"),
+                i, ObjectCount,
+                *Guid.ToString(EGuidFormats::Digits),
+                OffsetBefore, OffsetAfterHeader,
+                PayloadSize, ComputedPayloadSize,
+                (int64)(PacketEnd - (Ptr + PayloadSize)));
 
             if (PayloadSize < 0)
             {
@@ -4836,7 +4909,6 @@ ProcessBinaryPacket(
             // =====================================================
             // Phase 7C Stage 2C.2: FULL_ATTR v1 reassembly
             // =====================================================
-            bool bHasFullAttr = (Flags & MESH_CHUNK_FLAG_FULL_ATTR) != 0;
 
             // Phase 10J.5E/K: Skip v1 chunk accumulation for FBX-authoritative AND FBX-pending GUIDs.
             if (bHasFullAttr && (FBXAuthoritativeGuids.Contains(Guid) || FBXPendingGuids.Contains(Guid)))
