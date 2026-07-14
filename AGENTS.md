@@ -6,6 +6,13 @@
 - **v1.1** — Added Observation Completeness
 - **v1.2** — Added Evidence Ownership, Experiment IDs, Rollback Verification
 - **v1.3** — Generalized Rollback Verification, added Playbook Evolution
+- **v1.4** — Added Least Perturbation Principle
+- **v1.5** — Least Perturbation by state change (not location), Observation vs Instrumentation, Alternative Explanations
+- **v1.6** — Least Perturbation technique hierarchy, behavior-preserving vs behavior-changing split, Investigation Exit Criteria
+- **v1.7** — Existing observability tier, check/ensure separation, negative result stopping criterion
+- **v1.8** — check() after behavior-changing (conditional vs deterministic perturbation), read-only console inspection, current objective satisfaction in Exit Criteria
+- **v1.9** — Stable. Separated perturbation hierarchy from diagnostic mechanisms. Added rule lifecycle to Playbook Evolution.
+- **v2.0** — Added Engine Environment Immutability rule (motivated by INV-2026-002 `-clean` incident).
 
 ## Project
 
@@ -1059,6 +1066,208 @@ If engine instrumentation is absolutely necessary, stop immediately and ask for 
 
 These are hard constraints, not preferences. Any violation is a blocking error.
 
+## Engine Baseline Protection
+
+During investigations, the engine installation is treated as immutable.
+
+The following actions are prohibited unless explicitly approved by the user:
+
+- `Build.sh -clean`
+- Rebuilding `UnrealEditor` or any engine target
+- Regenerating `Engine/Binaries/`
+- Deleting engine build products
+- `GenerateProjectFiles`
+- `Setup.sh`
+- Git operations inside the engine repository
+- Modifying `Engine/Source`
+
+Known behavior: `Build.sh <EditorTarget> ... -clean` deletes files matching prefix `"UnrealEditor"` in `Engine/Binaries/<Platform>/` because `CleanMode` uses `GetAppNameForTargetType(TargetType.Editor)` which returns `"UnrealEditor"`. This includes the main executable, `.target`, `.modules`, `.version`, and all `libUnrealEditor-*.so` files.
+
+If the build system behaves unexpectedly (e.g. `"Target is up to date"` despite source changes), stop immediately and report the anomaly. Do not attempt recovery actions.
+
+Unexpected build behavior is evidence, not authorization to mutate the engine.
+
+Warning: `Build.sh <EditorTarget> ... -clean` does NOT clean only the specified editor target. For editor targets, UnrealBuildTool treats `"UnrealEditor"` as the application prefix and cleans all matching engine build products. Treat `Build.sh -clean` as an engine-mutating operation.
+
+Motivated by: INV-2026-002, where `Build.sh UELiveSync_Test58Editor ... -clean` removed `Engine/Binaries/Linux/UnrealEditor` and the subsequent timed-out rebuild did not restore it, breaking the launcher.
+
+## Scope Preservation
+
+Actions must not exceed the scope of the investigation.
+
+If the investigation concerns only project code or a plugin, all build, clean, and recovery actions must remain within the project/plugin scope.
+
+Do not escalate to engine-level operations unless the user explicitly expands the investigation scope.
+
+## Escalation Gate
+
+When an unexpected build result is observed (e.g. `"Target is up to date"` after source changes):
+
+1. Stop.
+2. Report the anomaly.
+3. Explain why it is unexpected.
+4. Request user approval before attempting any recovery action.
+
+Do not attempt force build, clean, regeneration, or engine rebuild automatically.
+
+## Diagnostic vs Repair
+
+Diagnostics and repairs are different activities.
+
+Investigation may gather evidence.
+
+Repair actions modify the environment.
+
+Never transition from diagnostics to repair without explicit approval.
+
+## Baseline Integrity
+
+Before modifying any build target, identify whether it belongs to:
+
+- Engine baseline
+- Project
+- Plugin
+
+If it belongs to the engine baseline, require explicit approval.
+
+## Evidence Before Escalation
+
+An unexpected observation is not sufficient justification for escalation.
+
+Before increasing the scope of an investigation, collect evidence explaining why the previous step failed.
+
+Escalation without new evidence is prohibited.
+
+## Recovery Authorization
+
+Recovery actions are never implied by an investigation.
+
+The objective of an investigation is to explain behavior, not restore the environment.
+
+If recovery becomes necessary, pause and request explicit authorization.
+
+## Engine-Mutating Operations
+
+Any action that may create, delete, replace, regenerate, or overwrite files inside the engine directory is considered engine-mutating.
+
+Engine-mutating operations require explicit approval, regardless of the perceived risk.
+
+## Build Input Verification
+
+Before modifying any source code, determine which source tree is actually used by the build.
+
+Never assume the repository currently being edited is the source compiled by the target project.
+
+Identify:
+
+- Active `.uproject`
+- Active plugin directory (engine plugin vs project plugin)
+- Load mechanism (symlink / junction / copied plugin / direct source reference)
+- Whether multiple copies exist
+
+Only modify the source tree that is confirmed to participate in the build.
+
+If multiple copies exist, stop and ask the user which copy is authoritative.
+
+This rule applies before any code modification — not just plugins, but also modules, engine source, game source, and generated code.
+
+## No Auto-Synchronization
+
+Never synchronize duplicated source trees automatically.
+
+If multiple copies exist, the synchronization strategy belongs to the user.
+
+Possible strategies include:
+
+- Repository is authoritative
+- Project is authoritative
+- Symlink
+- Git submodule
+- rsync
+- Manual copy
+
+Do not choose a strategy automatically. Each team and project has a different workflow.
+
+## User Intent Preservation
+
+Always verify that the proposed action directly advances the user's stated objective.
+
+Do not broaden the objective by solving unrelated problems discovered during the investigation.
+
+Unexpected issues should be reported, not automatically resolved.
+
+## Environment Classes
+
+- **Immutable** — Engine, toolchains, SDKs. Never modify without explicit approval.
+- **Semi-mutable** — Project, plugins. Only modify files necessary to answer the current investigation.
+- **Disposable** — Intermediate, DerivedDataCache, generated logs. Safe to clean.
+
+## Reversibility Check
+
+Before performing any action that modifies the environment, determine whether the action is reversible.
+
+If rollback is not immediate, deterministic, and verified, require explicit user approval.
+
+Irreversible actions require stronger justification than reversible actions.
+
+## Environment Risk Assessment
+
+Before modifying any environment, evaluate:
+
+- Scope of impact
+- Rebuild cost
+- Recovery cost
+- Risk of unrelated regressions
+
+Higher impact requires stronger evidence and explicit approval.
+
+## Cost Awareness
+
+When multiple actions can produce the same evidence, prefer the action with:
+
+- Smaller scope
+- Lower cost
+- Shorter execution time
+- Easier rollback
+
+Never choose a higher-cost action without evidence that the lower-cost action is insufficient.
+
+## Hypothesis Preservation
+
+Every environment-modifying action must contribute directly to testing the current hypothesis.
+
+If an action does not increase the evidence relevant to the active hypothesis, it is prohibited.
+
+Do not perform infrastructure changes that do not improve the investigation.
+
+## Minimal Evidence Principle
+
+Collect only the evidence necessary to distinguish between competing hypotheses.
+
+Avoid collecting additional evidence that cannot change the current decision.
+
+More evidence is not always better evidence.
+
+## Environment Mutation Budget
+
+Treat every environment mutation as consuming a limited budget.
+
+Prefer read-only observations.
+
+Mutations must be minimized throughout an investigation.
+
+When two approaches provide equivalent evidence, choose the one consuming less mutation budget.
+
+## Baseline Verification
+
+Before modifying any environment, identify:
+
+- What baseline will change.
+- Whether that baseline is shared by future investigations.
+- Whether the change survives beyond the current experiment.
+
+If the baseline is shared, explicit approval is required.
+
 ---
 
 # Investigation Escalation Ladder
@@ -1072,6 +1281,63 @@ When investigating bugs, follow this escalation order. Do not skip levels.
 5. If all above are insufficient, propose Engine instrumentation and require explicit user approval
 
 Each level must be attempted or explicitly ruled out before moving to the next.
+
+---
+
+# Least Perturbation Principle
+
+Choose the technique that produces the required observation while changing the system state as little as possible.
+
+## Perturbation Hierarchy
+
+1. **Existing observability** — no state change, no code change
+   - Existing logs
+   - Debugger / watch
+   - Unreal Insights traces
+   - Read-only console inspection commands
+2. **Behavior-preserving instrumentation** — adds observation points without changing runtime behavior
+   - `UE_LOG`
+   - Trace events
+   - Counters
+3. **State-changing intervention** — CVars that alter renderer behavior (`r.RecreateRenderStateContext`, `FreezeRendering`) — changes system state
+4. **Behavior-changing modification** — `if (...)`, `SetVisibility()`, `MarkRenderStateDirty()` — changes compiled behavior deterministically
+5. **Engine modification** — requires explicit approval — changes the engine itself
+
+## Diagnostic Mechanisms
+
+Diagnostic mechanisms cut across the perturbation hierarchy. They are tools, not escalation levels. Choose the mechanism appropriate for the observation needed, then place it at the correct perturbation level.
+
+**Passive diagnostics** — no control flow impact:
+- `UE_LOG` — behavior-preserving (level 2)
+- `TRACE_CPUPROFILER_EVENT_SCOPE` — behavior-preserving (level 2)
+
+**Diagnostic assertions** — evaluates expression, writes call stack, has internal state:
+- `ensure()` — does not crash, but has more perturbation than passive logging
+
+**Fail-fast assertions** — may crash the process:
+- `check()` — conditional perturbation: no effect when true, crashes when false
+
+Observation is the output. Technique is the method. They are different axes — do not conflate them.
+
+Within each perturbation level, prefer the least invasive option. A debugger watch is less invasive than adding a `UE_LOG` that persists across sessions.
+
+Rationale: Lower-perturbation techniques produce cleaner evidence. An intervention that changes behavior does not identify the cause — it only confirms sufficiency. Observing the current state first establishes a baseline before any state change.
+
+---
+
+# Observation vs Instrumentation
+
+Observation is the goal. Instrumentation is one way to create observations.
+
+- **Observation**: what the log/measurement directly shows (`HiddenEd=0`, `proxy != nullptr`, primitive absent from output)
+- **Instrumentation**: the mechanism that produced the observation (`UE_LOG`, console command, debugger breakpoint, tracepoint)
+
+Keep them separate in experiment records. The observation is evidence; the instrumentation is provenance.
+
+If a future tool (debugger, tracepoint, live query) can produce the same observation without code changes, the observation remains valid — only the instrumentation method changes.
+
+Bad: "UE_LOG shows HiddenEd=0" (conflates instrumentation with observation)
+Good: "Observation (UE_LOG): HiddenEd=0"
 
 ---
 
@@ -1310,6 +1576,45 @@ Good: "Observation: SelectActor() runs in the click path. Inference: selection m
 
 ---
 
+# Alternative Explanations
+
+For every hypothesis that survives an experiment, list at least one alternative explanation that is still consistent with the current evidence.
+
+A successful experiment rarely identifies a unique cause. The observation confirms that the intervention is sufficient to change the outcome — not that the original cause is identified.
+
+Example:
+
+If `r.RecreateRenderStateContext` makes actors appear:
+
+- Primary hypothesis: render state was stale after spawn
+- Alternative 1: deferred editor update was flushed by the command
+- Alternative 2: viewport cache was invalidated
+- Alternative 3: scene registration timing was corrected
+- Alternative 4: render thread synchronization was triggered
+
+All five are consistent with the same observation. The experiment does not distinguish between them.
+
+Rule: Before moving to the next experiment, explicitly state which alternatives remain alive. This prevents confirmation bias from treating one successful experiment as proof of a specific mechanism.
+
+---
+
+# Investigation Exit Criteria
+
+An investigation ends when one of the following is true:
+
+- Root cause is confirmed with direct evidence.
+- The current hypothesis is eliminated and no alternatives remain at this level.
+- The investigation objective has been satisfied, even if the global root cause is not yet known (e.g., a specific hypothesis was eliminated).
+- No observable exists within the approved scope.
+- Escalation to the next investigation level is justified.
+- Further experiments at the current level are unlikely to reduce uncertainty (negative result — remaining experiments would produce the same type of evidence).
+
+Do not continue generating experiments once no new information can be obtained from the current level. State explicitly why the current level is exhausted before escalating.
+
+This prevents indefinite investigation loops where experiments keep producing the same inconclusive result.
+
+---
+
 # Evidence Ownership
 
 Every observation must identify its source.
@@ -1382,6 +1687,27 @@ Do not add speculative rules.
 Each new rule should reference the incident that motivated it.
 
 The playbook grows by learning, not by anticipation.
+
+## Rule Lifecycle
+
+Each rule should track its provenance:
+
+```
+Rule: [name]
+Motivated by: INV-xxxx
+Validated by: INV-xxxx, INV-xxxx
+Status: Stable | Deprecated | Superseded by [rule] | Retired
+```
+
+Rules may be:
+
+- **Added** when an incident exposes a missing safeguard
+- **Validated** when subsequent incidents confirm the rule's value
+- **Deprecated** when the rule no longer provides value but the original incident still applies (rule remains in document as historical reference)
+- **Superseded** when a better rule replaces the original
+- **Retired** when the motivating incident no longer applies (e.g., upstream fix, platform change) and the rule can be completely removed
+
+The methodology should be refactored, not only expanded. If rules accumulate without removal, the document becomes unwieldy and loses its value as a concise reference.
 
 ---
 
