@@ -2,15 +2,23 @@
 
 ## Metadata
 
-- **Status**: Current environment does not reproduce the original issue. Regression point unknown.
+- **Status**: Resolved
+- **State**: Closed
+- **Reason**: Historical Bug C not reproducible under current Build B baseline. Historical triggering conditions remain unknown.
 - **Owner**: Khanh
 - **Started**: 2026-07-12
-- **Closed**: —
+- **Closed**: 2026-07-16
 - **Classification**: Editor Viewport Update / Editor Tick
 - **Parser Fix**: Commit `8444bd9` on `main` — proven, committed, build PASS
-- **Investigation Instrumentation**: Uncommitted in working tree (PLACEHOLDER, MESH-ACTOR, PMC-BUILD, RENDER-DIAG, SNAP-DUMP, MESH-PARSE, C2)
-- **Engine Debug Copy**: `~/Unreal/UE5.8-debug/` — C3 instrumentation target
+- **Investigation Instrumentation**: C11-C15 removed. C13-PATCH (bNeedsRedraw=true) added to plugin.
+- **Engine Debug Copy**: `~/Unreal/UE5.8-debug/` — cleaned up
 - **Build**: PASS (UE5.8/Linux)
+
+### Reopen Criteria
+
+- Historical Bug C reproduces under current Build B baseline
+- Historical commit/environment identified that exhibits the original symptom
+- Differential analysis between passing and failing environments yields new evidence
 
 ## Problem
 
@@ -762,7 +770,7 @@ Current direction:
 
 ## Bug C — Viewport Refresh after PMC Creation
 
-- Status: **Current environment does not reproduce the original issue. Regression point unknown.**
+- Status: **Current reference environment does not reproduce the original issue. Regression point unknown.**
 
 ### Historical Root Cause Hypothesis (SUPERSeded by C14/C15 evidence)
 
@@ -792,7 +800,7 @@ No C11 (viewport draw) → No C8 (visibility) → No mesh
 
 ### Current Behavior
 
-- Current test environment: actors are visible after Start Sync without user interaction.
+- Current reference test environment: actors are visible after Start Sync without user interaction.
 - C15: non-realtime draw branch entered at frame 522.
 - C11: Draw() executed at frame 522.
 - C8: Actor_0/Actor_1 present in visibility dump at frame 522.
@@ -845,7 +853,7 @@ No rollback/bisect unless bug reappears or historical logs prove old state.
 **Latest runtime validation (C14-C15)**:
 - Non-realtime draw branch works: C15 confirms branch entered at frame 522. ✅
 - Viewport draws when backgrounded: C11 confirms Draw() at frame 522. ✅
-- Actors visible in current test: Current test environment — actors appear after Start Sync. ✅
+- Actors visible in current test: Current reference test environment — actors appear after Start Sync. ✅
 
 ### What Has NOT Been Proven
 
@@ -1059,7 +1067,7 @@ If still fails → IsRealtime() gate at line 2673 is absolute blocker → need t
 
 **Bug A**: Commit `8444bd9` — PT_Mesh multi-object parser fix. ✅
 **Bug B**: Runtime confirmed — different PMC pointers per actor. ✅ (no code fix needed)
-**Bug C**: See Bug C section — current environment does not reproduce the original issue.
+**Bug C**: See Bug C section — current reference environment does not reproduce the original issue.
 
 ## Regression
 
@@ -1081,7 +1089,7 @@ If still fails → IsRealtime() gate at line 2673 is absolute blocker → need t
 | A/B Test (RedrawAllViewports) | ✅ COMPLETED — FAILED, insufficient |
 | Patch v2 (bNeedsRedraw=true) | ✅ COMPLETED — proven ineffective (true→true) |
 | C14/C15 (Full gate state) | ✅ COMPLETED — non-realtime draw path works correctly |
-| Issue reproduction | **NOT REPRODUCIBLE** — current test environment: actors visible after Start Sync |
+| Issue reproduction | **NOT REPRODUCIBLE** — current reference test environment: actors visible after Start Sync |
 
 ## Decision Log
 
@@ -1106,7 +1114,7 @@ If still fails → IsRealtime() gate at line 2673 is absolute blocker → need t
 | D17 | Phase 0B: 10 candidate divergences identified | All have Evidence Confidence: High, Causality Confidence: Low | Accepted | — | Instrument to confirm causality before fix |
 | D18 | Level 3 ordering: observation before intervention | EXP-C (DumpDetailedPrimitives) before EXP-D (r.RecreateRenderStateContext) | Accepted | Run intervention first | Scientific method: observe state before changing it. Intervention alone cannot identify cause. |
 | D19 | EXP-D scope: "changes outcome" not "identifies cause" | r.RecreateRenderStateContext confirming behavior change does not prove why | Accepted | Claim MarkRenderStateDirty was missing | Multiple causes could produce same result (stale state, registration timing, deferred updates, cache, sync) |
-| D20 | INV-2026-002: current environment does not reproduce the issue | All recent tests show actors visible after Start Sync. Regression point unknown. | Accepted | Continue rollback/bisect | Current test environment does not reproduce the issue. Rolling back would break a working state without evidence the bug still exists. |
+| D20 | INV-2026-002: current reference environment does not reproduce the issue | All recent tests show actors visible after Start Sync. Regression point unknown. | Accepted | Continue rollback/bisect | Current reference test environment does not reproduce the issue. Rolling back would break a working state without evidence the bug still exists. |
 | D21 | No rollback without evidence | Don't rollback patches to "find what fixed the bug" when bug is not reproducible | Accepted | Rollback to find regression point | Would break working state. Only rollback if bug reappears or historical logs prove old state. |
 
 ## Lessons Learned
@@ -1168,7 +1176,7 @@ If still fails → IsRealtime() gate at line 2673 is absolute blocker → need t
 - **Don't over-interpret from survey results**: A CVar survey identifies candidates and their mechanisms. It does not prove which mechanism the current bug uses. Keep hypotheses humble until runtime evidence confirms.
 - **Evidence Before Conclusion in practice**: The gap between "this command could change behavior" and "therefore X was missing" is exactly where Evidence Before Conclusion matters. State the observation, not the inferred cause.
 - **Golden reference is read-only**: The frozen engine source is used only for code audit and comparison. Any engine instrumentation, logging, assertions, or experimental modifications must be performed in a separate debug working copy (or dedicated debug branch if a separate working copy is impractical). The frozen reference must remain identical throughout the investigation to preserve a stable baseline. Hard links (`cp -al`) do not preserve immutability — modifying a hard-linked file modifies the original.
-- **"Issue not reproducible" ≠ "bug fixed"**: When an issue stops reproducing, the correct conclusion is "current test environment does not reproduce the issue." Concluding "bug is fixed" requires identifying which change caused the regression. Without that evidence, the regression point is unknown.
+- **"Issue not reproducible" ≠ "bug fixed"**: When an issue stops reproducing, the correct conclusion is "current reference test environment does not reproduce the issue." Concluding "bug is fixed" requires identifying which change caused the regression. Without that evidence, the regression point is unknown.
 - **Don't rollback to find regression point without evidence**: Rolling back patches to "find what fixed the bug" breaks a working state. Only rollback when: (a) bug reappears, or (b) historical logs prove the old state was different, or (c) git bisect is feasible and the regression window is narrow.
 - **Build target matters for engine instrumentation**: Engine source changes (EditorEngine.cpp) must be compiled into the correct target. Project-level builds may not pick up engine source changes if the engine .so is not loaded by the project editor.
 
@@ -1186,6 +1194,36 @@ If still fails → IsRealtime() gate at line 2673 is absolute blocker → need t
 **Bug B (PMC ownership)**
 - Status: RESOLVED
 - Evidence: Runtime confirmed — different PMC pointers per actor, no shared PMC, no last-writer-wins
+
+---
+
+**Bug C (Viewport refresh)**
+
+Resolved:
+- PT_Mesh parser fixed.
+- Renderer pipeline verified end-to-end.
+- Build A demonstrates the observed effect of missing viewport redraw.
+- Build B passes 3/3 independent reproductions with immediate rendering.
+
+Evidence established:
+- Missing viewport redraw can prevent continued visibility evaluation in the tested non-realtime editor viewport configuration.
+- Restoring viewport redraw consistently restores normal rendering behavior under the current baseline.
+
+Open:
+- Historical Bug C could not be reproduced under the current Build B baseline.
+- The historical triggering conditions remain unknown and would require differential analysis against the original failing environment if future evidence warrants reopening the investigation.
+
+Removed from active investigation (not supported by current evidence):
+- UE 5.8 regression
+- Slate invalidation issue
+- SceneProxy creation failure
+- Frustum culling failure
+- RenderState registration failure
+- Visibility pipeline failure
+
+Investigation direction:
+- Previous: Why doesn't UE render?
+- Current: What was different in the historical environment?
 
 ---
 
