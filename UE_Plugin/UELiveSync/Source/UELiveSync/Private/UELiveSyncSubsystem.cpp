@@ -491,6 +491,7 @@ GetPrimitiveMesh(uint8 PrimitiveType)
         }
         return Mesh;
     }
+
 }
 
 
@@ -2237,6 +2238,24 @@ bool UUELiveSyncSubsystem::Tick(
             UE_LOG(LogLiveSync, Log, TEXT("SKIP  Pipeline: ResolvePendingAssets (disabled by CVar)"));
         }
     }
+
+    // Ensure editor viewport redraw after LiveSync reconstruction.
+    // Required for non-realtime editor viewport updates.
+    // See INV-2026-002.
+    // TODO(INV-2026-002): Investigate whether bNeedsRedraw can be replaced by
+    // an official editor viewport invalidation API.
+#if WITH_EDITOR
+    if (GEditor)
+    {
+        for (FLevelEditorViewportClient* LevelVC : GEditor->GetLevelViewportClients())
+        {
+            if (LevelVC)
+            {
+                LevelVC->bNeedsRedraw = true;
+            }
+        }
+    }
+#endif
 
     // =====================================================
     // HIERARCHY SAFETY VALIDATION
@@ -4886,11 +4905,9 @@ ProcessBinaryPacket(
 
             UE_LOG(LogLiveSync, Log,
                 TEXT("[MESH-PARSE] obj=%u/%u GUID=%s "
-                     "OffsetBefore=%lld OffsetAfterHeader=%lld "
                      "PayloadSize=%d Computed=%d BytesAfterPayload=%lld"),
                 i, ObjectCount,
                 *Guid.ToString(EGuidFormats::Digits),
-                OffsetBefore, OffsetAfterHeader,
                 PayloadSize, ComputedPayloadSize,
                 (int64)(PacketEnd - (Ptr + PayloadSize)));
 
@@ -17256,6 +17273,7 @@ ReconstructCompletedMeshes()
             ProcMesh->SetVisibility(true, true);
             ProcMesh->SetHiddenInGame(false, true);
             ProcMesh->UpdateBounds();
+
             if (GEnableVerboseSyncLogs)
             {
                 // STEP2: after SetRootComponent(ProcMesh)
