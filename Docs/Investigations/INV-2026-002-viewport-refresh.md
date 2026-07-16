@@ -1206,7 +1206,7 @@ Resolved:
 - Build B passes 3/3 independent reproductions with immediate rendering.
 
 Evidence established:
-- Missing viewport redraw can prevent continued visibility evaluation in the tested non-realtime editor viewport configuration.
+- In the tested environment, forcing an editor viewport redraw consistently resulted in immediate rendering of newly reconstructed actors. The exact historical root cause remains unknown.
 - Restoring viewport redraw consistently restores normal rendering behavior under the current baseline.
 
 Open:
