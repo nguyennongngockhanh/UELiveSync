@@ -21,8 +21,10 @@ Desktop.ini
 # UE Plugin Build Artifacts
 Binaries/
 Intermediate/
+Saved/
 UE_Plugin/UELiveSync/Binaries/
 UE_Plugin/UELiveSync/Intermediate/
+UE_Plugin/UELiveSync/Saved/
 *.sln
 *.vcxproj*
 *.suo
@@ -34,9 +36,6 @@ DerivedDataCache/
 
 # opencode skills (local only)
 .opencode/skills/
-
-# project-level dev instructions (local only)
-AGENTS.md
 
 # Pi / OpenCode / AI agent config files
 .pi-local-rules.md

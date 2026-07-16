@@ -13,6 +13,8 @@
 - **v1.8** — check() after behavior-changing (conditional vs deterministic perturbation), read-only console inspection, current objective satisfaction in Exit Criteria
 - **v1.9** — Stable. Separated perturbation hierarchy from diagnostic mechanisms. Added rule lifecycle to Playbook Evolution.
 - **v2.0** — Added Engine Environment Immutability rule (motivated by INV-2026-002 `-clean` incident).
+- **v2.1** — Added Build Input Verification, Version Control Safety, Workspace Discovery, Assumption Verification, Single Variable Rule, Experiment Automation, Don't Optimize Hypothetical Problems, Symlink Integrity. Migrated to full-plugin symlink architecture.
+- **v2.2** — Generalized Active Build Topology (project-agnostic); added Verify Symlink Health, Workspace Topology Mutation, and Build Output Verification.
 
 ## Project
 
@@ -1152,6 +1154,14 @@ Any action that may create, delete, replace, regenerate, or overwrite files insi
 
 Engine-mutating operations require explicit approval, regardless of the perceived risk.
 
+## Version Control Safety
+
+Never create commits, amend commits, create tags, or push branches without explicit user approval.
+
+Staging and committing are user decisions, not agent decisions.
+
+An agent must not run `git add`, `git commit`, `git push`, `git tag`, or equivalent operations unless the user explicitly requests them.
+
 ## Build Input Verification
 
 Before modifying any source code, determine which source tree is actually used by the build.
@@ -1187,6 +1197,76 @@ Possible strategies include:
 - Manual copy
 
 Do not choose a strategy automatically. Each team and project has a different workflow.
+
+## Workspace Discovery
+
+Before modifying source code, discover the complete build workspace topology.
+
+This includes:
+
+- Repository root
+- Active `.uproject`
+- Plugin source directories
+- Module source directories
+- Generated source directories
+- Engine source references
+- Symbolic links, junctions, and duplicated trees
+
+Never assume directory layout. Map the workspace before editing.
+
+## Active Build Topology
+
+Always discover the active build topology before modifying source.
+
+If the active plugin directory is a symbolic link, the symlink target becomes the authoritative source tree.
+
+Never assume this architecture applies to every project.
+
+Current verified topology (example):
+
+```
+<Project>/Plugins/UELiveSync
+    -> symlink
+    -> ~/Projects/UELiveSync/UE_Plugin/UELiveSync
+```
+
+This topology is valid only after verification. Never assume another project uses the same layout.
+
+If the active plugin directory is a symbolic link, plugin-generated artifacts are typically written through the symlink into the target plugin directory.
+
+## Symlink Integrity
+
+Before editing a plugin used by a test project, verify whether the plugin directory is a symbolic link.
+
+If it is a symbolic link, treat the symlink target as the authoritative source tree.
+
+Do not replace or duplicate the symlink automatically.
+
+Do not create additional copies of the plugin alongside the symlink.
+
+## Verify Symlink Health
+
+Before building or editing a symlinked plugin, verify the symlink is healthy:
+
+```bash
+readlink <plugin_path>        # confirm target path
+test -e <plugin_path>         # confirm target exists
+```
+
+Do not assume a symlink is always valid. Broken symlinks cause silent build failures.
+
+## Workspace Topology Mutation
+
+Do not modify workspace topology (symbolic links, junctions, plugin locations, directory structure) without explicit approval.
+
+Topology changes are infrastructure changes, not code changes.
+
+Examples of topology mutations:
+
+- Creating or removing symlinks
+- Moving plugin directories
+- Changing plugin load mechanism
+- Restructuring project layout
 
 ## User Intent Preservation
 
@@ -1258,6 +1338,14 @@ Mutations must be minimized throughout an investigation.
 
 When two approaches provide equivalent evidence, choose the one consuming less mutation budget.
 
+## Don't Optimize Hypothetical Problems
+
+Do not optimize for hypothetical future workflows.
+
+Prefer solutions that simplify the current verified workspace.
+
+Only introduce additional complexity when there is evidence that it solves an existing problem.
+
 ## Baseline Verification
 
 Before modifying any environment, identify:
@@ -1322,6 +1410,122 @@ Observation is the output. Technique is the method. They are different axes — 
 Within each perturbation level, prefer the least invasive option. A debugger watch is less invasive than adding a `UE_LOG` that persists across sessions.
 
 Rationale: Lower-perturbation techniques produce cleaner evidence. An intervention that changes behavior does not identify the cause — it only confirms sufficiency. Observing the current state first establishes a baseline before any state change.
+
+---
+
+# Assumption Verification
+
+Before taking any action based on an assumption, verify the assumption using observable evidence.
+
+Do not infer:
+
+- Build inputs
+- Active project
+- Active plugin
+- Generated outputs
+- Workspace topology
+- Engine association
+
+If verification is inexpensive, perform it first.
+
+If verification is impossible, state the assumption explicitly and ask the user.
+
+---
+
+# Build Target Verification
+
+Before invoking any build command, determine:
+
+- Target name
+- Source inputs consumed by the target
+- Output location
+
+Never build a target before confirming what source tree it consumes.
+
+---
+
+# Build Output Verification
+
+After a successful build, verify that the expected build inputs participated in the compilation.
+
+Evidence may include:
+
+- Source file paths reported by UBT
+- Compile actions executed
+- Modified binary timestamps
+- Generated object files
+- Expected source tree referenced in build logs
+
+A successful build does not guarantee that the intended build inputs were compiled.
+
+If the evidence is insufficient, do not conclude that the intended changes were compiled.
+
+---
+
+# Read Before Write
+
+Before modifying any file, read the surrounding implementation.
+
+Understand:
+
+- File ownership
+- Existing architecture
+- Call path
+- Integration point
+
+Do not edit based on assumptions about code structure.
+
+---
+
+# Workspace Cache Awareness
+
+Differentiate between:
+
+- Source files (authoritative)
+- Generated files (derived)
+- Build cache (UBT intermediate)
+- Runtime cache (DDC, shader cache)
+
+Do not assume stale output implies stale source. Verify the actual state of each layer.
+
+---
+
+# Investigation Reproducibility
+
+Every experiment must specify:
+
+- Hypothesis being tested
+- Intervention applied
+- Expected observation if hypothesis is true
+- Interpretation of result
+
+Do not introduce additional variables during an experiment.
+
+---
+
+# Single Variable Rule
+
+Each experiment may intentionally change only one variable.
+
+Any additional user interaction that may affect the observed behavior is considered a confounding variable.
+
+Redesign the experiment if isolation cannot be maintained.
+
+---
+
+# Experiment Automation
+
+When investigating editor behavior, prefer automatic execution over manual interaction.
+
+Timer-based, scripted, or programmatic execution is preferred over requiring the user to click UI elements.
+
+---
+
+# User Interaction Minimization
+
+Do not require user interaction if the same action can be executed programmatically.
+
+Manual interaction introduces uncontrolled variables (focus changes, Slate events, input routing).
 
 ---
 
