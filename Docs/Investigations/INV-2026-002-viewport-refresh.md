@@ -344,9 +344,11 @@ Phase B-F: Select actor in Outliner → Press F
 
 ## Root Cause
 
-**Status**: Confirmed via causal intervention test (2026-07-19)
+**Status**: Immediate rendering failure mechanism confirmed (2026-07-19)
 
-Bug C is caused by an interaction between the fixed 250 ms visibility threshold in `SEditorViewport::IsVisible()` and the background viewport tick interval (~331 ms). When the tick interval exceeds the visibility threshold, `IsVisible()` consistently returns false, causing Gate1 to reject viewport ticking until another event refreshes `LastTickTime`.
+Bug C's immediate mechanism is an interaction between the fixed 250 ms visibility threshold in `SEditorViewport::IsVisible()` and the background viewport tick interval (~331 ms). When the tick interval exceeds the visibility threshold, `IsVisible()` consistently returns false, causing Gate1 to reject viewport ticking until another event refreshes `LastTickTime`.
+
+The origin of the ~331 ms tick interval remains unexplained. Possible sources include Background Process override, Slate throttle, editor idle scheduler, or realtime override stack. This is a separate investigation.
 
 ### Causal Chain
 
