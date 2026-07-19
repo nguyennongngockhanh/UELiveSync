@@ -1,0 +1,16 @@
+{
+  "experiment_id": "P0",
+  "repo_head": "8444bd9",
+  "plugin_source_commit": "51a4277",
+  "selection_method": "engineering judgment",
+  "selection_rationale": "8444bd9 cannot build; no intermediate plugin-source commits; 51a4277 is latest verified buildable plugin commit",
+  "historical_bug_c_provenance": "unknown",
+  "engine_path": "/home/nguyennongngockhanh/Unreal/UE5.8-debug",
+  "engine_type": "source build (debug instrumentation branch)",
+  "target": "UELiveSync_Test58Editor",
+  "configuration": "Development",
+  "platform": "Linux",
+  "build_result": "Succeeded",
+  "build_time_seconds": 14.98,
+  "timestamp": "2026-07-16T16:00:00+07:00"
+}

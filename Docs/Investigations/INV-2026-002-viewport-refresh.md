@@ -344,27 +344,73 @@ Phase B-F: Select actor in Outliner → Press F
 
 ## Root Cause
 
-**Status**: Strong hypothesis — pending runtime confirmation
+**Status**: Confirmed via causal intervention test (2026-07-19)
 
-Code audit shows the FBX spawn path does not call any editor viewport invalidation API. However:
-- "Not called" ≠ "Needs to be called"
-- Phase 0A may reveal the entry point is PT_Create, not PT_FBX — making the FBX audit irrelevant
-- H5 (wrong World) is possible but low probability
-- H6 (viewport redraw deferred) — spawn occurs during a frame where viewport redraw is deferred
-- H7 (realtime disabled) — viewport client may not be marked realtime
-- Runtime behavior may differ from what audit suggests
+Bug C is caused by an interaction between the fixed 250 ms visibility threshold in `SEditorViewport::IsVisible()` and the background viewport tick interval (~331 ms). When the tick interval exceeds the visibility threshold, `IsVisible()` consistently returns false, causing Gate1 to reject viewport ticking until another event refreshes `LastTickTime`.
 
-**Confidence**: Low (runtime evidence pending) — hypothesis supported by code audit, requires Phase 0A/0B/A/B/C runtime validation.
+### Causal Chain
+
+```
+Background mode
+    ↓
+Viewport tick interval ≈331 ms
+    ↓
+LastTickTime becomes older than VisibilityTimeThreshold (250 ms)
+    ↓
+SEditorViewport::IsVisible() == false
+    ↓
+Gate1 (UEditorEngine::Tick) rejects viewport tick
+    ↓
+Viewport does not render
+```
+
+### Key Source Evidence
+
+- `SEditorViewport.cpp:344-347` — `Tick()` updates `LastTickTime = FPlatformTime::Seconds()`
+- `SEditorViewport.cpp:1029-1046` — `IsVisible()` returns `Delta <= VisibilityTimeThreshold` (0.25f)
+- `EditorEngine.cpp:2258-2268` — Gate1 checks `ViewportClient->IsVisible()` before allowing viewport tick
+
+### Runtime Evidence
+
+- `INV-VISIBLE` instrumentation confirms `delta=0.331` at background tick rate
+- `INV-Gate1` instrumentation confirms `visible=0 pass=0` after Background Process fires
+- Background tick interval fluctuates between 0.329–0.332 s
+
+### Causal Intervention Test (2026-07-19)
+
+Single variable changed: `VisibilityTimeThreshold` in `SEditorViewport.cpp:1031`.
+
+| Threshold | delta (background) | visible=0 | visible=1 | Actors in viewport? | Verdict |
+|-----------|-------------------|-----------|-----------|---------------------|---------|
+| 0.25 | 0.331 | 1,774 | 0 | No | Bug C present |
+| 0.30 | 0.331 | — | — | No | Bug C present |
+| 0.32 | 0.331 | — | — | No | Bug C present |
+| **0.33** | **0.329–0.332** | **334** | **955** | **Yes (intermittent)** | **Crossover** |
+| 0.35 | 0.331 | 0 | 1,378 | Yes | Bug C absent |
+| 10.0 | 0.331 | 0 | 1,378 | Yes | Bug C absent |
+
+All other variables held constant: same project, same mesh (Cabinet), same plugin, same build configuration, same Start UE Sync procedure, same Background Process behavior.
+
+Crossover occurs at approximately the measured background tick interval (~0.331 s), consistent with the proposed mechanism.
+
+### What remains unexplained
+
+- Why the background viewport tick interval is ~331 ms (Background Process override, Slate throttle, editor idle scheduler — separate investigation)
+
+**Confidence**: High (supported by source analysis, runtime instrumentation, and causal intervention with dose-response boundary test).
 
 ## Fix
 
-Not applicable. Investigation in progress.
+Not yet implemented. Possible directions:
+- Increase `VisibilityTimeThreshold` (simple but hardcodes a magic number)
+- Fix `IsVisible()` to use a different mechanism (e.g., check whether the viewport client is actively displaying content rather than time-based threshold)
+- Prevent Background Process from throttling the active viewport below the visibility threshold
 
 ## Regression
 
 | Scenario | Result |
 |----------|--------|
-| Pending Phase 0A + Phase A | — |
+| Pending fix implementation | — |
 
 ## Decision Log
 
@@ -380,6 +426,8 @@ Not applicable. Investigation in progress.
 | D8 | Add Phase 0B: audit Tick lifecycle | Verify Spawn runs on Game Thread, inside Tick, Tick returns normally | Accepted | — | Don't assume Tick doesn't complete |
 | D9 | Add H7: realtime viewport disabled | Viewport client may not be marked realtime — known UE issue | Accepted | — | Cheap to check, common cause of this symptom |
 | D10 | Add B6': Details Panel update test | Distinguishes viewport-specific from systemic editor issue | Accepted | — | Cheaper and more reliable than stat fps |
+| D11 | Causal intervention test: change VisibilityTimeThreshold | Strongest evidence method — change one variable, observe dose-response | Accepted | — | Observational evidence insufficient for proof |
+| D12 | Revert threshold to 0.25f after test | 0.33f is diagnostic, not a fix | Accepted | Keep 0.33f | Fix should address mechanism, not hardcode value |
 
 ## Lessons Learned
 
@@ -392,3 +440,5 @@ Not applicable. Investigation in progress.
 - **H7 (realtime disabled)**: Viewport client may not be marked realtime — known cause of this exact symptom pattern.
 - **B6' > B6**: Details Panel update test is cheaper and more reliable than stat fps — it directly tests whether editor transactions are running.
 - **Don't use RedrawAllViewports() as hammer fix**: If the issue is viewport client realtime state or World context, adding RedrawAllViewports() only masks symptoms.
+- **Causal intervention > observational evidence**: Changing one variable (VisibilityTimeThreshold) and observing the dose-response curve provided far stronger evidence than any amount of log analysis. The crossover point (0.33 ≈ 0.331) directly fingerprinted the mechanism.
+- **Distinguish correlation from causation**: `AddRealtimeOverride(0)` preceding the tick interval change was correlation, not causation. The actual causal mechanism was the threshold/interval mismatch.

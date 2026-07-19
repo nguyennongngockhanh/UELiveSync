@@ -1,0 +1,3 @@
+Engine: UE5.8-debug
+Engine path: /home/nguyennongngockhanh/Unreal/UE5.8-debug
+Build type: Source build (debug instrumentation branch)

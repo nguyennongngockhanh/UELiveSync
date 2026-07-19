@@ -1,0 +1,5 @@
+Target: UELiveSync_Test58Editor
+Configuration: Development
+Platform: Linux
+Build result: Succeeded
+Build time: 14.98s

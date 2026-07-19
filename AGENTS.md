@@ -13,6 +13,9 @@
 - **v1.8** — check() after behavior-changing (conditional vs deterministic perturbation), read-only console inspection, current objective satisfaction in Exit Criteria
 - **v1.9** — Stable. Separated perturbation hierarchy from diagnostic mechanisms. Added rule lifecycle to Playbook Evolution.
 - **v2.0** — Added Engine Environment Immutability rule (motivated by INV-2026-002 `-clean` incident).
+- **v2.1** — Added Baseline Provenance, Baseline Freeze, Baseline Verification Gate (motivated by lessons learned during INV-2026-002).
+- **v2.2** — Added Baseline Archive First + clarifications (motivated by lessons learned during INV-2026-002).
+- **v2.3** — Added Artifact Freshness Gate (motivated by stale state reasoning during INV-2026-002).
 
 ## Project
 
@@ -1745,6 +1748,87 @@ Do not claim an experiment can validate a comparison if only one side of the com
 Bad: "Expected: before != after" when the patch only logs "before."
 
 Good: "Expected: HiddenEd == true" when the patch logs HiddenEd at one point in time.
+
+---
+
+# Baseline Provenance
+
+Every baseline must record:
+
+**Source:**
+- Git commit hash
+- Working tree state (clean/dirty)
+
+**Build:**
+- Engine commit/version
+- Target (Editor/Game)
+- Configuration (Development/Debug/Shipping)
+- Platform
+
+**Binary:**
+- SHA256 of every module loaded by the running process
+
+**Runtime:**
+- Build timestamp
+- Run timestamp
+- Corresponding log archive
+
+Do not declare a baseline without recording all four categories.
+
+---
+
+# Baseline Freeze
+
+Immediately after any experiment whose results may be used for reasoning, freeze the execution environment until provenance has been archived.
+
+This prevents the baseline from drifting while analysis is in progress.
+
+---
+
+# Baseline Verification Gate
+
+Do not use a baseline for reasoning if its provenance cannot be verified.
+
+If provenance is unknown:
+
+- State explicitly: "provenance unverified"
+- Do not assign the baseline to a specific commit
+- Do not draw conclusions that depend on the baseline being a specific version
+
+The execution baseline is defined by the binaries that actually ran. Git commit information is part of the baseline only when the binary provenance has been verified.
+
+If binary identity cannot be proven, treat every version-specific conclusion as invalid. The correct action is to establish a new verified baseline, not to continue the investigation.
+
+---
+
+# Baseline Archive First
+
+Before any cleanup, rebuild, checkout, or environment modification after a successful experiment, archive the following:
+
+Minimum archive:
+- Git HEAD
+- `git status --porcelain`
+- Build configuration
+- Engine version / commit
+- Runtime log
+- Experiment identifier (P0, P1, ...)
+- Timestamp
+
+Do not destroy an execution baseline before its provenance has been preserved.
+
+This is distinct from Baseline Freeze. Freeze says: do not change. Archive First says: if you are about to change, preserve first.
+
+---
+
+# Artifact Freshness Gate
+
+When making any claim about the current contents of a file, build output, or runtime artifact:
+
+- Read the current artifact first.
+- Do not rely on cached reasoning, previous observations, or earlier edits.
+- If the artifact has changed since the last observation, discard the old reasoning and re-evaluate from the current artifact.
+
+The current artifact is the source of truth.
 
 ---
 

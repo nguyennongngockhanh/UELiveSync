@@ -1,0 +1,3 @@
+Git HEAD (repo): 8444bd9
+Plugin source commit: 51a4277
+Note: 8444bd9 cannot build. Plugin source was reverted to 51a4277 via git checkout.

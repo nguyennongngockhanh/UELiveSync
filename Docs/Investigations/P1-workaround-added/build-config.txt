@@ -1,0 +1,4 @@
+Target: UELiveSync_Test58Editor
+Config: Development
+Platform: Linux
+UE Path: ~/Unreal/UE5.8-debug/

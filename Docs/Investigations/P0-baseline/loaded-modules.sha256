@@ -1,0 +1,16 @@
+# Runtime loaded module hashes (collected after UE launch)
+
+# Plugin modules
+0d4add106a9cf9498a910933f9a997bfbdd3624a8974e76c4360c8813be0e86a  libUELiveSync_Test58Editor-UELiveSync.so
+5faefc6aa87104c5b083f65a9792357294a60b83abf2dfab4c1a0cd5691e7645  libUELiveSync_Test58Editor-UELiveSyncEditor.so
+
+# Engine modules relevant to Bug C
+2e99a0be74da0685ca643754a07f6a8790a38069cd9933fcf8c2a8be68b5945d  Engine/Binaries/Linux/libUnrealEditor-Renderer.so
+8e95136f1a89de268ae4dfbd92571eb46bbda43b05d45b5138fb9173681ad12e  Engine/Binaries/Linux/libUnrealEditor-Engine.so
+
+# ProceduralMesh (project-level override)
+c678dfd936b874d663657c8cd66a90e7f7f2c54993501c726a670a3f59d7f6a3  libUELiveSync_Test58Editor-ProceduralMeshComponent.so
+
+# Blender addon
+27282a4fe99509e1bc262518b1c609b0f8ab26df5cd03534d831cf151ed9c8fc  Blender_Addon/__init__.py (repo = deployed)
+da9e386333cc879e00a0b5c7558043b9ccf536cc53de8593c1ffea9198da3379  Blender_Addon/sync.py (repo = deployed)

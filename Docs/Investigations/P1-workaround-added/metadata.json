@@ -1,0 +1,14 @@
+{
+  "id": "P1",
+  "description": "Bug C workaround added (bNeedsRedraw = true block). Testing if Bug C disappears.",
+  "date": "2026-07-17T08:31:09+07:00",
+  "plugin_commit": "8444bd9eca583bfdabf62bc0f49d272502862990",
+  "engine": "UE5.8-debug",
+  "target": "UELiveSync_Test58Editor",
+  "config": "Development",
+  "platform": "Linux",
+  "result_corrected": "actors_do_not_appear_in_viewport",
+  "bug_c_status": "NOT_fixed_by_bNeedsRedraw_via_StartUE_Sync",
+  "workflow_tested": "Start UE Sync",
+  "previous_incorrect_test": "Sync Selected Mesh to UE (FBX) - different code path"
+}

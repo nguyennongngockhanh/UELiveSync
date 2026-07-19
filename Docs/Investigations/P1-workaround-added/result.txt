@@ -1,0 +1,15 @@
+P1 Corrected — Instrumented Test
+=================================
+
+Instrumentation: UE_LOG(LogLiveSync, Warning, TEXT("[INV-2026-002] bNeedsRedraw applied"))
+Marker hits: 525 (confirmed code runs every tick)
+
+User observation: actors do NOT appear in viewport
+
+Log evidence:
+- AddToScene Actor_0 idx=18 frame=496
+- AddToScene Actor_1 idx=17 frame=496
+- BasePass: only Actor_1 rendered, Actor_0 NOT rendered
+- No GetViewRelevance for Actor_0 or Actor_1 after frame 496
+
+Conclusion: bNeedsRedraw does NOT fix Bug C via Start UE Sync workflow
