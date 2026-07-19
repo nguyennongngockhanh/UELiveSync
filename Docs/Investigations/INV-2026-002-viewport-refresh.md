@@ -373,7 +373,13 @@ Viewport does not render
 
 The boundary between proven and unproven:
 
-- **Proven** (Layer 1): 331ms > 250ms → IsVisible=false → Gate1 reject → no render. Confirmed by source analysis, runtime instrumentation, and causal intervention with dose-response boundary test.
+- **Proven** (Layer 1): 331ms > 250ms → IsVisible=false → Gate1 reject → no render.
+  Evidence:
+  - Source analysis (SEditorViewport::IsVisible, EditorEngine::Tick Gate1)
+  - Runtime instrumentation (INV-TICK, INV-VISIBLE, INV-Gate1)
+  - Causal intervention (single-variable: VisibilityTimeThreshold)
+  - Dose-response boundary experiment (0.25/0.30/0.32/0.33/0.35/10.0)
+  Confidence: High.
 - **Unproven** (Layer 2): Who drives the tick interval to ~331ms? Possible sources: Background Process override, Slate throttle, editor idle scheduler, realtime override stack. This is INV-2026-003.
 
 ### Key Source Evidence
