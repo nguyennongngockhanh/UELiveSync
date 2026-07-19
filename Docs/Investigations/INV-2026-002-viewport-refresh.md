@@ -353,7 +353,7 @@ The origin of the ~331 ms tick interval remains unexplained. This is a separate 
 ### Causal Chain
 
 ```
-Unknown scheduler                          ← UNPROVEN (see INV-2026-003)
+Unknown viewport tick source                ← UNPROVEN (see INV-2026-003)
     │
     ▼
 Viewport tick interval ≈ 331 ms
