@@ -344,27 +344,37 @@ Phase B-F: Select actor in Outliner → Press F
 
 ## Root Cause
 
-**Status**: Immediate rendering failure mechanism confirmed (2026-07-19)
+**Status**: Rendering Failure Mechanism Confirmed (2026-07-19)
 
-Bug C's immediate mechanism is an interaction between the fixed 250 ms visibility threshold in `SEditorViewport::IsVisible()` and the background viewport tick interval (~331 ms). When the tick interval exceeds the visibility threshold, `IsVisible()` consistently returns false, causing Gate1 to reject viewport ticking until another event refreshes `LastTickTime`.
+The immediate rendering failure mechanism is proven. An unknown scheduler drives the background viewport tick interval to ~331 ms, which exceeds the fixed 250 ms visibility threshold in `SEditorViewport::IsVisible()`. This causes `IsVisible()` to return false, Gate1 to reject viewport ticking, and the viewport to stop rendering.
 
-The origin of the ~331 ms tick interval remains unexplained. Possible sources include Background Process override, Slate throttle, editor idle scheduler, or realtime override stack. This is a separate investigation.
+The origin of the ~331 ms tick interval remains unexplained. This is a separate node in the causal chain (see INV-2026-003). Possible sources include Background Process override, Slate throttle, editor idle scheduler, or realtime override stack.
 
 ### Causal Chain
 
 ```
-Background mode
-    ↓
-Viewport tick interval ≈331 ms
-    ↓
-LastTickTime becomes older than VisibilityTimeThreshold (250 ms)
-    ↓
-SEditorViewport::IsVisible() == false
-    ↓
-Gate1 (UEditorEngine::Tick) rejects viewport tick
-    ↓
+Unknown scheduler                          ← UNPROVEN (see INV-2026-003)
+    │
+    ▼
+Viewport tick interval ≈ 331 ms
+    │
+    ▼
+VisibilityTimeThreshold = 250 ms          ← PROVEN (causal intervention)
+    │
+    ▼
+IsVisible() == false
+    │
+    ▼
+Gate1 rejects viewport tick
+    │
+    ▼
 Viewport does not render
 ```
+
+The boundary between proven and unproven:
+
+- **Proven** (Layer 1): 331ms > 250ms → IsVisible=false → Gate1 reject → no render. Confirmed by source analysis, runtime instrumentation, and causal intervention with dose-response boundary test.
+- **Unproven** (Layer 2): Who drives the tick interval to ~331ms? Possible sources: Background Process override, Slate throttle, editor idle scheduler, realtime override stack. This is INV-2026-003.
 
 ### Key Source Evidence
 
