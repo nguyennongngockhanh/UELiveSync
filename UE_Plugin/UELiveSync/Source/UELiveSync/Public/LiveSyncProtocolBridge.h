@@ -724,72 +724,191 @@ inline EDispatchResult ProcessObjectReparent(
 }
 
 // =========================================================
-// Handlers — Phase 1.3.2a (handshake only)
-// =========================================================
-// Each handler receives a pre-validated DeserializedMessage.
-// Handlers do NOT call DeserializeFrame or re-check invariants.
+// View structs — Handshake
 // =========================================================
 
-inline void HandleHello(const livesync::DeserializedMessage& msg)
+struct HelloView
+{
+    uint8_t ProtocolVersionMajor;
+    uint8_t ProtocolVersionMinor;
+    uint64_t Capabilities;
+};
+
+struct HelloAckView
+{
+    uint8_t ProtocolVersionMajor;
+    uint8_t ProtocolVersionMinor;
+    uint64_t AcceptedCapabilities;
+    uint32_t MaxChunkSize;
+    uint64_t SessionId;
+};
+
+struct HeartbeatView
+{
+    uint32_t SequenceId;
+    bool HasSessionId;
+    uint64_t SessionId;
+};
+
+struct HeartbeatAckView
+{
+    uint32_t SequenceId;
+    bool HasSessionId;
+    uint64_t SessionId;
+};
+
+// =========================================================
+// Builders — Handshake (pure functions)
+// =========================================================
+
+inline HelloView BuildHelloView(
+    const livesync::DeserializedMessage& msg)
+{
+    HelloView v;
+    v.ProtocolVersionMajor = GetField<uint8_t>(msg, "protocol_version_major");
+    v.ProtocolVersionMinor = GetField<uint8_t>(msg, "protocol_version_minor");
+    v.Capabilities = GetField<uint64_t>(msg, "capabilities");
+    return v;
+}
+
+inline HelloAckView BuildHelloAckView(
+    const livesync::DeserializedMessage& msg)
+{
+    HelloAckView v;
+    v.ProtocolVersionMajor = GetField<uint8_t>(msg, "protocol_version_major");
+    v.ProtocolVersionMinor = GetField<uint8_t>(msg, "protocol_version_minor");
+    v.AcceptedCapabilities = GetField<uint64_t>(msg, "accepted_capabilities");
+    v.MaxChunkSize = GetField<uint32_t>(msg, "max_chunk_size");
+    v.SessionId = GetField<uint64_t>(msg, "session_id");
+    return v;
+}
+
+inline HeartbeatView BuildHeartbeatView(
+    const livesync::DeserializedMessage& msg)
+{
+    HeartbeatView v;
+    v.SequenceId = msg.sequence_id;
+    v.HasSessionId = msg.session_id.has_value();
+    v.SessionId = v.HasSessionId ? msg.session_id.value() : 0;
+    return v;
+}
+
+inline HeartbeatAckView BuildHeartbeatAckView(
+    const livesync::DeserializedMessage& msg)
+{
+    HeartbeatAckView v;
+    v.SequenceId = msg.sequence_id;
+    v.HasSessionId = msg.session_id.has_value();
+    v.SessionId = v.HasSessionId ? msg.session_id.value() : 0;
+    return v;
+}
+
+// =========================================================
+// Log functions — Handshake
+// =========================================================
+
+inline void LogHello(const HelloView& v)
+{
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][HELLO] version=%u.%u capabilities=0x%llx"),
+        v.ProtocolVersionMajor, v.ProtocolVersionMinor,
+        (unsigned long long)v.Capabilities);
+}
+
+inline void LogHelloAck(const HelloAckView& v)
+{
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][HELLO_ACK] version=%u.%u accepted_caps=0x%llx "
+             "max_chunk=%u session=0x%llx"),
+        v.ProtocolVersionMajor, v.ProtocolVersionMinor,
+        (unsigned long long)v.AcceptedCapabilities,
+        v.MaxChunkSize, (unsigned long long)v.SessionId);
+}
+
+inline void LogHeartbeat(const HeartbeatView& v)
+{
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][HEARTBEAT] seq=%u session=0x%llx"),
+        v.SequenceId, (unsigned long long)v.SessionId);
+}
+
+inline void LogHeartbeatAck(const HeartbeatAckView& v)
+{
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][HEARTBEAT_ACK] seq=%u session=0x%llx"),
+        v.SequenceId, (unsigned long long)v.SessionId);
+}
+
+// =========================================================
+// Dispatch functions — Handshake (fan-out only)
+// =========================================================
+
+inline void DispatchHello(const HelloView& v)
+{
+    LogHello(v);
+}
+
+inline void DispatchHelloAck(const HelloAckView& v)
+{
+    LogHelloAck(v);
+}
+
+inline void DispatchHeartbeat(const HeartbeatView& v)
+{
+    LogHeartbeat(v);
+}
+
+inline void DispatchHeartbeatAck(const HeartbeatAckView& v)
+{
+    LogHeartbeatAck(v);
+}
+
+// =========================================================
+// Process functions — Handshake (orchestration)
+// =========================================================
+
+inline EDispatchResult ProcessHello(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_hello_calls++;
 #endif
-
-    uint8_t maj = std::get<uint8_t>(msg.body.at("protocol_version_major"));
-    uint8_t min = std::get<uint8_t>(msg.body.at("protocol_version_minor"));
-    uint64_t caps = std::get<uint64_t>(msg.body.at("capabilities"));
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][HELLO] version=%u.%u capabilities=0x%llx"),
-        maj, min, (unsigned long long)caps);
+    auto view = BuildHelloView(msg);
+    DispatchHello(view);
+    return EDispatchResult::Handled;
 }
 
-inline void HandleHelloAck(const livesync::DeserializedMessage& msg)
+inline EDispatchResult ProcessHelloAck(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_helloack_calls++;
 #endif
-
-    uint8_t maj = std::get<uint8_t>(msg.body.at("protocol_version_major"));
-    uint8_t min = std::get<uint8_t>(msg.body.at("protocol_version_minor"));
-    uint64_t caps = std::get<uint64_t>(msg.body.at("accepted_capabilities"));
-    uint32_t chunk = std::get<uint32_t>(msg.body.at("max_chunk_size"));
-    uint64_t sid = std::get<uint64_t>(msg.body.at("session_id"));
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][HELLO_ACK] version=%u.%u accepted_caps=0x%llx "
-             "max_chunk=%u session=0x%llx"),
-        maj, min, (unsigned long long)caps, chunk,
-        (unsigned long long)sid);
+    auto view = BuildHelloAckView(msg);
+    DispatchHelloAck(view);
+    return EDispatchResult::Handled;
 }
 
-inline void HandleHeartbeat(const livesync::DeserializedMessage& msg)
+inline EDispatchResult ProcessHeartbeat(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_heartbeat_calls++;
 #endif
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][HEARTBEAT] seq=%u session=0x%llx"),
-        msg.sequence_id,
-        msg.session_id.has_value()
-            ? (unsigned long long)msg.session_id.value()
-            : 0ULL);
+    auto view = BuildHeartbeatView(msg);
+    DispatchHeartbeat(view);
+    return EDispatchResult::Handled;
 }
 
-inline void HandleHeartbeatAck(const livesync::DeserializedMessage& msg)
+inline EDispatchResult ProcessHeartbeatAck(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_heartbeatack_calls++;
 #endif
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][HEARTBEAT_ACK] seq=%u session=0x%llx"),
-        msg.sequence_id,
-        msg.session_id.has_value()
-            ? (unsigned long long)msg.session_id.value()
-            : 0ULL);
+    auto view = BuildHeartbeatAckView(msg);
+    DispatchHeartbeatAck(view);
+    return EDispatchResult::Handled;
 }
 
 // =========================================================
@@ -1350,21 +1469,17 @@ inline EDispatchResult DispatchMsgTypePacket(
 
     switch (msg.msg_type)
     {
-        case livesync::MsgType::HELLO:
-            HandleHello(msg);
-            return EDispatchResult::Handled;
+            case livesync::MsgType::HELLO:
+                return ProcessHello(msg);
 
-        case livesync::MsgType::HELLO_ACK:
-            HandleHelloAck(msg);
-            return EDispatchResult::Handled;
+            case livesync::MsgType::HELLO_ACK:
+                return ProcessHelloAck(msg);
 
-        case livesync::MsgType::HEARTBEAT:
-            HandleHeartbeat(msg);
-            return EDispatchResult::Handled;
+            case livesync::MsgType::HEARTBEAT:
+                return ProcessHeartbeat(msg);
 
-        case livesync::MsgType::HEARTBEAT_ACK:
-            HandleHeartbeatAck(msg);
-            return EDispatchResult::Handled;
+            case livesync::MsgType::HEARTBEAT_ACK:
+                return ProcessHeartbeatAck(msg);
 
         case livesync::MsgType::OBJECT_CREATE:
             return ProcessObjectCreate(msg);
