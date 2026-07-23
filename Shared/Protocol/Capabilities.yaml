@@ -1,0 +1,56 @@
+# LiveSync Protocol — Capability Bit Definitions
+# Source of truth for capability negotiation bitmask.
+# Referenced by MessageTypes.yaml and Protocol.md.
+
+# ─── Capability Bits ────────────────────────────────────────────
+# Bit position → capability name.
+# Once assigned, a bit CANNOT be reassigned.
+# Deprecated capabilities keep their bit (marked deprecated).
+
+bits:
+  0:
+    name: mesh_sync
+    description: "Supports mesh data transfer (MESH_DATA, MESH_DELTA)"
+    since: "1.0"
+
+  1:
+    name: material_sync
+    description: "Supports material sync (MATERIAL_CREATE, MATERIAL_UPDATE, MATERIAL_ASSIGN)"
+    since: "1.0"
+
+  2:
+    name: camera_sync
+    description: "Supports camera sync (CAMERA_CREATE, CAMERA_UPDATE, CAMERASETACTIVE)"
+    since: "1.0"
+
+  3:
+    name: mesh_delta
+    description: "Supports vertex-only mesh updates (MESH_DELTA, no topology change)"
+    since: "1.0"
+
+  4:
+    name: chunked_transfer
+    description: "Supports chunked mesh transfer (MESH_START, MESH_CHUNK, MESH_END)"
+    since: "1.0"
+
+  5:
+    name: texture_uuid_resolution
+    description: "Supports texture UUID resolution (texture_path as UUID, not file path)"
+    since: "1.0"
+
+  6:
+    name: scene_hash
+    description: "Supports SCENE_HASH for incremental reconnect"
+    since: "1.0"
+
+# ─── Reserved Range ─────────────────────────────────────────────
+reserved_from: 7
+reserved_to: 31
+reserved_description: "Reserved for future use. Do not assign without protocol version bump."
+
+# ─── Rules ──────────────────────────────────────────────────────
+# - Once a bit is assigned, it CANNOT be reassigned.
+# - Deprecated capabilities keep their bit (marked deprecated).
+# - New capabilities MUST be announced in HELLO and checked in HELLO_ACK.
+# - Both sides only use features the other side supports (intersection).
+# - If a capability is not in the intersection, the feature is silently disabled.

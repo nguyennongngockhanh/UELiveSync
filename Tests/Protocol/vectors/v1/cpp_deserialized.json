@@ -1,0 +1,479 @@
+[
+  {
+    "body": {
+      "capabilities": 7,
+      "protocol_version_major": 2,
+      "protocol_version_minor": 0
+    },
+    "flags": 0,
+    "msg_type": 16,
+    "name": "HELLO",
+    "sequence_id": 0,
+    "session_id": null
+  },
+  {
+    "body": {
+      "accepted_capabilities": 7,
+      "max_chunk_size": 65536,
+      "protocol_version_major": 2,
+      "protocol_version_minor": 0,
+      "session_id": 16045690984503098046
+    },
+    "flags": 0,
+    "msg_type": 17,
+    "name": "HELLO_ACK",
+    "sequence_id": 0,
+    "session_id": null
+  },
+  {
+    "body": {
+      "error_code": 1,
+      "max_version_major": 2,
+      "max_version_minor": 0,
+      "min_version_major": 2,
+      "min_version_minor": 0,
+      "reason": "Unsupported version"
+    },
+    "flags": 0,
+    "msg_type": 18,
+    "name": "REJECT",
+    "sequence_id": 0,
+    "session_id": null
+  },
+  {
+    "body": {},
+    "flags": 0,
+    "msg_type": 0,
+    "name": "HEARTBEAT",
+    "sequence_id": 1,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {},
+    "flags": 0,
+    "msg_type": 1,
+    "name": "HEARTBEAT_ACK",
+    "sequence_id": 1,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "hash": 72623859790382856,
+      "object_count": 42
+    },
+    "flags": 0,
+    "msg_type": 2,
+    "name": "SCENE_HASH",
+    "sequence_id": 1,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "object_count": 5
+    },
+    "flags": 0,
+    "msg_type": 3,
+    "name": "SCENE_FULL",
+    "sequence_id": 2,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "object_count": 2
+    },
+    "flags": 0,
+    "msg_type": 4,
+    "name": "SCENE_DELTA",
+    "sequence_id": 3,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "name": "Suzanne",
+      "parent_id": "00000000000000000000000000000000",
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "transform": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "flags": 0,
+    "msg_type": 32,
+    "name": "OBJECT_CREATE",
+    "sequence_id": 4,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "name": "Suzanne_Renamed",
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "transform": [
+        100.5,
+        -200.25,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "visibility": 1
+    },
+    "flags": 0,
+    "msg_type": 33,
+    "name": "OBJECT_UPDATE",
+    "sequence_id": 5,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "persistent_id": "00112233445566778899aabbccddeeff"
+    },
+    "flags": 0,
+    "msg_type": 34,
+    "name": "OBJECT_DELETE",
+    "sequence_id": 6,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "new_name": "Cube_Renamed",
+      "persistent_id": "00112233445566778899aabbccddeeff"
+    },
+    "flags": 0,
+    "msg_type": 35,
+    "name": "OBJECT_RENAME",
+    "sequence_id": 7,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "new_parent_id": "ffeeddccbbaa99887766554433221100",
+      "persistent_id": "00112233445566778899aabbccddeeff"
+    },
+    "flags": 0,
+    "msg_type": 36,
+    "name": "OBJECT_REPARENT",
+    "sequence_id": 8,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "visible": 0
+    },
+    "flags": 0,
+    "msg_type": 37,
+    "name": "OBJECT_VISIBILITY",
+    "sequence_id": 9,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "format_flags": 1,
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "total_chunks": 3
+    },
+    "flags": 0,
+    "msg_type": 50,
+    "name": "MESH_START",
+    "sequence_id": 13,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "chunk_index": 0,
+      "data": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "index_count": 6,
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "vertex_count": 2,
+      "vertex_offset": 0
+    },
+    "flags": 0,
+    "msg_type": 51,
+    "name": "MESH_CHUNK",
+    "sequence_id": 14,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "checksum": 3735928559,
+      "persistent_id": "00112233445566778899aabbccddeeff"
+    },
+    "flags": 0,
+    "msg_type": 52,
+    "name": "MESH_END",
+    "sequence_id": 15,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "format_flags": 1,
+      "index_count": 6,
+      "indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "normals": [
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "uvs": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "vertex_count": 2,
+      "vertices": [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "flags": 0,
+    "msg_type": 48,
+    "name": "MESH_DATA",
+    "sequence_id": 16,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "format_flags": 1,
+      "normals": [
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "uvs": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "vertex_count": 2,
+      "vertices": [
+        0.5,
+        0.5,
+        0.5,
+        1.5,
+        1.5,
+        1.5
+      ]
+    },
+    "flags": 0,
+    "msg_type": 49,
+    "name": "MESH_DELTA",
+    "sequence_id": 17,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "base_color": [
+        1.0,
+        0.8399999737739563,
+        0.0,
+        1.0
+      ],
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "material_id": "ffeeddccbbaa99887766554433221100",
+      "metallic": 1.0,
+      "name": "Gold",
+      "roughness": 0.30000001192092896,
+      "texture_path": "T_Gold_BaseColor"
+    },
+    "flags": 0,
+    "msg_type": 64,
+    "name": "MATERIAL_CREATE",
+    "sequence_id": 18,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "base_color": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1.0
+      ],
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "material_id": "ffeeddccbbaa99887766554433221100",
+      "metallic": 0.0,
+      "roughness": 0.5,
+      "texture_path": ""
+    },
+    "flags": 0,
+    "msg_type": 65,
+    "name": "MATERIAL_UPDATE",
+    "sequence_id": 19,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "material_id": "ffeeddccbbaa99887766554433221100",
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "slot_index": 0
+    },
+    "flags": 0,
+    "msg_type": 66,
+    "name": "MATERIAL_ASSIGN",
+    "sequence_id": 20,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "camera_id": "00112233445566778899aabbccddeeff",
+      "focal_length": 50.0,
+      "name": "MainCamera",
+      "sensor_height": 24.0,
+      "sensor_width": 36.0,
+      "transform": [
+        1.5,
+        2.5,
+        3.5,
+        0.0,
+        0.0,
+        0.7071067690849304,
+        0.7071067690849304,
+        2.0,
+        2.0,
+        2.0
+      ]
+    },
+    "flags": 0,
+    "msg_type": 80,
+    "name": "CAMERA_CREATE",
+    "sequence_id": 21,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "camera_id": "00112233445566778899aabbccddeeff",
+      "focal_length": 85.0,
+      "transform": [
+        100.5,
+        -200.25,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "flags": 0,
+    "msg_type": 81,
+    "name": "CAMERA_UPDATE",
+    "sequence_id": 22,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "camera_id": "00112233445566778899aabbccddeeff"
+    },
+    "flags": 0,
+    "msg_type": 82,
+    "name": "CAMERASETACTIVE",
+    "sequence_id": 23,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "hash": 12302652056939934532,
+      "object_count": 100
+    },
+    "flags": 0,
+    "msg_type": 2,
+    "name": "SCENE_HASH_exchange_both",
+    "sequence_id": 1,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "acked_seq": 9
+    },
+    "flags": 0,
+    "msg_type": 240,
+    "name": "SYNC_ACK",
+    "sequence_id": 10,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
+      "error_code": 2,
+      "message": "Malformed payload"
+    },
+    "flags": 0,
+    "msg_type": 254,
+    "name": "ERROR",
+    "sequence_id": 11,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {},
+    "flags": 0,
+    "msg_type": 255,
+    "name": "DISCONNECT",
+    "sequence_id": 12,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {},
+    "flags": 1,
+    "msg_type": 0,
+    "name": "HEARTBEAT_compressed",
+    "sequence_id": 20,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {},
+    "flags": 0,
+    "msg_type": 0,
+    "name": "SEQUENCE_WRAPAROUND",
+    "sequence_id": 4294967295,
+    "session_id": 16045690984503098046
+  }
+]

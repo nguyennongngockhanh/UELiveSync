@@ -1,0 +1,92 @@
+# LiveSync Protocol — Error Code Definitions
+# Source of truth for error handling.
+# Referenced by MessageTypes.yaml and Protocol.md.
+
+# ─── Error Codes ────────────────────────────────────────────────
+
+codes:
+  0x0001:
+    name: UNSUPPORTED_VERSION
+    description: "Protocol version not supported by receiver"
+    action: "Receiver sends REJECT, connection closed"
+    when: "Session establishment"
+
+  0x0002:
+    name: INVALID_MESSAGE
+    description: "Message failed deserialization or schema validation"
+    action: "Receiver sends ERROR, connection may close"
+    when: "Post-session message"
+    severity: high
+
+  0x0003:
+    name: SESSION_EXPIRED
+    description: "Session ID in message does not match current session"
+    action: "Message silently dropped"
+    when: "Post-session message"
+    severity: low
+
+  0x0004:
+    name: CAPABILITY_MISMATCH
+    description: "Requested capability not available on receiver"
+    action: "Feature silently disabled for this session"
+    when: "Session establishment"
+    severity: low
+
+  0x0005:
+    name: CHECKSUM_MISMATCH
+    description: "Chunked transfer checksum does not match"
+    action: "Transfer discarded, sender may retry"
+    when: "Chunked transfer"
+    severity: medium
+
+  0x0006:
+    name: CHUNK_TIMEOUT
+    description: "Chunked transfer timed out (30s without new chunk)"
+    action: "Transfer discarded, partial data cleaned up"
+    when: "Chunked transfer"
+    severity: medium
+
+  0x0007:
+    name: INTERNAL_ERROR
+    description: "Unexpected internal error"
+    action: "Receiver sends ERROR, connection may close"
+    when: "Any"
+    severity: high
+
+  0x0008:
+    name: SCENE_HASH_MISMATCH
+    description: "SCENE_HASH comparison failed after reconnect"
+    action: "Full scene resync triggered"
+    when: "Session establishment"
+    severity: low
+
+# ─── Error Handling Rules ────────────────────────────────────────
+error_handling_rules:
+  malformed_message:
+    description: "Any message that fails deserialization or schema validation"
+    action: "Send ERROR(INVALID_MESSAGE), connection may close"
+    severity: high
+
+  stale_session:
+    description: "Message with session ID that does not match current session"
+    action: "Silently drop. Do not send ERROR."
+    severity: low
+
+  duplicate_sequence:
+    description: "Message with SequenceId already seen (is_duplicate returns true)"
+    action: "Silently ignore. Do not send ERROR. Do not process payload."
+    severity: low
+
+  unknown_opcode:
+    description: "Message with unknown or unassigned opcode"
+    action: "Send ERROR(INVALID_MESSAGE), connection may close"
+    severity: high
+
+# ─── Rules ──────────────────────────────────────────────────────
+# - ERROR message contains error_code (uint16) + message (utf8_string).
+# - Receiver MUST log the error with full context.
+# - Sender MAY close connection after sending ERROR.
+# - Receiver MUST NOT crash on any error code.
+# - Unknown error codes are treated as INTERNAL_ERROR.
+# - Stale session messages are silently dropped (no ERROR response).
+# - Duplicate SequenceId messages are silently ignored.

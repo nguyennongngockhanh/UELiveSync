@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
+using System.IO;
 
 public class UELiveSync : ModuleRules
 {
@@ -16,6 +17,10 @@ public class UELiveSync : ModuleRules
 
 		PrivateIncludePaths.AddRange(
 			new string[] {
+				// Phase 1.3: Shared protocol serializer/deserializer
+				// ModuleDirectory = .../UE_Plugin/UELiveSync/Source/UELiveSync
+				// Target          = .../Shared/Serializer
+				Path.Combine(ModuleDirectory, "..", "..", "..", "..", "Shared", "Serializer"),
 			}
 		);
 

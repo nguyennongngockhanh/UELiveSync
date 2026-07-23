@@ -821,6 +821,12 @@ private:
     // Phase 6I.1 Stage 2: guards against concurrent StartNetworkThread calls
     std::atomic<bool> bNetworkThreadStarting{false};
 
+    // Set true when a LiveSync session is fully established
+    // (socket accepted, runnable created, thread running).
+    // Used by IsCPUThrottlingShouldBeDisabled() to decide
+    // whether to suppress editor CPU throttling.
+    std::atomic<bool> bLiveSyncActive{false};
+
     // =====================================================
     // THREAD → GAME QUEUE
     // =====================================================
@@ -883,6 +889,11 @@ private:
 #if WITH_EDITOR
     // ImportSubsystem delegate handle for per-file texture import diagnostics
     FDelegateHandle OnAssetPostImportHandle;
+
+    // CPU throttling suppression delegate handle.
+    // The delegate is registered in Initialize() and removed in
+    // Deinitialize() via RemoveAll with IsBoundToObject(this).
+    // See IsCPUThrottlingShouldBeDisabled() for the condition.
 #endif
 
     // =====================================================
@@ -1022,6 +1033,14 @@ private:
     void ConsoleEnforceKnownBadPatterns();
     void CheckTransformGateSemanticEvents();
     void CheckStaleLocalAuthority();
+
+    // =====================================================
+    // CPU THROTTLING SUPPRESSION
+    // =====================================================
+    // Returns true when LiveSync is actively connected with a healthy
+    // network thread, used to disable editor CPU throttling so the
+    // tick rate stays high during sync sessions.
+    bool IsCPUThrottlingShouldBeDisabled() const;
 
     // =====================================================
     // ASSET RESOLUTION DATA (Phase 5D)

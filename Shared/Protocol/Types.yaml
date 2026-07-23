@@ -1,0 +1,99 @@
+# LiveSync Protocol — Composite Type Definitions
+# Source of truth for all composite/aggregate types.
+# Referenced by MessageTypes.yaml.
+
+# ─── Numeric Primitives ─────────────────────────────────────────
+
+primitives:
+  uint8:
+    size: 1
+    description: "Unsigned 8-bit integer"
+
+  uint16:
+    size: 2
+    endian: little
+    description: "Unsigned 16-bit integer, little-endian"
+
+  uint32:
+    size: 4
+    endian: little
+    description: "Unsigned 32-bit integer, little-endian"
+
+  uint64:
+    size: 8
+    endian: little
+    description: "Unsigned 64-bit integer, little-endian"
+
+  float32:
+    size: 4
+    encoding: IEEE754
+    endian: little
+    description: "IEEE 754 single-precision float, little-endian"
+
+# ─── Composite Types ────────────────────────────────────────────
+
+composite:
+  uuid:
+    type: raw_bytes
+    size: 16
+    encoding: RFC4122_network_byte_order
+    canonical_wire_rule: "Transmitted as the canonical 16-byte RFC 4122 byte sequence WITHOUT field-wise endian conversion. NOT Windows GUID mixed-endian layout."
+    description: >
+      128-bit UUID per RFC 4122, stored as 16 raw bytes in network byte order.
+      NOT platform GUID layout. NOT mixed-endian.
+      Example: UUID 00112233-4455-6677-8899-aabbccddeeff
+      stored as: 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff
+      The 16 bytes are transmitted as-is. No field-wise byte swapping.
+
+  transform3d:
+    packed: true
+    wire_size_bytes: 40
+    no_alignment: true
+    fields:
+      - { name: position_x, type: float32 }
+      - { name: position_y, type: float32 }
+      - { name: position_z, type: float32 }
+      - { name: rotation_x, type: float32 }
+      - { name: rotation_y, type: float32 }
+      - { name: rotation_z, type: float32 }
+      - { name: rotation_w, type: float32 }
+      - { name: scale_x,    type: float32 }
+      - { name: scale_y,    type: float32 }
+      - { name: scale_z,    type: float32 }
+    total_bytes: 40
+    description: >
+      3D transform: position(vec3) + rotation(quaternion xyzw) + scale(vec3).
+      All components are float32 little-endian.
+      Quaternion order: (x, y, z, w) — NOT (w, x, y, z).
+
+  utf8_string:
+    encoding: length_prefixed
+    length_type: uint16
+    length_unit: bytes
+    endian: little
+    description: >
+      UTF-8 string with 16-bit length prefix.
+      Length is in BYTES, not characters.
+      Max length: 65535 bytes.
+      No null terminator on wire.
+
+  f32_array:
+    element_type: float32
+    endian: little
+    description: >
+      Array of float32 values. Length determined by message field context.
+      All elements are IEEE 754 little-endian.
+
+  u32_array:
+    element_type: uint32
+    endian: little
+    description: >
+      Array of uint32 values. Length determined by message field context.
+
+  raw_bytes:
+    encoding: length_prefixed
+    length_type: uint32
+    endian: little
+    description: >
+      Raw byte array with 32-bit length prefix.
+      Length is in bytes. No padding.

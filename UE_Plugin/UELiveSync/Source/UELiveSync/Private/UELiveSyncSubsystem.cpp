@@ -41,7 +41,9 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 
 #if WITH_EDITOR
 #include "Editor.h"
+#include "Editor/EditorEngine.h"
 #include "LevelEditorViewport.h"
+#include "SEditorViewport.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/SceneComponent.h"
@@ -88,6 +90,9 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Misc/Guid.h"
 
 #include "LiveSyncRunnable.h"
+
+// Phase 1.3: Protocol bridge for MsgType detection
+#include "LiveSyncProtocolBridge.h"
 
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
@@ -1150,6 +1155,22 @@ void UUELiveSyncSubsystem::Initialize(
         Log,
         TEXT("UE Live Sync Started"));
 
+#if WITH_EDITOR
+    // Register CPU throttling suppression delegate. The delegate
+    // self-regulates via bLiveSyncActive — returns true only while
+    // a LiveSync connection is active, preventing
+    // ShouldThrottleCPUUsage() from limiting the editor tick rate
+    // to ~3 FPS when the editor is unfocused during a sync.
+    // Removed in Deinitialize() via RemoveAll(IsBoundToObject).
+    if (GEditor)
+    {
+        GEditor->ShouldDisableCPUThrottlingDelegates.Add(
+            UEditorEngine::FShouldDisableCPUThrottling::CreateUObject(
+                this,
+                &UUELiveSyncSubsystem::IsCPUThrottlingShouldBeDisabled));
+    }
+#endif
+
     // =====================================================
     // NULLRHI GUARD — injected ingress block detection
     // =====================================================
@@ -1519,6 +1540,15 @@ void UUELiveSyncSubsystem::Deinitialize()
         ListenerSocket =
             nullptr;
     }
+
+    // Unregister CPU throttling suppression delegate
+#if WITH_EDITOR
+    if (GEditor)
+    {
+        GEditor->ShouldDisableCPUThrottlingDelegates.RemoveAll(
+            [this](const auto& D) { return D.IsBoundToObject(this); });
+    }
+#endif
 
     Super::Deinitialize();
 }
@@ -2533,6 +2563,10 @@ StartNetworkThread()
             LIVE_SYNC_V5_ASSET_DEF_SIZE,
             LIVE_SYNC_MAX_PACKET_SIZE);
 
+        bLiveSyncActive = true;
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CPUTHROTTLE] bLiveSyncActive=true — session active, throttling suppressed"));
+
         bNetworkThreadStarting = false;
     }
     else
@@ -2559,6 +2593,9 @@ StopNetworkThread()
         ConnectionGeneration);
 
     bNetworkThreadStarting = false;
+    bLiveSyncActive = false;
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CPUTHROTTLE] bLiveSyncActive=false — session ended, throttling re-enabled"));
 
     if (!NetworkRunnable &&
         !NetworkThread)
@@ -2746,6 +2783,23 @@ StopNetworkThread()
             CleanupMs,
             StopMs);
     }
+}
+
+
+// =========================================================
+// CPU THROTTLING SUPPRESSION
+// =========================================================
+// Returns true when LiveSync is actively connected with a
+// healthy network thread. The engine calls this via the
+// ShouldDisableCPUThrottlingDelegates array; returning true
+// prevents ShouldThrottleCPUUsage() from dropping the editor
+// tick rate to ~3 FPS when the editor window loses focus.
+// =========================================================
+
+bool UUELiveSyncSubsystem::
+IsCPUThrottlingShouldBeDisabled() const
+{
+    return bLiveSyncActive.load();
 }
 
 
@@ -3020,6 +3074,44 @@ ProcessBinaryPacket(
 
     const uint8* PacketData =
         Packet.RawData.GetData();
+
+    // =====================================================
+    // PHASE 1.3: PROTOCOL BRIDGE
+    // =====================================================
+    // Detect new MsgType packets before legacy Magic check.
+    // New protocol uses length-prefixed framing (no Magic).
+    // Legacy protocol starts with Magic 0x4C56534D.
+    // =====================================================
+
+    if (LiveSyncBridge::IsMsgTypePacket(
+            PacketData, Packet.RawData.Num()))
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(
+            UELiveSync_ProcessMsgTypePacket);
+
+        auto Result = LiveSyncBridge::DispatchMsgTypePacket(
+            PacketData, Packet.RawData.Num());
+
+        switch (Result)
+        {
+            case LiveSyncBridge::EDispatchResult::Handled:
+            case LiveSyncBridge::EDispatchResult::Unsupported:
+                Stats.PacketsProcessed.fetch_add(
+                    1, std::memory_order_relaxed);
+                break;
+
+            case LiveSyncBridge::EDispatchResult::ParseError:
+            case LiveSyncBridge::EDispatchResult::ProtocolViolation:
+                Stats.MalformedPackets.fetch_add(
+                    1, std::memory_order_relaxed);
+                break;
+
+            default:
+                break;
+        }
+
+        return;
+    }
 
     uint32 Magic;
     uint16 Version;
@@ -4817,9 +4909,80 @@ ProcessBinaryPacket(
                 return;
             }
 
-            // Remaining bytes after header = payload
+            // Compute actual per-object payload size from wire format.
+            // V5: VertCount(4) + Verts(N*12) + TriCount(4) + Tris(N*12) + MatCount(4) + Mats(N*4)
+            // V1: [SchemaVersion(4,chunk0)] VertexStride(4) VertexCount(4) Verts(N*S)
+            //     IndexCount(4) Indices(N*4) MaterialSlotCount(4) MaterialSlots(N*4)
+            const bool bHasFullAttr = (Flags & MESH_CHUNK_FLAG_FULL_ATTR) != 0;
+            int32 ComputedPayloadSize = -1;
+            {
+                const uint8* P = Ptr;
+                const uint8* End = PacketEnd;
+
+                if (bHasFullAttr)
+                {
+                    // V1 wire format
+                    if (ChunkIndex == 0 && P + 4 <= End) { P += 4; } // skip SchemaVersion
+                    if (P + 4 <= End)
+                    {
+                        uint32 VS = 0; FMemory::Memcpy(&VS, P, sizeof(uint32)); P += 4;
+                        if ((VS == 32 || VS == 48) && P + 4 <= End)
+                        {
+                            uint32 VC = 0; FMemory::Memcpy(&VC, P, sizeof(uint32)); P += 4;
+                            int64 VB = static_cast<int64>(VC) * VS;
+                            if (P + VB + 4 <= End)
+                            {
+                                P += VB;
+                                uint32 IC = 0; FMemory::Memcpy(&IC, P, sizeof(uint32)); P += 4;
+                                int64 IB = static_cast<int64>(IC) * 4;
+                                if (P + IB + 4 <= End)
+                                {
+                                    P += IB;
+                                    uint32 MC = 0; FMemory::Memcpy(&MC, P, sizeof(uint32)); P += 4;
+                                    int64 MB = static_cast<int64>(MC) * 4;
+                                    if (P + MB <= End) { P += MB; ComputedPayloadSize = static_cast<int32>(P - Ptr); }
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // V5 wire format
+                    if (P + 4 <= End)
+                    {
+                        uint32 VC = 0; FMemory::Memcpy(&VC, P, sizeof(uint32)); P += 4;
+                        int64 VB = static_cast<int64>(VC) * 12;
+                        if (P + VB + 4 <= End)
+                        {
+                            P += VB;
+                            uint32 TC = 0; FMemory::Memcpy(&TC, P, sizeof(uint32)); P += 4;
+                            int64 TB = static_cast<int64>(TC) * 12;
+                            if (P + TB + 4 <= End)
+                            {
+                                P += TB;
+                                uint32 MC = 0; FMemory::Memcpy(&MC, P, sizeof(uint32)); P += 4;
+                                int64 MB = static_cast<int64>(MC) * 4;
+                                if (P + MB <= End) { P += MB; ComputedPayloadSize = static_cast<int32>(P - Ptr); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Use computed size if valid, otherwise fall back to remaining bytes
             const int32 PayloadSize =
-                static_cast<int32>(PacketEnd - Ptr);
+                (ComputedPayloadSize > 0 && Ptr + ComputedPayloadSize <= PacketEnd)
+                ? ComputedPayloadSize
+                : static_cast<int32>(PacketEnd - Ptr);
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MESH-PARSE] obj=%u/%u GUID=%s "
+                     "PayloadSize=%d Computed=%d BytesAfterPayload=%lld"),
+                i, ObjectCount,
+                *Guid.ToString(EGuidFormats::Digits),
+                PayloadSize, ComputedPayloadSize,
+                (int64)(PacketEnd - (Ptr + PayloadSize)));
 
             if (PayloadSize < 0)
             {
@@ -4836,7 +4999,6 @@ ProcessBinaryPacket(
             // =====================================================
             // Phase 7C Stage 2C.2: FULL_ATTR v1 reassembly
             // =====================================================
-            bool bHasFullAttr = (Flags & MESH_CHUNK_FLAG_FULL_ATTR) != 0;
 
             // Phase 10J.5E/K: Skip v1 chunk accumulation for FBX-authoritative AND FBX-pending GUIDs.
             if (bHasFullAttr && (FBXAuthoritativeGuids.Contains(Guid) || FBXPendingGuids.Contains(Guid)))
@@ -7631,9 +7793,6 @@ AttachToParent(
             TEXT("END TRACE: AttachToParent child=%s (no parent)"),
             *Guid.ToString(
                 EGuidFormats::Digits));
-        return;
-    }
-    {
         return;
     }
 

@@ -1,0 +1,575 @@
+{
+  "spec_format_version": 1,
+  "protocol_version": 1,
+  "protocol_revision": 1,
+  "generator_version": "1.0.0",
+  "git_commit": "9e39adda7843",
+  "protocol_sha256": "33707068e5630504e5bc12619773cc13dc9b86e13a6c167ab55003cde3e574a8",
+  "generated_at": "2026-07-22T09:25:21.949169+00:00",
+  "vector_count": 31,
+  "vectors": [
+    {
+      "name": "HELLO",
+      "file": "HELLO.bin",
+      "msg_type": 16,
+      "msg_type_name": "HELLO",
+      "flags": 0,
+      "sequence_id": 0,
+      "session_id": null,
+      "fields": {
+        "protocol_version_major": 2,
+        "protocol_version_minor": 0,
+        "capabilities": 7
+      },
+      "size": 20
+    },
+    {
+      "name": "HELLO_ACK",
+      "file": "HELLO_ACK.bin",
+      "msg_type": 17,
+      "msg_type_name": "HELLO_ACK",
+      "flags": 0,
+      "sequence_id": 0,
+      "session_id": null,
+      "fields": {
+        "protocol_version_major": 2,
+        "protocol_version_minor": 0,
+        "accepted_capabilities": 7,
+        "max_chunk_size": 65536,
+        "session_id": 16045690984503098046
+      },
+      "size": 32
+    },
+    {
+      "name": "REJECT",
+      "file": "REJECT.bin",
+      "msg_type": 18,
+      "msg_type_name": "REJECT",
+      "flags": 0,
+      "sequence_id": 0,
+      "session_id": null,
+      "fields": {
+        "error_code": 1,
+        "reason": "Unsupported version",
+        "min_version_major": 2,
+        "min_version_minor": 0,
+        "max_version_major": 2,
+        "max_version_minor": 0
+      },
+      "size": 37
+    },
+    {
+      "name": "HEARTBEAT",
+      "file": "HEARTBEAT.bin",
+      "msg_type": 0,
+      "msg_type_name": "HEARTBEAT",
+      "flags": 0,
+      "sequence_id": 1,
+      "session_id": 16045690984503098046,
+      "fields": {},
+      "size": 18
+    },
+    {
+      "name": "HEARTBEAT_ACK",
+      "file": "HEARTBEAT_ACK.bin",
+      "msg_type": 1,
+      "msg_type_name": "HEARTBEAT_ACK",
+      "flags": 0,
+      "sequence_id": 1,
+      "session_id": 16045690984503098046,
+      "fields": {},
+      "size": 18
+    },
+    {
+      "name": "SCENE_HASH",
+      "file": "SCENE_HASH.bin",
+      "msg_type": 2,
+      "msg_type_name": "SCENE_HASH",
+      "flags": 0,
+      "sequence_id": 1,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "hash": 72623859790382856,
+        "object_count": 42
+      },
+      "size": 30
+    },
+    {
+      "name": "SCENE_FULL",
+      "file": "SCENE_FULL.bin",
+      "msg_type": 3,
+      "msg_type_name": "SCENE_FULL",
+      "flags": 0,
+      "sequence_id": 2,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "object_count": 5
+      },
+      "size": 22
+    },
+    {
+      "name": "SCENE_DELTA",
+      "file": "SCENE_DELTA.bin",
+      "msg_type": 4,
+      "msg_type_name": "SCENE_DELTA",
+      "flags": 0,
+      "sequence_id": 3,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "object_count": 2
+      },
+      "size": 22
+    },
+    {
+      "name": "OBJECT_CREATE",
+      "file": "OBJECT_CREATE.bin",
+      "msg_type": 32,
+      "msg_type_name": "OBJECT_CREATE",
+      "flags": 0,
+      "sequence_id": 4,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "name": "Suzanne",
+        "parent_id": "00000000-0000-0000-0000-000000000000",
+        "transform": {
+          "px": 0.0,
+          "py": 0.0,
+          "pz": 0.0,
+          "rx": 0.0,
+          "ry": 0.0,
+          "rz": 0.0,
+          "rw": 1.0,
+          "sx": 1.0,
+          "sy": 1.0,
+          "sz": 1.0
+        }
+      },
+      "size": 99
+    },
+    {
+      "name": "OBJECT_UPDATE",
+      "file": "OBJECT_UPDATE.bin",
+      "msg_type": 33,
+      "msg_type_name": "OBJECT_UPDATE",
+      "flags": 0,
+      "sequence_id": 5,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "transform": {
+          "px": 100.5,
+          "py": -200.25,
+          "pz": 0.0,
+          "rx": 0.0,
+          "ry": 0.0,
+          "rz": 0.0,
+          "rw": 1.0,
+          "sx": 1.0,
+          "sy": 1.0,
+          "sz": 1.0
+        },
+        "name": "Suzanne_Renamed",
+        "visibility": 1
+      },
+      "size": 92
+    },
+    {
+      "name": "OBJECT_DELETE",
+      "file": "OBJECT_DELETE.bin",
+      "msg_type": 34,
+      "msg_type_name": "OBJECT_DELETE",
+      "flags": 0,
+      "sequence_id": 6,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff"
+      },
+      "size": 34
+    },
+    {
+      "name": "OBJECT_RENAME",
+      "file": "OBJECT_RENAME.bin",
+      "msg_type": 35,
+      "msg_type_name": "OBJECT_RENAME",
+      "flags": 0,
+      "sequence_id": 7,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "new_name": "Cube_Renamed"
+      },
+      "size": 48
+    },
+    {
+      "name": "OBJECT_REPARENT",
+      "file": "OBJECT_REPARENT.bin",
+      "msg_type": 36,
+      "msg_type_name": "OBJECT_REPARENT",
+      "flags": 0,
+      "sequence_id": 8,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "new_parent_id": "ffeeddcc-bbaa-9988-7766-554433221100"
+      },
+      "size": 50
+    },
+    {
+      "name": "OBJECT_VISIBILITY",
+      "file": "OBJECT_VISIBILITY.bin",
+      "msg_type": 37,
+      "msg_type_name": "OBJECT_VISIBILITY",
+      "flags": 0,
+      "sequence_id": 9,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "visible": 0
+      },
+      "size": 35
+    },
+    {
+      "name": "MESH_START",
+      "file": "MESH_START.bin",
+      "msg_type": 50,
+      "msg_type_name": "MESH_START",
+      "flags": 0,
+      "sequence_id": 13,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "total_chunks": 3,
+        "format_flags": 1
+      },
+      "size": 37
+    },
+    {
+      "name": "MESH_CHUNK",
+      "file": "MESH_CHUNK.bin",
+      "msg_type": 51,
+      "msg_type_name": "MESH_CHUNK",
+      "flags": 0,
+      "sequence_id": 14,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "chunk_index": 0,
+        "vertex_offset": 0,
+        "vertex_count": 2,
+        "index_count": 6,
+        "data": "b'\\x00\\x01\\x02\\x03\\x04\\x05'"
+      },
+      "size": 56
+    },
+    {
+      "name": "MESH_END",
+      "file": "MESH_END.bin",
+      "msg_type": 52,
+      "msg_type_name": "MESH_END",
+      "flags": 0,
+      "sequence_id": 15,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "checksum": 3735928559
+      },
+      "size": 38
+    },
+    {
+      "name": "MESH_DATA",
+      "file": "MESH_DATA.bin",
+      "msg_type": 48,
+      "msg_type_name": "MESH_DATA",
+      "flags": 0,
+      "sequence_id": 16,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "vertex_count": 2,
+        "index_count": 6,
+        "format_flags": 1,
+        "vertices": [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "normals": [
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "uvs": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ],
+        "indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "size": 135
+    },
+    {
+      "name": "MESH_DELTA",
+      "file": "MESH_DELTA.bin",
+      "msg_type": 49,
+      "msg_type_name": "MESH_DELTA",
+      "flags": 0,
+      "sequence_id": 17,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "vertex_count": 2,
+        "format_flags": 1,
+        "vertices": [
+          0.5,
+          0.5,
+          0.5,
+          1.5,
+          1.5,
+          1.5
+        ],
+        "normals": [
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "uvs": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ]
+      },
+      "size": 103
+    },
+    {
+      "name": "MATERIAL_CREATE",
+      "file": "MATERIAL_CREATE.bin",
+      "msg_type": 64,
+      "msg_type_name": "MATERIAL_CREATE",
+      "flags": 0,
+      "sequence_id": 18,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "material_id": "ffeeddcc-bbaa-9988-7766-554433221100",
+        "name": "Gold",
+        "base_color": [
+          1.0,
+          0.84,
+          0.0,
+          1.0
+        ],
+        "metallic": 1.0,
+        "roughness": 0.3,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "texture_path": "T_Gold_BaseColor"
+      },
+      "size": 94
+    },
+    {
+      "name": "MATERIAL_UPDATE",
+      "file": "MATERIAL_UPDATE.bin",
+      "msg_type": 65,
+      "msg_type_name": "MATERIAL_UPDATE",
+      "flags": 0,
+      "sequence_id": 19,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "material_id": "ffeeddcc-bbaa-9988-7766-554433221100",
+        "base_color": [
+          0.8,
+          0.8,
+          0.8,
+          1.0
+        ],
+        "metallic": 0.0,
+        "roughness": 0.5,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "texture_path": ""
+      },
+      "size": 72
+    },
+    {
+      "name": "MATERIAL_ASSIGN",
+      "file": "MATERIAL_ASSIGN.bin",
+      "msg_type": 66,
+      "msg_type_name": "MATERIAL_ASSIGN",
+      "flags": 0,
+      "sequence_id": 20,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "material_id": "ffeeddcc-bbaa-9988-7766-554433221100",
+        "slot_index": 0
+      },
+      "size": 51
+    },
+    {
+      "name": "CAMERA_CREATE",
+      "file": "CAMERA_CREATE.bin",
+      "msg_type": 80,
+      "msg_type_name": "CAMERA_CREATE",
+      "flags": 0,
+      "sequence_id": 21,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "camera_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "name": "MainCamera",
+        "transform": {
+          "px": 1.5,
+          "py": 2.5,
+          "pz": 3.5,
+          "rx": 0.0,
+          "ry": 0.0,
+          "rz": 0.7071068,
+          "rw": 0.7071068,
+          "sx": 2.0,
+          "sy": 2.0,
+          "sz": 2.0
+        },
+        "focal_length": 50.0,
+        "sensor_width": 36.0,
+        "sensor_height": 24.0
+      },
+      "size": 98
+    },
+    {
+      "name": "CAMERA_UPDATE",
+      "file": "CAMERA_UPDATE.bin",
+      "msg_type": 81,
+      "msg_type_name": "CAMERA_UPDATE",
+      "flags": 0,
+      "sequence_id": 22,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "camera_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "transform": {
+          "px": 100.5,
+          "py": -200.25,
+          "pz": 0.0,
+          "rx": 0.0,
+          "ry": 0.0,
+          "rz": 0.0,
+          "rw": 1.0,
+          "sx": 1.0,
+          "sy": 1.0,
+          "sz": 1.0
+        },
+        "focal_length": 85.0
+      },
+      "size": 78
+    },
+    {
+      "name": "CAMERASETACTIVE",
+      "file": "CAMERASETACTIVE.bin",
+      "msg_type": 82,
+      "msg_type_name": "CAMERASETACTIVE",
+      "flags": 0,
+      "sequence_id": 23,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "camera_id": "00112233-4455-6677-8899-aabbccddeeff"
+      },
+      "size": 34
+    },
+    {
+      "name": "SCENE_HASH_exchange_both",
+      "file": "SCENE_HASH_exchange.bin",
+      "msg_type": 2,
+      "msg_type_name": "SCENE_HASH",
+      "flags": 0,
+      "sequence_id": 1,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "hash": 12302652056939934532,
+        "object_count": 100
+      },
+      "size": 30
+    },
+    {
+      "name": "SYNC_ACK",
+      "file": "SYNC_ACK.bin",
+      "msg_type": 240,
+      "msg_type_name": "SYNC_ACK",
+      "flags": 0,
+      "sequence_id": 10,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "acked_seq": 9
+      },
+      "size": 22
+    },
+    {
+      "name": "ERROR",
+      "file": "ERROR.bin",
+      "msg_type": 254,
+      "msg_type_name": "ERROR",
+      "flags": 0,
+      "sequence_id": 11,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "error_code": 2,
+        "message": "Malformed payload"
+      },
+      "size": 39
+    },
+    {
+      "name": "DISCONNECT",
+      "file": "DISCONNECT.bin",
+      "msg_type": 255,
+      "msg_type_name": "DISCONNECT",
+      "flags": 0,
+      "sequence_id": 12,
+      "session_id": 16045690984503098046,
+      "fields": {},
+      "size": 18
+    },
+    {
+      "name": "HEARTBEAT_compressed",
+      "file": "HEARTBEAT_compressed.bin",
+      "msg_type": 0,
+      "msg_type_name": "HEARTBEAT",
+      "flags": 1,
+      "sequence_id": 20,
+      "session_id": 16045690984503098046,
+      "fields": {},
+      "size": 18
+    },
+    {
+      "name": "SEQUENCE_WRAPAROUND",
+      "file": "SEQUENCE_WRAPAROUND.bin",
+      "msg_type": 0,
+      "msg_type_name": "HEARTBEAT",
+      "flags": 0,
+      "sequence_id": 4294967295,
+      "session_id": 16045690984503098046,
+      "fields": {},
+      "size": 18
+    }
+  ]
+}

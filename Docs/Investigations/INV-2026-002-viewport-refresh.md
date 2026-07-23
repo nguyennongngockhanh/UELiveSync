@@ -2,11 +2,12 @@
 
 ## Metadata
 
-- **Status**: Open
+- **Status**: Plugin Workaround Failed
 - **Owner**: Khanh
 - **Started**: 2026-07-12
 - **Closed**: —
 - **Classification**: Editor Viewport Update / Editor Tick
+- **Depends-on**: —
 
 ## Problem
 
@@ -419,10 +420,26 @@ Crossover occurs at approximately the measured background tick interval (~0.331 
 
 ## Fix
 
-Not yet implemented. Possible directions:
-- Increase `VisibilityTimeThreshold` (simple but hardcodes a magic number)
-- Fix `IsVisible()` to use a different mechanism (e.g., check whether the viewport client is actively displaying content rather than time-based threshold)
-- Prevent Background Process from throttling the active viewport below the visibility threshold
+**Plugin Workaround Attempt (2026-07-20): FAIL**
+
+Tested `AddRealtimeOverride(true, "UELiveSync")` + `GetEditorViewportWidget()->Invalidate()` in plugin Tick.
+
+**Result**: Bootstrap deadlock confirmed. The plugin's Tick runs inside the world tick (line 1967), AFTER Gate1 has already evaluated (line 2258). The world tick takes ~331ms, exceeding the 250ms VisibilityTimeThreshold. By the time the plugin calls `Invalidate()`, Gate1 has already rejected the viewport tick. The registered active timer won't fire until the next `SlateApplication::Tick()`, but by then another 331ms has passed.
+
+**Key evidence**:
+- Plugin called `Invalidate()` 1600 times (confirmed via `PLUGIN-INVALIDATE` logs)
+- INV-TICK timer fired for main viewport (1034 times)
+- INV-VISIBLE showed ALL `visible=0`, delta=0.332
+- INV-Gate1 showed all `pass=0` for main viewport
+- Timeline analysis: Timer fires during `SlateApplication::Tick()` → world tick (~331ms) → plugin Tick (inside world tick) → Gate1 evaluates → `IsVisible()=false` → reject
+
+**Conclusion**: Plugin workaround does NOT fix Bug C. The fundamental issue is the world tick duration exceeding the visibility threshold.
+
+**Alternative fix paths**:
+1. Engine patch: Increase `VisibilityTimeThreshold` (simple but hardcodes a magic number)
+2. Engine patch: Fix `IsVisible()` to use a different mechanism
+3. Engine patch: Prevent Background Process from throttling the active viewport below the visibility threshold
+4. Find source of ~331ms tick interval (INV-2026-003)
 
 ## Regression
 
@@ -460,3 +477,4 @@ Not yet implemented. Possible directions:
 - **Don't use RedrawAllViewports() as hammer fix**: If the issue is viewport client realtime state or World context, adding RedrawAllViewports() only masks symptoms.
 - **Causal intervention > observational evidence**: Changing one variable (VisibilityTimeThreshold) and observing the dose-response curve provided far stronger evidence than any amount of log analysis. The crossover point (0.33 ≈ 0.331) directly fingerprinted the mechanism.
 - **Distinguish correlation from causation**: `AddRealtimeOverride(0)` preceding the tick interval change was correlation, not causation. The actual causal mechanism was the threshold/interval mismatch.
+- **Plugin workaround timing is critical**: `AddRealtimeOverride` + `Invalidate()` cannot fix Bug C because the plugin's Tick runs INSIDE the world tick, AFTER Gate1 has already evaluated. The world tick duration (~331ms) exceeds the visibility threshold (250ms), creating a bootstrap deadlock.
