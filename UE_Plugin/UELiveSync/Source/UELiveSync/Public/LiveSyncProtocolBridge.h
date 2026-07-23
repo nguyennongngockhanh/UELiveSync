@@ -440,6 +440,43 @@ inline void DispatchCameraSetActive(const CameraSetActiveView& v)
 }
 
 // =========================================================
+// Process functions — Camera (orchestration)
+// =========================================================
+
+inline EDispatchResult ProcessCameraCreate(
+    const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_cameracreate_calls++;
+#endif
+    auto view = BuildCameraCreateView(msg);
+    DispatchCameraCreate(view);
+    return EDispatchResult::Handled;
+}
+
+inline EDispatchResult ProcessCameraUpdate(
+    const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_cameraupdate_calls++;
+#endif
+    auto view = BuildCameraUpdateView(msg);
+    DispatchCameraUpdate(view);
+    return EDispatchResult::Handled;
+}
+
+inline EDispatchResult ProcessCameraSetActive(
+    const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_camerasetactive_calls++;
+#endif
+    auto view = BuildCameraSetActiveView(msg);
+    DispatchCameraSetActive(view);
+    return EDispatchResult::Handled;
+}
+
+// =========================================================
 // View structs — Object
 // =========================================================
 
@@ -1524,34 +1561,13 @@ inline EDispatchResult DispatchMsgTypePacket(
             return ProcessMeshDelta(msg);
 
         case livesync::MsgType::CAMERA_CREATE:
-        {
-#ifdef UELIVESYNC_BRIDGE_TESTING
-            g_cameracreate_calls++;
-#endif
-            auto view = BuildCameraCreateView(msg);
-            DispatchCameraCreate(view);
-            return EDispatchResult::Handled;
-        }
+            return ProcessCameraCreate(msg);
 
         case livesync::MsgType::CAMERA_UPDATE:
-        {
-#ifdef UELIVESYNC_BRIDGE_TESTING
-            g_cameraupdate_calls++;
-#endif
-            auto view = BuildCameraUpdateView(msg);
-            DispatchCameraUpdate(view);
-            return EDispatchResult::Handled;
-        }
+            return ProcessCameraUpdate(msg);
 
         case livesync::MsgType::CAMERASETACTIVE:
-        {
-#ifdef UELIVESYNC_BRIDGE_TESTING
-            g_camerasetactive_calls++;
-#endif
-            auto view = BuildCameraSetActiveView(msg);
-            DispatchCameraSetActive(view);
-            return EDispatchResult::Handled;
-        }
+            return ProcessCameraSetActive(msg);
 
         default:
             UE_LOG(LogLiveSync, Log,
