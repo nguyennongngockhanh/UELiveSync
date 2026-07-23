@@ -793,97 +793,185 @@ inline void HandleHeartbeatAck(const livesync::DeserializedMessage& msg)
 }
 
 // =========================================================
-// Handlers — Phase 1.3.2d (materials)
+// View structs — Material
 // =========================================================
 
-inline void HandleMaterialCreate(const livesync::DeserializedMessage& msg)
+struct MaterialCreateView
+{
+    std::array<uint8_t, 16> MaterialId;
+    std::string Name;
+    std::vector<float> BaseColor;
+    float Metallic;
+    float Roughness;
+    std::vector<float> Emission;
+    bool HasTexturePath;
+    std::string TexturePath;
+};
+
+struct MaterialUpdateView
+{
+    std::array<uint8_t, 16> MaterialId;
+    std::vector<float> BaseColor;
+    float Metallic;
+    float Roughness;
+    std::vector<float> Emission;
+    bool HasTexturePath;
+    std::string TexturePath;
+};
+
+struct MaterialAssignView
+{
+    std::array<uint8_t, 16> PersistentId;
+    std::array<uint8_t, 16> MaterialId;
+    uint8_t SlotIndex;
+};
+
+// =========================================================
+// Builders — Material (pure functions)
+// =========================================================
+
+inline MaterialCreateView BuildMaterialCreateView(
+    const livesync::DeserializedMessage& msg)
+{
+    MaterialCreateView v;
+    v.MaterialId = GetField<std::array<uint8_t, 16>>(msg, "material_id");
+    v.Name = GetField<std::string>(msg, "name");
+    v.BaseColor = GetField<std::vector<float>>(msg, "base_color");
+    v.Metallic = GetField<float>(msg, "metallic");
+    v.Roughness = GetField<float>(msg, "roughness");
+    v.Emission = GetField<std::vector<float>>(msg, "emission");
+    auto* tex = TryGetField<std::string>(msg, "texture_path");
+    v.HasTexturePath = (tex != nullptr);
+    v.TexturePath = tex ? *tex : std::string{};
+    return v;
+}
+
+inline MaterialUpdateView BuildMaterialUpdateView(
+    const livesync::DeserializedMessage& msg)
+{
+    MaterialUpdateView v;
+    v.MaterialId = GetField<std::array<uint8_t, 16>>(msg, "material_id");
+    v.BaseColor = GetField<std::vector<float>>(msg, "base_color");
+    v.Metallic = GetField<float>(msg, "metallic");
+    v.Roughness = GetField<float>(msg, "roughness");
+    v.Emission = GetField<std::vector<float>>(msg, "emission");
+    auto* tex = TryGetField<std::string>(msg, "texture_path");
+    v.HasTexturePath = (tex != nullptr);
+    v.TexturePath = tex ? *tex : std::string{};
+    return v;
+}
+
+inline MaterialAssignView BuildMaterialAssignView(
+    const livesync::DeserializedMessage& msg)
+{
+    MaterialAssignView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.MaterialId = GetField<std::array<uint8_t, 16>>(msg, "material_id");
+    v.SlotIndex = GetField<uint8_t>(msg, "slot_index");
+    return v;
+}
+
+// =========================================================
+// Log functions — Material
+// =========================================================
+
+inline void LogMaterialCreate(const MaterialCreateView& v)
+{
+    char mid_str[37];
+    FormatUuid(v.MaterialId, mid_str, sizeof(mid_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MATERIAL_CREATE] id=%hs name=%hs "
+             "metallic=%.2f roughness=%.2f"),
+        mid_str, v.Name.c_str(), v.Metallic, v.Roughness);
+    if (v.HasTexturePath)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[BRIDGE][MATERIAL_CREATE] texture=%hs"),
+            v.TexturePath.c_str());
+    }
+}
+
+inline void LogMaterialUpdate(const MaterialUpdateView& v)
+{
+    char mid_str[37];
+    FormatUuid(v.MaterialId, mid_str, sizeof(mid_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MATERIAL_UPDATE] id=%hs "
+             "metallic=%.2f roughness=%.2f"),
+        mid_str, v.Metallic, v.Roughness);
+    if (v.HasTexturePath)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[BRIDGE][MATERIAL_UPDATE] texture=%hs"),
+            v.TexturePath.c_str());
+    }
+}
+
+inline void LogMaterialAssign(const MaterialAssignView& v)
+{
+    char oid_str[37];
+    FormatUuid(v.PersistentId, oid_str, sizeof(oid_str));
+    char mid_str[37];
+    FormatUuid(v.MaterialId, mid_str, sizeof(mid_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MATERIAL_ASSIGN] object=%hs material=%hs slot=%u"),
+        oid_str, mid_str, static_cast<unsigned>(v.SlotIndex));
+}
+
+// =========================================================
+// Dispatch functions — Material (fan-out only)
+// =========================================================
+
+inline void DispatchMaterialCreate(const MaterialCreateView& v)
+{
+    LogMaterialCreate(v);
+}
+
+inline void DispatchMaterialUpdate(const MaterialUpdateView& v)
+{
+    LogMaterialUpdate(v);
+}
+
+inline void DispatchMaterialAssign(const MaterialAssignView& v)
+{
+    LogMaterialAssign(v);
+}
+
+// =========================================================
+// Process functions — Material (orchestration)
+// =========================================================
+
+inline EDispatchResult ProcessMaterialCreate(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_materialcreate_calls++;
 #endif
-
-    char mid_str[37];
-    auto& mid = GetField<std::array<uint8_t, 16>>(msg, "material_id");
-    FormatUuid(mid, mid_str, sizeof(mid_str));
-
-    auto& name = GetField<std::string>(msg, "name");
-    auto& bc = GetField<std::vector<float>>(msg, "base_color");
-    float metallic = GetField<float>(msg, "metallic");
-    float roughness = GetField<float>(msg, "roughness");
-    auto& emission = GetField<std::vector<float>>(msg, "emission");
-
-    auto* tex = TryGetField<std::string>(msg, "texture_path");
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][MATERIAL_CREATE] id=%hs name=%hs "
-             "base_color=[%.2f,%.2f,%.2f,%.2f] "
-             "metallic=%.2f roughness=%.2f emission=[%.2f,%.2f,%.2f]"),
-        mid_str, name.c_str(),
-        bc[0], bc[1], bc[2], bc[3],
-        metallic, roughness,
-        emission[0], emission[1], emission[2]);
-
-    if (tex)
-    {
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[BRIDGE][MATERIAL_CREATE] texture=%hs"),
-            tex->c_str());
-    }
+    auto view = BuildMaterialCreateView(msg);
+    DispatchMaterialCreate(view);
+    return EDispatchResult::Handled;
 }
 
-inline void HandleMaterialUpdate(const livesync::DeserializedMessage& msg)
+inline EDispatchResult ProcessMaterialUpdate(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_materialupdate_calls++;
 #endif
-
-    char mid_str[37];
-    auto& mid = GetField<std::array<uint8_t, 16>>(msg, "material_id");
-    FormatUuid(mid, mid_str, sizeof(mid_str));
-
-    auto& bc = GetField<std::vector<float>>(msg, "base_color");
-    float metallic = GetField<float>(msg, "metallic");
-    float roughness = GetField<float>(msg, "roughness");
-    auto& emission = GetField<std::vector<float>>(msg, "emission");
-
-    auto* tex = TryGetField<std::string>(msg, "texture_path");
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][MATERIAL_UPDATE] id=%hs "
-             "base_color=[%.2f,%.2f,%.2f,%.2f] "
-             "metallic=%.2f roughness=%.2f emission=[%.2f,%.2f,%.2f]"),
-        mid_str,
-        bc[0], bc[1], bc[2], bc[3],
-        metallic, roughness,
-        emission[0], emission[1], emission[2]);
-
-    if (tex)
-    {
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[BRIDGE][MATERIAL_UPDATE] texture=%hs"),
-            tex->c_str());
-    }
+    auto view = BuildMaterialUpdateView(msg);
+    DispatchMaterialUpdate(view);
+    return EDispatchResult::Handled;
 }
 
-inline void HandleMaterialAssign(const livesync::DeserializedMessage& msg)
+inline EDispatchResult ProcessMaterialAssign(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_materialassign_calls++;
 #endif
-
-    char oid_str[37];
-    auto& oid = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
-    FormatUuid(oid, oid_str, sizeof(oid_str));
-
-    char mid_str[37];
-    auto& mid = GetField<std::array<uint8_t, 16>>(msg, "material_id");
-    FormatUuid(mid, mid_str, sizeof(mid_str));
-
-    uint8_t slot = GetField<uint8_t>(msg, "slot_index");
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][MATERIAL_ASSIGN] object=%hs material=%hs slot=%u"),
-        oid_str, mid_str, static_cast<unsigned>(slot));
+    auto view = BuildMaterialAssignView(msg);
+    DispatchMaterialAssign(view);
+    return EDispatchResult::Handled;
 }
 
 // =========================================================
@@ -1150,16 +1238,13 @@ inline EDispatchResult DispatchMsgTypePacket(
             return ProcessObjectReparent(msg);
 
         case livesync::MsgType::MATERIAL_CREATE:
-            HandleMaterialCreate(msg);
-            return EDispatchResult::Handled;
+            return ProcessMaterialCreate(msg);
 
         case livesync::MsgType::MATERIAL_UPDATE:
-            HandleMaterialUpdate(msg);
-            return EDispatchResult::Handled;
+            return ProcessMaterialUpdate(msg);
 
         case livesync::MsgType::MATERIAL_ASSIGN:
-            HandleMaterialAssign(msg);
-            return EDispatchResult::Handled;
+            return ProcessMaterialAssign(msg);
 
         case livesync::MsgType::MESH_START:
             HandleMeshStart(msg);
