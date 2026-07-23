@@ -405,7 +405,97 @@ int main(int argc, char** argv)
         }
     }
 
-    // ── Test 19: Empty buffer -> ParseError ───────────────
+    // ── Test 19: CAMERA_CREATE -> Handled ──────────────────
+    {
+        auto buf = read_file((dir + "CAMERA_CREATE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  CAMERA_CREATE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("CAMERA_CREATE", r,
+                EDispatchResult::Handled, 1, g_cameracreate_calls);
+            check_no_violation("CAMERA_CREATE (no violation)", r);
+
+            if (r == EDispatchResult::Handled)
+            {
+                auto msg = livesync::DeserializeFrame(
+                    buf.data(), buf.size());
+                auto view = BuildCameraCreateView(msg);
+                bool ok = (view.FocalLength > 0.0f) &&
+                          (view.SensorWidth > 0.0f) &&
+                          (view.SensorHeight > 0.0f) &&
+                          !view.Name.empty();
+                printf("  %s  CAMERA_CREATE (builder) "
+                       "name=%s focal=%.1f\n",
+                    ok ? "PASS" : "FAIL",
+                    view.Name.c_str(), view.FocalLength);
+                if (ok) passed++; else failed++;
+            }
+        }
+    }
+
+    // ── Test 20: CAMERA_UPDATE -> Handled ──────────────────
+    {
+        auto buf = read_file((dir + "CAMERA_UPDATE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  CAMERA_UPDATE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("CAMERA_UPDATE", r,
+                EDispatchResult::Handled, 1, g_cameraupdate_calls);
+            check_no_violation("CAMERA_UPDATE (no violation)", r);
+
+            if (r == EDispatchResult::Handled)
+            {
+                auto msg = livesync::DeserializeFrame(
+                    buf.data(), buf.size());
+                auto view = BuildCameraUpdateView(msg);
+                bool ok = view.HasFocalLength &&
+                          (view.FocalLength > 0.0f);
+                printf("  %s  CAMERA_UPDATE (builder) "
+                       "has_focal=%d focal=%.1f\n",
+                    ok ? "PASS" : "FAIL",
+                    static_cast<int>(view.HasFocalLength),
+                    view.FocalLength);
+                if (ok) passed++; else failed++;
+            }
+        }
+    }
+
+    // ── Test 21: CAMERASETACTIVE -> Handled ────────────────
+    {
+        auto buf = read_file((dir + "CAMERASETACTIVE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  CAMERASETACTIVE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("CAMERASETACTIVE", r,
+                EDispatchResult::Handled, 1, g_camerasetactive_calls);
+            check_no_violation("CAMERASETACTIVE (no violation)", r);
+
+            if (r == EDispatchResult::Handled)
+            {
+                auto msg = livesync::DeserializeFrame(
+                    buf.data(), buf.size());
+                auto view = BuildCameraSetActiveView(msg);
+                char id_str[37];
+                FormatUuid(view.CameraId, id_str, sizeof(id_str));
+                bool ok = (id_str[0] != '\0');
+                printf("  %s  CAMERASETACTIVE (builder) "
+                       "id=%s\n",
+                    ok ? "PASS" : "FAIL", id_str);
+                if (ok) passed++; else failed++;
+            }
+        }
+    }
+
+    // ── Test 22: Empty buffer -> ParseError ───────────────
     {
         uint8 tiny[2] = {0x00, 0x00};
         auto r = DispatchMsgTypePacket(tiny, 2);
@@ -413,7 +503,7 @@ int main(int argc, char** argv)
             EDispatchResult::ParseError, 0, 0);
     }
 
-    // ── Test 20: Zero bytes -> ParseError ─────────────────
+    // ── Test 23: Zero bytes -> ParseError ─────────────────
     {
         auto r = DispatchMsgTypePacket(nullptr, 0);
         check_result("zero_size", r,

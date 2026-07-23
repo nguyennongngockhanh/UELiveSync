@@ -220,6 +220,9 @@ inline int g_meshchunk_calls = 0;
 inline int g_meshend_calls = 0;
 inline int g_meshdata_calls = 0;
 inline int g_meshdelta_calls = 0;
+inline int g_cameracreate_calls = 0;
+inline int g_cameraupdate_calls = 0;
+inline int g_camerasetactive_calls = 0;
 
 inline void ResetAllCounters()
 {
@@ -241,6 +244,9 @@ inline void ResetAllCounters()
     g_meshend_calls = 0;
     g_meshdata_calls = 0;
     g_meshdelta_calls = 0;
+    g_cameracreate_calls = 0;
+    g_cameraupdate_calls = 0;
+    g_camerasetactive_calls = 0;
 }
 #endif
 
@@ -289,6 +295,148 @@ inline const T& GetField(
     const std::string& name)
 {
     return std::get<T>(msg.body.at(name));
+}
+
+// =========================================================
+// View structs — Camera
+// =========================================================
+// Immutable data objects. No UE runtime dependencies.
+// =========================================================
+
+struct CameraCreateView
+{
+    std::array<uint8_t, 16> CameraId;
+    std::string Name;
+    struct { float X, Y, Z, Rx, Ry, Rz, Rw, Sx, Sy, Sz; } Transform;
+    float FocalLength;
+    float SensorWidth;
+    float SensorHeight;
+};
+
+struct CameraUpdateView
+{
+    std::array<uint8_t, 16> CameraId;
+    bool HasTransform;
+    struct { float X, Y, Z, Rx, Ry, Rz, Rw, Sx, Sy, Sz; } Transform;
+    bool HasFocalLength;
+    float FocalLength;
+    bool HasSensorWidth;
+    float SensorWidth;
+    bool HasSensorHeight;
+    float SensorHeight;
+};
+
+struct CameraSetActiveView
+{
+    std::array<uint8_t, 16> CameraId;
+};
+
+// =========================================================
+// Builders — Camera (pure functions)
+// =========================================================
+// Only field extraction via GetField/TryGetField.
+// No UE API, no logging, no state mutation.
+// =========================================================
+
+inline CameraCreateView BuildCameraCreateView(
+    const livesync::DeserializedMessage& msg)
+{
+    CameraCreateView v;
+    v.CameraId = GetField<std::array<uint8_t, 16>>(msg, "camera_id");
+    v.Name = GetField<std::string>(msg, "name");
+    auto& t = GetField<std::vector<float>>(msg, "transform");
+    v.Transform = {t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9]};
+    v.FocalLength = GetField<float>(msg, "focal_length");
+    v.SensorWidth = GetField<float>(msg, "sensor_width");
+    v.SensorHeight = GetField<float>(msg, "sensor_height");
+    return v;
+}
+
+inline CameraUpdateView BuildCameraUpdateView(
+    const livesync::DeserializedMessage& msg)
+{
+    CameraUpdateView v;
+    v.CameraId = GetField<std::array<uint8_t, 16>>(msg, "camera_id");
+    auto* t = TryGetField<std::vector<float>>(msg, "transform");
+    v.HasTransform = (t != nullptr);
+    if (t) v.Transform = {(*t)[0], (*t)[1], (*t)[2], (*t)[3], (*t)[4], (*t)[5], (*t)[6], (*t)[7], (*t)[8], (*t)[9]};
+    else v.Transform = {};
+    auto* fl = TryGetField<float>(msg, "focal_length");
+    v.HasFocalLength = (fl != nullptr);
+    v.FocalLength = fl ? *fl : 0.0f;
+    auto* sw = TryGetField<float>(msg, "sensor_width");
+    v.HasSensorWidth = (sw != nullptr);
+    v.SensorWidth = sw ? *sw : 0.0f;
+    auto* sh = TryGetField<float>(msg, "sensor_height");
+    v.HasSensorHeight = (sh != nullptr);
+    v.SensorHeight = sh ? *sh : 0.0f;
+    return v;
+}
+
+inline CameraSetActiveView BuildCameraSetActiveView(
+    const livesync::DeserializedMessage& msg)
+{
+    CameraSetActiveView v;
+    v.CameraId = GetField<std::array<uint8_t, 16>>(msg, "camera_id");
+    return v;
+}
+
+// =========================================================
+// Log functions — Camera
+// =========================================================
+
+inline void LogCameraCreate(const CameraCreateView& v)
+{
+    char id_str[37];
+    FormatUuid(v.CameraId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][CAMERA_CREATE] id=%hs name=%hs "
+             "focal=%.1f sensor=%.1fx%.1f"),
+        id_str, v.Name.c_str(),
+        v.FocalLength, v.SensorWidth, v.SensorHeight);
+}
+
+inline void LogCameraUpdate(const CameraUpdateView& v)
+{
+    char id_str[37];
+    FormatUuid(v.CameraId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][CAMERA_UPDATE] id=%hs "
+             "has_transform=%d focal=%hs%.1f"),
+        id_str,
+        static_cast<int>(v.HasTransform),
+        v.HasFocalLength ? "" : "not_set=",
+        v.HasFocalLength ? v.FocalLength : 0.0f);
+}
+
+inline void LogCameraSetActive(const CameraSetActiveView& v)
+{
+    char id_str[37];
+    FormatUuid(v.CameraId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][CAMERA_SETACTIVE] id=%hs"), id_str);
+}
+
+// =========================================================
+// Dispatch functions — Camera (fan-out only)
+// =========================================================
+// Receives const View&. Does NOT modify view.
+// Current: Log only. Phase 1.3.3: add GameplaySink.
+// =========================================================
+
+inline void DispatchCameraCreate(const CameraCreateView& v)
+{
+    LogCameraCreate(v);
+}
+
+inline void DispatchCameraUpdate(const CameraUpdateView& v)
+{
+    LogCameraUpdate(v);
+}
+
+inline void DispatchCameraSetActive(const CameraSetActiveView& v)
+{
+    LogCameraSetActive(v);
 }
 
 // =========================================================
@@ -898,6 +1046,36 @@ inline EDispatchResult DispatchMsgTypePacket(
         case livesync::MsgType::MESH_DELTA:
             HandleMeshDelta(msg);
             return EDispatchResult::Handled;
+
+        case livesync::MsgType::CAMERA_CREATE:
+        {
+#ifdef UELIVESYNC_BRIDGE_TESTING
+            g_cameracreate_calls++;
+#endif
+            auto view = BuildCameraCreateView(msg);
+            DispatchCameraCreate(view);
+            return EDispatchResult::Handled;
+        }
+
+        case livesync::MsgType::CAMERA_UPDATE:
+        {
+#ifdef UELIVESYNC_BRIDGE_TESTING
+            g_cameraupdate_calls++;
+#endif
+            auto view = BuildCameraUpdateView(msg);
+            DispatchCameraUpdate(view);
+            return EDispatchResult::Handled;
+        }
+
+        case livesync::MsgType::CAMERASETACTIVE:
+        {
+#ifdef UELIVESYNC_BRIDGE_TESTING
+            g_camerasetactive_calls++;
+#endif
+            auto view = BuildCameraSetActiveView(msg);
+            DispatchCameraSetActive(view);
+            return EDispatchResult::Handled;
+        }
 
         default:
             UE_LOG(LogLiveSync, Log,
