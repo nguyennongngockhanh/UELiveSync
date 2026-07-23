@@ -440,6 +440,290 @@ inline void DispatchCameraSetActive(const CameraSetActiveView& v)
 }
 
 // =========================================================
+// View structs — Object
+// =========================================================
+
+struct ObjectCreateView
+{
+    std::array<uint8_t, 16> PersistentId;
+    std::string Name;
+    bool HasParentId;
+    std::array<uint8_t, 16> ParentId;
+    std::vector<float> Transform;
+};
+
+struct ObjectUpdateView
+{
+    std::array<uint8_t, 16> PersistentId;
+    bool HasTransform;
+    std::vector<float> Transform;
+    bool HasName;
+    std::string Name;
+    bool HasVisibility;
+    uint8_t Visibility;
+};
+
+struct ObjectDeleteView
+{
+    std::array<uint8_t, 16> PersistentId;
+};
+
+struct ObjectRenameView
+{
+    std::array<uint8_t, 16> PersistentId;
+    std::string NewName;
+};
+
+struct ObjectVisibilityView
+{
+    std::array<uint8_t, 16> PersistentId;
+    uint8_t Visible;
+};
+
+struct ObjectReparentView
+{
+    std::array<uint8_t, 16> PersistentId;
+    std::array<uint8_t, 16> NewParentId;
+};
+
+// =========================================================
+// Builders — Object (pure functions)
+// =========================================================
+
+inline ObjectCreateView BuildObjectCreateView(
+    const livesync::DeserializedMessage& msg)
+{
+    ObjectCreateView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.Name = GetField<std::string>(msg, "name");
+    auto* pid = TryGetField<std::array<uint8_t, 16>>(msg, "parent_id");
+    v.HasParentId = (pid != nullptr);
+    v.ParentId = pid ? *pid : std::array<uint8_t, 16>{};
+    v.Transform = GetField<std::vector<float>>(msg, "transform");
+    return v;
+}
+
+inline ObjectUpdateView BuildObjectUpdateView(
+    const livesync::DeserializedMessage& msg)
+{
+    ObjectUpdateView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    auto* t = TryGetField<std::vector<float>>(msg, "transform");
+    v.HasTransform = (t != nullptr);
+    v.Transform = t ? *t : std::vector<float>{};
+    auto* n = TryGetField<std::string>(msg, "name");
+    v.HasName = (n != nullptr);
+    v.Name = n ? *n : std::string{};
+    auto* vis = TryGetField<uint8_t>(msg, "visibility");
+    v.HasVisibility = (vis != nullptr);
+    v.Visibility = vis ? *vis : 0;
+    return v;
+}
+
+inline ObjectDeleteView BuildObjectDeleteView(
+    const livesync::DeserializedMessage& msg)
+{
+    ObjectDeleteView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    return v;
+}
+
+inline ObjectRenameView BuildObjectRenameView(
+    const livesync::DeserializedMessage& msg)
+{
+    ObjectRenameView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.NewName = GetField<std::string>(msg, "new_name");
+    return v;
+}
+
+inline ObjectVisibilityView BuildObjectVisibilityView(
+    const livesync::DeserializedMessage& msg)
+{
+    ObjectVisibilityView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.Visible = GetField<uint8_t>(msg, "visible");
+    return v;
+}
+
+inline ObjectReparentView BuildObjectReparentView(
+    const livesync::DeserializedMessage& msg)
+{
+    ObjectReparentView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.NewParentId = GetField<std::array<uint8_t, 16>>(msg, "new_parent_id");
+    return v;
+}
+
+// =========================================================
+// Log functions — Object
+// =========================================================
+
+inline void LogObjectCreate(const ObjectCreateView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    char parent_str[37] = "none";
+    if (v.HasParentId)
+        FormatUuid(v.ParentId, parent_str, sizeof(parent_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_CREATE] id=%hs name=%hs parent=%hs"),
+        id_str, v.Name.c_str(), parent_str);
+}
+
+inline void LogObjectUpdate(const ObjectUpdateView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_UPDATE] id=%hs has_transform=%d"),
+        id_str, static_cast<int>(v.HasTransform));
+}
+
+inline void LogObjectDelete(const ObjectDeleteView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_DELETE] id=%hs"), id_str);
+}
+
+inline void LogObjectRename(const ObjectRenameView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_RENAME] id=%hs new_name=%hs"),
+        id_str, v.NewName.c_str());
+}
+
+inline void LogObjectVisibility(const ObjectVisibilityView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_VISIBILITY] id=%hs visible=%u"),
+        id_str, static_cast<unsigned>(v.Visible));
+}
+
+inline void LogObjectReparent(const ObjectReparentView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    char parent_str[37];
+    FormatUuid(v.NewParentId, parent_str, sizeof(parent_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_REPARENT] id=%hs new_parent=%hs"),
+        id_str, parent_str);
+}
+
+// =========================================================
+// Dispatch functions — Object (fan-out only)
+// =========================================================
+
+inline void DispatchObjectCreate(const ObjectCreateView& v)
+{
+    LogObjectCreate(v);
+}
+
+inline void DispatchObjectUpdate(const ObjectUpdateView& v)
+{
+    LogObjectUpdate(v);
+}
+
+inline void DispatchObjectDelete(const ObjectDeleteView& v)
+{
+    LogObjectDelete(v);
+}
+
+inline void DispatchObjectRename(const ObjectRenameView& v)
+{
+    LogObjectRename(v);
+}
+
+inline void DispatchObjectVisibility(const ObjectVisibilityView& v)
+{
+    LogObjectVisibility(v);
+}
+
+inline void DispatchObjectReparent(const ObjectReparentView& v)
+{
+    LogObjectReparent(v);
+}
+
+// =========================================================
+// Process functions — Object (orchestration)
+// =========================================================
+// Only ProcessXXX() returns EDispatchResult.
+// =========================================================
+
+inline EDispatchResult ProcessObjectCreate(
+    const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectcreate_calls++;
+#endif
+    auto view = BuildObjectCreateView(msg);
+    DispatchObjectCreate(view);
+    return EDispatchResult::Handled;
+}
+
+inline EDispatchResult ProcessObjectUpdate(
+    const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectupdate_calls++;
+#endif
+    auto view = BuildObjectUpdateView(msg);
+    DispatchObjectUpdate(view);
+    return EDispatchResult::Handled;
+}
+
+inline EDispatchResult ProcessObjectDelete(
+    const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectdelete_calls++;
+#endif
+    auto view = BuildObjectDeleteView(msg);
+    DispatchObjectDelete(view);
+    return EDispatchResult::Handled;
+}
+
+inline EDispatchResult ProcessObjectRename(
+    const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectrename_calls++;
+#endif
+    auto view = BuildObjectRenameView(msg);
+    DispatchObjectRename(view);
+    return EDispatchResult::Handled;
+}
+
+inline EDispatchResult ProcessObjectVisibility(
+    const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectvisibility_calls++;
+#endif
+    auto view = BuildObjectVisibilityView(msg);
+    DispatchObjectVisibility(view);
+    return EDispatchResult::Handled;
+}
+
+inline EDispatchResult ProcessObjectReparent(
+    const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectreparent_calls++;
+#endif
+    auto view = BuildObjectReparentView(msg);
+    DispatchObjectReparent(view);
+    return EDispatchResult::Handled;
+}
+
+// =========================================================
 // Handlers — Phase 1.3.2a (handshake only)
 // =========================================================
 // Each handler receives a pre-validated DeserializedMessage.
@@ -506,150 +790,6 @@ inline void HandleHeartbeatAck(const livesync::DeserializedMessage& msg)
         msg.session_id.has_value()
             ? (unsigned long long)msg.session_id.value()
             : 0ULL);
-}
-
-// =========================================================
-// Handlers — Phase 1.3.2b (object lifecycle)
-// =========================================================
-// Deserialize → Validate → Log. No actor spawn/destroy/modify.
-// =========================================================
-
-inline void HandleObjectCreate(const livesync::DeserializedMessage& msg)
-{
-#ifdef UELIVESYNC_BRIDGE_TESTING
-    g_objectcreate_calls++;
-#endif
-
-    char id_str[37];
-    auto& pid = std::get<std::array<uint8_t, 16>>(
-        msg.body.at("persistent_id"));
-    FormatUuid(pid, id_str, sizeof(id_str));
-
-    const std::string& name = std::get<std::string>(
-        msg.body.at("name"));
-
-    char parent_str[37] = "none";
-    auto pit = msg.body.find("parent_id");
-    if (pit != msg.body.end())
-    {
-        FormatUuid(std::get<std::array<uint8_t, 16>>(pit->second),
-            parent_str, sizeof(parent_str));
-    }
-
-    auto& tf = std::get<std::vector<float>>(
-        msg.body.at("transform"));
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][OBJECT_CREATE] id=%hs name=%hs "
-             "parent=%hs transform=[%.2f,%.2f,%.2f,...]"),
-        id_str, name.c_str(), parent_str,
-        tf.size() >= 3 ? tf[0] : 0.f,
-        tf.size() >= 3 ? tf[1] : 0.f,
-        tf.size() >= 3 ? tf[2] : 0.f);
-}
-
-inline void HandleObjectUpdate(const livesync::DeserializedMessage& msg)
-{
-#ifdef UELIVESYNC_BRIDGE_TESTING
-    g_objectupdate_calls++;
-#endif
-
-    char id_str[37];
-    auto& pid = std::get<std::array<uint8_t, 16>>(
-        msg.body.at("persistent_id"));
-    FormatUuid(pid, id_str, sizeof(id_str));
-
-    auto it_t = msg.body.find("transform");
-    if (it_t != msg.body.end())
-    {
-        auto& tf = std::get<std::vector<float>>(it_t->second);
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[BRIDGE][OBJECT_UPDATE] id=%hs "
-                 "transform=[%.2f,%.2f,%.2f,...]"),
-            id_str,
-            tf.size() >= 3 ? tf[0] : 0.f,
-            tf.size() >= 3 ? tf[1] : 0.f,
-            tf.size() >= 3 ? tf[2] : 0.f);
-    }
-    else
-    {
-        UE_LOG(LogLiveSync, Log,
-            TEXT("[BRIDGE][OBJECT_UPDATE] id=%hs (no transform)"),
-            id_str);
-    }
-}
-
-inline void HandleObjectDelete(const livesync::DeserializedMessage& msg)
-{
-#ifdef UELIVESYNC_BRIDGE_TESTING
-    g_objectdelete_calls++;
-#endif
-
-    char id_str[37];
-    auto& pid = std::get<std::array<uint8_t, 16>>(
-        msg.body.at("persistent_id"));
-    FormatUuid(pid, id_str, sizeof(id_str));
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][OBJECT_DELETE] id=%hs"), id_str);
-}
-
-inline void HandleObjectRename(const livesync::DeserializedMessage& msg)
-{
-#ifdef UELIVESYNC_BRIDGE_TESTING
-    g_objectrename_calls++;
-#endif
-
-    char id_str[37];
-    auto& pid = std::get<std::array<uint8_t, 16>>(
-        msg.body.at("persistent_id"));
-    FormatUuid(pid, id_str, sizeof(id_str));
-
-    const std::string& new_name = std::get<std::string>(
-        msg.body.at("new_name"));
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][OBJECT_RENAME] id=%hs new_name=%hs"),
-        id_str, new_name.c_str());
-}
-
-inline void HandleObjectVisibility(const livesync::DeserializedMessage& msg)
-{
-#ifdef UELIVESYNC_BRIDGE_TESTING
-    g_objectvisibility_calls++;
-#endif
-
-    char id_str[37];
-    auto& pid = std::get<std::array<uint8_t, 16>>(
-        msg.body.at("persistent_id"));
-    FormatUuid(pid, id_str, sizeof(id_str));
-
-    uint8_t visible = std::get<uint8_t>(msg.body.at("visible"));
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][OBJECT_VISIBILITY] id=%hs visible=%u"),
-        id_str, static_cast<unsigned>(visible));
-}
-
-inline void HandleObjectReparent(const livesync::DeserializedMessage& msg)
-{
-#ifdef UELIVESYNC_BRIDGE_TESTING
-    g_objectreparent_calls++;
-#endif
-
-    char id_str[37];
-    auto& pid = std::get<std::array<uint8_t, 16>>(
-        msg.body.at("persistent_id"));
-    FormatUuid(pid, id_str, sizeof(id_str));
-
-    char parent_str[37];
-    auto& npid = std::get<std::array<uint8_t, 16>>(
-        msg.body.at("new_parent_id"));
-    FormatUuid(npid, parent_str, sizeof(parent_str));
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][OBJECT_REPARENT] id=%hs new_parent=%hs"),
-        id_str, parent_str);
 }
 
 // =========================================================
@@ -992,28 +1132,22 @@ inline EDispatchResult DispatchMsgTypePacket(
             return EDispatchResult::Handled;
 
         case livesync::MsgType::OBJECT_CREATE:
-            HandleObjectCreate(msg);
-            return EDispatchResult::Handled;
+            return ProcessObjectCreate(msg);
 
         case livesync::MsgType::OBJECT_UPDATE:
-            HandleObjectUpdate(msg);
-            return EDispatchResult::Handled;
+            return ProcessObjectUpdate(msg);
 
         case livesync::MsgType::OBJECT_DELETE:
-            HandleObjectDelete(msg);
-            return EDispatchResult::Handled;
+            return ProcessObjectDelete(msg);
 
         case livesync::MsgType::OBJECT_RENAME:
-            HandleObjectRename(msg);
-            return EDispatchResult::Handled;
+            return ProcessObjectRename(msg);
 
         case livesync::MsgType::OBJECT_VISIBILITY:
-            HandleObjectVisibility(msg);
-            return EDispatchResult::Handled;
+            return ProcessObjectVisibility(msg);
 
         case livesync::MsgType::OBJECT_REPARENT:
-            HandleObjectReparent(msg);
-            return EDispatchResult::Handled;
+            return ProcessObjectReparent(msg);
 
         case livesync::MsgType::MATERIAL_CREATE:
             HandleMaterialCreate(msg);
