@@ -67,6 +67,7 @@
 
 #include "livesync_serializer.h"
 #include "livesync_deserializer.h"
+#include "LiveSyncViews.h"
 
 // =========================================================
 // LiveSyncBridge namespace
@@ -302,40 +303,6 @@ inline const T& GetField(
 }
 
 // =========================================================
-// View structs — Camera
-// =========================================================
-// Immutable data objects. No UE runtime dependencies.
-// =========================================================
-
-struct CameraCreateView
-{
-    std::array<uint8_t, 16> CameraId;
-    std::string Name;
-    struct { float X, Y, Z, Rx, Ry, Rz, Rw, Sx, Sy, Sz; } Transform;
-    float FocalLength;
-    float SensorWidth;
-    float SensorHeight;
-};
-
-struct CameraUpdateView
-{
-    std::array<uint8_t, 16> CameraId;
-    bool HasTransform;
-    struct { float X, Y, Z, Rx, Ry, Rz, Rw, Sx, Sy, Sz; } Transform;
-    bool HasFocalLength;
-    float FocalLength;
-    bool HasSensorWidth;
-    float SensorWidth;
-    bool HasSensorHeight;
-    float SensorHeight;
-};
-
-struct CameraSetActiveView
-{
-    std::array<uint8_t, 16> CameraId;
-};
-
-// =========================================================
 // Builders — Camera (pure functions)
 // =========================================================
 // Only field extraction via GetField/TryGetField.
@@ -479,53 +446,6 @@ inline EDispatchResult ProcessCameraSetActive(
     DispatchCameraSetActive(view);
     return EDispatchResult::Handled;
 }
-
-// =========================================================
-// View structs — Object
-// =========================================================
-
-struct ObjectCreateView
-{
-    std::array<uint8_t, 16> PersistentId;
-    std::string Name;
-    bool HasParentId;
-    std::array<uint8_t, 16> ParentId;
-    std::vector<float> Transform;
-};
-
-struct ObjectUpdateView
-{
-    std::array<uint8_t, 16> PersistentId;
-    bool HasTransform;
-    std::vector<float> Transform;
-    bool HasName;
-    std::string Name;
-    bool HasVisibility;
-    uint8_t Visibility;
-};
-
-struct ObjectDeleteView
-{
-    std::array<uint8_t, 16> PersistentId;
-};
-
-struct ObjectRenameView
-{
-    std::array<uint8_t, 16> PersistentId;
-    std::string NewName;
-};
-
-struct ObjectVisibilityView
-{
-    std::array<uint8_t, 16> PersistentId;
-    uint8_t Visible;
-};
-
-struct ObjectReparentView
-{
-    std::array<uint8_t, 16> PersistentId;
-    std::array<uint8_t, 16> NewParentId;
-};
 
 // =========================================================
 // Builders — Object (pure functions)
@@ -765,40 +685,6 @@ inline EDispatchResult ProcessObjectReparent(
 }
 
 // =========================================================
-// View structs — Handshake
-// =========================================================
-
-struct HelloView
-{
-    uint8_t ProtocolVersionMajor;
-    uint8_t ProtocolVersionMinor;
-    uint64_t Capabilities;
-};
-
-struct HelloAckView
-{
-    uint8_t ProtocolVersionMajor;
-    uint8_t ProtocolVersionMinor;
-    uint64_t AcceptedCapabilities;
-    uint32_t MaxChunkSize;
-    uint64_t SessionId;
-};
-
-struct HeartbeatView
-{
-    uint32_t SequenceId;
-    bool HasSessionId;
-    uint64_t SessionId;
-};
-
-struct HeartbeatAckView
-{
-    uint32_t SequenceId;
-    bool HasSessionId;
-    uint64_t SessionId;
-};
-
-// =========================================================
 // Builders — Handshake (pure functions)
 // =========================================================
 
@@ -953,40 +839,6 @@ inline EDispatchResult ProcessHeartbeatAck(
 }
 
 // =========================================================
-// View structs — Material
-// =========================================================
-
-struct MaterialCreateView
-{
-    std::array<uint8_t, 16> MaterialId;
-    std::string Name;
-    std::vector<float> BaseColor;
-    float Metallic;
-    float Roughness;
-    std::vector<float> Emission;
-    bool HasTexturePath;
-    std::string TexturePath;
-};
-
-struct MaterialUpdateView
-{
-    std::array<uint8_t, 16> MaterialId;
-    std::vector<float> BaseColor;
-    float Metallic;
-    float Roughness;
-    std::vector<float> Emission;
-    bool HasTexturePath;
-    std::string TexturePath;
-};
-
-struct MaterialAssignView
-{
-    std::array<uint8_t, 16> PersistentId;
-    std::array<uint8_t, 16> MaterialId;
-    uint8_t SlotIndex;
-};
-
-// =========================================================
 // Builders — Material (pure functions)
 // =========================================================
 
@@ -1133,55 +985,6 @@ inline EDispatchResult ProcessMaterialAssign(
     DispatchMaterialAssign(view);
     return EDispatchResult::Handled;
 }
-
-// =========================================================
-// View structs — Mesh
-// =========================================================
-
-struct MeshStartView
-{
-    std::array<uint8_t, 16> PersistentId;
-    uint16_t TotalChunks;
-    uint8_t FormatFlags;
-};
-
-struct MeshChunkView
-{
-    std::array<uint8_t, 16> PersistentId;
-    uint16_t ChunkIndex;
-    uint16_t VertexOffset;
-    uint32_t VertexCount;
-    uint32_t IndexCount;
-    std::vector<uint8_t> Data;
-};
-
-struct MeshEndView
-{
-    std::array<uint8_t, 16> PersistentId;
-    uint32_t Checksum;
-};
-
-struct MeshDataView
-{
-    std::array<uint8_t, 16> PersistentId;
-    uint32_t VertexCount;
-    uint32_t IndexCount;
-    uint8_t FormatFlags;
-    std::vector<float> Vertices;
-    std::vector<float> Normals;
-    std::vector<float>Uvs;
-    std::vector<uint32_t> Indices;
-};
-
-struct MeshDeltaView
-{
-    std::array<uint8_t, 16> PersistentId;
-    uint32_t VertexCount;
-    uint8_t FormatFlags;
-    std::vector<float> Vertices;
-    std::vector<float> Normals;
-    std::vector<float> Uvs;
-};
 
 // =========================================================
 // Builders — Mesh (pure functions)
