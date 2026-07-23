@@ -286,7 +286,126 @@ int main(int argc, char** argv)
         }
     }
 
-    // ── Test 14: Empty buffer -> ParseError ───────────────
+    // ── Test 14: MESH_START -> Handled ────────────────────
+    {
+        auto buf = read_file((dir + "MESH_START.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_START.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("MESH_START", r,
+                EDispatchResult::Handled, 1, g_meshstart_calls);
+            check_no_violation("MESH_START (no violation)", r);
+        }
+    }
+
+    // ── Test 15: MESH_CHUNK -> Handled ────────────────────
+    {
+        auto buf = read_file((dir + "MESH_CHUNK.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_CHUNK.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("MESH_CHUNK", r,
+                EDispatchResult::Handled, 1, g_meshchunk_calls);
+            check_no_violation("MESH_CHUNK (no violation)", r);
+        }
+    }
+
+    // ── Test 16: MESH_END -> Handled ──────────────────────
+    {
+        auto buf = read_file((dir + "MESH_END.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_END.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("MESH_END", r,
+                EDispatchResult::Handled, 1, g_meshend_calls);
+            check_no_violation("MESH_END (no violation)", r);
+        }
+    }
+
+    // ── Test 17: MESH_DATA -> Handled (rich) ──────────────
+    {
+        auto buf = read_file((dir + "MESH_DATA.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_DATA.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("MESH_DATA", r,
+                EDispatchResult::Handled, 1, g_meshdata_calls);
+            check_no_violation("MESH_DATA (no violation)", r);
+
+            // Rich assertion: deserialize and check fields
+            if (r == EDispatchResult::Handled)
+            {
+                auto msg = livesync::DeserializeFrame(
+                    buf.data(), buf.size());
+                uint32_t vc = std::get<uint32_t>(
+                    msg.body.at("vertex_count"));
+                uint32_t ic = std::get<uint32_t>(
+                    msg.body.at("index_count"));
+                auto& verts = std::get<std::vector<float>>(
+                    msg.body.at("vertices"));
+                auto& indices = std::get<std::vector<uint32_t>>(
+                    msg.body.at("indices"));
+
+                bool ok = (verts.size() == vc * 3) &&
+                          (indices.size() == ic);
+                printf("  %s  MESH_DATA (rich) verts=%u idx=%u "
+                       "vert_buf=%zu idx_buf=%zu\n",
+                    ok ? "PASS" : "FAIL",
+                    vc, ic, verts.size(), indices.size());
+                if (ok) passed++; else failed++;
+            }
+        }
+    }
+
+    // ── Test 18: MESH_DELTA -> Handled (rich) ─────────────
+    {
+        auto buf = read_file((dir + "MESH_DELTA.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_DELTA.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("MESH_DELTA", r,
+                EDispatchResult::Handled, 1, g_meshdelta_calls);
+            check_no_violation("MESH_DELTA (no violation)", r);
+
+            // Rich assertion: deserialize and check fields
+            if (r == EDispatchResult::Handled)
+            {
+                auto msg = livesync::DeserializeFrame(
+                    buf.data(), buf.size());
+                uint32_t vc = std::get<uint32_t>(
+                    msg.body.at("vertex_count"));
+                auto& verts = std::get<std::vector<float>>(
+                    msg.body.at("vertices"));
+                auto& norms = std::get<std::vector<float>>(
+                    msg.body.at("normals"));
+
+                bool ok = (verts.size() == vc * 3) &&
+                          (norms.size() == vc * 3);
+                printf("  %s  MESH_DELTA (rich) verts=%u "
+                       "vert_buf=%zu norm_buf=%zu\n",
+                    ok ? "PASS" : "FAIL",
+                    vc, verts.size(), norms.size());
+                if (ok) passed++; else failed++;
+            }
+        }
+    }
+
+    // ── Test 19: Empty buffer -> ParseError ───────────────
     {
         uint8 tiny[2] = {0x00, 0x00};
         auto r = DispatchMsgTypePacket(tiny, 2);
@@ -294,7 +413,7 @@ int main(int argc, char** argv)
             EDispatchResult::ParseError, 0, 0);
     }
 
-    // ── Test 15: Zero bytes -> ParseError ─────────────────
+    // ── Test 20: Zero bytes -> ParseError ─────────────────
     {
         auto r = DispatchMsgTypePacket(nullptr, 0);
         check_result("zero_size", r,

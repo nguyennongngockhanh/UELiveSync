@@ -215,6 +215,11 @@ inline int g_objectreparent_calls = 0;
 inline int g_materialcreate_calls = 0;
 inline int g_materialupdate_calls = 0;
 inline int g_materialassign_calls = 0;
+inline int g_meshstart_calls = 0;
+inline int g_meshchunk_calls = 0;
+inline int g_meshend_calls = 0;
+inline int g_meshdata_calls = 0;
+inline int g_meshdelta_calls = 0;
 
 inline void ResetAllCounters()
 {
@@ -231,6 +236,11 @@ inline void ResetAllCounters()
     g_materialcreate_calls = 0;
     g_materialupdate_calls = 0;
     g_materialassign_calls = 0;
+    g_meshstart_calls = 0;
+    g_meshchunk_calls = 0;
+    g_meshend_calls = 0;
+    g_meshdata_calls = 0;
+    g_meshdelta_calls = 0;
 }
 #endif
 
@@ -519,14 +529,18 @@ inline void HandleMaterialCreate(const livesync::DeserializedMessage& msg)
     UE_LOG(LogLiveSync, Log,
         TEXT("[BRIDGE][MATERIAL_CREATE] id=%hs name=%hs "
              "base_color=[%.2f,%.2f,%.2f,%.2f] "
-             "metallic=%.2f roughness=%.2f emission=[%.2f,%.2f,%.2f]"
-             "%hs%hs"),
+             "metallic=%.2f roughness=%.2f emission=[%.2f,%.2f,%.2f]"),
         mid_str, name.c_str(),
         bc[0], bc[1], bc[2], bc[3],
         metallic, roughness,
-        emission[0], emission[1], emission[2],
-        tex ? " texture=" : "",
-        tex ? tex->c_str() : "");
+        emission[0], emission[1], emission[2]);
+
+    if (tex)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[BRIDGE][MATERIAL_CREATE] texture=%hs"),
+            tex->c_str());
+    }
 }
 
 inline void HandleMaterialUpdate(const livesync::DeserializedMessage& msg)
@@ -549,14 +563,18 @@ inline void HandleMaterialUpdate(const livesync::DeserializedMessage& msg)
     UE_LOG(LogLiveSync, Log,
         TEXT("[BRIDGE][MATERIAL_UPDATE] id=%hs "
              "base_color=[%.2f,%.2f,%.2f,%.2f] "
-             "metallic=%.2f roughness=%.2f emission=[%.2f,%.2f,%.2f]"
-             "%hs%hs"),
+             "metallic=%.2f roughness=%.2f emission=[%.2f,%.2f,%.2f]"),
         mid_str,
         bc[0], bc[1], bc[2], bc[3],
         metallic, roughness,
-        emission[0], emission[1], emission[2],
-        tex ? " texture=" : "",
-        tex ? tex->c_str() : "");
+        emission[0], emission[1], emission[2]);
+
+    if (tex)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[BRIDGE][MATERIAL_UPDATE] texture=%hs"),
+            tex->c_str());
+    }
 }
 
 inline void HandleMaterialAssign(const livesync::DeserializedMessage& msg)
@@ -578,6 +596,128 @@ inline void HandleMaterialAssign(const livesync::DeserializedMessage& msg)
     UE_LOG(LogLiveSync, Log,
         TEXT("[BRIDGE][MATERIAL_ASSIGN] object=%hs material=%hs slot=%u"),
         oid_str, mid_str, static_cast<unsigned>(slot));
+}
+
+// =========================================================
+// Handlers — Phase 1.3.2e (mesh)
+// =========================================================
+// Decomposed into small helpers for readability.
+// Each handler logs identity + summary, not raw data.
+// =========================================================
+
+inline void LogMeshIdentity(
+    const livesync::DeserializedMessage& msg,
+    const char* label)
+{
+    char id_str[37];
+    auto& pid = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    FormatUuid(pid, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][%hs] id=%hs"), label, id_str);
+}
+
+inline void HandleMeshStart(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_meshstart_calls++;
+#endif
+
+    LogMeshIdentity(msg, "MESH_START");
+
+    uint16_t total = GetField<uint16_t>(msg, "total_chunks");
+    uint8_t fmt = GetField<uint8_t>(msg, "format_flags");
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MESH_START] total_chunks=%u format=0x%02x"),
+        static_cast<unsigned>(total),
+        static_cast<unsigned>(fmt));
+}
+
+inline void HandleMeshChunk(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_meshchunk_calls++;
+#endif
+
+    LogMeshIdentity(msg, "MESH_CHUNK");
+
+    uint16_t ci = GetField<uint16_t>(msg, "chunk_index");
+    uint16_t vo = GetField<uint16_t>(msg, "vertex_offset");
+    uint32_t vc = GetField<uint32_t>(msg, "vertex_count");
+    uint32_t ic = GetField<uint32_t>(msg, "index_count");
+    auto& data = GetField<std::vector<uint8_t>>(msg, "data");
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MESH_CHUNK] chunk=%u vert_off=%u "
+             "vert=%u idx=%u data=%zu bytes"),
+        static_cast<unsigned>(ci),
+        static_cast<unsigned>(vo),
+        vc, ic, data.size());
+}
+
+inline void HandleMeshEnd(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_meshend_calls++;
+#endif
+
+    LogMeshIdentity(msg, "MESH_END");
+
+    uint32_t cs = GetField<uint32_t>(msg, "checksum");
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MESH_END] checksum=0x%08x"), cs);
+}
+
+inline void HandleMeshData(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_meshdata_calls++;
+#endif
+
+    LogMeshIdentity(msg, "MESH_DATA");
+
+    uint32_t vc = GetField<uint32_t>(msg, "vertex_count");
+    uint32_t ic = GetField<uint32_t>(msg, "index_count");
+    uint8_t fmt = GetField<uint8_t>(msg, "format_flags");
+
+    auto* verts = TryGetField<std::vector<float>>(msg, "vertices");
+    auto* norms = TryGetField<std::vector<float>>(msg, "normals");
+    auto* uvs = TryGetField<std::vector<float>>(msg, "uvs");
+    auto* indices = TryGetField<std::vector<uint32_t>>(msg, "indices");
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MESH_DATA] verts=%u idx=%u fmt=0x%02x "
+             "vert_buf=%zu norm_buf=%zu uv_buf=%zu idx_buf=%zu"),
+        vc, ic, static_cast<unsigned>(fmt),
+        verts ? verts->size() : 0,
+        norms ? norms->size() : 0,
+        uvs ? uvs->size() : 0,
+        indices ? indices->size() : 0);
+}
+
+inline void HandleMeshDelta(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_meshdelta_calls++;
+#endif
+
+    LogMeshIdentity(msg, "MESH_DELTA");
+
+    uint32_t vc = GetField<uint32_t>(msg, "vertex_count");
+    uint8_t fmt = GetField<uint8_t>(msg, "format_flags");
+
+    auto* verts = TryGetField<std::vector<float>>(msg, "vertices");
+    auto* norms = TryGetField<std::vector<float>>(msg, "normals");
+    auto* uvs = TryGetField<std::vector<float>>(msg, "uvs");
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MESH_DELTA] verts=%u fmt=0x%02x "
+             "vert_buf=%zu norm_buf=%zu uv_buf=%zu"),
+        vc, static_cast<unsigned>(fmt),
+        verts ? verts->size() : 0,
+        norms ? norms->size() : 0,
+        uvs ? uvs->size() : 0);
 }
 
 // =========================================================
@@ -737,6 +877,26 @@ inline EDispatchResult DispatchMsgTypePacket(
 
         case livesync::MsgType::MATERIAL_ASSIGN:
             HandleMaterialAssign(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::MESH_START:
+            HandleMeshStart(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::MESH_CHUNK:
+            HandleMeshChunk(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::MESH_END:
+            HandleMeshEnd(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::MESH_DATA:
+            HandleMeshData(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::MESH_DELTA:
+            HandleMeshDelta(msg);
             return EDispatchResult::Handled;
 
         default:
