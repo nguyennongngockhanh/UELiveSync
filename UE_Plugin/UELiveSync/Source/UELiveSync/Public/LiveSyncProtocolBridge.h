@@ -206,6 +206,9 @@ inline int g_hello_calls = 0;
 inline int g_helloack_calls = 0;
 inline int g_heartbeat_calls = 0;
 inline int g_heartbeatack_calls = 0;
+inline int g_objectcreate_calls = 0;
+inline int g_objectupdate_calls = 0;
+inline int g_objectdelete_calls = 0;
 
 inline void ResetAllCounters()
 {
@@ -213,8 +216,28 @@ inline void ResetAllCounters()
     g_helloack_calls = 0;
     g_heartbeat_calls = 0;
     g_heartbeatack_calls = 0;
+    g_objectcreate_calls = 0;
+    g_objectupdate_calls = 0;
+    g_objectdelete_calls = 0;
 }
 #endif
+
+// =========================================================
+// Helpers — UUID formatting for log output
+// =========================================================
+
+inline void FormatUuid(
+    const std::array<uint8_t, 16>& uuid,
+    char* buf, size_t buf_size)
+{
+    if (buf_size < 37) { buf[0] = '\0'; return; }
+    snprintf(buf, buf_size,
+        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        uuid[0], uuid[1], uuid[2], uuid[3],
+        uuid[4], uuid[5], uuid[6], uuid[7],
+        uuid[8], uuid[9], uuid[10], uuid[11],
+        uuid[12], uuid[13], uuid[14], uuid[15]);
+}
 
 // =========================================================
 // Handlers — Phase 1.3.2a (handshake only)
@@ -283,6 +306,92 @@ inline void HandleHeartbeatAck(const livesync::DeserializedMessage& msg)
         msg.session_id.has_value()
             ? (unsigned long long)msg.session_id.value()
             : 0ULL);
+}
+
+// =========================================================
+// Handlers — Phase 1.3.2b (object lifecycle)
+// =========================================================
+// Deserialize → Validate → Log. No actor spawn/destroy/modify.
+// =========================================================
+
+inline void HandleObjectCreate(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectcreate_calls++;
+#endif
+
+    char id_str[37];
+    auto& pid = std::get<std::array<uint8_t, 16>>(
+        msg.body.at("persistent_id"));
+    FormatUuid(pid, id_str, sizeof(id_str));
+
+    const std::string& name = std::get<std::string>(
+        msg.body.at("name"));
+
+    char parent_str[37] = "none";
+    auto pit = msg.body.find("parent_id");
+    if (pit != msg.body.end())
+    {
+        FormatUuid(std::get<std::array<uint8_t, 16>>(pit->second),
+            parent_str, sizeof(parent_str));
+    }
+
+    auto& tf = std::get<std::vector<float>>(
+        msg.body.at("transform"));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_CREATE] id=%hs name=%hs "
+             "parent=%hs transform=[%.2f,%.2f,%.2f,...]"),
+        id_str, name.c_str(), parent_str,
+        tf.size() >= 3 ? tf[0] : 0.f,
+        tf.size() >= 3 ? tf[1] : 0.f,
+        tf.size() >= 3 ? tf[2] : 0.f);
+}
+
+inline void HandleObjectUpdate(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectupdate_calls++;
+#endif
+
+    char id_str[37];
+    auto& pid = std::get<std::array<uint8_t, 16>>(
+        msg.body.at("persistent_id"));
+    FormatUuid(pid, id_str, sizeof(id_str));
+
+    auto it_t = msg.body.find("transform");
+    if (it_t != msg.body.end())
+    {
+        auto& tf = std::get<std::vector<float>>(it_t->second);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[BRIDGE][OBJECT_UPDATE] id=%hs "
+                 "transform=[%.2f,%.2f,%.2f,...]"),
+            id_str,
+            tf.size() >= 3 ? tf[0] : 0.f,
+            tf.size() >= 3 ? tf[1] : 0.f,
+            tf.size() >= 3 ? tf[2] : 0.f);
+    }
+    else
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[BRIDGE][OBJECT_UPDATE] id=%hs (no transform)"),
+            id_str);
+    }
+}
+
+inline void HandleObjectDelete(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectdelete_calls++;
+#endif
+
+    char id_str[37];
+    auto& pid = std::get<std::array<uint8_t, 16>>(
+        msg.body.at("persistent_id"));
+    FormatUuid(pid, id_str, sizeof(id_str));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_DELETE] id=%hs"), id_str);
 }
 
 // =========================================================
@@ -406,6 +515,18 @@ inline EDispatchResult DispatchMsgTypePacket(
 
         case livesync::MsgType::HEARTBEAT_ACK:
             HandleHeartbeatAck(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::OBJECT_CREATE:
+            HandleObjectCreate(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::OBJECT_UPDATE:
+            HandleObjectUpdate(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::OBJECT_DELETE:
+            HandleObjectDelete(msg);
             return EDispatchResult::Handled;
 
         default:
