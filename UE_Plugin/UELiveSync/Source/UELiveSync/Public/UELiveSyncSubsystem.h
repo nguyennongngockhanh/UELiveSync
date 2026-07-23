@@ -184,6 +184,18 @@ private:
     virtual void OnObjectCreate(
         const LiveSyncBridge::ObjectCreateView& View) override;
 
+    virtual void OnObjectDelete(
+        const LiveSyncBridge::ObjectDeleteView& View) override;
+
+    virtual void OnObjectRename(
+        const LiveSyncBridge::ObjectRenameView& View) override;
+
+    virtual void OnObjectVisibility(
+        const LiveSyncBridge::ObjectVisibilityView& View) override;
+
+    virtual void OnCameraSetActive(
+        const LiveSyncBridge::CameraSetActiveView& View) override;
+
     // =====================================================
     // TRANSFORM PIPELINE
     // =====================================================
@@ -259,7 +271,8 @@ private:
         const FString& NewName,
         uint32 SequenceNumber,
         double Timestamp,
-        EChangeOrigin Origin);
+        EChangeOrigin Origin,
+        bool bSkipSequenceCheck = false);
 
     // =====================================================
     // VISIBILITY REPLICATION (Phase 6 — Semantic Event)
@@ -271,7 +284,8 @@ private:
         bool bHidden,
         uint32 SequenceNumber,
         double Timestamp,
-        EChangeOrigin Origin);
+        EChangeOrigin Origin,
+        bool bSkipSequenceCheck = false);
 
     // =====================================================
     // HIERARCHY REPLICATION (Phase 6D — Semantic Event)

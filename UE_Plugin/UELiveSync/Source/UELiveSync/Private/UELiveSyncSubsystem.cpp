@@ -8262,6 +8262,74 @@ void UUELiveSyncSubsystem::OnObjectCreate(
 }
 
 // =========================================================
+// ON OBJECT DELETE (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnObjectDelete(
+    const LiveSyncBridge::ObjectDeleteView& View)
+{
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    HandleDeleteObject(Guid);
+}
+
+// =========================================================
+// ON OBJECT RENAME (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnObjectRename(
+    const LiveSyncBridge::ObjectRenameView& View)
+{
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    FString NewName(UTF8_TO_TCHAR(View.NewName.c_str()));
+
+    // New protocol does not carry OldName, SequenceNumber, or Timestamp.
+    // bSkipSequenceCheck=true bypasses stale detection (not applicable
+    // to MsgType pipeline — protocol has no per-message sequence).
+    HandleRename(Guid, TEXT(""), NewName, 0, 0.0,
+                 EChangeOrigin::RemoteReplicated, /*bSkipSequenceCheck=*/true);
+}
+
+// =========================================================
+// ON OBJECT VISIBILITY (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnObjectVisibility(
+    const LiveSyncBridge::ObjectVisibilityView& View)
+{
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    // Wire: 0=hidden, 1=visible → HandleVisibility expects bHidden
+    bool bHidden = (View.Visible == 0);
+
+    HandleVisibility(Guid, bHidden, 0, 0.0,
+                     EChangeOrigin::RemoteReplicated, /*bSkipSequenceCheck=*/true);
+}
+
+// =========================================================
+// ON CAMERA SET ACTIVE (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnCameraSetActive(
+    const LiveSyncBridge::CameraSetActiveView& View)
+{
+    FGuid CameraGUID;
+    FMemory::Memcpy(&CameraGUID, View.CameraId.data(), 16);
+
+    // New protocol does not carry Sequence or Timestamp.
+    FActiveCameraPayload Payload;
+    Payload.CameraGUID = CameraGUID;
+    Payload.Sequence = 0;
+    Payload.Timestamp = 0.0;
+
+    HandleActiveCamera(Payload);
+}
+
+// =========================================================
 // HANDLE CREATE OBJECT
 // =========================================================
 
@@ -9073,7 +9141,8 @@ HandleRename(
     const FString& NewName,
     uint32 SequenceNumber,
     double Timestamp,
-    EChangeOrigin Origin)
+    EChangeOrigin Origin,
+    bool bSkipSequenceCheck)
 {
     CHECK_GAME_THREAD();
     TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleRename);
@@ -9111,7 +9180,7 @@ HandleRename(
     // REJECT: Stale or duplicate sequence number
     // =====================================================
 
-    if (GRenameSequences.IsStaleOrDuplicate(Guid, SequenceNumber))
+    if (!bSkipSequenceCheck && GRenameSequences.IsStaleOrDuplicate(Guid, SequenceNumber))
     {
         UE_LOG(LogLiveSync, Warning,
             TEXT("[RENAME] Rejected — stale/duplicate sequence "
@@ -9162,7 +9231,10 @@ HandleRename(
         // FScopedRenameSuppression to prevent re-replication.
         Actor->SetActorLabel(NewName);
 
-        GRenameSequences.Update(Guid, SequenceNumber);
+        if (!bSkipSequenceCheck)
+        {
+            GRenameSequences.Update(Guid, SequenceNumber);
+        }
 
         {
             const FString PostLabel = Actor->GetActorLabel();
@@ -9208,7 +9280,8 @@ HandleVisibility(
     bool bHidden,
     uint32 SequenceNumber,
     double Timestamp,
-    EChangeOrigin Origin)
+    EChangeOrigin Origin,
+    bool bSkipSequenceCheck)
 {
     CHECK_GAME_THREAD();
     TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleVisibility);
@@ -9246,7 +9319,7 @@ HandleVisibility(
     // REJECT: Stale or duplicate sequence number
     // =====================================================
 
-    if (GVisibilitySequences.IsStaleOrDuplicate(Guid, SequenceNumber))
+    if (!bSkipSequenceCheck && GVisibilitySequences.IsStaleOrDuplicate(Guid, SequenceNumber))
     {
         UE_LOG(LogLiveSync, Warning,
             TEXT("[VISIBILITY] Rejected — stale/duplicate sequence "
@@ -9285,7 +9358,10 @@ HandleVisibility(
 
         Actor->SetIsTemporarilyHiddenInEditor(bHidden);
 
-        GVisibilitySequences.Update(Guid, SequenceNumber);
+        if (!bSkipSequenceCheck)
+        {
+            GVisibilitySequences.Update(Guid, SequenceNumber);
+        }
 
         if (Origin == EChangeOrigin::RemoteReplicated)
         {

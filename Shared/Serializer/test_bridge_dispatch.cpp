@@ -82,6 +82,63 @@ static void check_no_violation(
     }
 }
 
+// =========================================================
+// Shared FakeGameplaySink fixture — covers all migrated messages
+// =========================================================
+
+struct FakeGameplaySink : IGameplaySink
+{
+    // OBJECT_CREATE
+    int ObjectCreateCalls = 0;
+    ObjectCreateView LastObjectCreate{};
+
+    // OBJECT_DELETE
+    int ObjectDeleteCalls = 0;
+    ObjectDeleteView LastObjectDelete{};
+
+    // OBJECT_RENAME
+    int ObjectRenameCalls = 0;
+    ObjectRenameView LastObjectRename{};
+
+    // OBJECT_VISIBILITY
+    int ObjectVisibilityCalls = 0;
+    ObjectVisibilityView LastObjectVisibility{};
+
+    // CAMERA_SETACTIVE
+    int CameraSetActiveCalls = 0;
+    CameraSetActiveView LastCameraSetActive{};
+
+    void OnObjectCreate(const ObjectCreateView& View) override
+    {
+        ++ObjectCreateCalls;
+        LastObjectCreate = View;
+    }
+
+    void OnObjectDelete(const ObjectDeleteView& View) override
+    {
+        ++ObjectDeleteCalls;
+        LastObjectDelete = View;
+    }
+
+    void OnObjectRename(const ObjectRenameView& View) override
+    {
+        ++ObjectRenameCalls;
+        LastObjectRename = View;
+    }
+
+    void OnObjectVisibility(const ObjectVisibilityView& View) override
+    {
+        ++ObjectVisibilityCalls;
+        LastObjectVisibility = View;
+    }
+
+    void OnCameraSetActive(const CameraSetActiveView& View) override
+    {
+        ++CameraSetActiveCalls;
+        LastCameraSetActive = View;
+    }
+};
+
 int main(int argc, char** argv)
 {
     if (argc < 2)
@@ -533,16 +590,7 @@ int main(int argc, char** argv)
 
     // ── Test 24: FakeGameplaySink receives OBJECT_CREATE ──
     {
-        struct TestSink : IGameplaySink
-        {
-            int ObjectCreateCalls = 0;
-            void OnObjectCreate(const LiveSyncBridge::ObjectCreateView&) override
-            {
-                ++ObjectCreateCalls;
-            }
-        };
-
-        TestSink sink;
+        FakeGameplaySink sink;
         DispatchContext ctx;
         ctx.Gameplay = &sink;
 
@@ -582,6 +630,157 @@ int main(int argc, char** argv)
                 static_cast<int32>(buf.size()), ctx);
             check_result("DI_null_OBJECT_CREATE", r,
                 EDispatchResult::Handled, 1, g_objectcreate_calls);
+        }
+    }
+
+    // ── Test 26: FakeGameplaySink receives OBJECT_DELETE ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "OBJECT_DELETE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_DELETE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_OBJECT_DELETE", r,
+                EDispatchResult::Handled, 1, g_objectdelete_calls);
+            if (sink.ObjectDeleteCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnObjectDelete\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.ObjectDeleteCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 27: FakeGameplaySink receives OBJECT_RENAME ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "OBJECT_RENAME.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_RENAME.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_OBJECT_RENAME", r,
+                EDispatchResult::Handled, 1, g_objectrename_calls);
+            if (sink.ObjectRenameCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnObjectRename\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.ObjectRenameCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 28: FakeGameplaySink receives OBJECT_VISIBILITY ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "OBJECT_VISIBILITY.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_VISIBILITY.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_OBJECT_VISIBILITY", r,
+                EDispatchResult::Handled, 1, g_objectvisibility_calls);
+            if (sink.ObjectVisibilityCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnObjectVisibility\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.ObjectVisibilityCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 29: FakeGameplaySink receives CAMERASETACTIVE ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "CAMERASETACTIVE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  CAMERASETACTIVE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_CAMERASETACTIVE", r,
+                EDispatchResult::Handled, 1, g_camerasetactive_calls);
+            if (sink.CameraSetActiveCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnCameraSetActive\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.CameraSetActiveCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 30: FakeGameplaySink — wrong callback not called ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "OBJECT_DELETE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_DELETE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_DELETE_no_cross_callback", r,
+                EDispatchResult::Handled, 1, g_objectdelete_calls);
+            if (sink.ObjectDeleteCalls == 1 &&
+                sink.ObjectCreateCalls == 0 &&
+                sink.ObjectRenameCalls == 0 &&
+                sink.ObjectVisibilityCalls == 0 &&
+                sink.CameraSetActiveCalls == 0)
+            {
+                printf("  PASS  Only OnObjectDelete called, no cross-callbacks\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  Cross-callback leak: Create=%d Delete=%d Rename=%d Vis=%d Camera=%d\n",
+                    sink.ObjectCreateCalls, sink.ObjectDeleteCalls,
+                    sink.ObjectRenameCalls, sink.ObjectVisibilityCalls,
+                    sink.CameraSetActiveCalls);
+                ++failed;
+            }
         }
     }
 
