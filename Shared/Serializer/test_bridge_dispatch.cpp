@@ -531,6 +531,60 @@ int main(int argc, char** argv)
             EDispatchResult::ParseError, 0, 0);
     }
 
+    // ── Test 24: FakeGameplaySink receives OBJECT_CREATE ──
+    {
+        struct TestSink : IGameplaySink
+        {
+            int ObjectCreateCalls = 0;
+            void OnObjectCreate(const LiveSyncBridge::ObjectCreateView&) override
+            {
+                ++ObjectCreateCalls;
+            }
+        };
+
+        TestSink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "OBJECT_CREATE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_CREATE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_OBJECT_CREATE", r,
+                EDispatchResult::Handled, 1, g_objectcreate_calls);
+            if (sink.ObjectCreateCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnObjectCreate\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.ObjectCreateCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 25: FakeGameplaySink null — no crash ─────────
+    {
+        auto buf = read_file((dir + "OBJECT_CREATE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_CREATE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            DispatchContext ctx;
+            ctx.Gameplay = nullptr;
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_null_OBJECT_CREATE", r,
+                EDispatchResult::Handled, 1, g_objectcreate_calls);
+        }
+    }
+
     // ── Summary ───────────────────────────────────────────
     printf("\n=== Summary ===\n");
     int total = passed + failed;

@@ -4,6 +4,8 @@
 
 #include "Subsystems/WorldSubsystem.h"
 
+#include "IGameplaySink.h"
+
 #include "Misc/Guid.h"
 
 #include "SyncTypes.h"
@@ -105,6 +107,7 @@ public:
 UCLASS()
 class UELIVESYNC_API UUELiveSyncSubsystem
     : public UWorldSubsystem
+    , public IGameplaySink
 {
     GENERATED_BODY()
 
@@ -173,6 +176,13 @@ private:
         const FLiveSyncPacket&
         Packet,
         TSet<FGuid>* SeenThisTick = nullptr);
+
+    // =====================================================
+    // IGameplaySink — protocol → gameplay boundary
+    // =====================================================
+
+    virtual void OnObjectCreate(
+        const LiveSyncBridge::ObjectCreateView& View) override;
 
     // =====================================================
     // TRANSFORM PIPELINE

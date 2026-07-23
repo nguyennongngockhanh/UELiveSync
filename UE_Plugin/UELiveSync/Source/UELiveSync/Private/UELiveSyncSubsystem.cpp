@@ -3089,9 +3089,10 @@ ProcessBinaryPacket(
         TRACE_CPUPROFILER_EVENT_SCOPE(
             UELiveSync_ProcessMsgTypePacket);
 
+        DispatchContext Ctx;
+        Ctx.Gameplay = this;
         auto Result = LiveSyncBridge::DispatchMsgTypePacket(
-            PacketData, Packet.RawData.Num(),
-            DispatchContext{});
+            PacketData, Packet.RawData.Num(), Ctx);
 
         switch (Result)
         {
@@ -8225,6 +8226,40 @@ DetachFromParent(
             EGuidFormats::Digits));
 }
 
+
+// =========================================================
+// IGameplaySink — OBJECT_CREATE
+// =========================================================
+
+void UUELiveSyncSubsystem::OnObjectCreate(
+    const LiveSyncBridge::ObjectCreateView& View)
+{
+    // Convert protocol View → UE types
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    FVector Location(0);
+    FQuat Rotation(FQuat::Identity);
+    FVector Scale(1);
+    if (View.Transform.size() >= 10)
+    {
+        Location = FVector(
+            View.Transform[0], View.Transform[1], View.Transform[2]);
+        Rotation = FQuat(
+            View.Transform[3], View.Transform[4],
+            View.Transform[5], View.Transform[6]);
+        Scale = FVector(
+            View.Transform[7], View.Transform[8], View.Transform[9]);
+    }
+
+    FGuid ParentGuid;
+    if (View.HasParentId)
+    {
+        FMemory::Memcpy(&ParentGuid, View.ParentId.data(), 16);
+    }
+
+    HandleCreateObject(Guid, Location, Rotation, Scale, ParentGuid);
+}
 
 // =========================================================
 // HANDLE CREATE OBJECT
