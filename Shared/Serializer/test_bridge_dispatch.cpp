@@ -241,7 +241,52 @@ int main(int argc, char** argv)
         }
     }
 
-    // ── Test 11: Empty buffer -> ParseError ───────────────
+    // ── Test 11: MATERIAL_CREATE -> Handled ───────────────
+    {
+        auto buf = read_file((dir + "MATERIAL_CREATE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MATERIAL_CREATE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("MATERIAL_CREATE", r,
+                EDispatchResult::Handled, 1, g_materialcreate_calls);
+            check_no_violation("MATERIAL_CREATE (no violation)", r);
+        }
+    }
+
+    // ── Test 12: MATERIAL_UPDATE -> Handled ───────────────
+    {
+        auto buf = read_file((dir + "MATERIAL_UPDATE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MATERIAL_UPDATE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("MATERIAL_UPDATE", r,
+                EDispatchResult::Handled, 1, g_materialupdate_calls);
+            check_no_violation("MATERIAL_UPDATE (no violation)", r);
+        }
+    }
+
+    // ── Test 13: MATERIAL_ASSIGN -> Handled ───────────────
+    {
+        auto buf = read_file((dir + "MATERIAL_ASSIGN.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MATERIAL_ASSIGN.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("MATERIAL_ASSIGN", r,
+                EDispatchResult::Handled, 1, g_materialassign_calls);
+            check_no_violation("MATERIAL_ASSIGN (no violation)", r);
+        }
+    }
+
+    // ── Test 14: Empty buffer -> ParseError ───────────────
     {
         uint8 tiny[2] = {0x00, 0x00};
         auto r = DispatchMsgTypePacket(tiny, 2);
@@ -249,7 +294,7 @@ int main(int argc, char** argv)
             EDispatchResult::ParseError, 0, 0);
     }
 
-    // ── Test 12: Zero bytes -> ParseError ─────────────────
+    // ── Test 15: Zero bytes -> ParseError ─────────────────
     {
         auto r = DispatchMsgTypePacket(nullptr, 0);
         check_result("zero_size", r,

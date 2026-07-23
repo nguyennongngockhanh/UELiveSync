@@ -212,6 +212,9 @@ inline int g_objectdelete_calls = 0;
 inline int g_objectrename_calls = 0;
 inline int g_objectvisibility_calls = 0;
 inline int g_objectreparent_calls = 0;
+inline int g_materialcreate_calls = 0;
+inline int g_materialupdate_calls = 0;
+inline int g_materialassign_calls = 0;
 
 inline void ResetAllCounters()
 {
@@ -225,6 +228,9 @@ inline void ResetAllCounters()
     g_objectrename_calls = 0;
     g_objectvisibility_calls = 0;
     g_objectreparent_calls = 0;
+    g_materialcreate_calls = 0;
+    g_materialupdate_calls = 0;
+    g_materialassign_calls = 0;
 }
 #endif
 
@@ -243,6 +249,36 @@ inline void FormatUuid(
         uuid[4], uuid[5], uuid[6], uuid[7],
         uuid[8], uuid[9], uuid[10], uuid[11],
         uuid[12], uuid[13], uuid[14], uuid[15]);
+}
+
+// =========================================================
+// Helpers — optional field access
+// =========================================================
+
+inline bool HasField(
+    const livesync::DeserializedMessage& msg,
+    const std::string& name)
+{
+    return msg.body.find(name) != msg.body.end();
+}
+
+template<typename T>
+inline const T* TryGetField(
+    const livesync::DeserializedMessage& msg,
+    const std::string& name)
+{
+    auto it = msg.body.find(name);
+    if (it == msg.body.end()) return nullptr;
+    auto* p = std::get_if<T>(&it->second);
+    return p;
+}
+
+template<typename T>
+inline const T& GetField(
+    const livesync::DeserializedMessage& msg,
+    const std::string& name)
+{
+    return std::get<T>(msg.body.at(name));
 }
 
 // =========================================================
@@ -459,6 +495,92 @@ inline void HandleObjectReparent(const livesync::DeserializedMessage& msg)
 }
 
 // =========================================================
+// Handlers — Phase 1.3.2d (materials)
+// =========================================================
+
+inline void HandleMaterialCreate(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_materialcreate_calls++;
+#endif
+
+    char mid_str[37];
+    auto& mid = GetField<std::array<uint8_t, 16>>(msg, "material_id");
+    FormatUuid(mid, mid_str, sizeof(mid_str));
+
+    auto& name = GetField<std::string>(msg, "name");
+    auto& bc = GetField<std::vector<float>>(msg, "base_color");
+    float metallic = GetField<float>(msg, "metallic");
+    float roughness = GetField<float>(msg, "roughness");
+    auto& emission = GetField<std::vector<float>>(msg, "emission");
+
+    auto* tex = TryGetField<std::string>(msg, "texture_path");
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MATERIAL_CREATE] id=%hs name=%hs "
+             "base_color=[%.2f,%.2f,%.2f,%.2f] "
+             "metallic=%.2f roughness=%.2f emission=[%.2f,%.2f,%.2f]"
+             "%hs%hs"),
+        mid_str, name.c_str(),
+        bc[0], bc[1], bc[2], bc[3],
+        metallic, roughness,
+        emission[0], emission[1], emission[2],
+        tex ? " texture=" : "",
+        tex ? tex->c_str() : "");
+}
+
+inline void HandleMaterialUpdate(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_materialupdate_calls++;
+#endif
+
+    char mid_str[37];
+    auto& mid = GetField<std::array<uint8_t, 16>>(msg, "material_id");
+    FormatUuid(mid, mid_str, sizeof(mid_str));
+
+    auto& bc = GetField<std::vector<float>>(msg, "base_color");
+    float metallic = GetField<float>(msg, "metallic");
+    float roughness = GetField<float>(msg, "roughness");
+    auto& emission = GetField<std::vector<float>>(msg, "emission");
+
+    auto* tex = TryGetField<std::string>(msg, "texture_path");
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MATERIAL_UPDATE] id=%hs "
+             "base_color=[%.2f,%.2f,%.2f,%.2f] "
+             "metallic=%.2f roughness=%.2f emission=[%.2f,%.2f,%.2f]"
+             "%hs%hs"),
+        mid_str,
+        bc[0], bc[1], bc[2], bc[3],
+        metallic, roughness,
+        emission[0], emission[1], emission[2],
+        tex ? " texture=" : "",
+        tex ? tex->c_str() : "");
+}
+
+inline void HandleMaterialAssign(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_materialassign_calls++;
+#endif
+
+    char oid_str[37];
+    auto& oid = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    FormatUuid(oid, oid_str, sizeof(oid_str));
+
+    char mid_str[37];
+    auto& mid = GetField<std::array<uint8_t, 16>>(msg, "material_id");
+    FormatUuid(mid, mid_str, sizeof(mid_str));
+
+    uint8_t slot = GetField<uint8_t>(msg, "slot_index");
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MATERIAL_ASSIGN] object=%hs material=%hs slot=%u"),
+        oid_str, mid_str, static_cast<unsigned>(slot));
+}
+
+// =========================================================
 // ValidateExtraInvariants — per-message-type checks
 // =========================================================
 // Called AFTER DeserializeFrame succeeds and traits check passes.
@@ -603,6 +725,18 @@ inline EDispatchResult DispatchMsgTypePacket(
 
         case livesync::MsgType::OBJECT_REPARENT:
             HandleObjectReparent(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::MATERIAL_CREATE:
+            HandleMaterialCreate(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::MATERIAL_UPDATE:
+            HandleMaterialUpdate(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::MATERIAL_ASSIGN:
+            HandleMaterialAssign(msg);
             return EDispatchResult::Handled;
 
         default:
