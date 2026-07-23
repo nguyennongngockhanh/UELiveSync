@@ -8286,9 +8286,11 @@ void UUELiveSyncSubsystem::OnObjectRename(
 
     FString NewName(UTF8_TO_TCHAR(View.NewName.c_str()));
 
-    // New protocol does not carry OldName, SequenceNumber, or Timestamp.
-    // bSkipSequenceCheck=true bypasses stale detection (not applicable
-    // to MsgType pipeline — protocol has no per-message sequence).
+    // MsgType protocol V2 compatibility shim:
+    // The new protocol carries no per-message SequenceNumber or Timestamp.
+    // Ordering is guaranteed by TCP. Stale detection (GRenameSequences)
+    // is a V1 concept that does not apply to MsgType pipeline.
+    // bSkipSequenceCheck=true bypasses it; default=false preserves old path.
     HandleRename(Guid, TEXT(""), NewName, 0, 0.0,
                  EChangeOrigin::RemoteReplicated, /*bSkipSequenceCheck=*/true);
 }
@@ -8306,6 +8308,9 @@ void UUELiveSyncSubsystem::OnObjectVisibility(
     // Wire: 0=hidden, 1=visible → HandleVisibility expects bHidden
     bool bHidden = (View.Visible == 0);
 
+    // MsgType protocol V2 compatibility shim — same as OnObjectRename:
+    // no per-message SequenceNumber/Timestamp in V2 wire format.
+    // TCP guarantees ordering. bSkipSequenceCheck=true.
     HandleVisibility(Guid, bHidden, 0, 0.0,
                      EChangeOrigin::RemoteReplicated, /*bSkipSequenceCheck=*/true);
 }

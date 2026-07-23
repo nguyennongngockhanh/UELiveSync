@@ -272,6 +272,9 @@ private:
         uint32 SequenceNumber,
         double Timestamp,
         EChangeOrigin Origin,
+        // MsgType V2 shim: new protocol has no per-message sequence.
+        // TCP ordering replaces stale detection. Pass true from OnXXX
+        // overrides; default=false preserves old PT_Rename path.
         bool bSkipSequenceCheck = false);
 
     // =====================================================
@@ -285,6 +288,7 @@ private:
         uint32 SequenceNumber,
         double Timestamp,
         EChangeOrigin Origin,
+        // MsgType V2 shim: same rationale as HandleRename above.
         bool bSkipSequenceCheck = false);
 
     // =====================================================
