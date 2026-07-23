@@ -3,26 +3,30 @@
 // =========================================================
 // LiveSyncProtocolBridge.h — MsgType Protocol Dispatcher
 // =========================================================
-// Phase 1.3.2a: Bridge between legacy PT_* protocol and new
-// MsgType protocol.
+// Phase 1.3.2a–1.3.2g: Bridge Architecture v1
 //
-// Architecture:
+// Pipeline (4-layer):
 //   ProcessBinaryPacket()
 //     -> DispatchMsgTypePacket() -> EDispatchResult
 //          |-- DeserializeFrame()
-//          |-- Validate invariants (via MessageTraits)
-//          +-- switch(msg_type) -> HandleXXX(msg)
+//          |-- GetMessageTraits() — session requirements
+//          |-- ValidateExtraInvariants() — per-type checks
+//          +-- switch(msg_type) -> ProcessXXX(msg)
+//                 |-- BuildXXXView(msg)     [pure builder]
+//                 +-- DispatchXXX(view)     [fan-out: Log, Gameplay]
+//                      +-- LogXXX(view)     [format & log]
 //
-// DETECTION METHOD:
-//   Legacy PT_* packets start with Magic 0x4C56534D (4 bytes).
-//   New MsgType packets start with a uint32 LE length prefix
-//   (small value like 14-1000), which is never the Magic value.
+// Raw DeserializedMessage field access is allowed ONLY in:
+//   - ValidateExtraInvariants()
+//   - BuildXXXView()
+// All other layers (Dispatch, Log, Process orchestration) use
+// View objects exclusively.
 //
 // Design rules:
-//   - MessageTraits only contains UE dispatcher policy.
-//     No opcode, field list, or payload layout.
-//   - Handlers receive const DeserializedMessage&.
-//     They never deserialize or re-validate.
+//   - One MsgType → one ProcessXXX() entry point.
+//   - Builder = pure function (no log, no UE API, no mutation).
+//   - View = immutable DTO (primitive data, no UE pointers).
+//   - Dispatch = fan-out only (const View&).
 //   - DispatchMsgTypePacket only routes. No UE actions.
 // =========================================================
 
@@ -1450,7 +1454,7 @@ inline EDispatchResult ValidateExtraInvariants(
 // 1. DeserializeFrame()
 // 2. Validate invariants via MessageTraits
 // 3. Validate per-message invariants
-// 4. switch(msg_type) -> HandleXXX(msg)
+// 4. switch(msg_type) -> ProcessXXX(msg)
 // =========================================================
 
 inline EDispatchResult DispatchMsgTypePacket(
