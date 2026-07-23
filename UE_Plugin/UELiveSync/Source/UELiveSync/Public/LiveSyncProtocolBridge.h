@@ -209,6 +209,9 @@ inline int g_heartbeatack_calls = 0;
 inline int g_objectcreate_calls = 0;
 inline int g_objectupdate_calls = 0;
 inline int g_objectdelete_calls = 0;
+inline int g_objectrename_calls = 0;
+inline int g_objectvisibility_calls = 0;
+inline int g_objectreparent_calls = 0;
 
 inline void ResetAllCounters()
 {
@@ -219,6 +222,9 @@ inline void ResetAllCounters()
     g_objectcreate_calls = 0;
     g_objectupdate_calls = 0;
     g_objectdelete_calls = 0;
+    g_objectrename_calls = 0;
+    g_objectvisibility_calls = 0;
+    g_objectreparent_calls = 0;
 }
 #endif
 
@@ -394,6 +400,64 @@ inline void HandleObjectDelete(const livesync::DeserializedMessage& msg)
         TEXT("[BRIDGE][OBJECT_DELETE] id=%hs"), id_str);
 }
 
+inline void HandleObjectRename(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectrename_calls++;
+#endif
+
+    char id_str[37];
+    auto& pid = std::get<std::array<uint8_t, 16>>(
+        msg.body.at("persistent_id"));
+    FormatUuid(pid, id_str, sizeof(id_str));
+
+    const std::string& new_name = std::get<std::string>(
+        msg.body.at("new_name"));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_RENAME] id=%hs new_name=%hs"),
+        id_str, new_name.c_str());
+}
+
+inline void HandleObjectVisibility(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectvisibility_calls++;
+#endif
+
+    char id_str[37];
+    auto& pid = std::get<std::array<uint8_t, 16>>(
+        msg.body.at("persistent_id"));
+    FormatUuid(pid, id_str, sizeof(id_str));
+
+    uint8_t visible = std::get<uint8_t>(msg.body.at("visible"));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_VISIBILITY] id=%hs visible=%u"),
+        id_str, static_cast<unsigned>(visible));
+}
+
+inline void HandleObjectReparent(const livesync::DeserializedMessage& msg)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectreparent_calls++;
+#endif
+
+    char id_str[37];
+    auto& pid = std::get<std::array<uint8_t, 16>>(
+        msg.body.at("persistent_id"));
+    FormatUuid(pid, id_str, sizeof(id_str));
+
+    char parent_str[37];
+    auto& npid = std::get<std::array<uint8_t, 16>>(
+        msg.body.at("new_parent_id"));
+    FormatUuid(npid, parent_str, sizeof(parent_str));
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_REPARENT] id=%hs new_parent=%hs"),
+        id_str, parent_str);
+}
+
 // =========================================================
 // ValidateExtraInvariants — per-message-type checks
 // =========================================================
@@ -527,6 +591,18 @@ inline EDispatchResult DispatchMsgTypePacket(
 
         case livesync::MsgType::OBJECT_DELETE:
             HandleObjectDelete(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::OBJECT_RENAME:
+            HandleObjectRename(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::OBJECT_VISIBILITY:
+            HandleObjectVisibility(msg);
+            return EDispatchResult::Handled;
+
+        case livesync::MsgType::OBJECT_REPARENT:
+            HandleObjectReparent(msg);
             return EDispatchResult::Handled;
 
         default:

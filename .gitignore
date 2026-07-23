@@ -49,6 +49,17 @@ AGENTS.md
 # tests (local only)
 tests/
 
+# C++ test executables (built from Shared/Serializer/*.cpp)
+Shared/Serializer/test_bridge_dispatch
+Shared/Serializer/test_cross_language
+Shared/Serializer/test_deserializer
+Shared/Serializer/test_fuzz
+Shared/Serializer/test_primitives
+Shared/Serializer/test_property
+Shared/Serializer/test_property_debug
+Shared/Serializer/test_roundtrip
+Shared/Serializer/test_serializer
+
 # Local Opencode runtime/cache
 .opencode/node_modules/
 .opencode/node_modules.disabled.*/

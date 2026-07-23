@@ -196,7 +196,52 @@ int main(int argc, char** argv)
         }
     }
 
-    // ── Test 8: Empty buffer -> ParseError ────────────────
+    // ── Test 8: OBJECT_RENAME -> Handled ──────────────────
+    {
+        auto buf = read_file((dir + "OBJECT_RENAME.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_RENAME.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("OBJECT_RENAME", r,
+                EDispatchResult::Handled, 1, g_objectrename_calls);
+            check_no_violation("OBJECT_RENAME (no violation)", r);
+        }
+    }
+
+    // ── Test 9: OBJECT_VISIBILITY -> Handled ──────────────
+    {
+        auto buf = read_file((dir + "OBJECT_VISIBILITY.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_VISIBILITY.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("OBJECT_VISIBILITY", r,
+                EDispatchResult::Handled, 1, g_objectvisibility_calls);
+            check_no_violation("OBJECT_VISIBILITY (no violation)", r);
+        }
+    }
+
+    // ── Test 10: OBJECT_REPARENT -> Handled ───────────────
+    {
+        auto buf = read_file((dir + "OBJECT_REPARENT.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_REPARENT.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()));
+            check_result("OBJECT_REPARENT", r,
+                EDispatchResult::Handled, 1, g_objectreparent_calls);
+            check_no_violation("OBJECT_REPARENT (no violation)", r);
+        }
+    }
+
+    // ── Test 11: Empty buffer -> ParseError ───────────────
     {
         uint8 tiny[2] = {0x00, 0x00};
         auto r = DispatchMsgTypePacket(tiny, 2);
@@ -204,7 +249,7 @@ int main(int argc, char** argv)
             EDispatchResult::ParseError, 0, 0);
     }
 
-    // ── Test 9: Zero bytes -> ParseError ──────────────────
+    // ── Test 12: Zero bytes -> ParseError ─────────────────
     {
         auto r = DispatchMsgTypePacket(nullptr, 0);
         check_result("zero_size", r,
