@@ -103,7 +103,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("HELLO", r,
                 EDispatchResult::Handled, 1, g_hello_calls);
         }
@@ -117,7 +118,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("HELLO_ACK", r,
                 EDispatchResult::Handled, 1, g_helloack_calls);
         }
@@ -131,7 +133,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("HEARTBEAT", r,
                 EDispatchResult::Handled, 1, g_heartbeat_calls);
         }
@@ -145,7 +148,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("HEARTBEAT_ACK", r,
                 EDispatchResult::Handled, 1, g_heartbeatack_calls);
         }
@@ -159,7 +163,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("OBJECT_CREATE", r,
                 EDispatchResult::Handled, 1, g_objectcreate_calls);
             check_no_violation("OBJECT_CREATE (no violation)", r);
@@ -174,7 +179,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("OBJECT_UPDATE", r,
                 EDispatchResult::Handled, 1, g_objectupdate_calls);
             check_no_violation("OBJECT_UPDATE (no violation)", r);
@@ -189,7 +195,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("OBJECT_DELETE", r,
                 EDispatchResult::Handled, 1, g_objectdelete_calls);
             check_no_violation("OBJECT_DELETE (no violation)", r);
@@ -204,7 +211,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("OBJECT_RENAME", r,
                 EDispatchResult::Handled, 1, g_objectrename_calls);
             check_no_violation("OBJECT_RENAME (no violation)", r);
@@ -219,7 +227,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("OBJECT_VISIBILITY", r,
                 EDispatchResult::Handled, 1, g_objectvisibility_calls);
             check_no_violation("OBJECT_VISIBILITY (no violation)", r);
@@ -234,7 +243,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("OBJECT_REPARENT", r,
                 EDispatchResult::Handled, 1, g_objectreparent_calls);
             check_no_violation("OBJECT_REPARENT (no violation)", r);
@@ -249,7 +259,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("MATERIAL_CREATE", r,
                 EDispatchResult::Handled, 1, g_materialcreate_calls);
             check_no_violation("MATERIAL_CREATE (no violation)", r);
@@ -264,7 +275,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("MATERIAL_UPDATE", r,
                 EDispatchResult::Handled, 1, g_materialupdate_calls);
             check_no_violation("MATERIAL_UPDATE (no violation)", r);
@@ -279,7 +291,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("MATERIAL_ASSIGN", r,
                 EDispatchResult::Handled, 1, g_materialassign_calls);
             check_no_violation("MATERIAL_ASSIGN (no violation)", r);
@@ -294,7 +307,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("MESH_START", r,
                 EDispatchResult::Handled, 1, g_meshstart_calls);
             check_no_violation("MESH_START (no violation)", r);
@@ -309,7 +323,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("MESH_CHUNK", r,
                 EDispatchResult::Handled, 1, g_meshchunk_calls);
             check_no_violation("MESH_CHUNK (no violation)", r);
@@ -324,7 +339,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("MESH_END", r,
                 EDispatchResult::Handled, 1, g_meshend_calls);
             check_no_violation("MESH_END (no violation)", r);
@@ -339,7 +355,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("MESH_DATA", r,
                 EDispatchResult::Handled, 1, g_meshdata_calls);
             check_no_violation("MESH_DATA (no violation)", r);
@@ -377,7 +394,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("MESH_DELTA", r,
                 EDispatchResult::Handled, 1, g_meshdelta_calls);
             check_no_violation("MESH_DELTA (no violation)", r);
@@ -413,7 +431,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("CAMERA_CREATE", r,
                 EDispatchResult::Handled, 1, g_cameracreate_calls);
             check_no_violation("CAMERA_CREATE (no violation)", r);
@@ -444,7 +463,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("CAMERA_UPDATE", r,
                 EDispatchResult::Handled, 1, g_cameraupdate_calls);
             check_no_violation("CAMERA_UPDATE (no violation)", r);
@@ -474,7 +494,8 @@ int main(int argc, char** argv)
         {
             ResetAllCounters();
             auto r = DispatchMsgTypePacket(buf.data(),
-                static_cast<int32>(buf.size()));
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
             check_result("CAMERASETACTIVE", r,
                 EDispatchResult::Handled, 1, g_camerasetactive_calls);
             check_no_violation("CAMERASETACTIVE (no violation)", r);
@@ -498,14 +519,14 @@ int main(int argc, char** argv)
     // ── Test 22: Empty buffer -> ParseError ───────────────
     {
         uint8 tiny[2] = {0x00, 0x00};
-        auto r = DispatchMsgTypePacket(tiny, 2);
+        auto r = DispatchMsgTypePacket(tiny, 2, DispatchContext{});
         check_result("tiny_buffer", r,
             EDispatchResult::ParseError, 0, 0);
     }
 
     // ── Test 23: Zero bytes -> ParseError ─────────────────
     {
-        auto r = DispatchMsgTypePacket(nullptr, 0);
+        auto r = DispatchMsgTypePacket(nullptr, 0, DispatchContext{});
         check_result("zero_size", r,
             EDispatchResult::ParseError, 0, 0);
     }

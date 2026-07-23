@@ -3090,7 +3090,8 @@ ProcessBinaryPacket(
             UELiveSync_ProcessMsgTypePacket);
 
         auto Result = LiveSyncBridge::DispatchMsgTypePacket(
-            PacketData, Packet.RawData.Num());
+            PacketData, Packet.RawData.Num(),
+            DispatchContext{});
 
         switch (Result)
         {

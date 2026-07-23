@@ -68,6 +68,8 @@
 #include "livesync_serializer.h"
 #include "livesync_deserializer.h"
 #include "LiveSyncViews.h"
+#include "DispatchContext.h"
+#include "IGameplaySink.h"
 
 // =========================================================
 // LiveSyncBridge namespace
@@ -391,23 +393,29 @@ inline void LogCameraSetActive(const CameraSetActiveView& v)
 // =========================================================
 // Dispatch functions — Camera (fan-out only)
 // =========================================================
-// Receives const View&. Does NOT modify view.
-// Current: Log only. Phase 1.3.3: add GameplaySink.
-// =========================================================
 
-inline void DispatchCameraCreate(const CameraCreateView& v)
+inline void DispatchCameraCreate(
+    const CameraCreateView& v,
+    const DispatchContext& ctx)
 {
     LogCameraCreate(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnCameraCreate(v);
 }
 
-inline void DispatchCameraUpdate(const CameraUpdateView& v)
+inline void DispatchCameraUpdate(
+    const CameraUpdateView& v,
+    const DispatchContext& ctx)
 {
     LogCameraUpdate(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnCameraUpdate(v);
 }
 
-inline void DispatchCameraSetActive(const CameraSetActiveView& v)
+inline void DispatchCameraSetActive(
+    const CameraSetActiveView& v,
+    const DispatchContext& ctx)
 {
     LogCameraSetActive(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnCameraSetActive(v);
 }
 
 // =========================================================
@@ -415,35 +423,38 @@ inline void DispatchCameraSetActive(const CameraSetActiveView& v)
 // =========================================================
 
 inline EDispatchResult ProcessCameraCreate(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_cameracreate_calls++;
 #endif
     auto view = BuildCameraCreateView(msg);
-    DispatchCameraCreate(view);
+    DispatchCameraCreate(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessCameraUpdate(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_cameraupdate_calls++;
 #endif
     auto view = BuildCameraUpdateView(msg);
-    DispatchCameraUpdate(view);
+    DispatchCameraUpdate(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessCameraSetActive(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_camerasetactive_calls++;
 #endif
     auto view = BuildCameraSetActiveView(msg);
-    DispatchCameraSetActive(view);
+    DispatchCameraSetActive(view, ctx);
     return EDispatchResult::Handled;
 }
 
@@ -582,105 +593,127 @@ inline void LogObjectReparent(const ObjectReparentView& v)
 // Dispatch functions — Object (fan-out only)
 // =========================================================
 
-inline void DispatchObjectCreate(const ObjectCreateView& v)
+inline void DispatchObjectCreate(
+    const ObjectCreateView& v,
+    const DispatchContext& ctx)
 {
     LogObjectCreate(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnObjectCreate(v);
 }
 
-inline void DispatchObjectUpdate(const ObjectUpdateView& v)
+inline void DispatchObjectUpdate(
+    const ObjectUpdateView& v,
+    const DispatchContext& ctx)
 {
     LogObjectUpdate(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnObjectUpdate(v);
 }
 
-inline void DispatchObjectDelete(const ObjectDeleteView& v)
+inline void DispatchObjectDelete(
+    const ObjectDeleteView& v,
+    const DispatchContext& ctx)
 {
     LogObjectDelete(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnObjectDelete(v);
 }
 
-inline void DispatchObjectRename(const ObjectRenameView& v)
+inline void DispatchObjectRename(
+    const ObjectRenameView& v,
+    const DispatchContext& ctx)
 {
     LogObjectRename(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnObjectRename(v);
 }
 
-inline void DispatchObjectVisibility(const ObjectVisibilityView& v)
+inline void DispatchObjectVisibility(
+    const ObjectVisibilityView& v,
+    const DispatchContext& ctx)
 {
     LogObjectVisibility(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnObjectVisibility(v);
 }
 
-inline void DispatchObjectReparent(const ObjectReparentView& v)
+inline void DispatchObjectReparent(
+    const ObjectReparentView& v,
+    const DispatchContext& ctx)
 {
     LogObjectReparent(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnObjectReparent(v);
 }
 
 // =========================================================
 // Process functions — Object (orchestration)
 // =========================================================
-// Only ProcessXXX() returns EDispatchResult.
-// =========================================================
 
 inline EDispatchResult ProcessObjectCreate(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_objectcreate_calls++;
 #endif
     auto view = BuildObjectCreateView(msg);
-    DispatchObjectCreate(view);
+    DispatchObjectCreate(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessObjectUpdate(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_objectupdate_calls++;
 #endif
     auto view = BuildObjectUpdateView(msg);
-    DispatchObjectUpdate(view);
+    DispatchObjectUpdate(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessObjectDelete(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_objectdelete_calls++;
 #endif
     auto view = BuildObjectDeleteView(msg);
-    DispatchObjectDelete(view);
+    DispatchObjectDelete(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessObjectRename(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_objectrename_calls++;
 #endif
     auto view = BuildObjectRenameView(msg);
-    DispatchObjectRename(view);
+    DispatchObjectRename(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessObjectVisibility(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_objectvisibility_calls++;
 #endif
     auto view = BuildObjectVisibilityView(msg);
-    DispatchObjectVisibility(view);
+    DispatchObjectVisibility(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessObjectReparent(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_objectreparent_calls++;
 #endif
     auto view = BuildObjectReparentView(msg);
-    DispatchObjectReparent(view);
+    DispatchObjectReparent(view, ctx);
     return EDispatchResult::Handled;
 }
 
@@ -770,24 +803,36 @@ inline void LogHeartbeatAck(const HeartbeatAckView& v)
 // Dispatch functions — Handshake (fan-out only)
 // =========================================================
 
-inline void DispatchHello(const HelloView& v)
+inline void DispatchHello(
+    const HelloView& v,
+    const DispatchContext& ctx)
 {
     LogHello(v);
+    (void)ctx;
 }
 
-inline void DispatchHelloAck(const HelloAckView& v)
+inline void DispatchHelloAck(
+    const HelloAckView& v,
+    const DispatchContext& ctx)
 {
     LogHelloAck(v);
+    (void)ctx;
 }
 
-inline void DispatchHeartbeat(const HeartbeatView& v)
+inline void DispatchHeartbeat(
+    const HeartbeatView& v,
+    const DispatchContext& ctx)
 {
     LogHeartbeat(v);
+    (void)ctx;
 }
 
-inline void DispatchHeartbeatAck(const HeartbeatAckView& v)
+inline void DispatchHeartbeatAck(
+    const HeartbeatAckView& v,
+    const DispatchContext& ctx)
 {
     LogHeartbeatAck(v);
+    (void)ctx;
 }
 
 // =========================================================
@@ -795,46 +840,50 @@ inline void DispatchHeartbeatAck(const HeartbeatAckView& v)
 // =========================================================
 
 inline EDispatchResult ProcessHello(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_hello_calls++;
 #endif
     auto view = BuildHelloView(msg);
-    DispatchHello(view);
+    DispatchHello(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessHelloAck(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_helloack_calls++;
 #endif
     auto view = BuildHelloAckView(msg);
-    DispatchHelloAck(view);
+    DispatchHelloAck(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessHeartbeat(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_heartbeat_calls++;
 #endif
     auto view = BuildHeartbeatView(msg);
-    DispatchHeartbeat(view);
+    DispatchHeartbeat(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessHeartbeatAck(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_heartbeatack_calls++;
 #endif
     auto view = BuildHeartbeatAckView(msg);
-    DispatchHeartbeatAck(view);
+    DispatchHeartbeatAck(view, ctx);
     return EDispatchResult::Handled;
 }
 
@@ -934,19 +983,28 @@ inline void LogMaterialAssign(const MaterialAssignView& v)
 // Dispatch functions — Material (fan-out only)
 // =========================================================
 
-inline void DispatchMaterialCreate(const MaterialCreateView& v)
+inline void DispatchMaterialCreate(
+    const MaterialCreateView& v,
+    const DispatchContext& ctx)
 {
     LogMaterialCreate(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnMaterialCreate(v);
 }
 
-inline void DispatchMaterialUpdate(const MaterialUpdateView& v)
+inline void DispatchMaterialUpdate(
+    const MaterialUpdateView& v,
+    const DispatchContext& ctx)
 {
     LogMaterialUpdate(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnMaterialUpdate(v);
 }
 
-inline void DispatchMaterialAssign(const MaterialAssignView& v)
+inline void DispatchMaterialAssign(
+    const MaterialAssignView& v,
+    const DispatchContext& ctx)
 {
     LogMaterialAssign(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnMaterialAssign(v);
 }
 
 // =========================================================
@@ -954,35 +1012,38 @@ inline void DispatchMaterialAssign(const MaterialAssignView& v)
 // =========================================================
 
 inline EDispatchResult ProcessMaterialCreate(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_materialcreate_calls++;
 #endif
     auto view = BuildMaterialCreateView(msg);
-    DispatchMaterialCreate(view);
+    DispatchMaterialCreate(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessMaterialUpdate(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_materialupdate_calls++;
 #endif
     auto view = BuildMaterialUpdateView(msg);
-    DispatchMaterialUpdate(view);
+    DispatchMaterialUpdate(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessMaterialAssign(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_materialassign_calls++;
 #endif
     auto view = BuildMaterialAssignView(msg);
-    DispatchMaterialAssign(view);
+    DispatchMaterialAssign(view, ctx);
     return EDispatchResult::Handled;
 }
 
@@ -1122,29 +1183,44 @@ inline void LogMeshDelta(const MeshDeltaView& v)
 // Dispatch functions — Mesh (fan-out only)
 // =========================================================
 
-inline void DispatchMeshStart(const MeshStartView& v)
+inline void DispatchMeshStart(
+    const MeshStartView& v,
+    const DispatchContext& ctx)
 {
     LogMeshStart(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnMeshStart(v);
 }
 
-inline void DispatchMeshChunk(const MeshChunkView& v)
+inline void DispatchMeshChunk(
+    const MeshChunkView& v,
+    const DispatchContext& ctx)
 {
     LogMeshChunk(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnMeshChunk(v);
 }
 
-inline void DispatchMeshEnd(const MeshEndView& v)
+inline void DispatchMeshEnd(
+    const MeshEndView& v,
+    const DispatchContext& ctx)
 {
     LogMeshEnd(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnMeshEnd(v);
 }
 
-inline void DispatchMeshData(const MeshDataView& v)
+inline void DispatchMeshData(
+    const MeshDataView& v,
+    const DispatchContext& ctx)
 {
     LogMeshData(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnMeshData(v);
 }
 
-inline void DispatchMeshDelta(const MeshDeltaView& v)
+inline void DispatchMeshDelta(
+    const MeshDeltaView& v,
+    const DispatchContext& ctx)
 {
     LogMeshDelta(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnMeshDelta(v);
 }
 
 // =========================================================
@@ -1152,57 +1228,62 @@ inline void DispatchMeshDelta(const MeshDeltaView& v)
 // =========================================================
 
 inline EDispatchResult ProcessMeshStart(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_meshstart_calls++;
 #endif
     auto view = BuildMeshStartView(msg);
-    DispatchMeshStart(view);
+    DispatchMeshStart(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessMeshChunk(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_meshchunk_calls++;
 #endif
     auto view = BuildMeshChunkView(msg);
-    DispatchMeshChunk(view);
+    DispatchMeshChunk(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessMeshEnd(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_meshend_calls++;
 #endif
     auto view = BuildMeshEndView(msg);
-    DispatchMeshEnd(view);
+    DispatchMeshEnd(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessMeshData(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_meshdata_calls++;
 #endif
     auto view = BuildMeshDataView(msg);
-    DispatchMeshData(view);
+    DispatchMeshData(view, ctx);
     return EDispatchResult::Handled;
 }
 
 inline EDispatchResult ProcessMeshDelta(
-    const livesync::DeserializedMessage& msg)
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_meshdelta_calls++;
 #endif
     auto view = BuildMeshDeltaView(msg);
-    DispatchMeshDelta(view);
+    DispatchMeshDelta(view, ctx);
     return EDispatchResult::Handled;
 }
 
@@ -1262,7 +1343,8 @@ inline EDispatchResult ValidateExtraInvariants(
 
 inline EDispatchResult DispatchMsgTypePacket(
     const uint8* Data,
-    int32 DataSize)
+    int32 DataSize,
+    const DispatchContext& ctx)
 {
     livesync::DeserializedMessage msg;
 
@@ -1314,67 +1396,67 @@ inline EDispatchResult DispatchMsgTypePacket(
     switch (msg.msg_type)
     {
             case livesync::MsgType::HELLO:
-                return ProcessHello(msg);
+                return ProcessHello(msg, ctx);
 
             case livesync::MsgType::HELLO_ACK:
-                return ProcessHelloAck(msg);
+                return ProcessHelloAck(msg, ctx);
 
             case livesync::MsgType::HEARTBEAT:
-                return ProcessHeartbeat(msg);
+                return ProcessHeartbeat(msg, ctx);
 
             case livesync::MsgType::HEARTBEAT_ACK:
-                return ProcessHeartbeatAck(msg);
+                return ProcessHeartbeatAck(msg, ctx);
 
         case livesync::MsgType::OBJECT_CREATE:
-            return ProcessObjectCreate(msg);
+            return ProcessObjectCreate(msg, ctx);
 
         case livesync::MsgType::OBJECT_UPDATE:
-            return ProcessObjectUpdate(msg);
+            return ProcessObjectUpdate(msg, ctx);
 
         case livesync::MsgType::OBJECT_DELETE:
-            return ProcessObjectDelete(msg);
+            return ProcessObjectDelete(msg, ctx);
 
         case livesync::MsgType::OBJECT_RENAME:
-            return ProcessObjectRename(msg);
+            return ProcessObjectRename(msg, ctx);
 
         case livesync::MsgType::OBJECT_VISIBILITY:
-            return ProcessObjectVisibility(msg);
+            return ProcessObjectVisibility(msg, ctx);
 
         case livesync::MsgType::OBJECT_REPARENT:
-            return ProcessObjectReparent(msg);
+            return ProcessObjectReparent(msg, ctx);
 
         case livesync::MsgType::MATERIAL_CREATE:
-            return ProcessMaterialCreate(msg);
+            return ProcessMaterialCreate(msg, ctx);
 
         case livesync::MsgType::MATERIAL_UPDATE:
-            return ProcessMaterialUpdate(msg);
+            return ProcessMaterialUpdate(msg, ctx);
 
         case livesync::MsgType::MATERIAL_ASSIGN:
-            return ProcessMaterialAssign(msg);
+            return ProcessMaterialAssign(msg, ctx);
 
         case livesync::MsgType::MESH_START:
-            return ProcessMeshStart(msg);
+            return ProcessMeshStart(msg, ctx);
 
         case livesync::MsgType::MESH_CHUNK:
-            return ProcessMeshChunk(msg);
+            return ProcessMeshChunk(msg, ctx);
 
         case livesync::MsgType::MESH_END:
-            return ProcessMeshEnd(msg);
+            return ProcessMeshEnd(msg, ctx);
 
         case livesync::MsgType::MESH_DATA:
-            return ProcessMeshData(msg);
+            return ProcessMeshData(msg, ctx);
 
         case livesync::MsgType::MESH_DELTA:
-            return ProcessMeshDelta(msg);
+            return ProcessMeshDelta(msg, ctx);
 
         case livesync::MsgType::CAMERA_CREATE:
-            return ProcessCameraCreate(msg);
+            return ProcessCameraCreate(msg, ctx);
 
         case livesync::MsgType::CAMERA_UPDATE:
-            return ProcessCameraUpdate(msg);
+            return ProcessCameraUpdate(msg, ctx);
 
         case livesync::MsgType::CAMERASETACTIVE:
-            return ProcessCameraSetActive(msg);
+            return ProcessCameraSetActive(msg, ctx);
 
         default:
             UE_LOG(LogLiveSync, Log,
