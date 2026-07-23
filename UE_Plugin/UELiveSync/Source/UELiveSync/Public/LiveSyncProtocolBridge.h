@@ -975,125 +975,272 @@ inline EDispatchResult ProcessMaterialAssign(
 }
 
 // =========================================================
-// Handlers — Phase 1.3.2e (mesh)
-// =========================================================
-// Decomposed into small helpers for readability.
-// Each handler logs identity + summary, not raw data.
+// View structs — Mesh
 // =========================================================
 
-inline void LogMeshIdentity(
-    const livesync::DeserializedMessage& msg,
-    const char* label)
+struct MeshStartView
 {
-    char id_str[37];
-    auto& pid = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
-    FormatUuid(pid, id_str, sizeof(id_str));
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][%hs] id=%hs"), label, id_str);
+    std::array<uint8_t, 16> PersistentId;
+    uint16_t TotalChunks;
+    uint8_t FormatFlags;
+};
+
+struct MeshChunkView
+{
+    std::array<uint8_t, 16> PersistentId;
+    uint16_t ChunkIndex;
+    uint16_t VertexOffset;
+    uint32_t VertexCount;
+    uint32_t IndexCount;
+    std::vector<uint8_t> Data;
+};
+
+struct MeshEndView
+{
+    std::array<uint8_t, 16> PersistentId;
+    uint32_t Checksum;
+};
+
+struct MeshDataView
+{
+    std::array<uint8_t, 16> PersistentId;
+    uint32_t VertexCount;
+    uint32_t IndexCount;
+    uint8_t FormatFlags;
+    std::vector<float> Vertices;
+    std::vector<float> Normals;
+    std::vector<float>Uvs;
+    std::vector<uint32_t> Indices;
+};
+
+struct MeshDeltaView
+{
+    std::array<uint8_t, 16> PersistentId;
+    uint32_t VertexCount;
+    uint8_t FormatFlags;
+    std::vector<float> Vertices;
+    std::vector<float> Normals;
+    std::vector<float> Uvs;
+};
+
+// =========================================================
+// Builders — Mesh (pure functions)
+// =========================================================
+
+inline MeshStartView BuildMeshStartView(
+    const livesync::DeserializedMessage& msg)
+{
+    MeshStartView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.TotalChunks = GetField<uint16_t>(msg, "total_chunks");
+    v.FormatFlags = GetField<uint8_t>(msg, "format_flags");
+    return v;
 }
 
-inline void HandleMeshStart(const livesync::DeserializedMessage& msg)
+inline MeshChunkView BuildMeshChunkView(
+    const livesync::DeserializedMessage& msg)
+{
+    MeshChunkView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.ChunkIndex = GetField<uint16_t>(msg, "chunk_index");
+    v.VertexOffset = GetField<uint16_t>(msg, "vertex_offset");
+    v.VertexCount = GetField<uint32_t>(msg, "vertex_count");
+    v.IndexCount = GetField<uint32_t>(msg, "index_count");
+    v.Data = GetField<std::vector<uint8_t>>(msg, "data");
+    return v;
+}
+
+inline MeshEndView BuildMeshEndView(
+    const livesync::DeserializedMessage& msg)
+{
+    MeshEndView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.Checksum = GetField<uint32_t>(msg, "checksum");
+    return v;
+}
+
+inline MeshDataView BuildMeshDataView(
+    const livesync::DeserializedMessage& msg)
+{
+    MeshDataView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.VertexCount = GetField<uint32_t>(msg, "vertex_count");
+    v.IndexCount = GetField<uint32_t>(msg, "index_count");
+    v.FormatFlags = GetField<uint8_t>(msg, "format_flags");
+    auto* verts = TryGetField<std::vector<float>>(msg, "vertices");
+    v.Vertices = verts ? *verts : std::vector<float>{};
+    auto* norms = TryGetField<std::vector<float>>(msg, "normals");
+    v.Normals = norms ? *norms : std::vector<float>{};
+    auto* uvs = TryGetField<std::vector<float>>(msg, "uvs");
+    v.Uvs = uvs ? *uvs : std::vector<float>{};
+    auto* indices = TryGetField<std::vector<uint32_t>>(msg, "indices");
+    v.Indices = indices ? *indices : std::vector<uint32_t>{};
+    return v;
+}
+
+inline MeshDeltaView BuildMeshDeltaView(
+    const livesync::DeserializedMessage& msg)
+{
+    MeshDeltaView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.VertexCount = GetField<uint32_t>(msg, "vertex_count");
+    v.FormatFlags = GetField<uint8_t>(msg, "format_flags");
+    auto* verts = TryGetField<std::vector<float>>(msg, "vertices");
+    v.Vertices = verts ? *verts : std::vector<float>{};
+    auto* norms = TryGetField<std::vector<float>>(msg, "normals");
+    v.Normals = norms ? *norms : std::vector<float>{};
+    auto* uvs = TryGetField<std::vector<float>>(msg, "uvs");
+    v.Uvs = uvs ? *uvs : std::vector<float>{};
+    return v;
+}
+
+// =========================================================
+// Log functions — Mesh
+// =========================================================
+
+inline void LogMeshStart(const MeshStartView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MESH_START] id=%hs total_chunks=%u format=0x%02x"),
+        id_str, static_cast<unsigned>(v.TotalChunks),
+        static_cast<unsigned>(v.FormatFlags));
+}
+
+inline void LogMeshChunk(const MeshChunkView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MESH_CHUNK] id=%hs chunk=%u vert_off=%u "
+             "vert=%u idx=%u data=%zu bytes"),
+        id_str,
+        static_cast<unsigned>(v.ChunkIndex),
+        static_cast<unsigned>(v.VertexOffset),
+        v.VertexCount, v.IndexCount, v.Data.size());
+}
+
+inline void LogMeshEnd(const MeshEndView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MESH_END] id=%hs checksum=0x%08x"),
+        id_str, v.Checksum);
+}
+
+inline void LogMeshData(const MeshDataView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MESH_DATA] id=%hs verts=%u idx=%u fmt=0x%02x "
+             "vert_buf=%zu norm_buf=%zu uv_buf=%zu idx_buf=%zu"),
+        id_str, v.VertexCount, v.IndexCount,
+        static_cast<unsigned>(v.FormatFlags),
+        v.Vertices.size(), v.Normals.size(),
+        v.Uvs.size(), v.Indices.size());
+}
+
+inline void LogMeshDelta(const MeshDeltaView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][MESH_DELTA] id=%hs verts=%u fmt=0x%02x "
+             "vert_buf=%zu norm_buf=%zu uv_buf=%zu"),
+        id_str, v.VertexCount,
+        static_cast<unsigned>(v.FormatFlags),
+        v.Vertices.size(), v.Normals.size(), v.Uvs.size());
+}
+
+// =========================================================
+// Dispatch functions — Mesh (fan-out only)
+// =========================================================
+
+inline void DispatchMeshStart(const MeshStartView& v)
+{
+    LogMeshStart(v);
+}
+
+inline void DispatchMeshChunk(const MeshChunkView& v)
+{
+    LogMeshChunk(v);
+}
+
+inline void DispatchMeshEnd(const MeshEndView& v)
+{
+    LogMeshEnd(v);
+}
+
+inline void DispatchMeshData(const MeshDataView& v)
+{
+    LogMeshData(v);
+}
+
+inline void DispatchMeshDelta(const MeshDeltaView& v)
+{
+    LogMeshDelta(v);
+}
+
+// =========================================================
+// Process functions — Mesh (orchestration)
+// =========================================================
+
+inline EDispatchResult ProcessMeshStart(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_meshstart_calls++;
 #endif
-
-    LogMeshIdentity(msg, "MESH_START");
-
-    uint16_t total = GetField<uint16_t>(msg, "total_chunks");
-    uint8_t fmt = GetField<uint8_t>(msg, "format_flags");
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][MESH_START] total_chunks=%u format=0x%02x"),
-        static_cast<unsigned>(total),
-        static_cast<unsigned>(fmt));
+    auto view = BuildMeshStartView(msg);
+    DispatchMeshStart(view);
+    return EDispatchResult::Handled;
 }
 
-inline void HandleMeshChunk(const livesync::DeserializedMessage& msg)
+inline EDispatchResult ProcessMeshChunk(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_meshchunk_calls++;
 #endif
-
-    LogMeshIdentity(msg, "MESH_CHUNK");
-
-    uint16_t ci = GetField<uint16_t>(msg, "chunk_index");
-    uint16_t vo = GetField<uint16_t>(msg, "vertex_offset");
-    uint32_t vc = GetField<uint32_t>(msg, "vertex_count");
-    uint32_t ic = GetField<uint32_t>(msg, "index_count");
-    auto& data = GetField<std::vector<uint8_t>>(msg, "data");
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][MESH_CHUNK] chunk=%u vert_off=%u "
-             "vert=%u idx=%u data=%zu bytes"),
-        static_cast<unsigned>(ci),
-        static_cast<unsigned>(vo),
-        vc, ic, data.size());
+    auto view = BuildMeshChunkView(msg);
+    DispatchMeshChunk(view);
+    return EDispatchResult::Handled;
 }
 
-inline void HandleMeshEnd(const livesync::DeserializedMessage& msg)
+inline EDispatchResult ProcessMeshEnd(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_meshend_calls++;
 #endif
-
-    LogMeshIdentity(msg, "MESH_END");
-
-    uint32_t cs = GetField<uint32_t>(msg, "checksum");
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][MESH_END] checksum=0x%08x"), cs);
+    auto view = BuildMeshEndView(msg);
+    DispatchMeshEnd(view);
+    return EDispatchResult::Handled;
 }
 
-inline void HandleMeshData(const livesync::DeserializedMessage& msg)
+inline EDispatchResult ProcessMeshData(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_meshdata_calls++;
 #endif
-
-    LogMeshIdentity(msg, "MESH_DATA");
-
-    uint32_t vc = GetField<uint32_t>(msg, "vertex_count");
-    uint32_t ic = GetField<uint32_t>(msg, "index_count");
-    uint8_t fmt = GetField<uint8_t>(msg, "format_flags");
-
-    auto* verts = TryGetField<std::vector<float>>(msg, "vertices");
-    auto* norms = TryGetField<std::vector<float>>(msg, "normals");
-    auto* uvs = TryGetField<std::vector<float>>(msg, "uvs");
-    auto* indices = TryGetField<std::vector<uint32_t>>(msg, "indices");
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][MESH_DATA] verts=%u idx=%u fmt=0x%02x "
-             "vert_buf=%zu norm_buf=%zu uv_buf=%zu idx_buf=%zu"),
-        vc, ic, static_cast<unsigned>(fmt),
-        verts ? verts->size() : 0,
-        norms ? norms->size() : 0,
-        uvs ? uvs->size() : 0,
-        indices ? indices->size() : 0);
+    auto view = BuildMeshDataView(msg);
+    DispatchMeshData(view);
+    return EDispatchResult::Handled;
 }
 
-inline void HandleMeshDelta(const livesync::DeserializedMessage& msg)
+inline EDispatchResult ProcessMeshDelta(
+    const livesync::DeserializedMessage& msg)
 {
 #ifdef UELIVESYNC_BRIDGE_TESTING
     g_meshdelta_calls++;
 #endif
-
-    LogMeshIdentity(msg, "MESH_DELTA");
-
-    uint32_t vc = GetField<uint32_t>(msg, "vertex_count");
-    uint8_t fmt = GetField<uint8_t>(msg, "format_flags");
-
-    auto* verts = TryGetField<std::vector<float>>(msg, "vertices");
-    auto* norms = TryGetField<std::vector<float>>(msg, "normals");
-    auto* uvs = TryGetField<std::vector<float>>(msg, "uvs");
-
-    UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][MESH_DELTA] verts=%u fmt=0x%02x "
-             "vert_buf=%zu norm_buf=%zu uv_buf=%zu"),
-        vc, static_cast<unsigned>(fmt),
-        verts ? verts->size() : 0,
-        norms ? norms->size() : 0,
-        uvs ? uvs->size() : 0);
+    auto view = BuildMeshDeltaView(msg);
+    DispatchMeshDelta(view);
+    return EDispatchResult::Handled;
 }
 
 // =========================================================
@@ -1247,24 +1394,19 @@ inline EDispatchResult DispatchMsgTypePacket(
             return ProcessMaterialAssign(msg);
 
         case livesync::MsgType::MESH_START:
-            HandleMeshStart(msg);
-            return EDispatchResult::Handled;
+            return ProcessMeshStart(msg);
 
         case livesync::MsgType::MESH_CHUNK:
-            HandleMeshChunk(msg);
-            return EDispatchResult::Handled;
+            return ProcessMeshChunk(msg);
 
         case livesync::MsgType::MESH_END:
-            HandleMeshEnd(msg);
-            return EDispatchResult::Handled;
+            return ProcessMeshEnd(msg);
 
         case livesync::MsgType::MESH_DATA:
-            HandleMeshData(msg);
-            return EDispatchResult::Handled;
+            return ProcessMeshData(msg);
 
         case livesync::MsgType::MESH_DELTA:
-            HandleMeshDelta(msg);
-            return EDispatchResult::Handled;
+            return ProcessMeshDelta(msg);
 
         case livesync::MsgType::CAMERA_CREATE:
         {
