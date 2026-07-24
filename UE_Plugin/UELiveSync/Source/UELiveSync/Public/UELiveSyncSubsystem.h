@@ -6,6 +6,7 @@
 
 #include "IGameplaySink.h"
 #include "MaterialDefinitionDatabase.h"
+#include "MaterialRegistry.h"
 
 #include "Misc/Guid.h"
 
@@ -1148,6 +1149,13 @@ private:
     // CREATE/UPDATE. MaterialDatabase holds runtime model;
     // MaterialCreateStorage remains for legacy consumers.
     MaterialDefinitionDatabase MaterialDatabase;
+
+    // =====================================================
+    // MATERIAL REGISTRY (Phase 1.3.4c)
+    // =====================================================
+    // Lazy resolver: Resolve(UUID) → UMaterialInterface*.
+    // Reads from MaterialDefinitionDatabase, caches built MID.
+    TUniquePtr<MaterialRegistry> MaterialReg;
 
     // =====================================================
     // GENERATED MATERIAL CACHE (Phase 10J.5H)

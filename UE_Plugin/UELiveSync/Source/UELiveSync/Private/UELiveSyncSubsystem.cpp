@@ -69,6 +69,9 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Materials/MaterialExpressionConstant3Vector.h"
 #include "UObject/SavePackage.h"
 
+// Phase 1.3.4c: MaterialRegistry
+#include "MaterialRegistry.h"
+
 #include "AssetRegistry/IAssetRegistry.h"
 
 #endif
@@ -1113,6 +1116,33 @@ void UUELiveSyncSubsystem::Initialize(
     Super::Initialize(Collection);
 
     StartServer();
+
+    // Phase 1.3.4c: MaterialRegistry — lazy resolver
+    MaterialReg = MakeUnique<MaterialRegistry>(
+        MaterialDatabase,
+        [this](const MaterialDefinition& Def) -> UMaterialInterface*
+        {
+            UMaterialInterface* BaseMat = GetOrCreateLiveSyncMasterMaterial();
+            if (!BaseMat)
+            {
+                return nullptr;
+            }
+            UMaterialInstanceDynamic* MID =
+                UMaterialInstanceDynamic::Create(BaseMat, this);
+            if (!MID)
+            {
+                return nullptr;
+            }
+            const FLinearColor BC = Def.BaseColor;
+            MID->SetVectorParameterValue(FName("Base Color"), BC);
+            MID->SetVectorParameterValue(FName("BaseColor"), BC);
+            MID->SetVectorParameterValue(FName("Color"), BC);
+            MID->SetVectorParameterValue(FName("Diffuse Color"), BC);
+            MID->SetVectorParameterValue(FName("DiffuseColor"), BC);
+            MID->SetScalarParameterValue(FName("Roughness"), Def.Roughness);
+            MID->SetScalarParameterValue(FName("Metallic"), Def.Metallic);
+            return MID;
+        });
 
     BuildActorCache();
 
