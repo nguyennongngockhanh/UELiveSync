@@ -8335,6 +8335,157 @@ void UUELiveSyncSubsystem::OnCameraSetActive(
 }
 
 // =========================================================
+// ON CAMERA UPDATE (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnCameraUpdate(
+    const LiveSyncBridge::CameraUpdateView& View)
+{
+    FGuid CameraGUID;
+    FMemory::Memcpy(&CameraGUID, View.CameraId.data(), 16);
+
+    AActor* Found = FindActorFast(CameraGUID);
+    if (!Found)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][UPDATE] No tracked actor for GUID=%s"),
+            *CameraGUID.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    ALiveSyncCameraActor* Camera = Cast<ALiveSyncCameraActor>(Found);
+    if (!Camera)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][UPDATE] Actor %s is not a LiveSyncCameraActor"),
+            *Found->GetName());
+        return;
+    }
+
+    UCameraComponent* CamComp = Camera->GetCameraComponent();
+    if (!CamComp)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][UPDATE] CameraActor %s has no CameraComponent"),
+            *Camera->GetName());
+        return;
+    }
+
+    // Delta update — only apply fields present in the view.
+    // Unlike HandleCameraDef (full replace), CameraUpdateView carries
+    // only changed fields with Has* booleans.
+    if (View.HasFocalLength || View.HasSensorWidth || View.HasSensorHeight)
+    {
+        const float FocalMM = View.HasFocalLength
+            ? FMath::Max(View.FocalLength, 1.0f)
+            : CamComp->FieldOfView; // fallback: keep current (approximation)
+        const float SensorW = View.HasSensorWidth
+            ? FMath::Max(View.SensorWidth, 1.0f)
+            : 36.0f; // default sensor width
+        const float SensorH = View.HasSensorHeight
+            ? FMath::Max(View.SensorHeight, 1.0f)
+            : 24.0f; // default sensor height
+
+        const float FOVRad = 2.0f * FMath::Atan(SensorW / (2.0f * FocalMM));
+        CamComp->FieldOfView = FMath::RadiansToDegrees(FOVRad);
+        CamComp->AspectRatio = SensorW / SensorH;
+        CamComp->bConstrainAspectRatio = true;
+    }
+
+    if (View.HasTransform)
+    {
+        FVector Location(View.Transform.X, View.Transform.Y, View.Transform.Z);
+        FQuat Rotation(View.Transform.Rx, View.Transform.Ry,
+                       View.Transform.Rz, View.Transform.Rw);
+        FVector Scale(View.Transform.Sx, View.Transform.Sy, View.Transform.Sz);
+        Camera->SetActorLocation(Location);
+        Camera->SetActorRotation(Rotation);
+        Camera->SetActorScale3D(Scale);
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA][UPDATE] Applied delta for GUID=%s focal=%d sensor=%d transform=%d"),
+        *CameraGUID.ToString(EGuidFormats::Digits),
+        View.HasFocalLength ? 1 : 0,
+        View.HasSensorWidth ? 1 : 0,
+        View.HasTransform ? 1 : 0);
+}
+
+// =========================================================
+// ON OBJECT UPDATE (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnObjectUpdate(
+    const LiveSyncBridge::ObjectUpdateView& View)
+{
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    // Delta update — only apply fields present in the view.
+    if (View.HasTransform && View.Transform.size() >= 10)
+    {
+        FVector Location(
+            View.Transform[0], View.Transform[1], View.Transform[2]);
+        FQuat Rotation(
+            View.Transform[3], View.Transform[4],
+            View.Transform[5], View.Transform[6]);
+        FVector Scale(
+            View.Transform[7], View.Transform[8], View.Transform[9]);
+
+        // No parent info in ObjectUpdateView — use current parent.
+        // bIsLocalTransform=false: protocol sends world-space transforms.
+        UpdateTargetTransform(Guid, Location, Rotation, Scale,
+                              FGuid(), /*bIsLocalTransform=*/false);
+    }
+
+    if (View.HasVisibility)
+    {
+        AActor* Actor = FindActorFast(Guid);
+        if (Actor)
+        {
+            // Wire: 0=hidden, 1=visible
+            bool bHidden = (View.Visibility == 0);
+            Actor->SetIsTemporarilyHiddenInEditor(bHidden);
+        }
+    }
+
+    if (View.HasName)
+    {
+        AActor* Actor = FindActorFast(Guid);
+        if (Actor)
+        {
+            FString NewName(UTF8_TO_TCHAR(View.Name.c_str()));
+            Actor->SetActorLabel(NewName);
+        }
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_UPDATE] id=%s transform=%d vis=%d name=%d"),
+        *Guid.ToString(EGuidFormats::Digits),
+        View.HasTransform ? 1 : 0,
+        View.HasVisibility ? 1 : 0,
+        View.HasName ? 1 : 0);
+}
+
+// =========================================================
+// ON OBJECT REPARENT (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnObjectReparent(
+    const LiveSyncBridge::ObjectReparentView& View)
+{
+    FGuid ChildGuid;
+    FMemory::Memcpy(&ChildGuid, View.PersistentId.data(), 16);
+
+    FGuid ParentGuid;
+    FMemory::Memcpy(&ParentGuid, View.NewParentId.data(), 16);
+
+    // MsgType V2 compatibility shim — no per-message sequence.
+    HandleHierarchy(ChildGuid, ParentGuid, 0, 0.0,
+                    EChangeOrigin::RemoteReplicated, /*bSkipSequenceCheck=*/true);
+}
+
+// =========================================================
 // HANDLE CREATE OBJECT
 // =========================================================
 
@@ -9401,7 +9552,8 @@ HandleHierarchy(
     const FGuid& ParentGuid,
     uint32 SequenceNumber,
     double Timestamp,
-    EChangeOrigin Origin)
+    EChangeOrigin Origin,
+    bool bSkipSequenceCheck)
 {
     CHECK_GAME_THREAD();
     TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleHierarchy);
@@ -9442,7 +9594,7 @@ HandleHierarchy(
     // REJECT: Stale or duplicate sequence number
     // =====================================================
 
-    if (GHierarchySequences.IsStaleOrDuplicate(ChildGuid, SequenceNumber))
+    if (!bSkipSequenceCheck && GHierarchySequences.IsStaleOrDuplicate(ChildGuid, SequenceNumber))
     {
         UE_LOG(LogLiveSync, Warning,
             TEXT("[HIERARCHY] Rejected — stale/duplicate sequence "
@@ -9515,7 +9667,10 @@ HandleHierarchy(
         }
 
         // Update tracker — detach is a processed event
-        GHierarchySequences.Update(ChildGuid, SequenceNumber);
+        if (!bSkipSequenceCheck)
+        {
+            GHierarchySequences.Update(ChildGuid, SequenceNumber);
+        }
 
         if (Origin == EChangeOrigin::RemoteReplicated)
         {
@@ -9684,7 +9839,10 @@ HandleHierarchy(
             *ChildGuid.ToString(EGuidFormats::Digits),
             *ParentGuid.ToString(EGuidFormats::Digits));
 
-        GHierarchySequences.Update(ChildGuid, SequenceNumber);
+        if (!bSkipSequenceCheck)
+        {
+            GHierarchySequences.Update(ChildGuid, SequenceNumber);
+        }
 
         if (Origin == EChangeOrigin::RemoteReplicated)
         {
@@ -9717,7 +9875,10 @@ HandleHierarchy(
             *ChildGuid.ToString(EGuidFormats::Digits),
             *ParentGuid.ToString(EGuidFormats::Digits));
         // Keep world transform intact (no attach = world transform preserved).
-        GHierarchySequences.Update(ChildGuid, SequenceNumber);
+        if (!bSkipSequenceCheck)
+        {
+            GHierarchySequences.Update(ChildGuid, SequenceNumber);
+        }
         if (Origin == EChangeOrigin::RemoteReplicated)
         {
             Stats.HierarchyProcessed.fetch_add(1, std::memory_order_relaxed);
@@ -9738,7 +9899,10 @@ HandleHierarchy(
     // UPDATE TRACKER AND COUNTERS
     // =====================================================
 
-    GHierarchySequences.Update(ChildGuid, SequenceNumber);
+    if (!bSkipSequenceCheck)
+    {
+        GHierarchySequences.Update(ChildGuid, SequenceNumber);
+    }
 
     if (Origin == EChangeOrigin::RemoteReplicated)
     {

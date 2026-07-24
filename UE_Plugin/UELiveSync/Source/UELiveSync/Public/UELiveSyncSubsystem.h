@@ -187,14 +187,23 @@ private:
     virtual void OnObjectDelete(
         const LiveSyncBridge::ObjectDeleteView& View) override;
 
+    virtual void OnObjectUpdate(
+        const LiveSyncBridge::ObjectUpdateView& View) override;
+
     virtual void OnObjectRename(
         const LiveSyncBridge::ObjectRenameView& View) override;
+
+    virtual void OnObjectReparent(
+        const LiveSyncBridge::ObjectReparentView& View) override;
 
     virtual void OnObjectVisibility(
         const LiveSyncBridge::ObjectVisibilityView& View) override;
 
     virtual void OnCameraSetActive(
         const LiveSyncBridge::CameraSetActiveView& View) override;
+
+    virtual void OnCameraUpdate(
+        const LiveSyncBridge::CameraUpdateView& View) override;
 
     // =====================================================
     // TRANSFORM PIPELINE
@@ -322,7 +331,9 @@ private:
         const FGuid& ParentGuid,
         uint32 SequenceNumber,
         double Timestamp,
-        EChangeOrigin Origin);
+        EChangeOrigin Origin,
+        // MsgType V2 shim: same rationale as HandleRename/HandleVisibility.
+        bool bSkipSequenceCheck = false);
 
     void ResolveHierarchyAttachments();
 
