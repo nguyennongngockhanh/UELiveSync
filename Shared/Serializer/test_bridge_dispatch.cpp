@@ -140,6 +140,14 @@ struct FakeGameplaySink : IGameplaySink
     int MeshDeltaCalls = 0;
     MeshDeltaView LastMeshDelta{};
 
+    // MATERIAL_CREATE
+    int MaterialCreateCalls = 0;
+    MaterialCreateView LastMaterialCreate{};
+
+    // MATERIAL_UPDATE
+    int MaterialUpdateCalls = 0;
+    MaterialUpdateView LastMaterialUpdate{};
+
     void OnObjectCreate(const ObjectCreateView& View) override
     {
         ++ObjectCreateCalls;
@@ -216,6 +224,18 @@ struct FakeGameplaySink : IGameplaySink
     {
         ++MeshDeltaCalls;
         LastMeshDelta = View;
+    }
+
+    void OnMaterialCreate(const MaterialCreateView& View) override
+    {
+        ++MaterialCreateCalls;
+        LastMaterialCreate = View;
+    }
+
+    void OnMaterialUpdate(const MaterialUpdateView& View) override
+    {
+        ++MaterialUpdateCalls;
+        LastMaterialUpdate = View;
     }
 };
 
@@ -1128,6 +1148,64 @@ int main(int argc, char** argv)
                     sink.MeshDataCalls, sink.ObjectCreateCalls,
                     sink.ObjectDeleteCalls, sink.MeshStartCalls,
                     sink.MeshDeltaCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 40: FakeGameplaySink receives MATERIAL_CREATE ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "MATERIAL_CREATE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MATERIAL_CREATE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_MATERIAL_CREATE", r,
+                EDispatchResult::Handled, 1, g_materialcreate_calls);
+            if (sink.MaterialCreateCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnMaterialCreate\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.MaterialCreateCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 41: FakeGameplaySink receives MATERIAL_UPDATE ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "MATERIAL_UPDATE.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MATERIAL_UPDATE.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_MATERIAL_UPDATE", r,
+                EDispatchResult::Handled, 1, g_materialupdate_calls);
+            if (sink.MaterialUpdateCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnMaterialUpdate\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.MaterialUpdateCalls);
                 ++failed;
             }
         }

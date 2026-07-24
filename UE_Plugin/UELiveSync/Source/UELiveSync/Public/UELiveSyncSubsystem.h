@@ -220,6 +220,12 @@ private:
     virtual void OnMeshDelta(
         const LiveSyncBridge::MeshDeltaView& View) override;
 
+    virtual void OnMaterialCreate(
+        const LiveSyncBridge::MaterialCreateView& View) override;
+
+    virtual void OnMaterialUpdate(
+        const LiveSyncBridge::MaterialUpdateView& View) override;
+
     // =====================================================
     // TRANSFORM PIPELINE
     // =====================================================
@@ -1124,6 +1130,14 @@ private:
 
     // Count of successful SetMaterial() calls this session
     int32 MaterialAssignmentsSucceeded = 0;
+
+    // =====================================================
+    // MATERIAL CREATE STORAGE (Phase 1.3.3)
+    // =====================================================
+    // Stores material definitions received via MATERIAL_CREATE.
+    // Keyed by material UUID. Populated by OnMaterialCreate.
+    // Will be consumed by Material Registry in Phase 1.3.4.
+    TMap<FGuid, LiveSyncBridge::MaterialCreateView> MaterialCreateStorage;
 
     // =====================================================
     // GENERATED MATERIAL CACHE (Phase 10J.5H)

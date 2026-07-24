@@ -8890,6 +8890,82 @@ void UUELiveSyncSubsystem::OnMeshDelta(
 }
 
 // =========================================================
+// ON MATERIAL CREATE (IGameplaySink override)
+// =========================================================
+// Stores material definition metadata. Simple adapter — no
+// Registry, no asset loading, no UE types. Material Registry
+// will consume this storage in Phase 1.3.4.
+// =========================================================
+
+void UUELiveSyncSubsystem::OnMaterialCreate(
+    const LiveSyncBridge::MaterialCreateView& View)
+{
+    CHECK_GAME_THREAD();
+
+    FGuid MaterialGuid;
+    FMemory::Memcpy(&MaterialGuid, View.MaterialId.data(), 16);
+
+    MaterialCreateStorage.Add(MaterialGuid, View);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MATERIAL][CREATE] id=%s name=%hs metallic=%.2f "
+             "roughness=%.2f texture=%hs"),
+        *MaterialGuid.ToString(EGuidFormats::Digits),
+        View.Name.c_str(),
+        View.Metallic, View.Roughness,
+        View.HasTexturePath ? View.TexturePath.c_str() : "none");
+}
+
+// =========================================================
+// ON MATERIAL UPDATE (IGameplaySink override)
+// =========================================================
+// Updates existing material definition in MaterialCreateStorage.
+// Merges changed fields into existing entry. No Registry, no
+// asset loading. Material Registry will consume this in Phase 1.3.4.
+// =========================================================
+
+void UUELiveSyncSubsystem::OnMaterialUpdate(
+    const LiveSyncBridge::MaterialUpdateView& View)
+{
+    CHECK_GAME_THREAD();
+
+    FGuid MaterialGuid;
+    FMemory::Memcpy(&MaterialGuid, View.MaterialId.data(), 16);
+
+    auto* Existing = MaterialCreateStorage.Find(MaterialGuid);
+    if (Existing)
+    {
+        Existing->BaseColor = View.BaseColor;
+        Existing->Metallic = View.Metallic;
+        Existing->Roughness = View.Roughness;
+        Existing->Emission = View.Emission;
+        Existing->HasTexturePath = View.HasTexturePath;
+        Existing->TexturePath = View.TexturePath;
+    }
+    else
+    {
+        // No prior CREATE — store as new entry with empty name
+        LiveSyncBridge::MaterialCreateView Entry;
+        Entry.MaterialId = View.MaterialId;
+        Entry.Name = "";
+        Entry.BaseColor = View.BaseColor;
+        Entry.Metallic = View.Metallic;
+        Entry.Roughness = View.Roughness;
+        Entry.Emission = View.Emission;
+        Entry.HasTexturePath = View.HasTexturePath;
+        Entry.TexturePath = View.TexturePath;
+        MaterialCreateStorage.Add(MaterialGuid, MoveTemp(Entry));
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MATERIAL][UPDATE] id=%s metallic=%.2f roughness=%.2f "
+             "texture=%hs"),
+        *MaterialGuid.ToString(EGuidFormats::Digits),
+        View.Metallic, View.Roughness,
+        View.HasTexturePath ? View.TexturePath.c_str() : "none");
+}
+
+// =========================================================
 // HANDLE CREATE OBJECT
 // =========================================================
 
