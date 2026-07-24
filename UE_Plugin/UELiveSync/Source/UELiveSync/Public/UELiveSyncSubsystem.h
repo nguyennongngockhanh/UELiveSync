@@ -5,6 +5,7 @@
 #include "Subsystems/WorldSubsystem.h"
 
 #include "IGameplaySink.h"
+#include "MaterialDefinitionDatabase.h"
 
 #include "Misc/Guid.h"
 
@@ -1138,6 +1139,15 @@ private:
     // Keyed by material UUID. Populated by OnMaterialCreate.
     // Will be consumed by Material Registry in Phase 1.3.4.
     TMap<FGuid, LiveSyncBridge::MaterialCreateView> MaterialCreateStorage;
+
+    // =====================================================
+    // MATERIAL DEFINITION DATABASE (Phase 1.3.4b)
+    // =====================================================
+    // Single source of truth for protocol material definitions.
+    // Both MaterialCreateStorage and MaterialDatabase receive
+    // CREATE/UPDATE. MaterialDatabase holds runtime model;
+    // MaterialCreateStorage remains for legacy consumers.
+    MaterialDefinitionDatabase MaterialDatabase;
 
     // =====================================================
     // GENERATED MATERIAL CACHE (Phase 10J.5H)

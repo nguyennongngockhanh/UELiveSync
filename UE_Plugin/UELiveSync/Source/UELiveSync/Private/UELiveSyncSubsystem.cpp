@@ -8906,6 +8906,7 @@ void UUELiveSyncSubsystem::OnMaterialCreate(
     FMemory::Memcpy(&MaterialGuid, View.MaterialId.data(), 16);
 
     MaterialCreateStorage.Add(MaterialGuid, View);
+    MaterialDatabase.RegisterDefinition(View);
 
     UE_LOG(LogLiveSync, Log,
         TEXT("[MATERIAL][CREATE] id=%s name=%hs metallic=%.2f "
@@ -8956,6 +8957,7 @@ void UUELiveSyncSubsystem::OnMaterialUpdate(
         Entry.TexturePath = View.TexturePath;
         MaterialCreateStorage.Add(MaterialGuid, MoveTemp(Entry));
     }
+    MaterialDatabase.UpdateDefinition(View);
 
     UE_LOG(LogLiveSync, Log,
         TEXT("[MATERIAL][UPDATE] id=%s metallic=%.2f roughness=%.2f "
