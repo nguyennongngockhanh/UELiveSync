@@ -228,6 +228,9 @@ private:
     virtual void OnMaterialUpdate(
         const LiveSyncBridge::MaterialUpdateView& View) override;
 
+    virtual void OnMaterialAssign(
+        const LiveSyncBridge::MaterialAssignView& View) override;
+
     // =====================================================
     // TRANSFORM PIPELINE
     // =====================================================
@@ -560,6 +563,14 @@ private:
      *  unresolved entries. Resolution is path-cache driven.
      */
     void ResolvePendingMaterials();
+
+    /** Assign a resolved material to an object's mesh slot.
+     *  Called by OnMaterialAssign after Registry.Resolve().
+     *  Handles: FindActor, get mesh component, validate slot, SetMaterial.
+     */
+    void AssignMaterial(
+        const LiveSyncBridge::MaterialAssignView& View,
+        UMaterialInterface* Material);
 
     /** Register a material identity → path mapping in MaterialPathCache.
      *  Logs a warning on identity collision (same identity, different path).

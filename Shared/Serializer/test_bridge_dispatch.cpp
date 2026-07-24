@@ -148,6 +148,10 @@ struct FakeGameplaySink : IGameplaySink
     int MaterialUpdateCalls = 0;
     MaterialUpdateView LastMaterialUpdate{};
 
+    // MATERIAL_ASSIGN
+    int MaterialAssignCalls = 0;
+    MaterialAssignView LastMaterialAssign{};
+
     void OnObjectCreate(const ObjectCreateView& View) override
     {
         ++ObjectCreateCalls;
@@ -236,6 +240,12 @@ struct FakeGameplaySink : IGameplaySink
     {
         ++MaterialUpdateCalls;
         LastMaterialUpdate = View;
+    }
+
+    void OnMaterialAssign(const MaterialAssignView& View) override
+    {
+        ++MaterialAssignCalls;
+        LastMaterialAssign = View;
     }
 };
 
@@ -1206,6 +1216,35 @@ int main(int argc, char** argv)
             {
                 printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
                     sink.MaterialUpdateCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 42: FakeGameplaySink receives MATERIAL_ASSIGN ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "MATERIAL_ASSIGN.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MATERIAL_ASSIGN.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_MATERIAL_ASSIGN", r,
+                EDispatchResult::Handled, 1, g_materialassign_calls);
+            if (sink.MaterialAssignCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnMaterialAssign\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.MaterialAssignCalls);
                 ++failed;
             }
         }

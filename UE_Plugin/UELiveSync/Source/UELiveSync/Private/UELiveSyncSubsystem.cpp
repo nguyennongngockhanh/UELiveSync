@@ -8998,6 +8998,76 @@ void UUELiveSyncSubsystem::OnMaterialUpdate(
 }
 
 // =========================================================
+// ON MATERIAL ASSIGN (IGameplaySink override)
+// =========================================================
+// Orchestration only: resolve via Registry, then assign.
+// Phase 1.3.4d: first consumer of MaterialRegistry.Resolve().
+// =========================================================
+
+void UUELiveSyncSubsystem::OnMaterialAssign(
+    const LiveSyncBridge::MaterialAssignView& View)
+{
+    CHECK_GAME_THREAD();
+
+    FGuid MaterialGuid;
+    FMemory::Memcpy(&MaterialGuid, View.MaterialId.data(), 16);
+
+    UMaterialInterface* Material = MaterialReg->Resolve(MaterialGuid);
+    if (!Material)
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MATERIAL][ASSIGN] id=%s — Resolve returned null"),
+            *MaterialGuid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    AssignMaterial(View, Material);
+}
+
+// =========================================================
+// ASSIGN MATERIAL (private helper)
+// =========================================================
+// Find actor, get mesh component, validate slot, SetMaterial.
+// Called by OnMaterialAssign after Registry.Resolve().
+// =========================================================
+
+void UUELiveSyncSubsystem::AssignMaterial(
+    const LiveSyncBridge::MaterialAssignView& View,
+    UMaterialInterface* Material)
+{
+    FGuid ObjectGuid;
+    FMemory::Memcpy(&ObjectGuid, View.PersistentId.data(), 16);
+
+    AActor* Actor = FindActorFast(ObjectGuid);
+    if (!Actor)
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MATERIAL][ASSIGN] object=%s — actor not found"),
+            *ObjectGuid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    UStaticMeshComponent* MeshComp =
+        Actor->FindComponentByClass<UStaticMeshComponent>();
+    if (!MeshComp)
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MATERIAL][ASSIGN] object=%s — no mesh component"),
+            *ObjectGuid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    MeshComp->SetMaterial(View.SlotIndex, Material);
+    MaterialAssignmentsSucceeded++;
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MATERIAL][ASSIGN] object=%s slot=%u material=%s OK"),
+        *ObjectGuid.ToString(EGuidFormats::Digits),
+        View.SlotIndex,
+        *Material->GetName());
+}
+
+// =========================================================
 // HANDLE CREATE OBJECT
 // =========================================================
 
