@@ -120,6 +120,26 @@ struct FakeGameplaySink : IGameplaySink
     int CameraUpdateCalls = 0;
     CameraUpdateView LastCameraUpdate{};
 
+    // MESH_START
+    int MeshStartCalls = 0;
+    MeshStartView LastMeshStart{};
+
+    // MESH_CHUNK
+    int MeshChunkCalls = 0;
+    MeshChunkView LastMeshChunk{};
+
+    // MESH_END
+    int MeshEndCalls = 0;
+    MeshEndView LastMeshEnd{};
+
+    // MESH_DATA
+    int MeshDataCalls = 0;
+    MeshDataView LastMeshData{};
+
+    // MESH_DELTA
+    int MeshDeltaCalls = 0;
+    MeshDeltaView LastMeshDelta{};
+
     void OnObjectCreate(const ObjectCreateView& View) override
     {
         ++ObjectCreateCalls;
@@ -166,6 +186,36 @@ struct FakeGameplaySink : IGameplaySink
     {
         ++CameraUpdateCalls;
         LastCameraUpdate = View;
+    }
+
+    void OnMeshStart(const MeshStartView& View) override
+    {
+        ++MeshStartCalls;
+        LastMeshStart = View;
+    }
+
+    void OnMeshChunk(const MeshChunkView& View) override
+    {
+        ++MeshChunkCalls;
+        LastMeshChunk = View;
+    }
+
+    void OnMeshEnd(const MeshEndView& View) override
+    {
+        ++MeshEndCalls;
+        LastMeshEnd = View;
+    }
+
+    void OnMeshData(const MeshDataView& View) override
+    {
+        ++MeshDataCalls;
+        LastMeshData = View;
+    }
+
+    void OnMeshDelta(const MeshDeltaView& View) override
+    {
+        ++MeshDeltaCalls;
+        LastMeshDelta = View;
     }
 };
 
@@ -897,6 +947,187 @@ int main(int argc, char** argv)
             {
                 printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
                     sink.ObjectReparentCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 34: FakeGameplaySink receives MESH_DATA ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "MESH_DATA.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_DATA.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_MESH_DATA", r,
+                EDispatchResult::Handled, 1, g_meshdata_calls);
+            if (sink.MeshDataCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnMeshData\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.MeshDataCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 35: FakeGameplaySink receives MESH_DELTA ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "MESH_DELTA.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_DELTA.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_MESH_DELTA", r,
+                EDispatchResult::Handled, 1, g_meshdelta_calls);
+            if (sink.MeshDeltaCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnMeshDelta\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.MeshDeltaCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 36: FakeGameplaySink receives MESH_START ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "MESH_START.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_START.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_MESH_START", r,
+                EDispatchResult::Handled, 1, g_meshstart_calls);
+            if (sink.MeshStartCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnMeshStart\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.MeshStartCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 37: FakeGameplaySink receives MESH_CHUNK ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "MESH_CHUNK.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_CHUNK.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_MESH_CHUNK", r,
+                EDispatchResult::Handled, 1, g_meshchunk_calls);
+            if (sink.MeshChunkCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnMeshChunk\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.MeshChunkCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 38: FakeGameplaySink receives MESH_END ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "MESH_END.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_END.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_MESH_END", r,
+                EDispatchResult::Handled, 1, g_meshend_calls);
+            if (sink.MeshEndCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnMeshEnd\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.MeshEndCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 39: MESH_DATA cross-callback isolation ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "MESH_DATA.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  MESH_DATA.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_MESH_DATA_no_cross", r,
+                EDispatchResult::Handled, 1, g_meshdata_calls);
+            if (sink.MeshDataCalls == 1 &&
+                sink.ObjectCreateCalls == 0 &&
+                sink.ObjectDeleteCalls == 0 &&
+                sink.MeshStartCalls == 0 &&
+                sink.MeshDeltaCalls == 0)
+            {
+                printf("  PASS  Only OnMeshData called, no cross-callbacks\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  Cross-callback leak: Data=%d Create=%d "
+                       "Delete=%d Start=%d Delta=%d\n",
+                    sink.MeshDataCalls, sink.ObjectCreateCalls,
+                    sink.ObjectDeleteCalls, sink.MeshStartCalls,
+                    sink.MeshDeltaCalls);
                 ++failed;
             }
         }

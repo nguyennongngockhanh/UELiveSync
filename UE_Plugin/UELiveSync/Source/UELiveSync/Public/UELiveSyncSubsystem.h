@@ -205,6 +205,21 @@ private:
     virtual void OnCameraUpdate(
         const LiveSyncBridge::CameraUpdateView& View) override;
 
+    virtual void OnMeshStart(
+        const LiveSyncBridge::MeshStartView& View) override;
+
+    virtual void OnMeshChunk(
+        const LiveSyncBridge::MeshChunkView& View) override;
+
+    virtual void OnMeshEnd(
+        const LiveSyncBridge::MeshEndView& View) override;
+
+    virtual void OnMeshData(
+        const LiveSyncBridge::MeshDataView& View) override;
+
+    virtual void OnMeshDelta(
+        const LiveSyncBridge::MeshDeltaView& View) override;
+
     // =====================================================
     // TRANSFORM PIPELINE
     // =====================================================

@@ -8486,6 +8486,410 @@ void UUELiveSyncSubsystem::OnObjectReparent(
 }
 
 // =========================================================
+// ON MESH START (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnMeshStart(
+    const LiveSyncBridge::MeshStartView& View)
+{
+    CHECK_GAME_THREAD();
+
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    FMeshReassemblyState& State = PendingMeshReassembly.FindOrAdd(Guid);
+    State.ChunkCount = View.TotalChunks;
+    State.ChunksReceived = 0;
+    State.Flags = View.FormatFlags;
+    State.FirstChunkTime = FPlatformTime::Seconds();
+    State.bReconstructed = false;
+    State.Chunks.Empty();
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MESH][START] id=%s total_chunks=%u format=0x%02x"),
+        *Guid.ToString(EGuidFormats::Digits),
+        static_cast<unsigned>(View.TotalChunks),
+        static_cast<unsigned>(View.FormatFlags));
+}
+
+// =========================================================
+// ON MESH CHUNK (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnMeshChunk(
+    const LiveSyncBridge::MeshChunkView& View)
+{
+    CHECK_GAME_THREAD();
+
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    auto* State = PendingMeshReassembly.Find(Guid);
+    if (!State)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][CHUNK] No pending reassembly for GUID=%s "
+                 "\u2014 dropping chunk %u"),
+            *Guid.ToString(EGuidFormats::Digits),
+            static_cast<unsigned>(View.ChunkIndex));
+        return;
+    }
+
+    if (State->bReconstructed)
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MESH][CHUNK] Already reconstructed GUID=%s "
+                 "\u2014 dropping chunk %u"),
+            *Guid.ToString(EGuidFormats::Digits),
+            static_cast<unsigned>(View.ChunkIndex));
+        return;
+    }
+
+    if (State->Chunks.Contains(View.ChunkIndex))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[MESH][CHUNK] Duplicate chunk %u/%u for GUID=%s"),
+            static_cast<unsigned>(View.ChunkIndex),
+            static_cast<unsigned>(State->ChunkCount),
+            *Guid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    // Store raw chunk data
+    TArray<uint8> ChunkData;
+    ChunkData.Append(View.Data.data(), View.Data.size());
+    State->Chunks.Add(View.ChunkIndex, MoveTemp(ChunkData));
+    State->ChunksReceived++;
+
+    UE_LOG(LogLiveSync, Verbose,
+        TEXT("[MESH][CHUNK] Stored chunk %u/%u for GUID=%s "
+             "(received=%u/%u)"),
+        static_cast<unsigned>(View.ChunkIndex),
+        static_cast<unsigned>(State->ChunkCount),
+        *Guid.ToString(EGuidFormats::Digits),
+        State->ChunksReceived, State->ChunkCount);
+}
+
+// =========================================================
+// ON MESH END (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnMeshEnd(
+    const LiveSyncBridge::MeshEndView& View)
+{
+    CHECK_GAME_THREAD();
+
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    auto* State = PendingMeshReassembly.Find(Guid);
+    if (!State)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][END] No pending reassembly for GUID=%s"),
+            *Guid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    if (!State->IsComplete())
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][END] Incomplete for GUID=%s "
+                 "(received=%u/%u)"),
+            *Guid.ToString(EGuidFormats::Digits),
+            State->ChunksReceived, State->ChunkCount);
+        return;
+    }
+
+    // Checksum verification — compute CRC32 over all chunk data
+    uint32 ComputedChecksum = 0;
+    for (uint32 i = 0; i < State->ChunkCount; i++)
+    {
+        const TArray<uint8>* ChunkData = State->Chunks.Find(i);
+        if (ChunkData)
+        {
+            ComputedChecksum = FCrc::MemCrc32(
+                ChunkData->GetData(), ChunkData->Num(), ComputedChecksum);
+        }
+    }
+
+    if (View.Checksum != 0 && ComputedChecksum != View.Checksum)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][END] Checksum mismatch for GUID=%s "
+                 "(expected=0x%08x computed=0x%08x)"),
+            *Guid.ToString(EGuidFormats::Digits),
+            View.Checksum, ComputedChecksum);
+        return;
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MESH][END] Reassembly complete for GUID=%s "
+             "(%u/%u chunks, checksum=0x%08x)"),
+        *Guid.ToString(EGuidFormats::Digits),
+        State->ChunksReceived, State->ChunkCount,
+        ComputedChecksum);
+
+    // Mark complete — ReconstructCompletedMeshes() will build on next tick
+}
+
+// =========================================================
+// ON MESH DATA (IGameplaySink override)
+// =========================================================
+// Full mesh in one message. Converts View flat arrays to UE types
+// and calls CreateMeshSection, reusing the subsystem's procedural
+// mesh creation pattern from ReconstructCompletedMeshes().
+// =========================================================
+
+void UUELiveSyncSubsystem::OnMeshData(
+    const LiveSyncBridge::MeshDataView& View)
+{
+    CHECK_GAME_THREAD();
+
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    if (View.VertexCount == 0 || View.Vertices.size() < View.VertexCount * 3)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][DATA] Invalid vertex data for GUID=%s "
+                 "(count=%u buf=%zu)"),
+            *Guid.ToString(EGuidFormats::Digits),
+            View.VertexCount, View.Vertices.size());
+        return;
+    }
+
+    if (View.IndexCount == 0 || View.Indices.size() < View.IndexCount)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][DATA] Invalid index data for GUID=%s "
+                 "(count=%u buf=%zu)"),
+            *Guid.ToString(EGuidFormats::Digits),
+            View.IndexCount, View.Indices.size());
+        return;
+    }
+
+    AActor* Actor = FindActorFast(Guid);
+    if (!Actor)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][DATA] No tracked actor for GUID=%s"),
+            *Guid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    // Convert flat float arrays to UE types (Y-flip + cm scale)
+    TArray<FVector> Vertices;
+    Vertices.SetNum(View.VertexCount);
+    for (uint32 i = 0; i < View.VertexCount; i++)
+    {
+        float X = View.Vertices[i * 3 + 0] * 100.0f;
+        float Y = -View.Vertices[i * 3 + 1] * 100.0f;
+        float Z = View.Vertices[i * 3 + 2] * 100.0f;
+        Vertices[i] = FVector(X, Y, Z);
+    }
+
+    TArray<int32> Triangles;
+    Triangles.SetNum(View.IndexCount);
+    for (uint32 i = 0; i < View.IndexCount; i++)
+    {
+        Triangles[i] = static_cast<int32>(View.Indices[i]);
+    }
+
+    // Normals — Y-flip only (no cm scale)
+    TArray<FVector> Normals;
+    if (View.Normals.size() >= View.VertexCount * 3)
+    {
+        Normals.SetNum(View.VertexCount);
+        for (uint32 i = 0; i < View.VertexCount; i++)
+        {
+            float NX = View.Normals[i * 3 + 0];
+            float NY = -View.Normals[i * 3 + 1];
+            float NZ = View.Normals[i * 3 + 2];
+            Normals[i] = FVector(NX, NY, NZ);
+        }
+    }
+
+    // UVs
+    TArray<FVector2D> UVs;
+    if (View.Uvs.size() >= View.VertexCount * 2)
+    {
+        UVs.SetNum(View.VertexCount);
+        for (uint32 i = 0; i < View.VertexCount; i++)
+        {
+            UVs[i] = FVector2D(View.Uvs[i * 2 + 0], View.Uvs[i * 2 + 1]);
+        }
+    }
+    else
+    {
+        // Procedural UV: identity mapping
+        UVs.SetNum(View.VertexCount);
+        for (uint32 i = 0; i < View.VertexCount; i++)
+        {
+            UVs[i] = FVector2D(0.0f, 0.0f);
+        }
+    }
+
+    TArray<FColor> Colors;
+    TArray<FProcMeshTangent> Tangents;
+
+    // Compute normals + tangents if not provided
+    if (Normals.Num() == 0)
+    {
+        UKismetProceduralMeshLibrary::CalculateTangentsForMesh(
+            Vertices, Triangles, UVs, Normals, Tangents);
+    }
+    else
+    {
+        UKismetProceduralMeshLibrary::CalculateTangentsForMesh(
+            Vertices, Triangles, UVs, Normals, Tangents);
+    }
+
+    // Find or create ProceduralMeshComponent
+    UProceduralMeshComponent* ProcMesh =
+        Actor->FindComponentByClass<UProceduralMeshComponent>();
+
+    if (!ProcMesh)
+    {
+        ProcMesh = NewObject<UProceduralMeshComponent>(Actor);
+        if (Actor->GetRootComponent())
+        {
+            ProcMesh->SetupAttachment(Actor->GetRootComponent());
+        }
+        else
+        {
+            Actor->SetRootComponent(ProcMesh);
+        }
+        ProcMesh->RegisterComponent();
+    }
+
+    // Create or update mesh section
+    const FProcMeshSection* ExistingSection =
+        ProcMesh->GetProcMeshSection(0);
+    if (ExistingSection &&
+        ExistingSection->ProcVertexBuffer.Num() == Vertices.Num())
+    {
+        ProcMesh->UpdateMeshSection(0, Vertices, Normals, UVs,
+            TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+            Colors, Tangents);
+    }
+    else
+    {
+        ProcMesh->CreateMeshSection(0, Vertices, Triangles,
+            Normals, UVs, Colors, Tangents, true);
+    }
+
+    MeshSectionsBuilt++;
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MESH][DATA] Built mesh for GUID=%s verts=%d tris=%d"),
+        *Guid.ToString(EGuidFormats::Digits),
+        Vertices.Num(), Triangles.Num() / 3);
+}
+
+// =========================================================
+// ON MESH DELTA (IGameplaySink override)
+// =========================================================
+// Vertex-only update. Updates existing mesh section vertices
+// without rebuilding indices.
+// =========================================================
+
+void UUELiveSyncSubsystem::OnMeshDelta(
+    const LiveSyncBridge::MeshDeltaView& View)
+{
+    CHECK_GAME_THREAD();
+
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    if (View.VertexCount == 0 || View.Vertices.size() < View.VertexCount * 3)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][DELTA] Invalid vertex data for GUID=%s "
+                 "(count=%u buf=%zu)"),
+            *Guid.ToString(EGuidFormats::Digits),
+            View.VertexCount, View.Vertices.size());
+        return;
+    }
+
+    AActor* Actor = FindActorFast(Guid);
+    if (!Actor)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][DELTA] No tracked actor for GUID=%s"),
+            *Guid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    UProceduralMeshComponent* ProcMesh =
+        Actor->FindComponentByClass<UProceduralMeshComponent>();
+
+    if (!ProcMesh || ProcMesh->GetNumSections() == 0)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][DELTA] No existing mesh for GUID=%s"),
+            *Guid.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    // Convert flat float arrays to UE types (Y-flip + cm scale)
+    TArray<FVector> Vertices;
+    Vertices.SetNum(View.VertexCount);
+    for (uint32 i = 0; i < View.VertexCount; i++)
+    {
+        float X = View.Vertices[i * 3 + 0] * 100.0f;
+        float Y = -View.Vertices[i * 3 + 1] * 100.0f;
+        float Z = View.Vertices[i * 3 + 2] * 100.0f;
+        Vertices[i] = FVector(X, Y, Z);
+    }
+
+    // Normals — Y-flip only
+    TArray<FVector> Normals;
+    if (View.Normals.size() >= View.VertexCount * 3)
+    {
+        Normals.SetNum(View.VertexCount);
+        for (uint32 i = 0; i < View.VertexCount; i++)
+        {
+            float NX = View.Normals[i * 3 + 0];
+            float NY = -View.Normals[i * 3 + 1];
+            float NZ = View.Normals[i * 3 + 2];
+            Normals[i] = FVector(NX, NY, NZ);
+        }
+    }
+
+    // UVs
+    TArray<FVector2D> UVs;
+    if (View.Uvs.size() >= View.VertexCount * 2)
+    {
+        UVs.SetNum(View.VertexCount);
+        for (uint32 i = 0; i < View.VertexCount; i++)
+        {
+            UVs[i] = FVector2D(View.Uvs[i * 2 + 0], View.Uvs[i * 2 + 1]);
+        }
+    }
+    else
+    {
+        UVs.SetNum(View.VertexCount);
+        for (uint32 i = 0; i < View.VertexCount; i++)
+        {
+            UVs[i] = FVector2D(0.0f, 0.0f);
+        }
+    }
+
+    TArray<FColor> Colors;
+    TArray<FProcMeshTangent> Tangents;
+
+    // Update only vertices + normals + UVs (keep existing indices)
+    ProcMesh->UpdateMeshSection(0, Vertices, Normals, UVs,
+        TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+        Colors, Tangents);
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[MESH][DELTA] Updated vertices for GUID=%s verts=%d"),
+        *Guid.ToString(EGuidFormats::Digits), Vertices.Num());
+}
+
+// =========================================================
 // HANDLE CREATE OBJECT
 // =========================================================
 
