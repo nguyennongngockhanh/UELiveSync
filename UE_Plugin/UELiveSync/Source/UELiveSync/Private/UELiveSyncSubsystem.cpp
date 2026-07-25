@@ -3936,58 +3936,8 @@ ProcessBinaryPacket(
         return;
     }
 
-    // =====================================================
-    // ACTIVE CAMERA PACKET (Phase 7D)
-    // =====================================================
-    // Wire format (28 bytes fixed):
-    //   CameraGUID(16) + Sequence(4) + Timestamp(8)
-    //
-    // Validation:
-    //   - Payload size must be exactly 28 bytes
-    //   - Sequence must be strictly greater than LastActiveCameraSequence
-    //     (first packet with any sequence is accepted)
-    //   - All-zero GUID is a valid null-camera signal
-    //   - No viewport SetViewTarget is called — storage only
-    // =====================================================
-
-    if (PacketType == 0x15)
-    {
-        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessActiveCamera);
-
-        Stats.ActiveCameraPacketsReceived.fetch_add(1, std::memory_order_relaxed);
-
-        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
-        if (ObjSize < sizeof(FActiveCameraPayload))
-        {
-            Stats.ActiveCameraPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
-            Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[CAMERA] Malformed packet: size %d < %d"),
-                ObjSize, sizeof(FActiveCameraPayload));
-            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-
-        FActiveCameraPayload Payload;
-        Payload.CameraGUID = *reinterpret_cast<const FGuid*>(Ptr + 0);
-        Payload.Sequence   = *reinterpret_cast<const uint32*>(Ptr + 16);
-        Payload.Timestamp  = *reinterpret_cast<const double*>(Ptr + 20);
-
-        if (bHasEverReceivedActiveCamera && Payload.Sequence <= LastActiveCameraSequence)
-        {
-            Stats.ActiveCameraPacketsStale.fetch_add(1, std::memory_order_relaxed);
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[CAMERA] Stale packet: seq %u <= %u"),
-                Payload.Sequence, LastActiveCameraSequence);
-            Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-
-        HandleActiveCamera(Payload);
-        Stats.ActiveCameraPacketsApplied.fetch_add(1, std::memory_order_relaxed);
-        Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
+    // PT_ActiveCamera (0x15) removed — routed via Bridge → CAMERASETACTIVE
+    // → OnCameraSetActive → HandleActiveCamera
 
     // =====================================================
     // SEQUENCER OP (Phase 7E — PT_SequencerOp 0x18)
