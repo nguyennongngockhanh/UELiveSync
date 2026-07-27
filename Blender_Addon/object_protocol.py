@@ -122,6 +122,22 @@ def build_object_delete(
     return bytes(body)
 
 
+def build_object_visibility(
+    persistent_id,
+    visible: bool,
+) -> bytes:
+    """OBJECT_VISIBILITY body bytes.
+
+    Wire format (matches C++ BuildObjectVisibilityView):
+      persistent_id: UUID (16 bytes, FGuid LE)
+      visible:       uint8 (1=visible, 0=hidden)
+    """
+    body = bytearray()
+    body.extend(_uuid_to_fguid_bytes(persistent_id))
+    body.extend(pack_u8(1 if visible else 0))
+    return bytes(body)
+
+
 def build_object_reparent(
     persistent_id,
     new_parent_id=None,

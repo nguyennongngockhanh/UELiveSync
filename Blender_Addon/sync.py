@@ -15,7 +15,7 @@ from uuid import UUID
 
 from .msg_transport import get_transport, MsgType
 from .material_protocol import build_material_create, build_material_update
-from .object_protocol import build_object_create, build_object_reparent
+from .object_protocol import build_object_create, build_object_reparent, build_object_visibility
 
 try:
     from . import network as _network_mod
@@ -28,7 +28,6 @@ try:
         serialize_object_v3,
         serialize_delete_v3,
         serialize_rename,
-        serialize_visibility,
         serialize_delete,
         is_connected,
         get_last_error,
@@ -51,7 +50,6 @@ try:
         PT_AssetDef,
         PT_Rename,
         PT_Delete_V5,
-        PT_Visibility,
         PT_Collection,
         PT_Material,
         get_object_material_slots,
@@ -184,7 +182,6 @@ except ImportError:
         serialize_object_v3,
         serialize_delete_v3,
         serialize_rename,
-        serialize_visibility,
         serialize_delete,
         is_connected,
         get_last_error,
@@ -207,7 +204,6 @@ except ImportError:
         PT_AssetDef,
         PT_Rename,
         PT_Delete_V5,
-        PT_Visibility,
         PT_Collection,
         PT_Material,
         LIVE_SYNC_VERSION_V5,
@@ -1634,7 +1630,7 @@ def check_updates():
     deletes_v5_to_send = []
     asset_defs_to_send = []
     renames_to_send = []
-    vis_payloads_to_send = []
+    object_visibility_msgs_to_send = []
     collection_payloads_to_send = []
     material_payloads_to_send = []
     material_creates_to_send = []
@@ -1950,15 +1946,22 @@ def check_updates():
         # Phase 6: Visibility detection (semantic event)
         # NOTE: Lives OUTSIDE the transforms_different gate so that
         # visibility changes are detected even when the object does
-        # not move. The prev_vis guard prevents first-tick emission.
+        # not move.
+        # On first tick: send visibility if object is hidden (initial state).
+        # On subsequent ticks: send if visibility changed.
         current_vis = obj.hide_get()
         prev_vis = _last_visibility_state.get(guid)
-        if prev_vis is not None and prev_vis != current_vis:
-            vis_payloads_to_send.append(
-                serialize_visibility(guid_obj, current_vis)
+        if prev_vis is None:
+            if current_vis:
+                object_visibility_msgs_to_send.append(
+                    (MsgType.OBJECT_VISIBILITY, build_object_visibility(
+                        guid_obj, False))
+                )
+        elif prev_vis != current_vis:
+            object_visibility_msgs_to_send.append(
+                (MsgType.OBJECT_VISIBILITY, build_object_visibility(
+                    guid_obj, not current_vis))
             )
-            if _verbose_logging:
-                print(f"[VISIBILITY][DIAG] Change detected guid={guid} hidden={current_vis}")
         _last_visibility_state[guid] = current_vis
 
         # Phase 6: Rename detection (semantic event)
@@ -2713,16 +2716,18 @@ def check_updates():
         _burst_packet_count += 1
 
     # =====================================================
-    # SEND VISIBILITY PACKETS (Phase 6 — Semantic Event)
+    # SEND VISIBILITY (Phase 6 — MsgType OBJECT_VISIBILITY)
     # =====================================================
 
-    if vis_payloads_to_send:
-
-        send_objects(
-            vis_payloads_to_send,
-            packet_type=PT_Visibility
-        )
-        _burst_packet_count += 1
+    if object_visibility_msgs_to_send:
+        transport = get_transport()
+        if transport:
+            sent_count = 0
+            for msg_type, body in object_visibility_msgs_to_send:
+                if transport.send_msg(msg_type, body):
+                    sent_count += 1
+            if sent_count > 0:
+                _burst_packet_count += 1
 
     # =====================================================
     # =====================================================
