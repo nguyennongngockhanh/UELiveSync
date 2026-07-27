@@ -44,6 +44,7 @@ DEFINE_LOG_CATEGORY(LogLiveSync);
 #include "Editor/EditorEngine.h"
 #include "LevelEditorViewport.h"
 #include "SEditorViewport.h"
+#include "EditorSupportDelegates.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/SceneComponent.h"
@@ -733,6 +734,16 @@ static TAutoConsoleVariable<int32>
         TEXT("UE.LiveSync.MaxMeshBuildsPerTick"),
         10,
         TEXT("Max ProceduralMesh section builds per tick (spreads mesh rebuild work across frames, preventing game-thread stalls during snapshot replay)"),
+        ECVF_Default
+    );
+
+// BUG-VIEWPORT-001: hypothesis test — force viewport redraw after mesh rebuild
+// 0=off, 1=Invalidate(lightest), 2=Broadcast delegate, 3=RedrawAll(false), 4=RedrawAll(true)
+static TAutoConsoleVariable<int32>
+    CVarLiveSyncForceViewportRedraw(
+        TEXT("UE.LiveSync.ForceViewportRedraw"),
+        1,
+        TEXT("BUG-VIEWPORT-001: viewport redraw test level (0=off 1=Invalidate 2=Broadcast 3=RedrawAll(false) 4=RedrawAll(true))"),
         ECVF_Default
     );
 
@@ -1705,6 +1716,14 @@ bool UUELiveSyncSubsystem::Tick(
 
     GEnableVerboseSyncLogs =
         bEnableVerboseSyncLogs;
+
+    // =====================================================
+    // BUG-VIEWPORT-001: Clear deferred render state check
+    // =====================================================
+    if (PendingRenderVerifyGuid.IsValid())
+    {
+        PendingRenderVerifyGuid = FGuid();
+    }
 
     bEnableTransportVerbose =
         CVarLiveSyncTransportVerbose.GetValueOnGameThread() != 0;
@@ -5553,6 +5572,7 @@ ProcessBinaryPacket(
         // =================================================
         // APPLY
         // =================================================
+        // =================================================
 
         UpdateTargetTransform(
 
@@ -6424,30 +6444,9 @@ InterpolateTransforms(
                                     FMath::RadiansToDegrees(DeltaAngleRad));
                             }
 
-                            Actor->SetActorTransform(WorldXForm);
-                            DiagBasis_CameraOneShot(Actor, Guid);
-                            // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
-                            if (FBXAuthoritativeGuids.Contains(Guid))
-                            {
-                                const FVector PostScl = Actor->GetActorScale3D();
-                                if (FMath::Abs(PostScl.X) > 100000.0f || FMath::Abs(PostScl.Y) > 100000.0f || FMath::Abs(PostScl.Z) > 100000.0f)
-                                {
-                                    UE_LOG(LogLiveSync, Warning,
-                                        TEXT("[FBX][TRANSFORM_WARN] guid=%s reason=extreme_scale scl=(%s)"),
-                                        *Guid.ToString(EGuidFormats::Digits),
-                                        *PostScl.ToString());
-                                }
-                                const FVector PostLoc = Actor->GetActorLocation();
-                                const float LocMag = PostLoc.Size();
-                                if (LocMag > 1000000.0f)
-                                {
-                                    UE_LOG(LogLiveSync, Warning,
-                                        TEXT("[FBX][TRANSFORM_WARN] guid=%s reason=large_location loc=(%s) magnitude=%.1f"),
-                                        *Guid.ToString(EGuidFormats::Digits),
-                                        *PostLoc.ToString(), LocMag);
-                                }
-                            }
-                        }
+                        Actor->SetActorTransform(WorldXForm);
+                        DiagBasis_CameraOneShot(Actor, Guid);
+                    }
                     else
                     {
                         if (ShouldLogVerbose())
@@ -6633,14 +6632,6 @@ InterpolateTransforms(
 
                     Actor->SetActorTransform(RootDirectXForm);
                     DiagBasis_CameraOneShot(Actor, Guid);
-                    // Stage 7G.4: camera diagnostic marker
-                    if (bEnableVerboseSyncLogs && Actor->IsA(ACameraActor::StaticClass()))
-                    {
-                        UE_LOG(LogLiveSync, Log,
-                            TEXT("[CAMERA][TRANSFORM_APPLY] guid=%s actor=%s"),
-                            *Guid.ToString(EGuidFormats::Digits),
-                            *Actor->GetName());
-                    }
                     // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
                     if (FBXAuthoritativeGuids.Contains(Guid))
                     {
@@ -6992,6 +6983,19 @@ InterpolateTransforms(
         }
 
         InterpCount++;
+    }
+
+    // =====================================================
+    // VIEWPORT INVALIDATION (BUG-VIEWPORT-001)
+    // =====================================================
+
+    if (InterpCount > 0)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[TRANSFORM][VIEWPORT] %d transforms applied"),
+            InterpCount);
+
+        RequestEditorViewportRefresh();
     }
 
     if (bEnableVerboseSyncLogs)
@@ -7669,22 +7673,6 @@ DetachFromParent(
         bOldHasLocalTarget = State->bHasLocalTarget;
     }
 
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT(
-            "[DETACH][DIAG] Child guid=%s"),
-        *Guid.ToString(
-            EGuidFormats::Digits));
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT(
-            "[DETACH][DIAG] Old parent=%s was_attached=%d"),
-        *OldParentGuid.ToString(
-            EGuidFormats::Digits),
-        bWasAttached ? 1 : 0);
-
     // Detach from UE scene graph if still attached.
     // HandleHierarchy may have already detached the actor —
     // this check prevents redundant DetachFromActor while
@@ -7694,21 +7682,6 @@ DetachFromParent(
         Actor->DetachFromActor(
             FDetachmentTransformRules::
                 KeepWorldTransform);
-
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT(
-                "[DETACH][DIAG] Attach state cleared"));
-    }
-    else
-    {
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT(
-                "[DETACH][DIAG] Already detached"
-                " (HandleHierarchy) — state cleanup only"));
     }
 
     // ----------------------------------------------------
@@ -7721,14 +7694,6 @@ DetachFromParent(
     if (FSyncTransformState* State =
         TransformStates.Find(Guid))
     {
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT(
-                "[DETACH][DIAG] Clearing local authority state"
-                " (bHasLocalTarget=%d)"),
-            bOldHasLocalTarget ? 1 : 0);
-
         State->bHasLocalTarget =
             false;
 
@@ -7748,29 +7713,10 @@ DetachFromParent(
             State->CurrentScale =
                 DetachedActor->
                 GetActorScale3D();
-
-            UE_LOG(
-                LogLiveSync,
-                Log,
-                TEXT(
-                    "[DETACH][DIAG] New world authority"
-                    " final world transform=(%s)"),
-                *DetachedActor->
-                    GetActorLocation().
-                    ToString());
         }
 
         State->bPendingSceneGraphWrite =
             true;
-
-        UE_LOG(
-            LogLiveSync,
-            Log,
-            TEXT(
-                "[DETACH][DIAG] bHasLocalTarget=%d"
-                " ParentGuid valid=%d"),
-            State->bHasLocalTarget ? 1 : 0,
-            State->ParentGuid.IsValid() ? 1 : 0);
     }
 
     UE_LOG(
@@ -8618,6 +8564,15 @@ HandleCreateObject(
     TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_HandleCreateObject);
     UWorld* World = GetWorld();
 
+    // [SPAWN-TRACE] Step 3: unconditional entry log
+    UE_LOG(LogLiveSync, Warning,
+        TEXT("[SPAWN-TRACE][CREATE] guid=%s loc=(%.1f,%.1f,%.1f) rot=(%.4f,%.4f,%.4f,%.4f) scl=(%.4f,%.4f,%.4f) prim=0x%02X local=%d"),
+        *Guid.ToString(EGuidFormats::Digits),
+        Location.X, Location.Y, Location.Z,
+        Rotation.W, Rotation.X, Rotation.Y, Rotation.Z,
+        Scale.X, Scale.Y, Scale.Z,
+        PrimitiveType, bIsLocalTransform ? 1 : 0);
+
     if (!World)
     {
         UE_LOG(LogLiveSync, Error,
@@ -9224,6 +9179,12 @@ HandleCreateObject(
 
         MeshComp->RegisterComponent();
 
+        // ── FIX: SpawnActor drops transform when AActor has no root
+        // component. Apply the intended spawn transform after the root
+        // component exists and is registered.
+        NewActor->SetActorTransform(
+            FTransform(Rotation, Location, Scale));
+
         double RegisterMs =
             FPlatformTime::
             ToMilliseconds64(
@@ -9259,13 +9220,6 @@ HandleCreateObject(
     // an explicit UpdateTargetTransform call with correct
     // (possibly local-space) transform values.
     // This avoids passing world-spawn values as local targets.
-
-    UE_LOG(
-        LogLiveSync,
-        Log,
-        TEXT("END TRACE: HandleCreateObject guid=%s"),
-        *Guid.ToString(
-            EGuidFormats::Digits));
 
     // ── Unified world replay recording (Phase 6G) ──
     if (!bInSnapshotBuild)
@@ -12117,7 +12071,7 @@ AssignFallbackPrimitive(
 
         if (!MeshComp->IsRegistered())
         {
-            MeshComp->RegisterComponent();
+        MeshComp->RegisterComponent();
         }
     }
 }
@@ -17244,6 +17198,38 @@ HandleMeshChunk(
 
 
 // =========================================================
+// REQUEST EDITOR VIEWPORT REFRESH (BUG-VIEWPORT-001)
+// =========================================================
+// Single entry point for editor viewport invalidation.
+// After any visual change (mesh, transform, material,
+// visibility), call this to ensure the viewport redraws.
+// Gate: CVarLiveSyncForceViewportRedraw >= 1.
+
+void UUELiveSyncSubsystem::RequestEditorViewportRefresh()
+{
+    if (CVarLiveSyncForceViewportRedraw.GetValueOnGameThread() < 1)
+    {
+        return;
+    }
+
+#if WITH_EDITOR
+    if (GEditor)
+    {
+        for (FLevelEditorViewportClient* VC :
+            GEditor->GetLevelViewportClients())
+        {
+            if (VC && VC->IsPerspective())
+            {
+                VC->Invalidate(false, false);
+                break;
+            }
+        }
+    }
+#endif
+}
+
+
+// =========================================================
 // RECONSTRUCT COMPLETED MESHES (Phase 7C Stage 1C)
 // =========================================================
 
@@ -17668,28 +17654,15 @@ ReconstructCompletedMeshes()
             int32 FinalSectionCount = ProcMesh->GetNumSections();
             FBoxSphereBounds ProcBounds = ProcMesh->Bounds;
             FVector ProcExtent = ProcBounds.GetBox().GetExtent();
-            // Compute pre-scale extent by unscaling Vertices
-            FBox PreScaleBox(ForceInit);
-            for (const FVector& V : Vertices) { PreScaleBox += V / 100.0f; }
             if (GEnableVerboseSyncLogs)
             {
                 UE_LOG(LogLiveSync, Warning,
-                    TEXT("[MESH][SCALE] preScaleExtent=%s postScaleExtent=%s "
-                         "sections=%d boundsOrigin=(%g,%g,%g) boundsExtent=%s "
+                    TEXT("[MESH][SCALE] sections=%d boundsOrigin=(%g,%g,%g) boundsExtent=%s "
                          "sphereRadius=%g"),
-                    *PreScaleBox.GetExtent().ToString(), *ProcExtent.ToString(),
                     FinalSectionCount,
                     ProcBounds.Origin.X, ProcBounds.Origin.Y, ProcBounds.Origin.Z,
                     *ProcExtent.ToString(),
                     ProcBounds.SphereRadius);
-                // STEP1: after CreateMeshSection
-                FBoxSphereBounds ActorBS1; Actor->GetActorBounds(false, ActorBS1.Origin, ActorBS1.BoxExtent);
-                UE_LOG(LogLiveSync, Warning,
-                    TEXT("[MESH][STEP1] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
-                    ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
-                    Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
-                    ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
-                    *ProcExtent.ToString(), *ActorBS1.BoxExtent.ToString());
             }
         }
 
@@ -17732,32 +17705,6 @@ ReconstructCompletedMeshes()
             ProcMesh->SetVisibility(true, true);
             ProcMesh->SetHiddenInGame(false, true);
             ProcMesh->UpdateBounds();
-            if (GEnableVerboseSyncLogs)
-            {
-                // STEP2: after SetRootComponent(ProcMesh)
-                {
-                    FBoxSphereBounds ProcBS2 = ProcMesh->Bounds;
-                    FBoxSphereBounds ActorBS2; Actor->GetActorBounds(false, ActorBS2.Origin, ActorBS2.BoxExtent);
-                    UE_LOG(LogLiveSync, Warning,
-                        TEXT("[MESH][STEP2] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
-                        ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
-                        Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
-                        ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
-                        *ProcBS2.GetBox().GetExtent().ToString(), *ActorBS2.BoxExtent.ToString());
-                }
-
-                // STEP3: after visibility restore (bounds already updated above)
-                {
-                    FBoxSphereBounds ProcBS3 = ProcMesh->Bounds;
-                    FBoxSphereBounds ActorBS3; Actor->GetActorBounds(false, ActorBS3.Origin, ActorBS3.BoxExtent);
-                    UE_LOG(LogLiveSync, Warning,
-                        TEXT("[MESH][STEP3] reg=%d vis=%d hidden=%d root=%s attach=%s boundsExtent=%s actorExtent=%s"),
-                        ProcMesh->IsRegistered(), ProcMesh->IsVisible(), ProcMesh->bHiddenInGame,
-                        Actor->GetRootComponent() ? *Actor->GetRootComponent()->GetClass()->GetName() : TEXT("None"),
-                        ProcMesh->GetAttachParent() ? *ProcMesh->GetAttachParent()->GetClass()->GetName() : TEXT("None"),
-                        *ProcBS3.GetBox().GetExtent().ToString(), *ActorBS3.BoxExtent.ToString());
-                }
-            }
         }
 
         DiagBuildCount++;
@@ -17769,6 +17716,16 @@ ReconstructCompletedMeshes()
     for (const FGuid& Guid : Reconstructed)
     {
         PendingMeshReassembly.Remove(Guid);
+    }
+
+    // BUG-VIEWPORT-001: viewport invalidation after mesh rebuild
+    if (Reconstructed.Num() > 0)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[MESH][VIEWPORT-REDRAW] %d meshes rebuilt"),
+            Reconstructed.Num());
+
+        RequestEditorViewportRefresh();
     }
 
     // Phase 7C Stage 2C.3: Build ProceduralMesh from completed v1 reassemblies

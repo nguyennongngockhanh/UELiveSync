@@ -230,6 +230,92 @@ uint32 FLiveSyncRunnable::Run()
             TotalHeaderRead);
 
         // =================================================
+        // MSGTYPE DETECTION
+        // =================================================
+        // MsgType packets start with a 4-byte LE length
+        // prefix (< LEGACY_MAGIC). Legacy packets start
+        // with Magic 0x4C56534D in the first 4 bytes.
+        // Detect MsgType here before legacy header parsing.
+        // =================================================
+
+        {
+            uint32 FirstDWord;
+            FMemory::Memcpy(&FirstDWord, HeaderBytes, sizeof(uint32));
+
+            if (FirstDWord < 0x4C56534D)
+            {
+                int32 FrameSize = 4 + static_cast<int32>(FirstDWord);
+
+                if (FrameSize < 4 || FrameSize > LIVE_SYNC_MAX_PACKET_SIZE)
+                {
+                    UE_LOG(LogLiveSync, Error,
+                        TEXT("[MSGTYPE] Invalid frame size: %d"), FrameSize);
+                    if (StatsRef)
+                        StatsRef->MalformedPackets.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+
+                TArray<uint8> FrameData;
+                FrameData.SetNumUninitialized(FrameSize);
+
+                int32 AlreadyRead = FMath::Min(TotalHeaderRead, FrameSize);
+                FMemory::Memcpy(FrameData.GetData(), HeaderBytes, AlreadyRead);
+
+                int32 Remaining = FrameSize - AlreadyRead;
+
+                if (Remaining > 0)
+                {
+                    int32 TotalExtraRead = 0;
+
+                    while (TotalExtraRead < Remaining)
+                    {
+                        if (!bRunThread)
+                        {
+                            UE_LOG(LogLiveSync, Log,
+                                TEXT("[MSGTYPE] Read interrupted by stop signal"));
+                            bThreadExited = true;
+                            return 0;
+                        }
+
+                        int32 BytesRead = 0;
+                        bool bOk = Socket->Recv(
+                            FrameData.GetData() + AlreadyRead + TotalExtraRead,
+                            Remaining - TotalExtraRead,
+                            BytesRead);
+
+                        if (!bOk || BytesRead <= 0)
+                        {
+                            UE_LOG(LogLiveSync, Warning,
+                                TEXT("[MSGTYPE] Socket error during frame read (ok=%d bytes=%d)"),
+                                bOk ? 1 : 0, BytesRead);
+                            bThreadExited = true;
+                            return 0;
+                        }
+
+                        TotalExtraRead += BytesRead;
+                    }
+                }
+
+                FLiveSyncPacket Packet;
+                Packet.RawData = MoveTemp(FrameData);
+                Packet.ReceiveTime = FPlatformTime::Seconds();
+
+                PacketQueue->Enqueue(MoveTemp(Packet));
+
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[RECV][DIAG] MsgType packet received: "
+                         "length_prefix=%u frame_size=%d"),
+                    FirstDWord, FrameSize);
+
+                LastPacketReceiveTime.store(
+                    FPlatformTime::Seconds(),
+                    std::memory_order_relaxed);
+
+                continue;
+            }
+        }
+
+        // =================================================
         // DETERMINE VERSION
         // =================================================
 

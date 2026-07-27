@@ -6,6 +6,8 @@ import threading
 import queue
 import time
 
+from .msg_transport import init_transport, get_transport
+
 
 # Phase 10J.5L: Blender-side debug log for material extraction diagnostics.
 # Written to ~/.cache/uelivesync/uelivesync_blender_debug.log
@@ -4158,6 +4160,8 @@ def connect(
             host=host,
             port=port
         )
+
+        init_transport(_client)
 
     elif not _client.connected:
 

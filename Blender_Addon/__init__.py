@@ -2608,7 +2608,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
 
                         # Task 9B.6B.14: emit material basic property summary (FBX path)
                         _mat_records = network.mat_basic_collect_records
-                        if _mat_records and network._mt_basic_collecting:
+                        if _mat_records and network._mat_basic_collecting:
                             total_slots = len(_mat_records)
                             # Count changed fields by comparing with stored property signatures
                             total_changed = 0
@@ -2637,7 +2637,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                     finally:
                         if network._mtex_collecting:
                             network._mtex_clear_dedup_state()
-                        if network._mt_basic_collecting:
+                        if network._mat_basic_collecting:
                             network._mt_basic_clear_state()
 
                     # Phase 7H: decide whether to send based on scalar OR texture change

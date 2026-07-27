@@ -13,6 +13,10 @@ from mathutils import Matrix
 
 from uuid import UUID
 
+from .msg_transport import get_transport, MsgType
+from .material_protocol import build_material_create, build_material_update
+from .object_protocol import build_object_create, build_object_reparent
+
 try:
     from . import network as _network_mod
     from .network import (
@@ -24,7 +28,6 @@ try:
         serialize_object_v3,
         serialize_delete_v3,
         serialize_rename,
-        serialize_hierarchy,
         serialize_visibility,
         serialize_delete,
         is_connected,
@@ -47,7 +50,6 @@ try:
         PT_EndSnapshot,
         PT_AssetDef,
         PT_Rename,
-        PT_Hierarchy,
         PT_Delete_V5,
         PT_Visibility,
         PT_Collection,
@@ -182,7 +184,6 @@ except ImportError:
         serialize_object_v3,
         serialize_delete_v3,
         serialize_rename,
-        serialize_hierarchy,
         serialize_visibility,
         serialize_delete,
         is_connected,
@@ -205,7 +206,6 @@ except ImportError:
         PT_EndSnapshot,
         PT_AssetDef,
         PT_Rename,
-        PT_Hierarchy,
         PT_Delete_V5,
         PT_Visibility,
         PT_Collection,
@@ -301,6 +301,13 @@ _last_mesh_identity = {}
 # Phase 7B: Per-GUID last material slot identities for change detection
 # Maps guid -> {slot_index: (material_identity_low, material_identity_high)}
 _last_material_identity = {}
+
+# Phase 1.4.2a: Track material names already sent as MATERIAL_CREATE this session
+_mat_create_sent_names = set()
+
+# Phase 1.4.2b: Per-material last-sent property state for MATERIAL_UPDATE detection
+# Maps mat_name -> (base_color_4f, metallic_f, roughness_f)
+_last_material_sent_props = {}
 
 # Phase 10J.5I: Per-GUID last material property signature for change detection
 # Maps guid -> {slot_index: (r, g, b, a, roughness, metallic)}
@@ -1490,6 +1497,8 @@ def check_updates():
         _last_material_identity.clear()
         _last_material_property_sig.clear()
         _last_material_sent_reason.clear()
+        _mat_create_sent_names.clear()
+        _last_material_sent_props.clear()  # Phase 1.4.2b
         _last_decision_init_printed.clear()
         _last_sidecar_digest.clear()
         _last_sidecar_info.clear()
@@ -1626,10 +1635,13 @@ def check_updates():
     asset_defs_to_send = []
     renames_to_send = []
     vis_payloads_to_send = []
-    hierarchies_to_send = []
     collection_payloads_to_send = []
     material_payloads_to_send = []
+    material_creates_to_send = []
+    material_updates_to_send = []
     mesh_payloads_to_send = []
+    object_create_msgs_to_send = []
+    object_reparent_msgs_to_send = []
 
     # =====================================================
     # MATSTALL: track GUIDs that had material changes this tick
@@ -1825,6 +1837,25 @@ def check_updates():
                         serialized
                     )
 
+                    # Phase 1.4.4: MsgType OBJECT_CREATE alongside legacy PT_Create
+                    _spawn_loc = transform["location"]
+                    _spawn_rot = transform["rotation"]
+                    _spawn_scl = transform["scale"]
+                    print(f"[SPAWN-TRACE][SEND] guid={guid_obj} name={obj.name} loc=({_spawn_loc[0]:.1f},{_spawn_loc[1]:.1f},{_spawn_loc[2]:.1f}) rot=({_spawn_rot[0]:.4f},{_spawn_rot[1]:.4f},{_spawn_rot[2]:.4f},{_spawn_rot[3]:.4f}) scl=({_spawn_scl[0]:.4f},{_spawn_scl[1]:.4f},{_spawn_scl[2]:.4f})")
+                    _append_blender_debug_log(
+                        f"[SPAWN-TRACE][SEND] guid={guid_obj} name={obj.name} loc=({_spawn_loc[0]:.1f},{_spawn_loc[1]:.1f},{_spawn_loc[2]:.1f})"
+                    )
+                    object_create_msgs_to_send.append(
+                        (MsgType.OBJECT_CREATE, build_object_create(
+                            persistent_id=guid_obj,
+                            name=obj.name,
+                            location=transform["location"],
+                            rotation=transform["rotation"],
+                            scale=transform["scale"],
+                            parent_id=parent_guid_obj,
+                        ))
+                    )
+
                 else:
 
                     children_to_send.append(
@@ -1837,6 +1868,25 @@ def check_updates():
 
                     create_objects.append(
                         serialized
+                    )
+
+                    # Phase 1.4.4: MsgType OBJECT_CREATE alongside legacy PT_Create
+                    _spawn_loc = transform["location"]
+                    _spawn_rot = transform["rotation"]
+                    _spawn_scl = transform["scale"]
+                    print(f"[SPAWN-TRACE][SEND] guid={guid_obj} name={obj.name} loc=({_spawn_loc[0]:.1f},{_spawn_loc[1]:.1f},{_spawn_loc[2]:.1f}) rot=({_spawn_rot[0]:.4f},{_spawn_rot[1]:.4f},{_spawn_rot[2]:.4f},{_spawn_rot[3]:.4f}) scl=({_spawn_scl[0]:.4f},{_spawn_scl[1]:.4f},{_spawn_scl[2]:.4f})")
+                    _append_blender_debug_log(
+                        f"[SPAWN-TRACE][SEND] guid={guid_obj} name={obj.name} loc=({_spawn_loc[0]:.1f},{_spawn_loc[1]:.1f},{_spawn_loc[2]:.1f})"
+                    )
+                    object_create_msgs_to_send.append(
+                        (MsgType.OBJECT_CREATE, build_object_create(
+                            persistent_id=guid_obj,
+                            name=obj.name,
+                            location=transform["location"],
+                            rotation=transform["rotation"],
+                            scale=transform["scale"],
+                            parent_id=parent_guid_obj,
+                        ))
                     )
 
                 else:
@@ -1943,18 +1993,43 @@ def check_updates():
                 UUID(current_parent_guid)
                 if current_parent_guid else None
             )
-            hierarchies_to_send.append(
-                serialize_hierarchy(guid_obj, parent_guid_obj_for_hierarchy)
+            # Phase 1.4: Send via MsgType OBJECT_REPARENT through Bridge
+            # (replaces legacy PT_Hierarchy which UE removed in Phase 1.3.5a)
+            object_reparent_msgs_to_send.append(
+                (MsgType.OBJECT_REPARENT, build_object_reparent(
+                    guid_obj,
+                    parent_guid_obj_for_hierarchy,
+                ))
             )
             if _verbose_logging:
                 parent_str = current_parent_guid if current_parent_guid else "(root)"
                 prev_parent_str = prev_parent_guid if prev_parent_guid else "(root)"
-                print(f"[HIERARCHY][DIAG] Parent change detected without transform change")
+                print(f"[HIERARCHY][DIAG] Parent change detected")
                 print(f"[HIERARCHY][DIAG] Child guid={guid}")
                 print(f"[HIERARCHY][DIAG] Old parent={prev_parent_str}")
                 print(f"[HIERARCHY][DIAG] New parent={parent_str}")
-                print(f"[HIERARCHY][DIAG] Packet queued")
+                print(f"[HIERARCHY][DIAG] MsgType OBJECT_REPARENT queued")
         _last_parent_guid[guid] = current_parent_guid
+
+        # When parent changes, get_transform() switches between
+        # matrix_local and matrix_world.  Clear-Parent keeps
+        # matrix_local unchanged so matrix_world == matrix_local
+        # after detach, making transforms_different() return False
+        # even though the world position changed.
+        # Invalidating the cache forces one PT_Transform on the
+        # next tick to reflect the new world transform.
+        if prev_parent_guid != current_parent_guid:
+            # Set sentinel cache instead of popping. Popping makes
+            # previous=None on next tick → is_first_send=True →
+            # OBJECT_CREATE instead of PT_Transform → UE skips spawn
+            # (actor exists) → no transform update after detach.
+            # Sentinel guarantees transforms_different() returns True
+            # while is_first_send stays False → routes to PT_Transform.
+            last_sent_transforms[guid] = {
+                "location": [999999.0, 999999.0, 999999.0],
+                "rotation": [0.0, 0.0, 0.0, 0.0],
+                "scale": [0.0, 0.0, 0.0],
+            }
 
         # =================================================
         # Phase 7B Stage 1C: Material slot identity detection
@@ -2156,6 +2231,103 @@ def check_updates():
                                 _mt_basic_collect_slot(slot_index, p)
                 except Exception:
                     mat_props = None
+
+                # Phase 1.4.2a: collect MATERIAL_CREATE for unique materials
+                _mc_before = len(material_creates_to_send)
+                try:
+                    for slot_index, slot in enumerate(obj.material_slots):
+                        if not slot or not slot.material:
+                            continue
+                        mat = slot.material
+                        mat_name = mat.name
+                        if mat_name in _mat_create_sent_names:
+                            continue
+                        _mat_create_sent_names.add(mat_name)
+                        low, high = get_material_identity_hash(mat)
+                        mat_uuid = uuid.UUID(
+                            int=((high & 0xFFFFFFFFFFFFFFFF) << 64)
+                            | (low & 0xFFFFFFFFFFFFFFFF)
+                        )
+                        p = get_material_basic_properties(mat)
+                        if p is None:
+                            continue
+                        bc = (
+                            p.get("BaseColorR", 0.8),
+                            p.get("BaseColorG", 0.8),
+                            p.get("BaseColorB", 0.8),
+                            p.get("Alpha", 1.0),
+                        )
+                        metallic = p.get("Metallic", 0.0)
+                        roughness = p.get("Roughness", 0.5)
+                        emission = (0.0, 0.0, 0.0)
+                        body = build_material_create(
+                            material_id=mat_uuid,
+                            name=mat_name,
+                            base_color=bc,
+                            metallic=metallic,
+                            roughness=roughness,
+                            emission=emission,
+                        )
+                        material_creates_to_send.append(
+                            (MsgType.MATERIAL_CREATE, body)
+                        )
+                        _last_material_sent_props[mat_name] = (bc, metallic, roughness)
+                except Exception as _mc_exc:
+                    print(f"[MATERIAL][MSGTYPE][ERROR] {_mc_exc}")
+                _mc_after = len(material_creates_to_send)
+                if _mc_after > _mc_before:
+                    print(f"[MATERIAL][MSGTYPE] collected {_mc_after - _mc_before} MATERIAL_CREATE for guid={guid[:8]}")
+
+                # Phase 1.4.2b: collect MATERIAL_UPDATE for materials
+                # that already exist on UE side but have changed properties.
+                # Skip materials just created in this same pass (MATERIAL_CREATE covers them).
+                _mu_before = len(material_updates_to_send)
+                if bPropertiesChanged and mat_props:
+                    for slot_index, slot in enumerate(obj.material_slots):
+                        if not slot or not slot.material:
+                            continue
+                        mat = slot.material
+                        mat_name = mat.name
+                        if mat_name in _mat_create_sent_names:
+                            continue
+                        low, high = get_material_identity_hash(mat)
+                        mat_uuid = uuid.UUID(
+                            int=((high & 0xFFFFFFFFFFFFFFFF) << 64)
+                            | (low & 0xFFFFFFFFFFFFFFFF)
+                        )
+                        p = get_material_basic_properties(mat)
+                        if p is None:
+                            continue
+                        bc = (
+                            p.get("BaseColorR", 0.8),
+                            p.get("BaseColorG", 0.8),
+                            p.get("BaseColorB", 0.8),
+                            p.get("Alpha", 1.0),
+                        )
+                        metallic = p.get("Metallic", 0.0)
+                        roughness = p.get("Roughness", 0.5)
+                        emission = (0.0, 0.0, 0.0)
+                        prev = _last_material_sent_props.get(mat_name)
+                        if prev is None:
+                            continue
+                        prev_bc, prev_metal, prev_rough = prev
+                        if (bc == prev_bc and metallic == prev_metal
+                                and roughness == prev_rough):
+                            continue
+                        body = build_material_update(
+                            material_id=mat_uuid,
+                            base_color=bc,
+                            metallic=metallic,
+                            roughness=roughness,
+                            emission=emission,
+                        )
+                        material_updates_to_send.append(
+                            (MsgType.MATERIAL_UPDATE, body)
+                        )
+                        _last_material_sent_props[mat_name] = (bc, metallic, roughness)
+                _mu_after = len(material_updates_to_send)
+                if _mu_after > _mu_before:
+                    print(f"[MATERIAL][MSGTYPE] collected {_mu_after - _mu_before} MATERIAL_UPDATE for guid={guid[:8]}")
 
                 # Phase 7H: log MATX_VALUE_SEND for each slot/channel
                 if mat_props:
@@ -2479,6 +2651,42 @@ def check_updates():
         _burst_packet_count += 1
 
     # =====================================================
+    # SEND OBJECT CREATE via MsgType (Phase 1.4.4)
+    # Alongside legacy PT_Create for verification.
+    # =====================================================
+
+    if object_create_msgs_to_send:
+        transport = get_transport()
+        if transport is not None:
+            sent_count = 0
+            for msg_type, body in object_create_msgs_to_send:
+                if transport.send_msg(msg_type, body):
+                    sent_count += 1
+            if _verbose_logging:
+                print(f"[OBJECT][MSGTYPE] Sent {sent_count} OBJECT_CREATE via MsgType")
+            _append_blender_debug_log(
+                f"[OBJ][MSGTYPE] OBJECT_CREATE sent={sent_count}"
+            )
+
+    # =====================================================
+    # SEND OBJECT REPARENT via MsgType (Phase 1.4)
+    # Hierarchy changes flow through Bridge → OnObjectReparent
+    # =====================================================
+
+    if object_reparent_msgs_to_send:
+        transport = get_transport()
+        if transport is not None:
+            sent_count = 0
+            for msg_type, body in object_reparent_msgs_to_send:
+                if transport.send_msg(msg_type, body):
+                    sent_count += 1
+            if _verbose_logging:
+                print(f"[OBJECT][MSGTYPE] Sent {sent_count} OBJECT_REPARENT via MsgType")
+            _append_blender_debug_log(
+                f"[OBJ][MSGTYPE] OBJECT_REPARENT sent={sent_count}"
+            )
+
+    # =====================================================
     # SEND ASSET DEF PACKETS (Phase 5D: V5 PT_AssetDef)
     # Sent after CREATE, before TRANSFORM — non-blocking
     # =====================================================
@@ -2517,17 +2725,6 @@ def check_updates():
         _burst_packet_count += 1
 
     # =====================================================
-    # SEND HIERARCHY PACKETS (Phase 6D — Semantic Event)
-    # =====================================================
-
-    if hierarchies_to_send:
-
-        send_objects(
-            hierarchies_to_send,
-            packet_type=PT_Hierarchy
-        )
-        _burst_packet_count += 1
-
     # =====================================================
     # SEND COLLECTION PACKETS (Phase 6F — Semantic Event)
     # =====================================================
@@ -2543,6 +2740,43 @@ def check_updates():
             version=LIVE_SYNC_VERSION_V5
         )
         _burst_packet_count += 1
+
+    # =====================================================
+    # SEND MATERIAL CREATE (Phase 1.4.2a — MsgType)
+    # =====================================================
+
+    if material_creates_to_send:
+        transport = get_transport()
+        if transport is not None:
+            sent_count = 0
+            for msg_type, body in material_creates_to_send:
+                if transport.send_msg(msg_type, body):
+                    sent_count += 1
+            if _verbose_logging:
+                print(f"[MATERIAL][MSGTYPE] Sent {sent_count} MATERIAL_CREATE via MsgType")
+            _append_blender_debug_log(
+                f"[MAT][MSGTYPE] MATERIAL_CREATE sent={sent_count}"
+            )
+            # Phase 1.4.2b: record sent state for MATERIAL_UPDATE tracking
+            # (done per-slot during collection; this is a safety net if collection
+            #  tracked names but didn't yet update _last_material_sent_props)
+
+    # =====================================================
+    # SEND MATERIAL UPDATE (Phase 1.4.2b — MsgType)
+    # =====================================================
+
+    if material_updates_to_send:
+        transport = get_transport()
+        if transport is not None:
+            sent_count = 0
+            for msg_type, body in material_updates_to_send:
+                if transport.send_msg(msg_type, body):
+                    sent_count += 1
+            if _verbose_logging:
+                print(f"[MATERIAL][MSGTYPE] Sent {sent_count} MATERIAL_UPDATE via MsgType")
+            _append_blender_debug_log(
+                f"[MAT][MSGTYPE] MATERIAL_UPDATE sent={sent_count}"
+            )
 
     # =====================================================
     # SEND MATERIAL PACKETS (Phase 7B Stage 1C — PT_Material)
@@ -3288,6 +3522,8 @@ def start_sync():
     _last_material_identity.clear()
     _last_material_property_sig.clear()  # Phase 10J.5I
     _last_material_sent_reason.clear()  # Phase 7H
+    _mat_create_sent_names.clear()  # Phase 1.4.2a
+    _last_material_sent_props.clear()  # Phase 1.4.2b
     _last_decision_init_printed.clear()  # Phase 7H
     _last_sidecar_digest.clear()  # Phase 9B.6
     _last_sidecar_info.clear()  # Phase 9B.6
