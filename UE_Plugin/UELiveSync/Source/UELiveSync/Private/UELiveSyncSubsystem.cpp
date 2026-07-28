@@ -1717,14 +1717,6 @@ bool UUELiveSyncSubsystem::Tick(
     GEnableVerboseSyncLogs =
         bEnableVerboseSyncLogs;
 
-    // =====================================================
-    // BUG-VIEWPORT-001: Clear deferred render state check
-    // =====================================================
-    if (PendingRenderVerifyGuid.IsValid())
-    {
-        PendingRenderVerifyGuid = FGuid();
-    }
-
     bEnableTransportVerbose =
         CVarLiveSyncTransportVerbose.GetValueOnGameThread() != 0;
 
@@ -9575,6 +9567,7 @@ HandleVisibility(
             (int32)bHidden, SequenceNumber);
 
         Actor->SetIsTemporarilyHiddenInEditor(bHidden);
+        RequestEditorViewportRefresh();
 
         if (!bSkipSequenceCheck)
         {

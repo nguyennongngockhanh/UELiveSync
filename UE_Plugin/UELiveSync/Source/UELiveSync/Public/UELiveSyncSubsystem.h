@@ -769,6 +769,11 @@ private:
      */
     void ReconstructCompletedMeshes();
 
+    // BUG-VIEWPORT-001: Single entry point for editor viewport
+    // invalidation.  Call after any visual state change (mesh,
+    // transform, visibility) to ensure the viewport redraws.
+    void RequestEditorViewportRefresh();
+
     // =====================================================
     // TIMELINE STATE (Phase 7B)
     // =====================================================
