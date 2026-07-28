@@ -21,39 +21,103 @@ marked ✅ Stable. After that, remaining bugs are feature-specific → Phase 2.
 
 ---
 
-## Bug Lifecycle Status
+## Work Types
 
-Three statuses. Only **Confirmed** and **Closed** bugs count as bugs.
+Four distinct work types. Each has its own ID scheme and lifecycle.
 
-- **Candidate** — hypothesis only, no evidence. Not a bug yet.
-- **Confirmed** — reproduced with evidence. Root cause identified.
-- **Closed** — fixed, regression passed, merged.
+| Type | ID Scheme | Lifecycle |
+|------|-----------|-----------|
+| Investigation | INV-XXXX | Open → Evidence Collected → Closed |
+| Bug | BUG-XXX | Candidate → Confirmed → Closed |
+| Migration | MIG-XXX | Pending → In Progress → Done |
+| Feature | (Phase 2+) | Planned → In Progress → Done |
+
+**Investigations** collect evidence. They may lead to:
+- No bug found
+- A new BUG-XXX
+- A new MIG-XXX
+- An ADR update
+
+**Bugs** have symptoms, evidence, and regression tests.
+**Migration tasks** are code changes without confirmed bugs.
+**Features** are new functionality.
+
+### Investigation Lifecycle
+
+```
+Candidate
+    ↓
+INV-XXXX opened
+    ↓
+Evidence collected
+    ↓
+├── No bug → INV closed
+├── BUG-XXX → fix
+├── MIG-XXX → migrate
+└── ADR update → document
+```
+
+### Migration Definition of Done
+
+A migration item is complete only when:
+
+```
+[ ] Legacy path removed
+[ ] MsgType path verified
+[ ] Backward compatibility evaluated
+[ ] Regression tests passed
+[ ] Documentation updated
+[ ] Tracker updated
+```
 
 ---
 
-## Closed Bugs
+## Phase 1.4 — Foundation Bugs
 
-| ID | Title | Layer | Root Cause |
-|----|-------|-------|------------|
-| BUG-001 | Viewport not refreshed after mesh spawn | Presentation | Missing viewport invalidation |
-| BUG-002 | Viewport not refreshed after transform | Presentation | Missing viewport invalidation |
-| BUG-003 | Actor spawned at world origin | Presentation | SpawnActor drops transform |
-| BUG-004 | Hierarchy attach/detach sync | Gameplay | Cache invalidation after detach |
-| BUG-005 | Visibility sync (wrong protocol) | Protocol | PT_Visibility not dispatched |
-| BUG-006 | Viewport not refreshed after visibility | Presentation | Missing viewport invalidation |
+| ID | Title | Layer | Root Cause | Status |
+|----|-------|-------|------------|--------|
+| BUG-001 | Viewport not refreshed after mesh spawn | Presentation | Missing viewport invalidation | ✅ Closed |
+| BUG-002 | Viewport not refreshed after transform | Presentation | Missing viewport invalidation | ✅ Closed |
+| BUG-003 | Actor spawned at world origin | Presentation | SpawnActor drops transform | ✅ Closed |
+| BUG-004 | Hierarchy attach/detach sync | Gameplay | Cache invalidation after detach | ✅ Closed |
+| BUG-005 | Visibility sync (wrong protocol) | Protocol | PT_Visibility not dispatched | ✅ Closed |
+| BUG-006 | Viewport not refreshed after visibility | Presentation | Missing viewport invalidation | ✅ Closed |
+| BUG-007 | Rename sync (wrong protocol) | Protocol | PT_Rename not dispatched | ✅ Closed |
 
 ---
 
-## Confirmed Bugs
+## Phase 1.5 — Legacy Protocol Elimination
 
-None currently.
+Migration tasks. Not bugs — just code that hasn't been migrated yet.
+Only becomes a BUG if testing reveals actual failure.
+
+| ID | Lane | Legacy PT_* | Target MsgType | Status |
+|----|------|-------------|----------------|--------|
+| MIG-001 | Object Delete | PT_Delete_V5 | OBJECT_DELETE (0x22) | Pending |
+| MIG-002 | Material | PT_Material (0x05) | MATERIAL_CREATE/UPDATE (0x40/0x41) | Pending |
+| MIG-003 | Mesh | PT_Mesh (0x06) | MESH_DATA/CHUNK (0x30-0x34) | Pending |
+| MIG-004 | Camera Create | PT_CameraDef (0x1B) | CAMERA_CREATE (0x50) | Pending |
+| MIG-005 | Camera Set Active | PT_ActiveCamera (0x15) | CAMERASETACTIVE (0x52) | Pending |
+
+**Not in scope** (no MsgType equivalent yet):
+Collection, Keyframe, AssetDef, Snapshot, Playback, Timeline, Sequencer, Capability.
+
+**If a migration item fails during testing:**
+```
+MIG-XXX
+    ↓ Investigate
+    ↓ Evidence
+    ↓ BUG-YYY created
+    ↓ Fix
+    ↓ MIG-XXX marked Done
+```
 
 ---
 
 ## Candidates (Investigation Backlog)
 
-These are hypotheses, not confirmed bugs. Each must be investigated
-with evidence before being promoted to Confirmed.
+Hypotheses, not confirmed bugs. Each must be investigated with
+evidence before being promoted to Confirmed.
 
 ### Presentation Layer
 
@@ -103,15 +167,13 @@ with evidence before being promoted to Confirmed.
 
 ## Promotion Rules
 
-1. **Candidate → Confirmed**: Evidence collected, root cause identified.
-2. **Confirmed → Closed**: Fix applied, regression passed, merged.
-
-A Candidate is not a bug until it is Confirmed. Investigation must
-follow the evidence-first workflow (Bug Lifecycle in AGENTS.md).
+**Bugs**: Candidate → Confirmed (evidence) → Closed (fix + regression)
+**Migration**: Pending → In Progress → Done (or → BUG if failure found)
 
 ---
 
 ## Related
 
 - `64-editor-presentation-contract.md` — Presentation Contract
+- `66-confirmed-root-cause-rename-sync.md` — BUG-007 root cause
 - `00-index.md` — Architecture document index
