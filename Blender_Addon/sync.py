@@ -15,7 +15,7 @@ from uuid import UUID
 
 from .msg_transport import get_transport, MsgType
 from .material_protocol import build_material_create, build_material_update
-from .object_protocol import build_object_create, build_object_reparent, build_object_visibility
+from .object_protocol import build_object_create, build_object_reparent, build_object_visibility, build_object_rename
 
 try:
     from . import network as _network_mod
@@ -27,7 +27,6 @@ try:
         serialize_object,
         serialize_object_v3,
         serialize_delete_v3,
-        serialize_rename,
         serialize_delete,
         is_connected,
         get_last_error,
@@ -48,7 +47,6 @@ try:
         PT_BeginSnapshot,
         PT_EndSnapshot,
         PT_AssetDef,
-        PT_Rename,
         PT_Delete_V5,
         PT_Collection,
         PT_Material,
@@ -181,7 +179,6 @@ except ImportError:
         serialize_object,
         serialize_object_v3,
         serialize_delete_v3,
-        serialize_rename,
         serialize_delete,
         is_connected,
         get_last_error,
@@ -202,7 +199,6 @@ except ImportError:
         PT_BeginSnapshot,
         PT_EndSnapshot,
         PT_AssetDef,
-        PT_Rename,
         PT_Delete_V5,
         PT_Collection,
         PT_Material,
@@ -615,7 +611,7 @@ def _compute_owner_hash(obj):
 
     # NOTE: obj.name is intentionally excluded.
     # Object renames are independent semantic operations handled by
-    # the PT_Rename packet path. Including obj.name would cause
+    # the OBJECT_RENAME MsgType path. Including obj.name would cause
     # _reconcile_guids_on_load to regenerate the GUID on every rename,
     # triggering a delete+create cycle on the UE side and destroying
     # the authoritative rename label.
@@ -1973,7 +1969,7 @@ def check_updates():
         is_first_send_rename = (previous is None)
         if not is_first_send_rename and prev_name is not None and prev_name != current_name:
             renames_to_send.append(
-                serialize_rename(guid_obj, prev_name, current_name)
+                (MsgType.OBJECT_RENAME, build_object_rename(guid_obj, current_name))
             )
             if _verbose_logging:
                 print(f"[RENAME][DIAG] Rename detected without transform change")
@@ -2704,16 +2700,18 @@ def check_updates():
         _burst_packet_count += 1
 
     # =====================================================
-    # SEND RENAME PACKETS (Phase 6 — Semantic Event)
+    # SEND RENAME (Phase 6 — MsgType OBJECT_RENAME)
     # =====================================================
 
     if renames_to_send:
-
-        send_objects(
-            renames_to_send,
-            packet_type=PT_Rename
-        )
-        _burst_packet_count += 1
+        transport = get_transport()
+        if transport:
+            sent_count = 0
+            for msg_type, body in renames_to_send:
+                if transport.send_msg(msg_type, body):
+                    sent_count += 1
+            if sent_count > 0:
+                _burst_packet_count += 1
 
     # =====================================================
     # SEND VISIBILITY (Phase 6 — MsgType OBJECT_VISIBILITY)

@@ -122,6 +122,22 @@ def build_object_delete(
     return bytes(body)
 
 
+def build_object_rename(
+    persistent_id,
+    new_name: str,
+) -> bytes:
+    """OBJECT_RENAME body bytes.
+
+    Wire format (matches C++ BuildObjectRenameView):
+      persistent_id: UUID (16 bytes, FGuid LE)
+      new_name:      utf8_string
+    """
+    body = bytearray()
+    body.extend(_uuid_to_fguid_bytes(persistent_id))
+    body.extend(pack_utf8(new_name))
+    return bytes(body)
+
+
 def build_object_visibility(
     persistent_id,
     visible: bool,
