@@ -92,6 +92,8 @@
       "name": "Suzanne",
       "parent_id": "00000000000000000000000000000000",
       "persistent_id": "00112233445566778899aabbccddeeff",
+      "primitive_type": 1,
+      "sequence_number": 100,
       "transform": [
         0.0,
         0.0,
@@ -115,6 +117,7 @@
     "body": {
       "name": "Suzanne_Renamed",
       "persistent_id": "00112233445566778899aabbccddeeff",
+      "sequence_number": 101,
       "transform": [
         100.5,
         -200.25,

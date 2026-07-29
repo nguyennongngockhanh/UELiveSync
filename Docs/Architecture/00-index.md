@@ -113,6 +113,7 @@
 |-----|-------|
 | [64](64-editor-presentation-contract.md) | Editor Presentation Contract |
 | [67](67-mig-001-object-delete-semantic-migration.md) | MIG-001: Object Delete Semantic Migration |
+| [68](68-mig-002-object-create-update-semantic-migration.md) | MIG-002: Object Create/Update Semantic Migration |
 
 ## Current State & Roadmap
 

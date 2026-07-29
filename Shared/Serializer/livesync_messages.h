@@ -74,9 +74,11 @@ inline std::vector<uint8_t> serialize_body_scene_count(uint32_t object_count) {
 inline std::vector<uint8_t> serialize_body_object_create(
     const std::string& persistent_id, const std::string& name,
     const std::string& parent_id,
+    uint8_t primitive_type,
     float px, float py, float pz,
     float rx, float ry, float rz, float rw,
-    float sx, float sy, float sz)
+    float sx, float sy, float sz,
+    uint32_t sequence_number, double timestamp)
 {
     std::vector<uint8_t> body;
     auto pid = parse_uuid(persistent_id);
@@ -86,7 +88,10 @@ inline std::vector<uint8_t> serialize_body_object_create(
         auto parent = parse_uuid(parent_id);
         pack_uuid(body, parent.data());
     }
+    pack_uint8(body, primitive_type);
     pack_transform3d(body, px, py, pz, rx, ry, rz, rw, sx, sy, sz);
+    pack_uint32(body, sequence_number);
+    pack_float64(body, timestamp);
     return body;
 }
 
@@ -97,7 +102,8 @@ inline std::vector<uint8_t> serialize_body_object_update(
     float rx, float ry, float rz, float rw,
     float sx, float sy, float sz,
     bool has_name, const std::string& name,
-    bool has_visibility, uint8_t visibility)
+    bool has_visibility, uint8_t visibility,
+    uint32_t sequence_number, double timestamp)
 {
     std::vector<uint8_t> body;
     auto pid = parse_uuid(persistent_id);
@@ -111,6 +117,8 @@ inline std::vector<uint8_t> serialize_body_object_update(
     if (has_visibility) {
         pack_uint8(body, visibility);
     }
+    pack_uint32(body, sequence_number);
+    pack_float64(body, timestamp);
     return body;
 }
 

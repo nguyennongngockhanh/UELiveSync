@@ -5,8 +5,8 @@ Each function returns the body bytes for one OBJECT_* message.
 The caller passes these to MsgTransport.send_msg().
 
 Wire format matches C++ deserializer expectations:
-  OBJECT_CREATE: persistent_id(UUID), name(str), [parent_id(UUID)], transform(f32x10)
-  OBJECT_UPDATE: persistent_id(UUID), transform(f32x10), name(str), visibility(u8)
+  OBJECT_CREATE: persistent_id(UUID), name(str), [parent_id(UUID)], primitive_type(u8), transform(f32x10), sequence_number(u32), timestamp(f64)
+  OBJECT_UPDATE: persistent_id(UUID), transform(f32x10), name(str), visibility(u8), sequence_number(u32), timestamp(f64)
   OBJECT_DELETE: persistent_id(UUID), sequence_number(u32), timestamp(f64)
 """
 
@@ -46,14 +46,20 @@ def build_object_create(
     rotation: Tuple[float, float, float, float],
     scale: Tuple[float, float, float],
     parent_id=None,
+    primitive_type: int = 1,
+    sequence_number: int = 0,
+    timestamp: float = 0.0,
 ) -> bytes:
     """OBJECT_CREATE body bytes.
 
     Wire format (matches C++ deserialize_body_object_create):
-      persistent_id: UUID (16 bytes)
-      name: utf8_string
-      parent_id: UUID (16 bytes, optional — sent if present)
-      transform: 10 floats LE (loc.xyz, rot.xyzw, scale.xyz)
+      persistent_id:    UUID (16 bytes)
+      name:             utf8_string
+      parent_id:        UUID (16 bytes, optional — sent if present)
+      primitive_type:   uint8
+      transform:        10 floats LE (loc.xyz, rot.xyzw, scale.xyz)
+      sequence_number:  uint32 LE
+      timestamp:        float64 LE
     """
     body = bytearray()
 
@@ -67,10 +73,19 @@ def build_object_create(
     if parent_id is not None:
         body.extend(_uuid_to_fguid_bytes(parent_id))
 
+    # primitive_type: uint8
+    body.extend(pack_u8(primitive_type))
+
     # transform: 10 floats LE
     body.extend(struct.pack('<3f', *location[:3]))
     body.extend(struct.pack('<4f', *rotation[:4]))
     body.extend(struct.pack('<3f', *scale[:3]))
+
+    # sequence_number: uint32 LE
+    body.extend(pack_u32(sequence_number))
+
+    # timestamp: float64 LE
+    body.extend(pack_f64(timestamp))
 
     return bytes(body)
 
@@ -82,14 +97,18 @@ def build_object_update(
     scale: Tuple[float, float, float],
     name: Optional[str] = None,
     visibility: Optional[int] = None,
+    sequence_number: int = 0,
+    timestamp: float = 0.0,
 ) -> bytes:
     """OBJECT_UPDATE body bytes.
 
     Wire format (matches C++ deserialize_body_object_update):
-      persistent_id: UUID (16 bytes)
-      transform: 10 floats LE
-      name: utf8_string
-      visibility: uint8
+      persistent_id:    UUID (16 bytes)
+      transform:        10 floats LE
+      name:             utf8_string
+      visibility:       uint8
+      sequence_number:  uint32 LE
+      timestamp:        float64 LE
     """
     body = bytearray()
 
@@ -107,19 +126,52 @@ def build_object_update(
     # visibility: uint8
     body.extend(pack_u8(visibility if visibility is not None else 1))
 
+    # sequence_number: uint32 LE
+    body.extend(pack_u32(sequence_number))
+
+    # timestamp: float64 LE
+    body.extend(pack_f64(timestamp))
+
     return bytes(body)
 
 
-# ─── Delete sequence tracker ─────────────────────────────────
-# Per-GUID monotonic counter for stale-rejection on UE side.
-# Cleared on disconnect (via clear_delete_sequences).
+# ─── Per-GUID sequence trackers ──────────────────────────────
+# Monotonic counters per GUID for stale-rejection on UE side.
+# Each message type has its own namespace so counters are
+# independent across create/update/delete.
+# Cleared on disconnect via clear_all_sequences().
 
 _delete_sequences = {}
+_update_sequences = {}
+_create_sequences = {}
+
+
+def clear_all_sequences():
+    """Reset all per-GUID sequence counters (call on disconnect)."""
+    _delete_sequences.clear()
+    _update_sequences.clear()
+    _create_sequences.clear()
 
 
 def clear_delete_sequences():
-    """Reset all per-GUID sequence counters (call on disconnect)."""
+    """Reset per-GUID delete sequence counters (legacy alias)."""
     _delete_sequences.clear()
+
+
+def next_create_sequence(persistent_id) -> int:
+    """Return next monotonic sequence for OBJECT_CREATE for this GUID."""
+    key = str(persistent_id)
+    seq = _create_sequences.get(key, 0) + 1
+    _create_sequences[key] = seq
+    return seq
+
+
+def next_update_sequence(persistent_id) -> int:
+    """Return next monotonic sequence for OBJECT_UPDATE for this GUID."""
+    key = str(persistent_id)
+    seq = _update_sequences.get(key, 0) + 1
+    _update_sequences[key] = seq
+    return seq
 
 
 def build_object_delete(

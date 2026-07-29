@@ -192,11 +192,14 @@ inline void deserialize_body_object_create(UnpackState& s, DeserializedMessage& 
                                             size_t body_end) {
     msg.body["persistent_id"] = s.unpack_uuid();
     msg.body["name"] = s.unpack_utf8_string();
-    // parent_id is optional — if 56+ bytes remain (16 uuid + 40 transform), read it
-    if (body_end - s.offset >= 56) {
+    // parent_id is optional — if 69+ bytes remain (16 uuid + 1 uint8 + 40 transform + 4 uint32 + 8 float64), read it
+    if (body_end - s.offset >= 69) {
         msg.body["parent_id"] = s.unpack_uuid();
     }
+    msg.body["primitive_type"] = s.unpack_uint8();
     msg.body["transform"] = s.unpack_transform3d();
+    msg.body["sequence_number"] = s.unpack_uint32();
+    msg.body["timestamp"] = s.unpack_float64();
 }
 
 inline void deserialize_body_object_update(UnpackState& s, DeserializedMessage& msg) {
@@ -207,6 +210,8 @@ inline void deserialize_body_object_update(UnpackState& s, DeserializedMessage& 
     msg.body["transform"] = s.unpack_transform3d();
     msg.body["name"] = s.unpack_utf8_string();
     msg.body["visibility"] = s.unpack_uint8();
+    msg.body["sequence_number"] = s.unpack_uint32();
+    msg.body["timestamp"] = s.unpack_float64();
 }
 
 inline void deserialize_body_object_delete(UnpackState& s, DeserializedMessage& msg) {

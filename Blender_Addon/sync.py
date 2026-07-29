@@ -15,7 +15,7 @@ from uuid import UUID
 
 from .msg_transport import get_transport, MsgType
 from .material_protocol import build_material_create, build_material_update
-from .object_protocol import build_object_create, build_object_reparent, build_object_visibility, build_object_rename, build_object_delete, clear_delete_sequences
+from .object_protocol import build_object_create, build_object_update, build_object_reparent, build_object_visibility, build_object_rename, build_object_delete, clear_all_sequences, clear_delete_sequences, next_create_sequence, next_update_sequence
 
 try:
     from . import network as _network_mod
@@ -1479,7 +1479,7 @@ def check_updates():
         global _last_material_sent_reason
         global _last_decision_init_printed
         _known_guids.clear()
-        clear_delete_sequences()
+        clear_all_sequences()
         _last_collection_state.clear()
         _collection_anti_loop_guids.clear()
         _last_active_camera_guid = b''  # Phase 7D: resend on next tick
@@ -1626,6 +1626,7 @@ def check_updates():
     asset_defs_to_send = []
     renames_to_send = []
     object_visibility_msgs_to_send = []
+    object_update_msgs_to_send = []
     collection_payloads_to_send = []
     material_payloads_to_send = []
     material_creates_to_send = []
@@ -1836,6 +1837,8 @@ def check_updates():
                     _append_blender_debug_log(
                         f"[SPAWN-TRACE][SEND] guid={guid_obj} name={obj.name} loc=({_spawn_loc[0]:.1f},{_spawn_loc[1]:.1f},{_spawn_loc[2]:.1f})"
                     )
+                    _obj_ts = time.time()
+                    _obj_seq = next_create_sequence(guid_obj)
                     object_create_msgs_to_send.append(
                         (MsgType.OBJECT_CREATE, build_object_create(
                             persistent_id=guid_obj,
@@ -1844,6 +1847,9 @@ def check_updates():
                             rotation=transform["rotation"],
                             scale=transform["scale"],
                             parent_id=parent_guid_obj,
+                            primitive_type=_get_primitive_type(obj),
+                            sequence_number=_obj_seq,
+                            timestamp=_obj_ts,
                         ))
                     )
 
@@ -1851,6 +1857,21 @@ def check_updates():
 
                     children_to_send.append(
                         serialized
+                    )
+                    # OBJECT_UPDATE alongside PT_Transform for non-first-send children
+                    _obj_ts = time.time()
+                    _obj_seq = next_update_sequence(guid_obj)
+                    object_update_msgs_to_send.append(
+                        (MsgType.OBJECT_UPDATE, build_object_update(
+                            persistent_id=guid_obj,
+                            location=transform["location"],
+                            rotation=transform["rotation"],
+                            scale=transform["scale"],
+                            name=obj.name,
+                            visibility=0 if obj.hide_get() else 1,
+                            sequence_number=_obj_seq,
+                            timestamp=_obj_ts,
+                        ))
                     )
 
             else:
@@ -1869,6 +1890,8 @@ def check_updates():
                     _append_blender_debug_log(
                         f"[SPAWN-TRACE][SEND] guid={guid_obj} name={obj.name} loc=({_spawn_loc[0]:.1f},{_spawn_loc[1]:.1f},{_spawn_loc[2]:.1f})"
                     )
+                    _obj_ts = time.time()
+                    _obj_seq = next_create_sequence(guid_obj)
                     object_create_msgs_to_send.append(
                         (MsgType.OBJECT_CREATE, build_object_create(
                             persistent_id=guid_obj,
@@ -1877,6 +1900,9 @@ def check_updates():
                             rotation=transform["rotation"],
                             scale=transform["scale"],
                             parent_id=parent_guid_obj,
+                            primitive_type=_get_primitive_type(obj),
+                            sequence_number=_obj_seq,
+                            timestamp=_obj_ts,
                         ))
                     )
 
@@ -1884,6 +1910,21 @@ def check_updates():
 
                     objects_to_send.append(
                         serialized
+                    )
+                    # OBJECT_UPDATE alongside PT_Transform for non-first-send roots
+                    _obj_ts = time.time()
+                    _obj_seq = next_update_sequence(guid_obj)
+                    object_update_msgs_to_send.append(
+                        (MsgType.OBJECT_UPDATE, build_object_update(
+                            persistent_id=guid_obj,
+                            location=transform["location"],
+                            rotation=transform["rotation"],
+                            scale=transform["scale"],
+                            name=obj.name,
+                            visibility=0 if obj.hide_get() else 1,
+                            sequence_number=_obj_seq,
+                            timestamp=_obj_ts,
+                        ))
                     )
 
             last_sent_transforms[guid] = {
@@ -2669,6 +2710,25 @@ def check_updates():
                 print(f"[OBJECT][MSGTYPE] Sent {sent_count} OBJECT_CREATE via MsgType")
             _append_blender_debug_log(
                 f"[OBJ][MSGTYPE] OBJECT_CREATE sent={sent_count}"
+            )
+
+    # =====================================================
+    # SEND OBJECT UPDATE via MsgType (MIG-002)
+    # Alongside legacy PT_Transform for transform changes
+    # on existing objects.
+    # =====================================================
+
+    if object_update_msgs_to_send:
+        transport = get_transport()
+        if transport is not None:
+            sent_count = 0
+            for msg_type, body in object_update_msgs_to_send:
+                if transport.send_msg(msg_type, body):
+                    sent_count += 1
+            if _verbose_logging:
+                print(f"[OBJECT][MSGTYPE] Sent {sent_count} OBJECT_UPDATE via MsgType")
+            _append_blender_debug_log(
+                f"[OBJ][MSGTYPE] OBJECT_UPDATE sent={sent_count}"
             )
 
     # =====================================================

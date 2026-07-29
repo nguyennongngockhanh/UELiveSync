@@ -183,7 +183,10 @@ VECTORS = [
             "persistent_id": str(UUID_A),
             "name": "Suzanne",
             "parent_id": str(UUID_ZERO),
+            "primitive_type": 1,
             "transform": IDENTITY_TRANSFORM,
+            "sequence_number": 100,
+            "timestamp": 1700000000.5,
         },
     },
     {
@@ -198,6 +201,8 @@ VECTORS = [
             "transform": POSITION_ONLY_TRANSFORM,
             "name": "Suzanne_Renamed",
             "visibility": 1,
+            "sequence_number": 101,
+            "timestamp": 1700000001.0,
         },
     },
     {

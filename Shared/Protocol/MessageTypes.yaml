@@ -269,22 +269,27 @@ messages:
     direction: B→U
     session_required: true
     body:
-      - { name: persistent_id, type: uuid }
-      - { name: name,          type: utf8_string }
-      - { name: parent_id,     type: uuid, optional: true }
-      - { name: transform,     type: transform3d }
-    description: "New object (transform + metadata)."
+      - { name: persistent_id,   type: uuid }
+      - { name: name,            type: utf8_string }
+      - { name: parent_id,       type: uuid, optional: true }
+      - { name: primitive_type,  type: uint8 }
+      - { name: transform,       type: transform3d }
+      - { name: sequence_number, type: uint32 }
+      - { name: timestamp,       type: float64 }
+    description: "New object (transform + metadata). sequence_number enables stale-rejection; timestamp for ordering."
 
   OBJECT_UPDATE:
     code: 0x21
     direction: B→U
     session_required: true
     body:
-      - { name: persistent_id, type: uuid }
-      - { name: transform,     type: transform3d, optional: true }
-      - { name: name,          type: utf8_string, optional: true }
-      - { name: visibility,    type: uint8, optional: true }
-    description: "Property changes (delta)."
+      - { name: persistent_id,   type: uuid }
+      - { name: transform,       type: transform3d, optional: true }
+      - { name: name,            type: utf8_string, optional: true }
+      - { name: visibility,      type: uint8, optional: true }
+      - { name: sequence_number, type: uint32 }
+      - { name: timestamp,       type: float64 }
+    description: "Property changes (delta). sequence_number enables stale-rejection; timestamp for ordering."
 
   OBJECT_DELETE:
     code: 0x22

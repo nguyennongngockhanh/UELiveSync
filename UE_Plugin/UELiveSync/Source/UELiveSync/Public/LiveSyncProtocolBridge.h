@@ -471,7 +471,10 @@ inline ObjectCreateView BuildObjectCreateView(
     auto* pid = TryGetField<std::array<uint8_t, 16>>(msg, "parent_id");
     v.HasParentId = (pid != nullptr);
     v.ParentId = pid ? *pid : std::array<uint8_t, 16>{};
+    v.PrimitiveType = GetField<uint8_t>(msg, "primitive_type");
     v.Transform = GetField<std::vector<float>>(msg, "transform");
+    v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
+    v.Timestamp = GetField<double>(msg, "timestamp");
     return v;
 }
 
@@ -489,6 +492,8 @@ inline ObjectUpdateView BuildObjectUpdateView(
     auto* vis = TryGetField<uint8_t>(msg, "visibility");
     v.HasVisibility = (vis != nullptr);
     v.Visibility = vis ? *vis : 0;
+    v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
+    v.Timestamp = GetField<double>(msg, "timestamp");
     return v;
 }
 
@@ -541,8 +546,11 @@ inline void LogObjectCreate(const ObjectCreateView& v)
     if (v.HasParentId)
         FormatUuid(v.ParentId, parent_str, sizeof(parent_str));
     UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][OBJECT_CREATE] id=%hs name=%hs parent=%hs"),
-        id_str, v.Name.c_str(), parent_str);
+        TEXT("[BRIDGE][OBJECT_CREATE] id=%hs name=%hs parent=%hs "
+             "primitive_type=%u seq=%u ts=%.3f"),
+        id_str, v.Name.c_str(), parent_str,
+        static_cast<unsigned>(v.PrimitiveType),
+        v.SequenceNumber, v.Timestamp);
 }
 
 inline void LogObjectUpdate(const ObjectUpdateView& v)
@@ -550,8 +558,10 @@ inline void LogObjectUpdate(const ObjectUpdateView& v)
     char id_str[37];
     FormatUuid(v.PersistentId, id_str, sizeof(id_str));
     UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][OBJECT_UPDATE] id=%hs has_transform=%d"),
-        id_str, static_cast<int>(v.HasTransform));
+        TEXT("[BRIDGE][OBJECT_UPDATE] id=%hs has_transform=%d "
+             "seq=%u ts=%.3f"),
+        id_str, static_cast<int>(v.HasTransform),
+        v.SequenceNumber, v.Timestamp);
 }
 
 inline void LogObjectDelete(const ObjectDeleteView& v)

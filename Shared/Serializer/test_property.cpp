@@ -305,13 +305,16 @@ static void test_property_object_create() {
         std::string pid = rand_uuid_str();
         std::string name = rand_string();
         std::string parent = rand_bool() ? rand_uuid_str() : "";
+        uint8_t prim = rand_u8();
         float px = rand_float(), py = rand_float(), pz = rand_float();
         float rx = rand_float(), ry = rand_float(), rz = rand_float(), rw = rand_float();
         float sx = rand_float(), sy = rand_float(), sz = rand_float();
         uint32_t seq = rand_u32();
+        double ts = 1700000000.0 + (i * 0.1);
 
-        auto body = serialize_body_object_create(pid, name, parent,
-            px, py, pz, rx, ry, rz, rw, sx, sy, sz);
+        auto body = serialize_body_object_create(pid, name, parent, prim,
+            px, py, pz, rx, ry, rz, rw, sx, sy, sz,
+            seq, ts);
         auto frame = PackFrame(MsgType::OBJECT_CREATE, 0, seq, DEFAULT_SID, body);
         auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -333,6 +336,9 @@ static void test_property_object_create() {
             check(uuid_eq(dpar, opar), "object_create parent");
         }
 
+        // primitive_type
+        check(get_field<uint8_t>(d, "primitive_type") == prim, "object_create primitive_type");
+
         // transform
         auto tr = get_field<std::vector<float>>(d, "transform");
         check(tr.size() == 10, "object_create transform size");
@@ -348,6 +354,10 @@ static void test_property_object_create() {
         check(floats_eq(tr[7], sx), "object_create sx");
         check(floats_eq(tr[8], sy), "object_create sy");
         check(floats_eq(tr[9], sz), "object_create sz");
+
+        // sequence_number, timestamp
+        check(get_field<uint32_t>(d, "sequence_number") == seq, "object_create seq");
+        check(get_field<double>(d, "timestamp") == ts, "object_create ts");
     }
 }
 
@@ -360,10 +370,12 @@ static void test_property_object_update() {
         std::string name = rand_string();
         uint8_t vis = rand_u8();
         uint32_t seq = rand_u32();
+        double ts = 1700000000.0 + (i * 0.1);
 
         auto body = serialize_body_object_update(pid, true,
             px, py, pz, rx, ry, rz, rw, sx, sy, sz,
-            true, name, true, vis);
+            true, name, true, vis,
+            seq, ts);
         auto frame = PackFrame(MsgType::OBJECT_UPDATE, 0, seq, DEFAULT_SID, body);
         auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -381,6 +393,8 @@ static void test_property_object_update() {
 
         check(get_field<std::string>(d, "name") == name, "object_update name");
         check(get_field<uint8_t>(d, "visibility") == vis, "object_update vis");
+        check(get_field<uint32_t>(d, "sequence_number") == seq, "object_update seq");
+        check(get_field<double>(d, "timestamp") == ts, "object_update ts");
     }
 }
 

@@ -7752,7 +7752,8 @@ void UUELiveSyncSubsystem::OnObjectCreate(
         FMemory::Memcpy(&ParentGuid, View.ParentId.data(), 16);
     }
 
-    HandleCreateObject(Guid, Location, Rotation, Scale, ParentGuid);
+    HandleCreateObject(Guid, Location, Rotation, Scale, ParentGuid,
+        View.PrimitiveType, /*bIsLocalTransform=*/false);
 }
 
 // =========================================================
@@ -7919,6 +7920,21 @@ void UUELiveSyncSubsystem::OnObjectUpdate(
     FGuid Guid;
     FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
 
+    // Stale-rejection: drop updates with non-monotonic sequence
+    static TMap<FGuid, uint32> GUpdateSequences;
+    const uint32 IncomingSeq = View.SequenceNumber;
+    if (uint32* LastSeq = GUpdateSequences.Find(Guid))
+    {
+        if (IncomingSeq <= *LastSeq)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[BRIDGE][OBJECT_UPDATE] stale rejected id=%s seq=%u <= %u"),
+                *Guid.ToString(EGuidFormats::Digits), IncomingSeq, *LastSeq);
+            return;
+        }
+    }
+    GUpdateSequences.Add(Guid, IncomingSeq);
+
     // Delta update — only apply fields present in the view.
     if (View.HasTransform && View.Transform.size() >= 10)
     {
@@ -7958,8 +7974,9 @@ void UUELiveSyncSubsystem::OnObjectUpdate(
     }
 
     UE_LOG(LogLiveSync, Log,
-        TEXT("[BRIDGE][OBJECT_UPDATE] id=%s transform=%d vis=%d name=%d"),
+        TEXT("[BRIDGE][OBJECT_UPDATE] id=%s seq=%u ts=%.3f transform=%d vis=%d name=%d"),
         *Guid.ToString(EGuidFormats::Digits),
+        IncomingSeq, View.Timestamp,
         View.HasTransform ? 1 : 0,
         View.HasVisibility ? 1 : 0,
         View.HasName ? 1 : 0);

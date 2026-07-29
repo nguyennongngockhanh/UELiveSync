@@ -108,6 +108,8 @@
       "name": "Suzanne",
       "parent_id": "00000000000000000000000000000000",
       "persistent_id": "00112233445566778899aabbccddeeff",
+      "primitive_type": 1,
+      "sequence_number": 100,
       "transform": [
         0.0,
         0.0,
@@ -121,11 +123,11 @@
         1.0
       ]
     },
-    "cpp_size": 99,
+    "cpp_size": 112,
     "flags": 0,
     "msg_type": 32,
     "name": "OBJECT_CREATE",
-    "original_size": 99,
+    "original_size": 112,
     "sequence_id": 4,
     "session_id": 16045690984503098046
   },
@@ -133,6 +135,7 @@
     "body": {
       "name": "Suzanne_Renamed",
       "persistent_id": "00112233445566778899aabbccddeeff",
+      "sequence_number": 101,
       "transform": [
         100.5,
         -200.25,
@@ -147,11 +150,11 @@
       ],
       "visibility": 1
     },
-    "cpp_size": 92,
+    "cpp_size": 104,
     "flags": 0,
     "msg_type": 33,
     "name": "OBJECT_UPDATE",
-    "original_size": 92,
+    "original_size": 104,
     "sequence_id": 5,
     "session_id": 16045690984503098046
   },

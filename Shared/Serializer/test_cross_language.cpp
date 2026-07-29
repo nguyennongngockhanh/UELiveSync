@@ -199,21 +199,28 @@ static std::vector<uint8_t> serialize_from_manifest(const json& vec) {
             std::string name = fields["name"].get<std::string>();
             std::string parent = fields.contains("parent_id") ?
                 fields["parent_id"].get<std::string>() : "";
+            uint8_t prim = fields["primitive_type"].get<uint8_t>();
             auto tr = manifest_transform_to_vec(fields["transform"]);
-            body = serialize_body_object_create(pid_str, name, parent,
+            uint32_t obj_seq = fields["sequence_number"].get<uint32_t>();
+            double obj_ts = fields["timestamp"].get<double>();
+            body = serialize_body_object_create(pid_str, name, parent, prim,
                 tr[0], tr[1], tr[2], tr[3], tr[4], tr[5], tr[6],
-                tr[7], tr[8], tr[9]);
+                tr[7], tr[8], tr[9],
+                obj_seq, obj_ts);
             break;
         }
         case MsgType::OBJECT_UPDATE: {
             auto tr = manifest_transform_to_vec(fields["transform"]);
+            uint32_t obj_seq = fields["sequence_number"].get<uint32_t>();
+            double obj_ts = fields["timestamp"].get<double>();
             body = serialize_body_object_update(
                 fields["persistent_id"],
                 true,
                 tr[0], tr[1], tr[2], tr[3], tr[4], tr[5], tr[6],
                 tr[7], tr[8], tr[9],
                 true, fields["name"].get<std::string>(),
-                true, fields["visibility"]);
+                true, fields["visibility"],
+                obj_seq, obj_ts);
             break;
         }
         case MsgType::OBJECT_DELETE:

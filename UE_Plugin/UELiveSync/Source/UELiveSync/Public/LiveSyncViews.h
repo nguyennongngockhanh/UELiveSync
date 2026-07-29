@@ -63,7 +63,10 @@ struct ObjectCreateView
     std::string Name;
     bool HasParentId;
     std::array<uint8_t, 16> ParentId;
+    uint8_t PrimitiveType;
     std::vector<float> Transform;
+    uint32_t SequenceNumber;
+    double Timestamp;
 };
 
 struct ObjectUpdateView
@@ -75,6 +78,8 @@ struct ObjectUpdateView
     std::string Name;
     bool HasVisibility;
     uint8_t Visibility;
+    uint32_t SequenceNumber;
+    double Timestamp;
 };
 
 struct ObjectDeleteView

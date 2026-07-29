@@ -59,6 +59,8 @@ Shared/Serializer/test_property
 Shared/Serializer/test_property_debug
 Shared/Serializer/test_roundtrip
 Shared/Serializer/test_serializer
+Shared/Serializer/test_material_db
+Shared/Serializer/test_material_registry
 
 # Local Opencode runtime/cache
 .opencode/node_modules/

@@ -62,6 +62,16 @@ Completed Migrations:
   - Reference pattern for all future MIG items
   - Test vectors regenerated (34→46 bytes)
   - All tests updated
+- MIG-002: Object Create/Update semantic migration (COMPLETE)
+  - Extended OBJECT_CREATE/OBJECT_UPDATE bodies with primitive_type, sequence_number, timestamp
+  - Primitive type dispatch: OnObjectCreate passes PrimitiveType to HandleCreateObject
+  - Stale-rejection for OBJECT_UPDATE via GUpdateSequences (per-GUID sequence tracking)
+  - Dual-emission: OBJECT_UPDATE dispatched alongside PT_Transform for transform changes
+  - 10 test suites PASS (C++ 8/8 + Python 51 + cross-language 93)
+  - Phase 5 runtime verification: 6/6 tests PASS (T1–T6a)
+  - Known limitation: Blender _get_primitive_type() only distinguishes Camera vs non-camera (ENH-PrimitiveTypeDetection)
+  - ADR-68: Docs/Architecture/68-mig-002-object-create-update-semantic-migration.md
+  - Template v3 repeatability confirmed
 
 Key architectural pattern:
 - Semantic event pipeline: Blender detects → Serialize → Transport → Bridge → Gameplay → Presentation → Regression
@@ -69,7 +79,7 @@ Key architectural pattern:
 - "Make it maintainable" — new features should be hard to create bugs for
 
 Remaining MIG items:
-- MIG-002: Object Create/Update (pending)
+- MIG-003: Camera operations (pending)
 - MIG-003: Camera operations (pending)
 - MIG-004: Material operations (pending)
 - MIG-005: Mesh operations (pending)
@@ -236,7 +246,7 @@ Rules:
 - Do not search for UnrealBuildTool.
 - Do not search for Engine paths.
 - Use only:
-  /home/nguyennongngockhanh/Unreal/UE5.7.4/Engine/Build/BatchFiles/Linux/Build.sh
+  /home/nguyennongngockhanh/Unreal/UE5.8-debug/Engine/Build/BatchFiles/Linux/Build.sh
 - Sync plugin only with the fixed SRC/DST paths in the playbook.
 - Do not launch UE unless explicitly requested.
 
@@ -1076,6 +1086,22 @@ All investigation must stay inside:
 If engine instrumentation is absolutely necessary, stop immediately and ask for approval. Do not proceed automatically.
 
 These are hard constraints, not preferences. Any violation is a blocking error.
+
+## Development Engine Invariant
+
+Development, build, and launch must all use the same engine installation.
+
+| Role | Engine path |
+|------|-------------|
+| Development source | `UE5.8-debug` |
+| Build (`Build.sh`) | `UE5.8-debug` |
+| Launch (`UnrealEditor`) | `UE5.8-debug` |
+
+Do NOT infer the engine from `BuildSettingsVersion`, `.uproject EngineAssociation`, or any other project metadata. The authoritative engine for this project is fixed at `/home/nguyennongngockhanh/Unreal/UE5.8-debug/`.
+
+Never switch engine bindings during an active investigation. If the engine must change (e.g., for a different UE version test), it must be stated as an explicit experiment variable with the same investigation rigor as any code change.
+
+Motivated by: INV-2026-00Y — OpenCode auto-selected UE5.8 clean instead of UE5.8-debug during the instrumentation build, contaminating the investigation environment and invalidating all subsequent evidence.
 
 ## Engine Baseline Protection
 

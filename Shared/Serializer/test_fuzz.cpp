@@ -682,10 +682,11 @@ static void test_extra_bytes_after_frame() {
 
 static void test_object_create_no_parent() {
     printf("  test_object_create_no_parent... ");
-    // OBJECT_CREATE: uuid(16) + name(2+len) + parent_id(16 optional) + transform(40)
-    // Without parent_id: uuid(16) + name(2+4=6) + transform(40) = 62 bytes body
+    // OBJECT_CREATE: uuid(16) + name(2+len) + parent_id(16 optional)
+    //   + primitive_type(1) + transform(40) + seq(4) + ts(8)
+    // Without parent_id: 16 + 6 + 1 + 40 + 4 + 8 = 75 bytes body
     std::vector<uint8_t> data;
-    uint32_t len = 1 + 4 + 8 + 16 + 6 + 40;
+    uint32_t len = 1 + 1 + 4 + 8 + 16 + 6 + 1 + 40 + 4 + 8;
     for (int i = 0; i < 4; i++) data.push_back((len >> (i*8)) & 0xFF);
     data.push_back(static_cast<uint8_t>(MsgType::OBJECT_CREATE));
     data.push_back(0x00);
@@ -698,8 +699,14 @@ static void test_object_create_no_parent() {
     uint16_t nl = 4;
     for (int i = 0; i < 2; i++) data.push_back((nl >> (i*8)) & 0xFF);
     for (int i = 0; i < 4; i++) data.push_back('x');
-    // transform only (40 bytes) — no parent_id (body_end - offset < 56)
+    // primitive_type (1 byte)
+    data.push_back(rand_u8());
+    // transform (40 bytes)
     for (int i = 0; i < 40; i++) data.push_back(rand_u8());
+    // sequence_number (4 bytes)
+    for (int i = 0; i < 4; i++) data.push_back(rand_u8());
+    // timestamp (8 bytes)
+    for (int i = 0; i < 8; i++) data.push_back(rand_u8());
     auto msg = expect_ok(data, "obj_create_no_parent");
     if (msg && msg->body.find("parent_id") != msg->body.end()) {
         fprintf(stderr, "  WARNING: parent_id should not be present\n");
