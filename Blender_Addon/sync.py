@@ -15,7 +15,7 @@ from uuid import UUID
 
 from .msg_transport import get_transport, MsgType
 from .material_protocol import build_material_create, build_material_update
-from .object_protocol import build_object_create, build_object_reparent, build_object_visibility, build_object_rename
+from .object_protocol import build_object_create, build_object_reparent, build_object_visibility, build_object_rename, build_object_delete, clear_delete_sequences
 
 try:
     from . import network as _network_mod
@@ -27,7 +27,6 @@ try:
         serialize_object,
         serialize_object_v3,
         serialize_delete_v3,
-        serialize_delete,
         is_connected,
         get_last_error,
         get_last_error_severity,
@@ -179,7 +178,6 @@ except ImportError:
         serialize_object,
         serialize_object_v3,
         serialize_delete_v3,
-        serialize_delete,
         is_connected,
         get_last_error,
         get_last_error_severity,
@@ -1481,6 +1479,7 @@ def check_updates():
         global _last_material_sent_reason
         global _last_decision_init_printed
         _known_guids.clear()
+        clear_delete_sequences()
         _last_collection_state.clear()
         _collection_anti_loop_guids.clear()
         _last_active_camera_guid = b''  # Phase 7D: resend on next tick
@@ -1623,7 +1622,7 @@ def check_updates():
     children_to_send = []
     children_create = []
     deletes_to_send = []
-    deletes_v5_to_send = []
+    delete_msgs_to_send = []
     asset_defs_to_send = []
     renames_to_send = []
     object_visibility_msgs_to_send = []
@@ -1684,7 +1683,7 @@ def check_updates():
     # disappeared from tracked_objects since last tick.
     # These are Blender-deleted objects (removed by
     # scan_scene or direct scene manipulation).
-    # Emit V5 delete semantic events for each.
+    # Emit OBJECT_DELETE via MsgType for each.
     #
     # Does NOT emit on:
     #   - startup (_known_guids is empty)
@@ -1709,8 +1708,8 @@ def check_updates():
                     )
                 continue
 
-            deletes_v5_to_send.append(
-                serialize_delete(guid_obj)
+            delete_msgs_to_send.append(
+                (MsgType.OBJECT_DELETE, build_object_delete(guid_obj))
             )
 
             # Cleanup per-GUID state for deleted object
@@ -1755,9 +1754,9 @@ def check_updates():
                 serialize_delete_v3(guid_obj)
             )
 
-            # Phase 6E: also emit V5 delete for Phase 6E UE handler
-            deletes_v5_to_send.append(
-                serialize_delete(guid_obj)
+            # Phase 6E: also emit OBJECT_DELETE via MsgType
+            delete_msgs_to_send.append(
+                (MsgType.OBJECT_DELETE, build_object_delete(guid_obj))
             )
 
             continue
@@ -2597,23 +2596,28 @@ def check_updates():
                                 )
 
     # =====================================================
-    # SEND DELETE PACKETS (Phase 6E V5 — identity-destruction)
+    # SEND OBJECT DELETE via MsgType (MIG-001)
+    # Full semantic: sequence_number + timestamp for
+    # stale-rejection and tombstone on UE side.
     # =====================================================
 
-    if deletes_v5_to_send:
-
-        if _verbose_logging:
-            print(f"[DELETE][SEND] Sending {len(deletes_v5_to_send)} V5 delete(s)")
-
-        send_objects(
-            deletes_v5_to_send,
-            packet_type=PT_Delete_V5,
-            version=LIVE_SYNC_VERSION_V5
-        )
-        _burst_packet_count += 1
+    if delete_msgs_to_send:
+        transport = get_transport()
+        if transport is not None:
+            sent_count = 0
+            for msg_type, body in delete_msgs_to_send:
+                if transport.send_msg(msg_type, body):
+                    sent_count += 1
+            if _verbose_logging:
+                print(f"[DELETE][MSGTYPE] Sent {sent_count} OBJECT_DELETE via MsgType")
+            _append_blender_debug_log(
+                f"[DELETE][MSGTYPE] OBJECT_DELETE sent={sent_count}"
+            )
+            _burst_packet_count += 1
 
     # =====================================================
-    # SEND DELETE PACKETS (V3 legacy)
+    # SEND DELETE PACKETS (V3 legacy — unreachable, kept
+    # for backward compat until fully removed in Phase 1.5)
     # =====================================================
 
     if deletes_to_send:

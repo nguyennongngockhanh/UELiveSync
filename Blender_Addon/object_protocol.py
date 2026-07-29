@@ -7,14 +7,15 @@ The caller passes these to MsgTransport.send_msg().
 Wire format matches C++ deserializer expectations:
   OBJECT_CREATE: persistent_id(UUID), name(str), [parent_id(UUID)], transform(f32x10)
   OBJECT_UPDATE: persistent_id(UUID), transform(f32x10), name(str), visibility(u8)
-  OBJECT_DELETE: persistent_id(UUID)
+  OBJECT_DELETE: persistent_id(UUID), sequence_number(u32), timestamp(f64)
 """
 
 import struct
+import time
 from typing import Optional, Tuple
 
 from .msg_transport import (
-    MsgType, pack_u8, pack_utf8, pack_uuid,
+    MsgType, pack_u8, pack_u32, pack_f64, pack_utf8, pack_uuid,
 )
 
 
@@ -109,16 +110,42 @@ def build_object_update(
     return bytes(body)
 
 
+# ─── Delete sequence tracker ─────────────────────────────────
+# Per-GUID monotonic counter for stale-rejection on UE side.
+# Cleared on disconnect (via clear_delete_sequences).
+
+_delete_sequences = {}
+
+
+def clear_delete_sequences():
+    """Reset all per-GUID sequence counters (call on disconnect)."""
+    _delete_sequences.clear()
+
+
 def build_object_delete(
     persistent_id,
 ) -> bytes:
     """OBJECT_DELETE body bytes.
 
     Wire format (matches C++ deserialize_body_object_delete):
-      persistent_id: UUID (16 bytes)
+      persistent_id:     UUID (16 bytes)
+      sequence_number:   uint32 LE — monotonic per-GUID counter
+      timestamp:         float64 LE — seconds since epoch
+
+    Total body: 28 bytes.
     """
     body = bytearray()
     body.extend(_uuid_to_fguid_bytes(persistent_id))
+
+    # Monotonic sequence per GUID (replay dedup / stale rejection)
+    guid_key = str(persistent_id)
+    seq = _delete_sequences.get(guid_key, 0) + 1
+    _delete_sequences[guid_key] = seq
+    body.extend(pack_u32(seq))
+
+    # Timestamp (float64, seconds since epoch)
+    body.extend(pack_f64(time.time()))
+
     return bytes(body)
 
 

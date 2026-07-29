@@ -88,6 +88,13 @@ def unpack_float32(data: bytes, offset: int) -> tuple[float, int]:
     return struct.unpack_from("<f", data, offset)[0], offset + 4
 
 
+def unpack_float64(data: bytes, offset: int) -> tuple[float, int]:
+    """IEEE 754 float64 LE (double)."""
+    if offset + 8 > len(data):
+        raise DeserializeError("Truncated float64")
+    return struct.unpack_from("<d", data, offset)[0], offset + 8
+
+
 def unpack_uuid(data: bytes, offset: int) -> tuple[uuid_mod.UUID, int]:
     """RFC 4122 network byte order. 16 raw bytes."""
     if offset + UUID_SIZE > len(data):
@@ -162,6 +169,8 @@ def unpack_field(field_type: str, data: bytes, offset: int) -> tuple[Any, int]:
         return unpack_uint64(data, offset)
     elif field_type == "float32":
         return unpack_float32(data, offset)
+    elif field_type == "float64":
+        return unpack_float64(data, offset)
     elif field_type == "uuid":
         return unpack_uuid(data, offset)
     elif field_type == "utf8_string":

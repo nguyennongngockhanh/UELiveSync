@@ -86,8 +86,13 @@ static int verify_fields(const json& expected, const DeserializedMessage& msg,
                     std::cerr << "    MISMATCH " << field << ": expected " << exp << " got " << *p << "\n";
                     errors++;
                 }
+            } else if (auto* p = std::get_if<double>(&v)) {
+                if (!approx_equal(static_cast<float>(*p), exp)) {
+                    std::cerr << "    MISMATCH " << field << ": expected " << exp << " got " << *p << "\n";
+                    errors++;
+                }
             } else {
-                std::cerr << "    TYPE MISMATCH " << field << ": expected float\n";
+                std::cerr << "    TYPE MISMATCH " << field << ": expected float/double\n";
                 errors++;
             }
         } else if (val.is_string()) {

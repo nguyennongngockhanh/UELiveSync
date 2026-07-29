@@ -15,7 +15,7 @@
 | 1 | PT_Transform | 0x01 | OBJECT_UPDATE | 0x21 | Partial 1:1 | MAPPED (parent separated, primitive type lost) |
 | 2 | PT_Reserved_02 | 0x02 | -- | -- | None | DEAD CODE |
 | 3 | PT_Create | 0x03 | OBJECT_CREATE | 0x20 | 1:1 | MAPPED (name added, primitive type lost) |
-| 4 | PT_Delete | 0x04 | OBJECT_DELETE | 0x22 | 2:1 (with V5) | MAPPED (tombstone becomes app-level) |
+| 4 | PT_Delete | 0x04 | OBJECT_DELETE | 0x22 | 2:1 (with V5) | MAPPED (full Phase 6E semantic: seq+ts+tombstone) |
 | 5 | PT_Material | 0x05 | MATERIAL_CREATE/UPDATE/ASSIGN | 0x40/41/42 | 1:3 | MAPPED (cleaner separation) |
 | 6 | PT_Mesh | 0x06 | MESH_DATA/DELTA/START/CHUNK/END | 0x30-34 | 1:5 | MAPPED (chunked transfer new) |
 | 7 | PT_Heartbeat | 0x07 | HEARTBEAT + HEARTBEAT_ACK | 0x00/01 | 1:2 | MAPPED (ack added) |
@@ -25,7 +25,7 @@
 | 11 | PT_Visibility | 0x0B | OBJECT_VISIBILITY | 0x25 | 1:1 | MAPPED |
 | 12 | PT_Rename | 0x0C | OBJECT_RENAME | 0x23 | 1:1 | MAPPED |
 | 13 | PT_Hierarchy | 0x0D | OBJECT_REPARENT | 0x24 | 1:1 | MAPPED |
-| 14 | PT_Delete_V5 | 0x0E | OBJECT_DELETE | 0x22 | 2:1 (with V3) | MAPPED |
+| 14 | PT_Delete_V5 | 0x0E | OBJECT_DELETE | 0x22 | 2:1 (with V3) | MAPPED (full Phase 6E semantic: seq+ts+tombstone) |
 | 15 | PT_Collection | 0x0F | -- | -- | NONE | **MISSING** |
 | 16 | PT_CapabilityAnnounce | 0x11 | HELLO | 0x10 | Conceptual | MAPPED |
 | 17 | PT_CapabilityResponse | 0x12 | HELLO_ACK | 0x11 | Conceptual | MAPPED |

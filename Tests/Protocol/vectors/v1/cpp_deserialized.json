@@ -137,7 +137,8 @@
   },
   {
     "body": {
-      "persistent_id": "00112233445566778899aabbccddeeff"
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "sequence_number": 42
     },
     "flags": 0,
     "msg_type": 34,

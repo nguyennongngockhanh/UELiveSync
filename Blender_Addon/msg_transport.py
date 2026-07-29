@@ -126,6 +126,10 @@ def pack_f32(v: float) -> bytes:
     return struct.pack('<f', v)
 
 
+def pack_f64(v: float) -> bytes:
+    return struct.pack('<d', v)
+
+
 def pack_uuid(raw_16: bytes) -> bytes:
     assert len(raw_16) == 16
     return raw_16

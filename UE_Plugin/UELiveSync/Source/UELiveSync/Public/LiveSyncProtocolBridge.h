@@ -497,6 +497,8 @@ inline ObjectDeleteView BuildObjectDeleteView(
 {
     ObjectDeleteView v;
     v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
+    v.Timestamp = GetField<double>(msg, "timestamp");
     return v;
 }
 

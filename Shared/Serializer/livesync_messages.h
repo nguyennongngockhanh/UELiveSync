@@ -114,10 +114,14 @@ inline std::vector<uint8_t> serialize_body_object_update(
     return body;
 }
 
-inline std::vector<uint8_t> serialize_body_object_delete(const std::string& persistent_id) {
+inline std::vector<uint8_t> serialize_body_object_delete(
+    const std::string& persistent_id, uint32_t sequence_number, double timestamp)
+{
     std::vector<uint8_t> body;
     auto pid = parse_uuid(persistent_id);
     pack_uuid(body, pid.data());
+    pack_uint32(body, sequence_number);
+    pack_float64(body, timestamp);
     return body;
 }
 

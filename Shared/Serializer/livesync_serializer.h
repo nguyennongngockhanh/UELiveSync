@@ -120,6 +120,12 @@ inline void pack_float32(std::vector<uint8_t>& out, float v) {
     pack_uint32(out, bits);
 }
 
+inline void pack_float64(std::vector<uint8_t>& out, double v) {
+    uint64_t bits;
+    std::memcpy(&bits, &v, sizeof(bits));
+    pack_uint64(out, bits);
+}
+
 // ─── Composite Packers ──────────────────────────────────────────
 
 inline void pack_uuid(std::vector<uint8_t>& out, const uint8_t bytes[16]) {

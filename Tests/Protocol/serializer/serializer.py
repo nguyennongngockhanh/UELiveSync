@@ -63,6 +63,10 @@ def pack_float32(v: float) -> bytes:
     return struct.pack("<f", canonical)
 
 
+def pack_float64(v: float) -> bytes:
+    return struct.pack("<d", v)
+
+
 def pack_uuid(v: str | uuid_mod.UUID) -> bytes:
     """
     RFC 4122 network byte order. 16 raw bytes, no field-wise conversion.
@@ -125,6 +129,8 @@ def pack_field(field_type: str, value: Any) -> bytes:
         return pack_uint64(value)
     elif field_type == "float32":
         return pack_float32(value)
+    elif field_type == "float64":
+        return pack_float64(value)
     elif field_type == "uuid":
         return pack_uuid(value)
     elif field_type == "utf8_string":

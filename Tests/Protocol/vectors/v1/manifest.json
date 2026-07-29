@@ -3,9 +3,9 @@
   "protocol_version": 1,
   "protocol_revision": 1,
   "generator_version": "1.0.0",
-  "git_commit": "9e39adda7843",
-  "protocol_sha256": "33707068e5630504e5bc12619773cc13dc9b86e13a6c167ab55003cde3e574a8",
-  "generated_at": "2026-07-22T09:25:21.949169+00:00",
+  "git_commit": "c64900ced238",
+  "protocol_sha256": "842629fbee1594e9d7b973edb70214e246a16f81f99a209aa559ee2cd7b7745b",
+  "generated_at": "2026-07-28T03:53:34.968726+00:00",
   "vector_count": 31,
   "vectors": [
     {
@@ -183,9 +183,11 @@
       "sequence_id": 6,
       "session_id": 16045690984503098046,
       "fields": {
-        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff"
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "sequence_number": 42,
+        "timestamp": 1700000000.5
       },
-      "size": 34
+      "size": 46
     },
     {
       "name": "OBJECT_RENAME",

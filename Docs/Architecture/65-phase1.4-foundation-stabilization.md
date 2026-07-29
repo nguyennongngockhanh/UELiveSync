@@ -93,7 +93,7 @@ Only becomes a BUG if testing reveals actual failure.
 
 | ID | Lane | Legacy PT_* | Target MsgType | Status |
 |----|------|-------------|----------------|--------|
-| MIG-001 | Object Delete | PT_Delete_V5 | OBJECT_DELETE (0x22) | Pending |
+| MIG-001 | Object Delete | PT_Delete_V5 | OBJECT_DELETE (0x22) | ✅ Done |
 | MIG-002 | Material | PT_Material (0x05) | MATERIAL_CREATE/UPDATE (0x40/0x41) | Pending |
 | MIG-003 | Mesh | PT_Mesh (0x06) | MESH_DATA/CHUNK (0x30-0x34) | Pending |
 | MIG-004 | Camera Create | PT_CameraDef (0x1B) | CAMERA_CREATE (0x50) | Pending |

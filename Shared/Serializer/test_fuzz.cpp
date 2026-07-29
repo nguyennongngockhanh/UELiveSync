@@ -284,7 +284,8 @@ static void test_truncated_uuid() {
 
 static void test_uuid_in_body_short() {
     printf("  test_uuid_in_body_short... ");
-    // OBJECT_DELETE needs a UUID (16 bytes), provide less
+    // OBJECT_DELETE needs UUID(16) + seq(4) + ts(8) = 28 bytes body
+    // Test: provide less than 16 bytes for UUID
     for (int give = 0; give < 16; give++) {
         std::vector<uint8_t> data;
         uint32_t len = 1 + 4 + 8 + give; // msg_type + seq + session + partial uuid
@@ -297,6 +298,44 @@ static void test_uuid_in_body_short() {
         for (int i = 0; i < 8; i++) data.push_back((sid >> (i*8)) & 0xFF);
         for (int i = 0; i < give; i++) data.push_back(rand_u8());
         expect_throw(data, "uuid_short");
+    }
+    printf("OK\n");
+}
+
+static void test_delete_body_truncated_after_uuid() {
+    printf("  test_delete_body_truncated_after_uuid... ");
+    // OBJECT_DELETE body: UUID(16) + seq(4) + ts(8) = 28 bytes
+    // Test: UUID present but sequence_number truncated
+    {
+        std::vector<uint8_t> data;
+        uint32_t len = 1 + 4 + 8 + 16 + 2; // hdr + 2 bytes of seq
+        for (int i = 0; i < 4; i++) data.push_back((len >> (i*8)) & 0xFF);
+        data.push_back(static_cast<uint8_t>(MsgType::OBJECT_DELETE));
+        data.push_back(0x00);
+        uint32_t seq = 1;
+        for (int i = 0; i < 4; i++) data.push_back((seq >> (i*8)) & 0xFF);
+        uint64_t sid = 1;
+        for (int i = 0; i < 8; i++) data.push_back((sid >> (i*8)) & 0xFF);
+        for (int i = 0; i < 16; i++) data.push_back(rand_u8()); // full UUID
+        data.push_back(0x01); data.push_back(0x02); // partial seq (2 bytes, need 4)
+        expect_throw(data, "delete_seq_short");
+    }
+    // Test: UUID + seq present but timestamp truncated
+    {
+        std::vector<uint8_t> data;
+        uint32_t len = 1 + 4 + 8 + 16 + 4 + 3; // hdr + full seq + 3 bytes of ts
+        for (int i = 0; i < 4; i++) data.push_back((len >> (i*8)) & 0xFF);
+        data.push_back(static_cast<uint8_t>(MsgType::OBJECT_DELETE));
+        data.push_back(0x00);
+        uint32_t frame_seq = 1;
+        for (int i = 0; i < 4; i++) data.push_back((frame_seq >> (i*8)) & 0xFF);
+        uint64_t sid = 1;
+        for (int i = 0; i < 8; i++) data.push_back((sid >> (i*8)) & 0xFF);
+        for (int i = 0; i < 16; i++) data.push_back(rand_u8()); // full UUID
+        uint32_t del_seq = 42;
+        for (int i = 0; i < 4; i++) data.push_back((del_seq >> (i*8)) & 0xFF); // full seq
+        data.push_back(0x01); data.push_back(0x02); data.push_back(0x03); // partial ts (3 bytes, need 8)
+        expect_throw(data, "delete_ts_short");
     }
     printf("OK\n");
 }
@@ -691,6 +730,7 @@ int main() {
     printf("\n  UUID / Body Truncation:\n");
     test_truncated_uuid();
     test_uuid_in_body_short();
+    test_delete_body_truncated_after_uuid();
 
     printf("\n  String / UTF-8:\n");
     test_oversized_string_length();

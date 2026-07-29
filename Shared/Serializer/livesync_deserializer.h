@@ -24,7 +24,7 @@ struct DeserializedMessage {
     std::optional<uint64_t> session_id;
     std::unordered_map<std::string, std::variant<
         uint8_t, uint16_t, uint32_t, uint64_t,
-        float, std::string,
+        float, double, std::string,
         std::array<uint8_t, 16>,
         std::vector<float>,
         std::vector<uint32_t>,
@@ -79,6 +79,14 @@ struct UnpackState {
         float v;
         std::memcpy(&v, data + offset, 4);
         offset += 4;
+        return v;
+    }
+
+    double unpack_float64() {
+        if (offset + 8 > size) throw std::runtime_error("Truncated float64");
+        double v;
+        std::memcpy(&v, data + offset, 8);
+        offset += 8;
         return v;
     }
 
@@ -203,6 +211,8 @@ inline void deserialize_body_object_update(UnpackState& s, DeserializedMessage& 
 
 inline void deserialize_body_object_delete(UnpackState& s, DeserializedMessage& msg) {
     msg.body["persistent_id"] = s.unpack_uuid();
+    msg.body["sequence_number"] = s.unpack_uint32();
+    msg.body["timestamp"] = s.unpack_float64();
 }
 
 inline void deserialize_body_object_rename(UnpackState& s, DeserializedMessage& msg) {

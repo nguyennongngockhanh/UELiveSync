@@ -291,8 +291,10 @@ messages:
     direction: B→U
     session_required: true
     body:
-      - { name: persistent_id, type: uuid }
-    description: "Remove object."
+      - { name: persistent_id,     type: uuid }
+      - { name: sequence_number,   type: uint32 }
+      - { name: timestamp,         type: float64 }
+    description: "Remove object. sequence_number enables stale-rejection; timestamp for ordering."
 
   OBJECT_RENAME:
     code: 0x23

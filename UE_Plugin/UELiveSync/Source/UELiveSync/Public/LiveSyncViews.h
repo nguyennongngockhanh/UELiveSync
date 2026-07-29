@@ -80,6 +80,8 @@ struct ObjectUpdateView
 struct ObjectDeleteView
 {
     std::array<uint8_t, 16> PersistentId;
+    uint32 SequenceNumber;
+    double Timestamp;
 };
 
 struct ObjectRenameView

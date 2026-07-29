@@ -7765,7 +7765,11 @@ void UUELiveSyncSubsystem::OnObjectDelete(
     FGuid Guid;
     FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
 
-    HandleDeleteObject(Guid);
+    HandleDelete(
+        Guid,
+        View.SequenceNumber,
+        View.Timestamp,
+        EChangeOrigin::RemoteReplicated);
 }
 
 // =========================================================
@@ -11466,6 +11470,9 @@ HandleDelete(
 
     // Stage 5: Destroy the actor
     TargetActor->Destroy();
+
+    // Editor presentation: invalidate level viewports after actor destruction
+    RequestEditorViewportRefresh();
 
     // Stage 5: Update sequence tracker to prevent stale replay
     GDeleteSequences.Update(TargetGuid, SequenceNumber);

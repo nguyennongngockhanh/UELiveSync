@@ -157,13 +157,14 @@
   },
   {
     "body": {
-      "persistent_id": "00112233445566778899aabbccddeeff"
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "sequence_number": 42
     },
-    "cpp_size": 34,
+    "cpp_size": 46,
     "flags": 0,
     "msg_type": 34,
     "name": "OBJECT_DELETE",
-    "original_size": 34,
+    "original_size": 46,
     "sequence_id": 6,
     "session_id": 16045690984503098046
   },

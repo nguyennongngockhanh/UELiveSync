@@ -112,6 +112,7 @@
 | Doc | Title |
 |-----|-------|
 | [64](64-editor-presentation-contract.md) | Editor Presentation Contract |
+| [67](67-mig-001-object-delete-semantic-migration.md) | MIG-001: Object Delete Semantic Migration |
 
 ## Current State & Roadmap
 

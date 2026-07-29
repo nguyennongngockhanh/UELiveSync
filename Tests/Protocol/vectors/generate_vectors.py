@@ -209,6 +209,8 @@ VECTORS = [
         "session_id": TEST_SESSION_ID,
         "fields": {
             "persistent_id": str(UUID_A),
+            "sequence_number": 42,
+            "timestamp": 1700000000.5,
         },
     },
     {

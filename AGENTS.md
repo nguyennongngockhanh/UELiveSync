@@ -16,6 +16,7 @@
 - **v2.1** — Added Baseline Provenance, Baseline Freeze, Baseline Verification Gate (motivated by lessons learned during INV-2026-002).
 - **v2.2** — Added Baseline Archive First + clarifications (motivated by lessons learned during INV-2026-002).
 - **v2.3** — Added Artifact Freshness Gate (motivated by stale state reasoning during INV-2026-002).
+- **v2.4** — Added Bug Lifecycle checklist (motivated by BUG-005 visibility sync workflow).
 
 ## Project
 
@@ -52,23 +53,30 @@ Only mention a file, class, function, counter, or test if it exists in evidence 
 
 Current work:
 
-Phase 10A — Incremental Texture Synchronization (COMPLETE, tag v0.6.0)
+Phase 1.5 — Legacy Protocol Elimination (IN PROGRESS)
 
-Delivered:
-- Sidecar texture path: SIDECAR_HIT / SIDECAR_EXPORTED / SIDECAR_VERIFIED
-- Batch import via single `ImportAssetsAutomated` + `TMap<FString, UObject*>` canonical-name matching
-- Commit `6c2b242` — `perf(texture): batch sidecar import with canonical-name matching`
-- Commit `7ab3b97` — `docs(perf): record Phase 10A profiling results; fix brace corruption in ApplyUnitScaleGuard`
-- Commit `544ef02` — `fix(texture): import sidecars when semantic mesh import is skipped`
+Completed Migrations:
+- MIG-001: OBJECT_DELETE semantic migration (COMPLETE)
+  - Extended OBJECT_DELETE body from 16 to 28 bytes (persistent_id + sequence_number + timestamp)
+  - Activated Phase 6E semantic handlers (stale-rejection, tombstone gate, child-detach cascade)
+  - Reference pattern for all future MIG items
+  - Test vectors regenerated (34→46 bytes)
+  - All tests updated
 
-Key finding:
-- Root cause of N freeze+focus events: per-texture `ImportAssetsAutomated` (commit `b5c098f` changed batch to per-texture to fix slot mismatch bug)
-- Fix: single batch call + canonical-name TMap matching (O(n), zero SIDECAR_RESULT_MISMATCH)
-- Verified: 6-7 files per batch, zero mismatches, stall time ~230ms vs ~520ms before
+Key architectural pattern:
+- Semantic event pipeline: Blender detects → Serialize → Transport → Bridge → Gameplay → Presentation → Regression
+- Three contracts every feature must answer: Network, Gameplay, Presentation
+- "Make it maintainable" — new features should be hard to create bugs for
+
+Remaining MIG items:
+- MIG-002: Object Create/Update (pending)
+- MIG-003: Camera operations (pending)
+- MIG-004: Material operations (pending)
+- MIG-005: Mesh operations (pending)
 
 Known issues:
-- First-sync texture compression/DDC time is a separate concern from the per-texture freeze problem
-- `[MATERIAL][COAT_FALLBACK]` log spam demoted to backlog
+- PT_CameraDef (0x1B): Protocol schema gap — 4 fields missing from MsgType CAMERA_CREATE
+- MATERIAL_UPDATE/MATERIAL_ASSIGN runtime verification blocked until mesh pipeline fully works
 
 ## Operating Rules
 
@@ -1734,6 +1742,38 @@ Ready to merge: Yes/No
 ```
 
 Do not consider a fix done merely because "build succeeded" or "no more crashes."
+
+---
+
+# Bug Lifecycle
+
+Every bugfix must complete all steps before merge. No step may be skipped.
+
+```
+[ ] Reproduce
+[ ] Instrument (minimal, temporary)
+[ ] Root cause proven (evidence, not hypothesis)
+[ ] Fix (minimal, scoped)
+[ ] Regression test (all relevant scenarios)
+[ ] Cleanup instrumentation
+[ ] Documentation (Docs/Architecture/)
+[ ] Commit (conventional format)
+[ ] Merge --ff-only to integration branch
+```
+
+Steps are ordered. Do not jump ahead.
+
+- **Reproduce** — confirm the bug exists on current baseline.
+- **Instrument** — add minimal temporary observation points.
+- **Root cause proven** — direct evidence, not inference or guess.
+- **Fix** — smallest safe change. One bug, one change.
+- **Regression test** — verify fix works AND existing behavior unchanged.
+- **Cleanup** — remove all temporary instrumentation.
+- **Documentation** — Symptom → Root Cause → Evidence → Fix → Regression.
+- **Commit** — conventional commit with clear body.
+- **Merge** — `--ff-only` to `phase1.4-core-sync`, delete temp branch.
+
+If any step fails, do not proceed to the next. Fix the failing step first.
 
 ---
 

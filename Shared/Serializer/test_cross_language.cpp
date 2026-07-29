@@ -217,7 +217,10 @@ static std::vector<uint8_t> serialize_from_manifest(const json& vec) {
             break;
         }
         case MsgType::OBJECT_DELETE:
-            body = serialize_body_object_delete(fields["persistent_id"]);
+            body = serialize_body_object_delete(
+                fields["persistent_id"],
+                fields["sequence_number"].get<uint32_t>(),
+                fields["timestamp"].get<double>());
             break;
         case MsgType::OBJECT_RENAME:
             body = serialize_body_object_rename(fields["persistent_id"], fields["new_name"]);

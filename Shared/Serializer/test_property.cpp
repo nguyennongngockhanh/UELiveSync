@@ -387,9 +387,11 @@ static void test_property_object_update() {
 static void test_property_object_delete() {
     for (int i = 0; i < 100; i++) {
         std::string pid = rand_uuid_str();
+        uint32_t del_seq = rand_u32();
+        double del_ts = 1700000000.0 + (i * 0.1);
         uint32_t seq = rand_u32();
 
-        auto body = serialize_body_object_delete(pid);
+        auto body = serialize_body_object_delete(pid, del_seq, del_ts);
         auto frame = PackFrame(MsgType::OBJECT_DELETE, 0, seq, DEFAULT_SID, body);
         auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -397,6 +399,8 @@ static void test_property_object_delete() {
         auto dpid = get_field<std::array<uint8_t, 16>>(d, "persistent_id");
         auto opid = parse_uuid(pid);
         check(uuid_eq(dpid, opid), "object_delete pid");
+        check(get_field<uint32_t>(d, "sequence_number") == del_seq, "object_delete seq");
+        check(get_field<double>(d, "timestamp") == del_ts, "object_delete ts");
     }
 }
 
@@ -800,7 +804,7 @@ static void test_edge_uuid_all_zeros() {
     std::string pid(36, '0');
     // Format as UUID string: 00000000-0000-0000-0000-000000000000
     pid = "00000000-0000-0000-0000-000000000000";
-    auto body = serialize_body_object_delete(pid);
+    auto body = serialize_body_object_delete(pid, 1, 0.0);
     auto frame = PackFrame(MsgType::OBJECT_DELETE, 0, 1, DEFAULT_SID, body);
     auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -812,7 +816,7 @@ static void test_edge_uuid_all_zeros() {
 
 static void test_edge_uuid_all_ff() {
     std::string pid = "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF";
-    auto body = serialize_body_object_delete(pid);
+    auto body = serialize_body_object_delete(pid, 1, 0.0);
     auto frame = PackFrame(MsgType::OBJECT_DELETE, 0, 1, DEFAULT_SID, body);
     auto d = DeserializeFrame(frame.data(), frame.size());
 
