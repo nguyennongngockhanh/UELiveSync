@@ -905,6 +905,22 @@ def get_transform(obj):
         conversion
     )
 
+    # Blender camera looks along its local -Z.
+    # Unreal camera looks along its local +X.
+    # C*M*C converts the object's coordinate frame (Y-flip) but does not
+    # change the camera's intrinsic view axis. After converting the object
+    # basis, apply an additional fixed camera-local basis rotation so both
+    # cameras observe the same world-space view direction.
+    # Local mapping: +X->-Z, +Y->+X, +Z->-Y.
+    if obj.type == 'CAMERA':
+        camera_correction = Matrix((
+            (0,  1,  0,  0),
+            (0,  0, -1,  0),
+            (-1, 0,  0,  0),
+            (0,  0,  0,  1)
+        ))
+        ue_matrix = ue_matrix @ camera_correction
+
     loc = ue_matrix.to_translation()
 
     rot = ue_matrix.to_quaternion()
