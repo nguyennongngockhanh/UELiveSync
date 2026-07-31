@@ -236,6 +236,15 @@ Existing roadmap candidates remain options only and are not active work.
 
 > These are options only — no commitment to any particular direction.
 
+### Investigation Closeout (2026-07-31)
+
+Camera synchronization investigations completed:
+
+- **INV-2026-009 (INV-C9) — Camera orientation mismatch (Blender ↔ UE): Closed.** Root cause: `get_transform` converted the object frame (`C*M*C`) but not the camera's intrinsic view axis (Blender −Z vs UE +X). Fixed with a camera-local basis rotation in `Blender_Addon/sync.py`. Verified: identity settles to UE forward `(0,0,-1)`; Roll 90 / Pitch 90 runtime quaternions match expected corrected values; Yaw 90 validated mathematically. All `[INV-C9]` instrumentation removed.
+- **INV-2026-010 (INV-E2) — PiP viewport invalidation after OBJECT_CREATE / mesh rebuild: Closed.** Root cause was editor viewport invalidation policy, not RenderThread. Resolved via viewport invalidation after create/visibility/mesh rebuild.
+
+No MIG numbering changed here. Migration numbering normalization (AGENTS.md vs `65-phase1.4-foundation-stabilization.md`) is deferred to a separate documentation cleanup.
+
 ### Short-term (Standalone, No UE Build Required)
 1. ~~**Phase 9 Stage 3B — Discovery Scan.**~~ **IMPLEMENTED** ✅ `PASS_DISCOVERY_LOCALHOST_SCAN` (TCP connect probe; no UDP broadcast)
 2. ~~**Phase 9 Stage 3C — Discovery Auto-fill / Connect UX.**~~ **IMPLEMENTED** ✅ `PASS_DISCOVERY_CONNECT_UX` (apply_discovery_result, "Use Discovered Server"/"Discover & Connect" operators, 38 tests)
