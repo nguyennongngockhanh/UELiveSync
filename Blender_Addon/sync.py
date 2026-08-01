@@ -1388,6 +1388,10 @@ def scan_scene():
 
 def _build_camera_signature(camera_data):
     is_ortho = (camera_data.type == 'ORTHO')
+    # INV-2026-013: signature depends on source state, not derived value.
+    # Include raw render settings so any resolution/pixel-aspect change
+    # re-emits CameraDef (aspect alone would miss same-aspect resolution changes).
+    render = bpy.context.scene.render
     return (
         camera_data.lens,
         camera_data.sensor_width,
@@ -1396,6 +1400,10 @@ def _build_camera_signature(camera_data):
         camera_data.clip_end,
         _ue_ortho_scale(camera_data),
         is_ortho,
+        render.resolution_x,
+        render.resolution_y,
+        render.pixel_aspect_x,
+        render.pixel_aspect_y,
     )
 
 
