@@ -245,6 +245,10 @@ Camera synchronization investigations completed:
 - **INV-2026-011 — Ortho scale unit mismatch (Blender m → UE cm): Closed.** Root cause: `ortho_scale` sent raw from Blender (meters) while `UCameraComponent::OrthoWidth` is in world units (cm). Fixed with `_ue_ortho_scale()` (`ortho_scale * 100.0`) applied in the signature and both CameraDef emission paths. Commit `5ec62be`.
 - **INV-2026-012 — Camera aspect ratio not synced via protocol: Closed.** Root cause: `PT_CameraDef` carried no aspect field; UE derived `1.5` from sensor ratio while Blender framing depends on render resolution (`1.7778`). Fixed by extending `PT_CameraDef` 44 → 48 bytes with `AspectRatio` (offset 40), an explicit V1/V2 parser (44/48), aspect applied once for both Perspective and Orthographic, and removal of all sensor-derived aspect overrides (CAMERA_UPDATE, CAMERA_CREATE, perspective branch). Commit `6dea4f8`.
 
+### Investigation Closeout (2026-08-01)
+
+- **INV-2026-013 — Camera aspect not updated when render resolution changes: Closed.** Root cause: `_build_camera_signature()` excluded render settings, so changing `resolution_x/y` or `pixel_aspect_x/y` never dirtied the CameraDef gate and UE kept the stale aspect. Fixed by adding the four raw render fields to `_build_camera_signature()` in `Blender_Addon/sync.py` (signature depends on source state, not derived aspect). Protocol/wire unchanged. Runtime verified: every resolution field change re-emits CameraDef and UE applies the new aspect; same-aspect round-trip `3840×2160 → 1920×1080` returns to `1.7778`. Commit `37adf40`.
+
 No MIG numbering changed here. Migration numbering normalization (AGENTS.md vs `65-phase1.4-foundation-stabilization.md`) is deferred to a separate documentation cleanup.
 
 ### Short-term (Standalone, No UE Build Required)

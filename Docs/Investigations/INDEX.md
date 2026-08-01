@@ -12,6 +12,7 @@
 | INV-2026-010 | PiP Viewport Invalidation After OBJECT_CREATE / Mesh Rebuild | Closed | P0 | — | 2026-07-30 | Khanh |
 | INV-2026-011 | Ortho Scale Unit Mismatch (Blender m → UE cm) | Closed | P0 | — | 2026-07-31 | Khanh |
 | INV-2026-012 | Camera Aspect Ratio Not Synced via Protocol | Closed | P0 | — | 2026-07-31 | Khanh |
+| INV-2026-013 | Camera Aspect Not Updated When Render Resolution Changes | Closed | P0 | — | 2026-08-01 | Khanh |
 
 ## INV-2026-009 — Camera Orientation Mismatch (Blender ↔ UE)
 
@@ -47,3 +48,11 @@ Alias: INV-E2.
 - **Resolution**: Extended `PT_CameraDef` from 44 → 48 bytes adding `AspectRatio` at offset 40 (V2; CameraFlags → 44, Reserved → [45-47]). Blender sends `render_aspect_ratio()` at both CameraDef emission points. UE parses both V1 (44B — legacy: sensor-ratio fallback) and V2 (48B) via an explicit `switch(ObjSize)`, applies aspect once before the projection branch (both Perspective and Orthographic), and removes every sensor-derived aspect override (perspective branch, CAMERA_UPDATE, CAMERA_CREATE).
 - **Evidence**: Runtime verified — `DEF_APPLY persp ... aspect=1.7778` and `DEF_APPLY ortho width=500.0 ... aspect=1.7778` match Blender. Wire tests 26/26 PASS.
 - **Commit**: `6dea4f8`.
+
+## INV-2026-013 — Camera Aspect Not Updated When Render Resolution Changes
+
+- **Symptom**: Changing Blender render resolution (Output Properties → Resolution X/Y) during live sync did not update UE camera aspect; UE kept the old aspect until a camera-datablock field changed.
+- **Root cause**: `_build_camera_signature()` (signature feeding the CameraDef dirty-detection gate) held only camera-datablock fields. `render.resolution_x/y` and `pixel_aspect_x/y` were absent, so a render-settings change never dirtied the signature → CameraDef not re-emitted. `_aspect = render_aspect_ratio(bpy.context)` was computed only inside the already-failed gate.
+- **Resolution**: Added `render.resolution_x`, `render.resolution_y`, `render.pixel_aspect_x`, `render.pixel_aspect_y` to `_build_camera_signature()` in `Blender_Addon/sync.py`. Signature now depends on source state, not derived aspect — any render-settings change (including same-aspect changes like `1920×1080 → 3840×2160`) re-emits CameraDef. Protocol/wire unchanged (aspect payload already present from INV-2026-012).
+- **Evidence**: Runtime verified — each resolution field change re-emits CameraDef with the correct aspect applied in UE (`1.4815`, `1.3333`, `3.2`, `1.7778`, `0.8889`); same-aspect round-trip `3840×2160 → 1920×1080` returns to `1.7778`. Regression test `tests/phase7g_stage3_camera_signature_render_state.py` 11/11 PASS; wire test 26/26 PASS.
+- **Commit**: `37adf40`.
