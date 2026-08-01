@@ -201,6 +201,9 @@ private:
     virtual void OnObjectVisibility(
         const LiveSyncBridge::ObjectVisibilityView& View) override;
 
+    virtual void OnCameraCreate(
+        const LiveSyncBridge::CameraCreateView& View) override;
+
     virtual void OnCameraSetActive(
         const LiveSyncBridge::CameraSetActiveView& View) override;
 
@@ -350,6 +353,7 @@ private:
         int32 RetryCount;
         EChangeOrigin Origin;
         EOrphanState State;  // Stage 8: explicit orphan lifecycle state
+        bool bIsCamera = false;
     };
 
     void HandleHierarchy(
@@ -820,6 +824,12 @@ private:
     // (HandleCreateObject or HandleActiveCamera auto-spawn).
     void ConfigureLiveSyncCameraActor(
         class ACameraActor* CameraActor);
+
+    // Apply camera parameters (focal, sensor, clip, ortho, projection)
+    // from a CameraCreateView to a UCameraComponent.
+    void ApplyCameraParams(
+        class UCameraComponent* CamComp,
+        const LiveSyncBridge::CameraCreateView& View);
 
     // =====================================================
     // CAMERA DEFINITION (Phase 7G Stage 3)

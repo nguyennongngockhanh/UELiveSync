@@ -29,10 +29,18 @@ struct CameraCreateView
 {
     std::array<uint8_t, 16> CameraId;
     std::string Name;
+    bool HasParentId;
+    std::array<uint8_t, 16> ParentId;
     struct { float X, Y, Z, Rx, Ry, Rz, Rw, Sx, Sy, Sz; } Transform;
     float FocalLength;
     float SensorWidth;
     float SensorHeight;
+    float ClipStart;
+    float ClipEnd;
+    float OrthoScale;
+    uint8_t CameraFlags;
+    uint32_t SequenceNumber;
+    double Timestamp;
 };
 
 struct CameraUpdateView
@@ -46,6 +54,16 @@ struct CameraUpdateView
     float SensorWidth;
     bool HasSensorHeight;
     float SensorHeight;
+    bool HasClipStart;
+    float ClipStart;
+    bool HasClipEnd;
+    float ClipEnd;
+    bool HasOrthoScale;
+    float OrthoScale;
+    bool HasCameraFlags;
+    uint8_t CameraFlags;
+    uint32_t SequenceNumber;
+    double Timestamp;
 };
 
 struct CameraSetActiveView

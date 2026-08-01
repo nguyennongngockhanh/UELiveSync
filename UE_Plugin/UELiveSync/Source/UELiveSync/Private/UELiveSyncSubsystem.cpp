@@ -7773,6 +7773,19 @@ void UUELiveSyncSubsystem::OnObjectCreate(
 
     HandleCreateObject(Guid, Location, Rotation, Scale, ParentGuid,
         View.PrimitiveType, /*bIsLocalTransform=*/false);
+
+#if WITH_EDITOR
+    if (GEditor)
+    {
+        for (FLevelEditorViewportClient* LevelVC : GEditor->GetLevelViewportClients())
+        {
+            if (LevelVC && LevelVC->GetActorLock().HasValidLockedActor())
+            {
+                LevelVC->Invalidate();
+            }
+        }
+    }
+#endif
 }
 
 // =========================================================
@@ -7834,6 +7847,183 @@ void UUELiveSyncSubsystem::OnObjectVisibility(
 }
 
 // =========================================================
+// ON CAMERA CREATE (IGameplaySink override)
+// =========================================================
+
+void UUELiveSyncSubsystem::OnCameraCreate(
+    const LiveSyncBridge::CameraCreateView& View)
+{
+    FGuid CameraGUID;
+    FMemory::Memcpy(&CameraGUID, View.CameraId.data(), 16);
+
+    // Stale-rejection: per-GUID sequence tracking
+    static TMap<FGuid, uint32> GCameraCreateSequences;
+    const uint32 IncomingSeq = View.SequenceNumber;
+    if (uint32* LastSeq = GCameraCreateSequences.Find(CameraGUID))
+    {
+        if (IncomingSeq <= *LastSeq)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[CAMERA][CREATE] stale rejected guid=%s seq=%u <= %u"),
+                *CameraGUID.ToString(EGuidFormats::Digits), IncomingSeq, *LastSeq);
+            return;
+        }
+    }
+    GCameraCreateSequences.Add(CameraGUID, IncomingSeq);
+
+    // Check if actor already exists
+    AActor* Existing = FindActorFast(CameraGUID);
+    if (Existing)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][CREATE] actor already exists for guid=%s — updating in place"),
+            *CameraGUID.ToString(EGuidFormats::Digits));
+        // Apply camera parameters to existing actor
+        ALiveSyncCameraActor* CamActor = Cast<ALiveSyncCameraActor>(Existing);
+        if (CamActor)
+        {
+            UCameraComponent* CamComp = CamActor->GetCameraComponent();
+
+            if (CamComp)
+            {
+                ApplyCameraParams(CamComp, View);
+            }
+        }
+        return;
+    }
+
+    // Spawn new ALiveSyncCameraActor
+    FVector Location(View.Transform.X, View.Transform.Y, View.Transform.Z);
+    FQuat Rotation(View.Transform.Rx, View.Transform.Ry,
+                   View.Transform.Rz, View.Transform.Rw);
+    FVector Scale(View.Transform.Sx, View.Transform.Sy, View.Transform.Sz);
+
+    FActorSpawnParameters SpawnParams;
+    SpawnParams.SpawnCollisionHandlingOverride =
+        ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    // NOTE: In normal OBJECT_CREATE lifecycle, this path is NOT reached.
+    // Camera spawning occurs in HandleCreateObject() (SAFE_LIFECYCLE).
+    // If this path becomes active in the future, bHideFromSceneOutliner
+    // must NOT be set here — cameras need Outliner visibility for Pilot.
+
+    FTransform SpawnXForm(Rotation, Location, Scale);
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][CREATE] No world — cannot spawn camera for guid=%s"),
+            *CameraGUID.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    ALiveSyncCameraActor* NewCam = World->SpawnActor<ALiveSyncCameraActor>(
+        ALiveSyncCameraActor::StaticClass(), SpawnXForm, SpawnParams);
+    if (!NewCam)
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[CAMERA][CREATE] SpawnActor failed for guid=%s"),
+            *CameraGUID.ToString(EGuidFormats::Digits));
+        return;
+    }
+
+    // Tag with GUID
+    NewCam->Tags.Add(FName(*CameraGUID.ToString(EGuidFormats::Digits)));
+    ActorCache.Add(CameraGUID, NewCam);
+
+    // Configure (frustum guard, outliner hide)
+    ConfigureLiveSyncCameraActor(NewCam);
+
+    // Apply camera parameters
+    UCameraComponent* CamComp = NewCam->GetCameraComponent();
+    if (CamComp)
+    {
+        ApplyCameraParams(CamComp, View);
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[CAMERA][CREATE] Spawned guid=%s name=%hs focal=%.1f sensor=%.1fx%.1f "
+             "clip=[%.1f,%.1f] ortho=%.1f flags=0x%02x seq=%u ts=%.3f"),
+        *CameraGUID.ToString(EGuidFormats::Digits),
+        View.Name.c_str(),
+        View.FocalLength, View.SensorWidth, View.SensorHeight,
+        View.ClipStart, View.ClipEnd, View.OrthoScale, View.CameraFlags,
+        View.SequenceNumber, View.Timestamp);
+
+
+
+    // Handle parent attachment
+    if (View.HasParentId)
+    {
+        FGuid ParentGUID;
+        FMemory::Memcpy(&ParentGUID, View.ParentId.data(), 16);
+        AActor* ParentActor = FindActorFast(ParentGUID);
+        if (ParentActor)
+        {
+            NewCam->AttachToActor(ParentActor,
+                FAttachmentTransformRules::KeepWorldTransform);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][CREATE] Attached guid=%s to parent=%s"),
+                *CameraGUID.ToString(EGuidFormats::Digits),
+                *ParentActor->GetName());
+        }
+        else
+        {
+            // Defer attachment
+            FPendingHierarchyAttachment Pending;
+            Pending.ChildGuid = CameraGUID;
+            Pending.ParentGuid = ParentGUID;
+            Pending.bIsCamera = true;
+            PendingHierarchyAttachments.Add(MoveTemp(Pending));
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[CAMERA][CREATE] Deferred attachment guid=%s parent=%s"),
+                *CameraGUID.ToString(EGuidFormats::Digits),
+                *ParentGUID.ToString(EGuidFormats::Digits));
+        }
+    }
+}
+
+// =========================================================
+// Helper: Apply camera parameters from view to component
+// =========================================================
+
+void UUELiveSyncSubsystem::ApplyCameraParams(
+    UCameraComponent* CamComp,
+    const LiveSyncBridge::CameraCreateView& View)
+{
+    if (!CamComp) return;
+
+    const bool bIsOrtho = (View.CameraFlags & 0x01) != 0;
+
+    const float FocalMM = FMath::Max(View.FocalLength, 1.0f);
+    const float SensorW = FMath::Max(View.SensorWidth, 1.0f);
+
+    if (bIsOrtho)
+    {
+        CamComp->SetProjectionMode(ECameraProjectionMode::Orthographic);
+        CamComp->OrthoWidth = View.OrthoScale;
+        CamComp->SetOrthoNearClipPlane(FMath::Max(View.ClipStart, 0.01f));
+        CamComp->SetOrthoFarClipPlane(View.ClipEnd);
+    }
+    else
+    {
+        const float FOVRad = 2.0f * FMath::Atan(SensorW / (2.0f * FocalMM));
+        const float FOVDeg = FMath::RadiansToDegrees(FOVRad);
+
+        CamComp->SetProjectionMode(ECameraProjectionMode::Perspective);
+        CamComp->FieldOfView = FOVDeg;
+
+        // Aspect ratio is owned by PT_CameraDef (single source of truth);
+        // it is not derived here on the camera create path.
+
+        // Clip planes: UCameraComponent does not expose ZNear/ZFar for perspective.
+        // Log diagnostic only; UE RHI defaults apply.
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][CREATE] perspective clip: ZNear=%.1f ZFar=%.1f — RHI defaults"),
+            View.ClipStart, View.ClipEnd);
+    }
+}
+
+// =========================================================
 // ON CAMERA SET ACTIVE (IGameplaySink override)
 // =========================================================
 
@@ -7861,6 +8051,21 @@ void UUELiveSyncSubsystem::OnCameraUpdate(
 {
     FGuid CameraGUID;
     FMemory::Memcpy(&CameraGUID, View.CameraId.data(), 16);
+
+    // Stale-rejection: per-GUID sequence tracking for updates
+    static TMap<FGuid, uint32> GCameraUpdateSequences;
+    const uint32 IncomingSeq = View.SequenceNumber;
+    if (uint32* LastSeq = GCameraUpdateSequences.Find(CameraGUID))
+    {
+        if (IncomingSeq <= *LastSeq)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[CAMERA][UPDATE] stale rejected guid=%s seq=%u <= %u"),
+                *CameraGUID.ToString(EGuidFormats::Digits), IncomingSeq, *LastSeq);
+            return;
+        }
+    }
+    GCameraUpdateSequences.Add(CameraGUID, IncomingSeq);
 
     AActor* Found = FindActorFast(CameraGUID);
     if (!Found)
@@ -7900,27 +8105,85 @@ void UUELiveSyncSubsystem::OnCameraUpdate(
         const float SensorW = View.HasSensorWidth
             ? FMath::Max(View.SensorWidth, 1.0f)
             : 36.0f; // default sensor width
+
         const float FOVRad = 2.0f * FMath::Atan(SensorW / (2.0f * FocalMM));
         CamComp->FieldOfView = FMath::RadiansToDegrees(FOVRad);
     }
 
     if (View.HasTransform)
     {
-        FVector Location(View.Transform.X, View.Transform.Y, View.Transform.Z);
-        FQuat Rotation(View.Transform.Rx, View.Transform.Ry,
-                       View.Transform.Rz, View.Transform.Rw);
-        FVector Scale(View.Transform.Sx, View.Transform.Sy, View.Transform.Sz);
-        Camera->SetActorLocation(Location);
-        Camera->SetActorRotation(Rotation);
-        Camera->SetActorScale3D(Scale);
+        FVector NewLoc(View.Transform.X, View.Transform.Y, View.Transform.Z);
+        FQuat NewRot(View.Transform.Rx, View.Transform.Ry,
+                     View.Transform.Rz, View.Transform.Rw);
+        FVector NewScl(View.Transform.Sx, View.Transform.Sy, View.Transform.Sz);
+
+        Camera->SetActorLocation(NewLoc);
+        Camera->SetActorRotation(NewRot);
+        Camera->SetActorScale3D(NewScl);
+
+#if WITH_EDITOR
+        if (GEditor)
+        {
+            for (FLevelEditorViewportClient* LevelVC : GEditor->GetLevelViewportClients())
+            {
+                if (LevelVC && LevelVC->IsActorLocked(Camera))
+                {
+                    LevelVC->bLockedCameraView = true;
+                    LevelVC->ViewFOV = CamComp->FieldOfView;
+                    LevelVC->SetViewLocation(Camera->GetActorLocation());
+                    LevelVC->SetViewRotation(Camera->GetActorRotation());
+                    LevelVC->Invalidate();
+                }
+            }
+        }
+#endif
+    }
+
+    // Clip plane / ortho / projection mode delta
+    if (View.HasClipStart || View.HasClipEnd || View.HasOrthoScale || View.HasCameraFlags)
+    {
+        const bool bCurrentOrtho = (CamComp->ProjectionMode == ECameraProjectionMode::Orthographic);
+        const uint8 CurrentFlags = bCurrentOrtho ? 0x01 : 0x00;
+        const uint8 EffectiveFlags = View.HasCameraFlags ? View.CameraFlags : CurrentFlags;
+        const bool bNewOrtho = (EffectiveFlags & 0x01) != 0;
+
+        if (bNewOrtho)
+        {
+            CamComp->SetProjectionMode(ECameraProjectionMode::Orthographic);
+            if (View.HasOrthoScale) CamComp->OrthoWidth = View.OrthoScale;
+            if (View.HasClipStart) CamComp->SetOrthoNearClipPlane(FMath::Max(View.ClipStart, 0.01f));
+            if (View.HasClipEnd) CamComp->SetOrthoFarClipPlane(View.ClipEnd);
+        }
+        else
+        {
+            CamComp->SetProjectionMode(ECameraProjectionMode::Perspective);
+            // Recompute FOV if switching projection or if sensor/focal not already handled
+            if (bCurrentOrtho && !View.HasFocalLength && !View.HasSensorWidth)
+            {
+                // Keep existing perspective values
+            }
+        }
+
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[CAMERA][UPDATE] projection delta: ortho=%d clip=[%.1f,%.1f] ortho_scale=%.1f flags=0x%02x"),
+            bNewOrtho ? 1 : 0,
+            View.HasClipStart ? View.ClipStart : CamComp->OrthoNearClipPlane,
+            View.HasClipEnd ? View.ClipEnd : CamComp->OrthoFarClipPlane,
+            View.HasOrthoScale ? View.OrthoScale : CamComp->OrthoWidth,
+            EffectiveFlags);
     }
 
     UE_LOG(LogLiveSync, Log,
-        TEXT("[CAMERA][UPDATE] Applied delta for GUID=%s focal=%d sensor=%d transform=%d"),
+        TEXT("[CAMERA][UPDATE] Applied delta for GUID=%s focal=%d sensor=%d transform=%d clip=%d/%d ortho=%d flags=%d seq=%u"),
         *CameraGUID.ToString(EGuidFormats::Digits),
         View.HasFocalLength ? 1 : 0,
         View.HasSensorWidth ? 1 : 0,
-        View.HasTransform ? 1 : 0);
+        View.HasTransform ? 1 : 0,
+        View.HasClipStart ? 1 : 0,
+        View.HasClipEnd ? 1 : 0,
+        View.HasOrthoScale ? 1 : 0,
+        View.HasCameraFlags ? 1 : 0,
+        View.SequenceNumber);
 }
 
 // =========================================================
@@ -7963,6 +8226,25 @@ void UUELiveSyncSubsystem::OnObjectUpdate(
         // bIsLocalTransform=false: protocol sends world-space transforms.
         UpdateTargetTransform(Guid, Location, Rotation, Scale,
                               FGuid(), /*bIsLocalTransform=*/false);
+
+#if WITH_EDITOR
+        if (GEditor)
+        {
+            // Push locked-camera transform and invalidate viewport for scene change
+            AActor* UpdatedActor = FindActorFast(Guid);
+            for (FLevelEditorViewportClient* LevelVC : GEditor->GetLevelViewportClients())
+            {
+                if (!LevelVC || !LevelVC->GetActorLock().HasValidLockedActor()) continue;
+                AActor* LockedCam = LevelVC->GetActorLock().GetLockedActor();
+                if (UpdatedActor && UpdatedActor == LockedCam)
+                {
+                    LevelVC->SetViewLocation(UpdatedActor->GetActorLocation());
+                    LevelVC->SetViewRotation(UpdatedActor->GetActorRotation());
+                }
+                LevelVC->Invalidate();
+            }
+        }
+#endif
     }
 
     if (View.HasVisibility)
@@ -8819,10 +9101,13 @@ HandleCreateObject(
         FActorSpawnParameters CamSpawnParams;
         CamSpawnParams.SpawnCollisionHandlingOverride =
             ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-        CamSpawnParams.bHideFromSceneOutliner = true;
+        // Note: bHideFromSceneOutliner deliberately omitted here.
+        // Camera must appear in World Outliner for Pilot and selection.
+        // If outliner clutter becomes a performance concern, revisit
+        // with a per-camera setting rather than hiding all cameras.
 
         UE_LOG(LogLiveSync, Log,
-            TEXT("[CAMERA][SAFE_SPAWN_BEGIN] Spawning ALiveSyncCameraActor (hide-outliner) guid=%s"),
+            TEXT("[CAMERA][SAFE_SPAWN_BEGIN] Spawning ALiveSyncCameraActor guid=%s"),
             *Guid.ToString(EGuidFormats::Digits));
 
         FTransform CamSpawnXForm(
@@ -12547,6 +12832,7 @@ void UUELiveSyncSubsystem::ProcessDeferredCameras()
                 if (LevelVC)
                 {
                     LevelVC->SetActorLock(Camera);
+                    LevelVC->bLockedCameraView = true;
                     AppliedCount++;
                 }
             }
@@ -12555,7 +12841,7 @@ void UUELiveSyncSubsystem::ProcessDeferredCameras()
                 AppliedCount, std::memory_order_relaxed);
 
             UE_LOG(LogLiveSync, Log,
-                TEXT("[CAMERA][E2E10_DEFERRED_LOCK] SetActorLock on %d viewport(s) for CameraActor=%s"),
+                TEXT("[CAMERA][E2E10_DEFERRED_LOCK] SetActorLock on %d viewport(s) for CameraActor=%s (bLockedCameraView=true)"),
                 AppliedCount, *Camera->GetName());
         }
 #endif
@@ -12728,6 +13014,7 @@ HandleActiveCamera(
             if (LevelVC)
             {
                 LevelVC->SetActorLock(ResolvedCamera);
+                LevelVC->bLockedCameraView = true;
                 AppliedCount++;
             }
         }
@@ -12736,7 +13023,7 @@ HandleActiveCamera(
             AppliedCount, std::memory_order_relaxed);
 
         UE_LOG(LogLiveSync, Log,
-            TEXT("[CAMERA][VIEW_TARGET] SetActorLock on %d viewport(s) for CameraActor=%s"),
+            TEXT("[CAMERA][VIEW_TARGET] SetActorLock on %d viewport(s) for CameraActor=%s (bLockedCameraView=true)"),
             AppliedCount, *ResolvedCamera->GetName());
     }
     else if (GEditor && !IsLiveSyncCameraSafeForEditorUse(ResolvedCamera))
