@@ -116,6 +116,10 @@ struct FakeGameplaySink : IGameplaySink
     int CameraSetActiveCalls = 0;
     CameraSetActiveView LastCameraSetActive{};
 
+    // CAMERA_CREATE
+    int CameraCreateCalls = 0;
+    CameraCreateView LastCameraCreate{};
+
     // CAMERA_UPDATE
     int CameraUpdateCalls = 0;
     CameraUpdateView LastCameraUpdate{};
@@ -186,6 +190,12 @@ struct FakeGameplaySink : IGameplaySink
     {
         ++ObjectVisibilityCalls;
         LastObjectVisibility = View;
+    }
+
+    void OnCameraCreate(const CameraCreateView& View) override
+    {
+        ++CameraCreateCalls;
+        LastCameraCreate = View;
     }
 
     void OnCameraSetActive(const CameraSetActiveView& View) override

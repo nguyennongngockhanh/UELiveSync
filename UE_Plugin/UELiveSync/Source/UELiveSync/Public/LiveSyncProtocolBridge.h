@@ -317,11 +317,21 @@ inline CameraCreateView BuildCameraCreateView(
     CameraCreateView v;
     v.CameraId = GetField<std::array<uint8_t, 16>>(msg, "camera_id");
     v.Name = GetField<std::string>(msg, "name");
+    auto* pid = TryGetField<std::array<uint8_t, 16>>(msg, "parent_id");
+    v.HasParentId = (pid != nullptr);
+    if (pid) v.ParentId = *pid;
+    else v.ParentId = {};
     auto& t = GetField<std::vector<float>>(msg, "transform");
     v.Transform = {t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9]};
     v.FocalLength = GetField<float>(msg, "focal_length");
     v.SensorWidth = GetField<float>(msg, "sensor_width");
     v.SensorHeight = GetField<float>(msg, "sensor_height");
+    v.ClipStart = GetField<float>(msg, "clip_start");
+    v.ClipEnd = GetField<float>(msg, "clip_end");
+    v.OrthoScale = GetField<float>(msg, "ortho_scale");
+    v.CameraFlags = GetField<uint8_t>(msg, "camera_flags");
+    v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
+    v.Timestamp = GetField<double>(msg, "timestamp");
     return v;
 }
 
@@ -343,6 +353,20 @@ inline CameraUpdateView BuildCameraUpdateView(
     auto* sh = TryGetField<float>(msg, "sensor_height");
     v.HasSensorHeight = (sh != nullptr);
     v.SensorHeight = sh ? *sh : 0.0f;
+    auto* cs = TryGetField<float>(msg, "clip_start");
+    v.HasClipStart = (cs != nullptr);
+    v.ClipStart = cs ? *cs : 0.0f;
+    auto* ce = TryGetField<float>(msg, "clip_end");
+    v.HasClipEnd = (ce != nullptr);
+    v.ClipEnd = ce ? *ce : 0.0f;
+    auto* os = TryGetField<float>(msg, "ortho_scale");
+    v.HasOrthoScale = (os != nullptr);
+    v.OrthoScale = os ? *os : 0.0f;
+    auto* cf = TryGetField<uint8_t>(msg, "camera_flags");
+    v.HasCameraFlags = (cf != nullptr);
+    v.CameraFlags = cf ? *cf : 0;
+    v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
+    v.Timestamp = GetField<double>(msg, "timestamp");
     return v;
 }
 
@@ -364,9 +388,13 @@ inline void LogCameraCreate(const CameraCreateView& v)
     FormatUuid(v.CameraId, id_str, sizeof(id_str));
     UE_LOG(LogLiveSync, Log,
         TEXT("[BRIDGE][CAMERA_CREATE] id=%hs name=%hs "
-             "focal=%.1f sensor=%.1fx%.1f"),
+             "focal=%.1f sensor=%.1fx%.1f "
+             "clip=%.2f..%.2f ortho=%.2f flags=0x%02x "
+             "seq=%u ts=%.3f"),
         id_str, v.Name.c_str(),
-        v.FocalLength, v.SensorWidth, v.SensorHeight);
+        v.FocalLength, v.SensorWidth, v.SensorHeight,
+        v.ClipStart, v.ClipEnd, v.OrthoScale, v.CameraFlags,
+        v.SequenceNumber, v.Timestamp);
 }
 
 inline void LogCameraUpdate(const CameraUpdateView& v)
@@ -375,11 +403,22 @@ inline void LogCameraUpdate(const CameraUpdateView& v)
     FormatUuid(v.CameraId, id_str, sizeof(id_str));
     UE_LOG(LogLiveSync, Log,
         TEXT("[BRIDGE][CAMERA_UPDATE] id=%hs "
-             "has_transform=%d focal=%hs%.1f"),
+             "has_transform=%d focal=%hs%.1f "
+             "clip=%hs%.2f/%hs%.2f ortho=%hs%.2f flags=%hs0x%02x "
+             "seq=%u ts=%.3f"),
         id_str,
         static_cast<int>(v.HasTransform),
         v.HasFocalLength ? "" : "not_set=",
-        v.HasFocalLength ? v.FocalLength : 0.0f);
+        v.HasFocalLength ? v.FocalLength : 0.0f,
+        v.HasClipStart ? "" : "not_set=",
+        v.HasClipStart ? v.ClipStart : 0.0f,
+        v.HasClipEnd ? "" : "not_set=",
+        v.HasClipEnd ? v.ClipEnd : 0.0f,
+        v.HasOrthoScale ? "" : "not_set=",
+        v.HasOrthoScale ? v.OrthoScale : 0.0f,
+        v.HasCameraFlags ? "" : "not_set=0x",
+        v.HasCameraFlags ? v.CameraFlags : 0,
+        v.SequenceNumber, v.Timestamp);
 }
 
 inline void LogCameraSetActive(const CameraSetActiveView& v)
