@@ -250,3 +250,148 @@ def build_object_reparent(
     else:
         body.extend(b'\x00' * 16)
     return bytes(body)
+
+
+# ─── Camera MsgType builders (MIG-003) ───────────────────────
+# Per-GUID sequence trackers for camera operations.
+# Separate from object sequences because camera GUIDs live in
+# their own namespace.
+
+_camera_create_sequences = {}
+_camera_update_sequences = {}
+
+
+def clear_camera_sequences():
+    """Reset all per-GUID camera sequence counters (call on disconnect)."""
+    _camera_create_sequences.clear()
+    _camera_update_sequences.clear()
+
+
+def _next_camera_create_sequence(camera_id) -> int:
+    key = str(camera_id)
+    seq = _camera_create_sequences.get(key, 0) + 1
+    _camera_create_sequences[key] = seq
+    return seq
+
+
+def _next_camera_update_sequence(camera_id) -> int:
+    key = str(camera_id)
+    seq = _camera_update_sequences.get(key, 0) + 1
+    _camera_update_sequences[key] = seq
+    return seq
+
+
+def build_camera_create(
+    camera_id,
+    name: str,
+    parent_id=None,
+    location: Tuple[float, float, float] = (0, 0, 0),
+    rotation: Tuple[float, float, float, float] = (0, 0, 0, 1),
+    scale: Tuple[float, float, float] = (1, 1, 1),
+    focal_length: float = 50.0,
+    sensor_width: float = 36.0,
+    sensor_height: float = 24.0,
+    clip_start: float = 0.1,
+    clip_end: float = 1000.0,
+    ortho_scale: float = 6.0,
+    camera_flags: int = 0,
+    sequence_number: int = 0,
+    timestamp: float = 0.0,
+) -> bytes:
+    """CAMERA_CREATE body bytes (full camera state).
+
+    Wire format (matches C++ deserialize_body_camera_create):
+      camera_id:      UUID (16 bytes)
+      name:           utf8_string
+      parent_id:      UUID (16 bytes, optional)
+      transform:      10 floats LE (loc.xyz, rot.xyzw, scale.xyz)
+      focal_length:   float32 LE
+      sensor_width:   float32 LE
+      sensor_height:  float32 LE
+      clip_start:     float32 LE
+      clip_end:       float32 LE
+      ortho_scale:    float32 LE
+      camera_flags:   uint8 (bit0=is_ortho; bit1=DEPRECATED)
+      sequence_number: uint32 LE
+      timestamp:      float64 LE
+    """
+    body = bytearray()
+    body.extend(_uuid_to_fguid_bytes(camera_id))
+    body.extend(pack_utf8(name))
+    if parent_id is not None:
+        body.extend(_uuid_to_fguid_bytes(parent_id))
+    body.extend(struct.pack('<10f',
+        location[0], location[1], location[2],
+        rotation[0], rotation[1], rotation[2], rotation[3],
+        scale[0], scale[1], scale[2]))
+    body.extend(struct.pack('<f', focal_length))
+    body.extend(struct.pack('<f', sensor_width))
+    body.extend(struct.pack('<f', sensor_height))
+    body.extend(struct.pack('<f', clip_start))
+    body.extend(struct.pack('<f', clip_end))
+    body.extend(struct.pack('<f', ortho_scale))
+    body.extend(pack_u8(camera_flags))
+    body.extend(pack_u32(sequence_number))
+    body.extend(pack_f64(timestamp))
+    return bytes(body)
+
+
+def build_camera_update(
+    camera_id,
+    location: Tuple[float, float, float],
+    rotation: Tuple[float, float, float, float],
+    scale: Tuple[float, float, float],
+    focal_length: float,
+    sensor_width: float,
+    sensor_height: float,
+    clip_start: float,
+    clip_end: float,
+    ortho_scale: float,
+    camera_flags: int = 0,
+    sequence_number: int = 0,
+    timestamp: float = 0.0,
+) -> bytes:
+    """CAMERA_UPDATE body bytes (full camera state).
+
+    Wire format (matches C++ deserialize_body_camera_update):
+      camera_id:      UUID (16 bytes)
+      transform:      10 floats LE
+      focal_length:   float32 LE
+      sensor_width:   float32 LE
+      sensor_height:  float32 LE
+      clip_start:     float32 LE
+      clip_end:       float32 LE
+      ortho_scale:    float32 LE
+      camera_flags:   uint8
+      sequence_number: uint32 LE
+      timestamp:      float64 LE
+    """
+    body = bytearray()
+    body.extend(_uuid_to_fguid_bytes(camera_id))
+    body.extend(struct.pack('<10f',
+        location[0], location[1], location[2],
+        rotation[0], rotation[1], rotation[2], rotation[3],
+        scale[0], scale[1], scale[2]))
+    body.extend(struct.pack('<f', focal_length))
+    body.extend(struct.pack('<f', sensor_width))
+    body.extend(struct.pack('<f', sensor_height))
+    body.extend(struct.pack('<f', clip_start))
+    body.extend(struct.pack('<f', clip_end))
+    body.extend(struct.pack('<f', ortho_scale))
+    body.extend(pack_u8(camera_flags))
+    body.extend(pack_u32(sequence_number))
+    body.extend(pack_f64(timestamp))
+    return bytes(body)
+
+
+def build_camera_setactive(
+    camera_id,
+) -> bytes:
+    """CAMERASETACTIVE body bytes.
+
+    Wire format (matches C++ BuildCameraSetActiveView):
+      camera_id: UUID (16 bytes)
+    """
+    body = bytearray()
+    body.extend(_uuid_to_fguid_bytes(camera_id))
+    return bytes(body)

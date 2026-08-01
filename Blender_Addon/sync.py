@@ -6,6 +6,7 @@ import struct
 import time
 import traceback
 import uuid
+import math
 
 from bpy.app.handlers import persistent
 
@@ -15,7 +16,7 @@ from uuid import UUID
 
 from .msg_transport import get_transport, MsgType
 from .material_protocol import build_material_create, build_material_update
-from .object_protocol import build_object_create, build_object_update, build_object_reparent, build_object_visibility, build_object_rename, build_object_delete, clear_all_sequences, clear_delete_sequences, next_create_sequence, next_update_sequence
+from .object_protocol import build_object_create, build_object_update, build_object_reparent, build_object_visibility, build_object_rename, build_object_delete, clear_all_sequences, clear_delete_sequences, next_create_sequence, next_update_sequence, build_camera_create, build_camera_update, build_camera_setactive, clear_camera_sequences, _next_camera_create_sequence, _next_camera_update_sequence
 
 try:
     from . import network as _network_mod
@@ -1511,6 +1512,7 @@ def check_updates():
         global _last_decision_init_printed
         _known_guids.clear()
         clear_all_sequences()
+        clear_camera_sequences()
         _last_collection_state.clear()
         _collection_anti_loop_guids.clear()
         _last_active_camera_guid = b''  # Phase 7D: resend on next tick
@@ -3150,9 +3152,7 @@ def check_updates():
             guid_obj = None
             guid_bytes = NULL_CAMERA_GUID
 
-        if _last_active_camera_guid is None:
-            pass
-        elif _last_active_camera_guid == b'' or guid_bytes != _last_active_camera_guid:
+        if _last_active_camera_guid is None or _last_active_camera_guid == b'' or guid_bytes != _last_active_camera_guid:
             _active_camera_sequence += 1
             payload = serialize_active_camera(
                 guid_obj,
@@ -3165,6 +3165,14 @@ def check_updates():
             _active_camera_state_changes += 1
             _runtime_stats["active_camera_packets_sent"] = _active_camera_packets_sent
             _runtime_stats["active_camera_state_changes"] = _active_camera_state_changes
+
+            # Dual-emission: CAMERASETACTIVE alongside PT_ActiveCamera (MIG-003)
+            if guid_obj is not None:
+                transport = get_transport()
+                if transport is not None:
+                    setactive_body = build_camera_setactive(guid_obj)
+                    transport.send_msg(MsgType.CAMERASETACTIVE, setactive_body)
+                    _runtime_stats["active_camera_packets_sent"] = _active_camera_packets_sent
 
             # Send CameraDef alongside PT_ActiveCamera when camera is valid
             if camera_obj is not None and hasattr(camera_obj, 'data') and camera_obj.data is not None:
@@ -3195,6 +3203,34 @@ def check_updates():
                 _burst_packet_count += 1
                 _camera_def_packets_sent += 1
                 _runtime_stats["camera_def_packets_sent"] = _camera_def_packets_sent
+
+                # Dual-emission: CAMERA_CREATE alongside PT_CameraDef (MIG-003)
+                transport = get_transport()
+                if transport is not None:
+                    cam_xform = get_transform(camera_obj)
+                    cam_loc = cam_xform["location"]
+                    cam_rot = cam_xform["rotation"]
+                    cam_scl = cam_xform["scale"]
+                    cam_seq = _next_camera_create_sequence(guid_obj)
+                    create_body = build_camera_create(
+                        guid_obj, camera_obj.name,
+                        focal_length=focal,
+                        sensor_width=sensor_width,
+                        sensor_height=sensor_height,
+                        clip_start=clip_start,
+                        clip_end=clip_end,
+                        ortho_scale=ortho_scale,
+                        camera_flags=flags,
+                        location=(cam_loc[0], cam_loc[1], cam_loc[2]),
+                        rotation=(cam_rot[0], cam_rot[1], cam_rot[2], cam_rot[3]),
+                        scale=(cam_scl[0], cam_scl[1], cam_scl[2]),
+                        sequence_number=cam_seq,
+                        timestamp=time.time(),
+                    )
+                    transport.send_msg(MsgType.CAMERA_CREATE, create_body)
+                    _camera_def_packets_sent += 1
+                    _runtime_stats["camera_def_packets_sent"] = _camera_def_packets_sent
+
                 _last_camera_signature[guid_bytes] = _build_camera_signature(cam_data)
 
         _last_active_camera_guid = guid_bytes
@@ -3246,6 +3282,38 @@ def check_updates():
             _burst_packet_count += 1
             _camera_def_packets_sent += 1
             _runtime_stats["camera_def_packets_sent"] = _camera_def_packets_sent
+
+            # Dual-emission: CAMERA_UPDATE alongside PT_CameraDef (MIG-003)
+            transport = get_transport()
+            if transport is not None:
+                cam_xform = get_transform(obj)
+                cam_loc = cam_xform["location"]
+                cam_rot = cam_xform["rotation"]
+                cam_scl = cam_xform["scale"]
+                cam_seq = _next_camera_update_sequence(guid_obj)
+                is_ortho = (cam_data.type == 'ORTHO')
+                update_flags = 0
+                if is_ortho:
+                    update_flags |= 0x01
+                update_body = build_camera_update(
+                    guid_obj,
+                    location=(cam_loc[0], cam_loc[1], cam_loc[2]),
+                    rotation=(cam_rot[0], cam_rot[1], cam_rot[2], cam_rot[3]),
+                    scale=(cam_scl[0], cam_scl[1], cam_scl[2]),
+                    focal_length=cam_data.lens,
+                    sensor_width=cam_data.sensor_width,
+                    sensor_height=cam_data.sensor_height,
+                    clip_start=cam_data.clip_start,
+                    clip_end=cam_data.clip_end,
+                    ortho_scale=_ue_ortho_scale(cam_data),
+                    camera_flags=update_flags,
+                    sequence_number=cam_seq,
+                    timestamp=time.time(),
+                )
+                transport.send_msg(MsgType.CAMERA_UPDATE, update_body)
+                _camera_def_packets_sent += 1
+                _runtime_stats["camera_def_packets_sent"] = _camera_def_packets_sent
+
             _last_camera_signature[guid_bytes] = signature
 
     # =====================================================

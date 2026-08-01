@@ -3500,6 +3500,15 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
 
+    # Sync saved addon preferences to network module on load.
+    # BoolProperty update callbacks are not fired during addon registration,
+    # so _active_camera_enabled would otherwise stay at its default (False).
+    try:
+        prefs = bpy.context.preferences.addons[__package__].preferences
+        network.set_active_camera_enabled(prefs.active_camera_sync)
+    except Exception:
+        pass
+
 
 def unregister():
 
