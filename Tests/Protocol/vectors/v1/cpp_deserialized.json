@@ -367,11 +367,16 @@
   },
   {
     "body": {
+      "camera_flags": 2,
       "camera_id": "00112233445566778899aabbccddeeff",
+      "clip_end": 1000.0,
+      "clip_start": 0.10000000149011612,
       "focal_length": 50.0,
       "name": "MainCamera",
+      "ortho_scale": 6.0,
       "sensor_height": 24.0,
       "sensor_width": 36.0,
+      "sequence_number": 21,
       "transform": [
         1.5,
         2.5,
@@ -393,8 +398,15 @@
   },
   {
     "body": {
+      "camera_flags": 0,
       "camera_id": "00112233445566778899aabbccddeeff",
+      "clip_end": 1000.0,
+      "clip_start": 0.5,
       "focal_length": 85.0,
+      "ortho_scale": 6.0,
+      "sensor_height": 24.0,
+      "sensor_width": 36.0,
+      "sequence_number": 22,
       "transform": [
         100.5,
         -200.25,

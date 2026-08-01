@@ -411,11 +411,16 @@
   },
   {
     "body": {
+      "camera_flags": 2,
       "camera_id": "00112233445566778899aabbccddeeff",
+      "clip_end": 1000.0,
+      "clip_start": 0.10000000149011612,
       "focal_length": 50.0,
       "name": "MainCamera",
+      "ortho_scale": 6.0,
       "sensor_height": 24.0,
       "sensor_width": 36.0,
+      "sequence_number": 21,
       "transform": [
         1.5,
         2.5,
@@ -429,18 +434,25 @@
         2.0
       ]
     },
-    "cpp_size": 98,
+    "cpp_size": 123,
     "flags": 0,
     "msg_type": 80,
     "name": "CAMERA_CREATE",
-    "original_size": 98,
+    "original_size": 123,
     "sequence_id": 21,
     "session_id": 16045690984503098046
   },
   {
     "body": {
+      "camera_flags": 0,
       "camera_id": "00112233445566778899aabbccddeeff",
+      "clip_end": 1000.0,
+      "clip_start": 0.5,
       "focal_length": 85.0,
+      "ortho_scale": 6.0,
+      "sensor_height": 24.0,
+      "sensor_width": 36.0,
+      "sequence_number": 22,
       "transform": [
         100.5,
         -200.25,
@@ -454,11 +466,11 @@
         1.0
       ]
     },
-    "cpp_size": 78,
+    "cpp_size": 111,
     "flags": 0,
     "msg_type": 81,
     "name": "CAMERA_UPDATE",
-    "original_size": 78,
+    "original_size": 111,
     "sequence_id": 22,
     "session_id": 16045690984503098046
   },

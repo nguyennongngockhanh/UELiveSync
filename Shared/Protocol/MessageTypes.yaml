@@ -433,25 +433,38 @@ messages:
     direction: B→U
     session_required: true
     body:
-      - { name: camera_id,     type: uuid }
-      - { name: name,          type: utf8_string }
-      - { name: transform,     type: transform3d }
-      - { name: focal_length,  type: float32 }
-      - { name: sensor_width,  type: float32 }
-      - { name: sensor_height, type: float32 }
-    description: "New camera with intrinsics."
+      - { name: camera_id,      type: uuid }
+      - { name: name,           type: utf8_string }
+      - { name: parent_id,      type: uuid, optional: true }
+      - { name: transform,      type: transform3d }
+      - { name: focal_length,   type: float32 }
+      - { name: sensor_width,   type: float32 }
+      - { name: sensor_height,  type: float32 }
+      - { name: clip_start,     type: float32 }
+      - { name: clip_end,       type: float32 }
+      - { name: ortho_scale,    type: float32 }
+      - { name: camera_flags,   type: uint8, description: "bit0=is_ortho; bit1=DEPRECATED has_camera_def (compat only, new senders MUST ignore)" }
+      - { name: sequence_number, type: uint32 }
+      - { name: timestamp,      type: float64 }
+    description: "New camera with full state. sequence_number enables stale-rejection; timestamp for ordering. camera_flags bit1 (has_camera_def) is DEPRECATED and will be removed in a future migration."
 
   CAMERA_UPDATE:
     code: 0x51
     direction: B→U
     session_required: true
     body:
-      - { name: camera_id,     type: uuid }
-      - { name: transform,     type: transform3d, optional: true }
-      - { name: focal_length,  type: float32, optional: true }
-      - { name: sensor_width,  type: float32, optional: true }
-      - { name: sensor_height, type: float32, optional: true }
-    description: "Transform + parameter changes."
+      - { name: camera_id,      type: uuid }
+      - { name: transform,      type: transform3d, optional: true }
+      - { name: focal_length,   type: float32, optional: true }
+      - { name: sensor_width,   type: float32, optional: true }
+      - { name: sensor_height,  type: float32, optional: true }
+      - { name: clip_start,     type: float32, optional: true }
+      - { name: clip_end,       type: float32, optional: true }
+      - { name: ortho_scale,    type: float32, optional: true }
+      - { name: camera_flags,   type: uint8, optional: true, description: "bit0=is_ortho; bit1=DEPRECATED has_camera_def" }
+      - { name: sequence_number, type: uint32 }
+      - { name: timestamp,      type: float64 }
+    description: "Property delta. sequence_number enables stale-rejection; timestamp for ordering. camera_flags bit1 (has_camera_def) is DEPRECATED."
 
   CAMERASETACTIVE:
     code: 0x52

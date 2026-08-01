@@ -707,10 +707,14 @@ static void test_property_camera_create() {
         float rx = rand_float(), ry = rand_float(), rz = rand_float(), rw = rand_float();
         float sx = rand_float(), sy = rand_float(), sz = rand_float();
         float fl = rand_float(), sw = rand_float(), sh = rand_float();
+        float cs = rand_float(), ce = rand_float(), os = rand_float();
+        uint8_t cf = static_cast<uint8_t>(rand_u32() & 0xFF);
         uint32_t seq = rand_u32();
+        double ts = rand_float() * 1000.0;
 
-        auto body = serialize_body_camera_create(cid, name,
-            px, py, pz, rx, ry, rz, rw, sx, sy, sz, fl, sw, sh);
+        auto body = serialize_body_camera_create(cid, name, "",
+            px, py, pz, rx, ry, rz, rw, sx, sy, sz,
+            fl, sw, sh, cs, ce, os, cf, seq, ts);
         auto frame = PackFrame(MsgType::CAMERA_CREATE, 0, seq, DEFAULT_SID, body);
         auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -729,6 +733,12 @@ static void test_property_camera_create() {
         check(floats_eq(get_field<float>(d, "focal_length"), fl), "camera_create fl");
         check(floats_eq(get_field<float>(d, "sensor_width"), sw), "camera_create sw");
         check(floats_eq(get_field<float>(d, "sensor_height"), sh), "camera_create sh");
+        check(floats_eq(get_field<float>(d, "clip_start"), cs), "camera_create cs");
+        check(floats_eq(get_field<float>(d, "clip_end"), ce), "camera_create ce");
+        check(floats_eq(get_field<float>(d, "ortho_scale"), os), "camera_create os");
+        check(get_field<uint8_t>(d, "camera_flags") == cf, "camera_create cf");
+        check(get_field<uint32_t>(d, "sequence_number") == seq, "camera_create seq");
+        check(floats_eq(get_field<double>(d, "timestamp"), ts), "camera_create ts");
     }
 }
 
@@ -739,12 +749,14 @@ static void test_property_camera_update() {
         float rx = rand_float(), ry = rand_float(), rz = rand_float(), rw = rand_float();
         float sx = rand_float(), sy = rand_float(), sz = rand_float();
         float fl = rand_float(), sw = rand_float(), sh = rand_float();
+        float cs = rand_float(), ce = rand_float(), os = rand_float();
+        uint8_t cf = static_cast<uint8_t>(rand_u32() & 0xFF);
         uint32_t seq = rand_u32();
+        double ts = rand_float() * 1000.0;
 
-        // All optional fields present
-        auto body = serialize_body_camera_update(cid, true,
+        auto body = serialize_body_camera_update(cid,
             px, py, pz, rx, ry, rz, rw, sx, sy, sz,
-            true, fl, true, sw, true, sh);
+            fl, sw, sh, cs, ce, os, cf, seq, ts);
         auto frame = PackFrame(MsgType::CAMERA_UPDATE, 0, seq, DEFAULT_SID, body);
         auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -762,6 +774,12 @@ static void test_property_camera_update() {
         check(floats_eq(get_field<float>(d, "focal_length"), fl), "camera_update fl");
         check(floats_eq(get_field<float>(d, "sensor_width"), sw), "camera_update sw");
         check(floats_eq(get_field<float>(d, "sensor_height"), sh), "camera_update sh");
+        check(floats_eq(get_field<float>(d, "clip_start"), cs), "camera_update cs");
+        check(floats_eq(get_field<float>(d, "clip_end"), ce), "camera_update ce");
+        check(floats_eq(get_field<float>(d, "ortho_scale"), os), "camera_update os");
+        check(get_field<uint8_t>(d, "camera_flags") == cf, "camera_update cf");
+        check(get_field<uint32_t>(d, "sequence_number") == seq, "camera_update seq");
+        check(floats_eq(get_field<double>(d, "timestamp"), ts), "camera_update ts");
     }
 }
 
@@ -866,7 +884,7 @@ static void test_edge_max_uint64() {
 
 static void test_edge_float_zero() {
     std::string pid = "00000000-0000-0000-0000-000000000000";
-    auto body = serialize_body_camera_create(pid, "", 0,0,0, 0,0,0,1, 1,1,1, 0,0,0);
+    auto body = serialize_body_camera_create(pid, "", "", 0,0,0, 0,0,0,1, 1,1,1, 0,0,0, 0,0,0, 0, 0, 0.0);
     auto frame = PackFrame(MsgType::CAMERA_CREATE, 0, 1, DEFAULT_SID, body);
     auto d = DeserializeFrame(frame.data(), frame.size());
     check(get_field<float>(d, "focal_length") == 0.0f, "edge float zero");
@@ -875,7 +893,7 @@ static void test_edge_float_zero() {
 static void test_edge_float_negative_zero() {
     std::string pid = "00000000-0000-0000-0000-000000000000";
     // pack_float32 canonicalizes -0 to +0
-    auto body = serialize_body_camera_create(pid, "", 0,0,0, 0,0,0,1, 1,1,1, -0.0f, 0, 0);
+    auto body = serialize_body_camera_create(pid, "", "", 0,0,0, 0,0,0,1, 1,1,1, -0.0f, 0, 0, 0, 0, 0, 0, 0, 0.0);
     auto frame = PackFrame(MsgType::CAMERA_CREATE, 0, 1, DEFAULT_SID, body);
     auto d = DeserializeFrame(frame.data(), frame.size());
     float fl = get_field<float>(d, "focal_length");
@@ -889,7 +907,7 @@ static void test_edge_float_negative_zero() {
 static void test_edge_large_float() {
     std::string pid = "00000000-0000-0000-0000-000000000000";
     float big = 1e30f;
-    auto body = serialize_body_camera_create(pid, "", 0,0,0, 0,0,0,1, 1,1,1, big, 0, 0);
+    auto body = serialize_body_camera_create(pid, "", "", 0,0,0, 0,0,0,1, 1,1,1, big, 0, 0, 0, 0, 0, 0, 0, 0.0);
     auto frame = PackFrame(MsgType::CAMERA_CREATE, 0, 1, DEFAULT_SID, body);
     auto d = DeserializeFrame(frame.data(), frame.size());
     check(floats_eq(get_field<float>(d, "focal_length"), big), "edge large float");
@@ -898,7 +916,7 @@ static void test_edge_large_float() {
 static void test_edge_negative_float() {
     std::string pid = "00000000-0000-0000-0000-000000000000";
     float neg = -123.456f;
-    auto body = serialize_body_camera_create(pid, "", neg,0,0, 0,0,0,1, 1,1,1, 0, 0, 0);
+    auto body = serialize_body_camera_create(pid, "", "", neg,0,0, 0,0,0,1, 1,1,1, 0, 0, 0, 0, 0, 0, 0, 0, 0.0);
     auto frame = PackFrame(MsgType::CAMERA_CREATE, 0, 1, DEFAULT_SID, body);
     auto d = DeserializeFrame(frame.data(), frame.size());
     auto tr = get_field<std::vector<float>>(d, "transform");

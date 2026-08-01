@@ -396,28 +396,40 @@ inline DeserializedMessage DeserializeFrame(const uint8_t* data, size_t size) {
             msg.body["material_id"] = state.unpack_uuid();
             msg.body["slot_index"] = state.unpack_uint8();
             break;
-        case MsgType::CAMERA_CREATE:
+        case MsgType::CAMERA_CREATE: {
             msg.body["camera_id"] = state.unpack_uuid();
             msg.body["name"] = state.unpack_utf8_string();
+            // parent_id is optional. Remaining bytes after name with parent_id:
+            // 16 (uuid) + 40 (transform) + 24 (6 floats) + 1 (flags) + 4 (seq) + 8 (ts) = 93
+            // Without parent_id: 77
+            const size_t body_end = msg.total_size;
+            if (body_end - state.offset >= 93) {
+                msg.body["parent_id"] = state.unpack_uuid();
+            }
             msg.body["transform"] = state.unpack_transform3d();
             msg.body["focal_length"] = state.unpack_float32();
             msg.body["sensor_width"] = state.unpack_float32();
             msg.body["sensor_height"] = state.unpack_float32();
+            msg.body["clip_start"] = state.unpack_float32();
+            msg.body["clip_end"] = state.unpack_float32();
+            msg.body["ortho_scale"] = state.unpack_float32();
+            msg.body["camera_flags"] = state.unpack_uint8();
+            msg.body["sequence_number"] = state.unpack_uint32();
+            msg.body["timestamp"] = state.unpack_float64();
             break;
+        }
         case MsgType::CAMERA_UPDATE:
             msg.body["camera_id"] = state.unpack_uuid();
-            if (state.offset < msg.total_size) {
-                msg.body["transform"] = state.unpack_transform3d();
-            }
-            if (state.offset < msg.total_size) {
-                msg.body["focal_length"] = state.unpack_float32();
-            }
-            if (state.offset < msg.total_size) {
-                msg.body["sensor_width"] = state.unpack_float32();
-            }
-            if (state.offset < msg.total_size) {
-                msg.body["sensor_height"] = state.unpack_float32();
-            }
+            msg.body["transform"] = state.unpack_transform3d();
+            msg.body["focal_length"] = state.unpack_float32();
+            msg.body["sensor_width"] = state.unpack_float32();
+            msg.body["sensor_height"] = state.unpack_float32();
+            msg.body["clip_start"] = state.unpack_float32();
+            msg.body["clip_end"] = state.unpack_float32();
+            msg.body["ortho_scale"] = state.unpack_float32();
+            msg.body["camera_flags"] = state.unpack_uint8();
+            msg.body["sequence_number"] = state.unpack_uint32();
+            msg.body["timestamp"] = state.unpack_float64();
             break;
         case MsgType::CAMERASETACTIVE:
             msg.body["camera_id"] = state.unpack_uuid();

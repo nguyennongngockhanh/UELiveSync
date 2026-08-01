@@ -166,47 +166,59 @@ inline std::vector<uint8_t> serialize_body_object_visibility(
 
 inline std::vector<uint8_t> serialize_body_camera_create(
     const std::string& camera_id, const std::string& name,
+    const std::string& parent_id,
     float px, float py, float pz,
     float rx, float ry, float rz, float rw,
     float sx, float sy, float sz,
-    float focal_length, float sensor_width, float sensor_height)
+    float focal_length, float sensor_width, float sensor_height,
+    float clip_start, float clip_end, float ortho_scale,
+    uint8_t camera_flags,
+    uint32_t sequence_number, double timestamp)
 {
     std::vector<uint8_t> body;
     auto cid = parse_uuid(camera_id);
     pack_uuid(body, cid.data());
     pack_utf8_string(body, name);
+    if (!parent_id.empty()) {
+        auto pid = parse_uuid(parent_id);
+        pack_uuid(body, pid.data());
+    }
     pack_transform3d(body, px, py, pz, rx, ry, rz, rw, sx, sy, sz);
     pack_float32(body, focal_length);
     pack_float32(body, sensor_width);
     pack_float32(body, sensor_height);
+    pack_float32(body, clip_start);
+    pack_float32(body, clip_end);
+    pack_float32(body, ortho_scale);
+    pack_uint8(body, camera_flags);
+    pack_uint32(body, sequence_number);
+    pack_float64(body, timestamp);
     return body;
 }
 
 inline std::vector<uint8_t> serialize_body_camera_update(
     const std::string& camera_id,
-    bool has_transform,
     float px, float py, float pz,
     float rx, float ry, float rz, float rw,
     float sx, float sy, float sz,
-    bool has_focal_length, float focal_length,
-    bool has_sensor_width, float sensor_width,
-    bool has_sensor_height, float sensor_height)
+    float focal_length, float sensor_width, float sensor_height,
+    float clip_start, float clip_end, float ortho_scale,
+    uint8_t camera_flags,
+    uint32_t sequence_number, double timestamp)
 {
     std::vector<uint8_t> body;
     auto cid = parse_uuid(camera_id);
     pack_uuid(body, cid.data());
-    if (has_transform) {
-        pack_transform3d(body, px, py, pz, rx, ry, rz, rw, sx, sy, sz);
-    }
-    if (has_focal_length) {
-        pack_float32(body, focal_length);
-    }
-    if (has_sensor_width) {
-        pack_float32(body, sensor_width);
-    }
-    if (has_sensor_height) {
-        pack_float32(body, sensor_height);
-    }
+    pack_transform3d(body, px, py, pz, rx, ry, rz, rw, sx, sy, sz);
+    pack_float32(body, focal_length);
+    pack_float32(body, sensor_width);
+    pack_float32(body, sensor_height);
+    pack_float32(body, clip_start);
+    pack_float32(body, clip_end);
+    pack_float32(body, ortho_scale);
+    pack_uint8(body, camera_flags);
+    pack_uint32(body, sequence_number);
+    pack_float64(body, timestamp);
     return body;
 }
 

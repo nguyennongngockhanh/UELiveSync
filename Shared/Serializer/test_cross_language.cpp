@@ -305,24 +305,36 @@ static std::vector<uint8_t> serialize_from_manifest(const json& vec) {
             break;
         case MsgType::CAMERA_CREATE: {
             auto tr = manifest_transform_to_vec(fields["transform"]);
-            body = serialize_body_camera_create(fields["camera_id"], fields["name"],
+            float cs = fields.value("clip_start", 0.1f);
+            float ce = fields.value("clip_end", 1000.0f);
+            float os = fields.value("ortho_scale", 6.0f);
+            uint8_t cf = static_cast<uint8_t>(fields.value("camera_flags", 0));
+            uint32_t seq = fields.contains("sequence_number")
+                ? static_cast<uint32_t>(fields["sequence_number"]) : 0U;
+            double ts = fields.value("timestamp", 0.0);
+            std::string parent_id_str;
+            if (fields.contains("parent_id")) {
+                parent_id_str = fields["parent_id"].get<std::string>();
+            }
+            body = serialize_body_camera_create(fields["camera_id"], fields["name"], parent_id_str,
                 tr[0], tr[1], tr[2], tr[3], tr[4], tr[5], tr[6],
                 tr[7], tr[8], tr[9],
-                fields["focal_length"], fields["sensor_width"], fields["sensor_height"]);
+                fields["focal_length"], fields["sensor_width"], fields["sensor_height"],
+                cs, ce, os, cf, seq, ts);
             break;
         }
         case MsgType::CAMERA_UPDATE: {
             auto tr = manifest_transform_to_vec(fields["transform"]);
-            float fl = fields.value("focal_length", 0.0f);
-            float sw = fields.value("sensor_width", 0.0f);
-            float sh = fields.value("sensor_height", 0.0f);
-            bool has_fl = fields.contains("focal_length");
-            bool has_sw = fields.contains("sensor_width");
-            bool has_sh = fields.contains("sensor_height");
+            uint32_t seq = fields.contains("sequence_number")
+                ? static_cast<uint32_t>(fields["sequence_number"]) : 0U;
+            double ts = fields.value("timestamp", 0.0);
             body = serialize_body_camera_update(fields["camera_id"],
-                true, tr[0], tr[1], tr[2], tr[3], tr[4], tr[5], tr[6],
+                tr[0], tr[1], tr[2], tr[3], tr[4], tr[5], tr[6],
                 tr[7], tr[8], tr[9],
-                has_fl, fl, has_sw, sw, has_sh, sh);
+                fields["focal_length"], fields["sensor_width"], fields["sensor_height"],
+                fields["clip_start"], fields["clip_end"], fields["ortho_scale"],
+                static_cast<uint8_t>(fields.value("camera_flags", 0)),
+                seq, ts);
             break;
         }
         case MsgType::CAMERASETACTIVE:
