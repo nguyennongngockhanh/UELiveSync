@@ -954,6 +954,12 @@ def get_transform(obj):
     }
 
 
+def _ue_ortho_scale(cam_data):
+    # INV-2026-011: ortho_scale must go through the same Blender->UE unit
+    # conversion as location (m -> cm) in get_transform.
+    return cam_data.ortho_scale * 100.0
+
+
 # =========================================================
 # KEYFRAME EXTRACTION (Phase 7E Stage 8)
 # =========================================================
@@ -1388,7 +1394,7 @@ def _build_camera_signature(camera_data):
         camera_data.sensor_height,
         camera_data.clip_start,
         camera_data.clip_end,
-        camera_data.ortho_scale,
+        _ue_ortho_scale(camera_data),
         is_ortho,
     )
 
@@ -3161,7 +3167,7 @@ def check_updates():
                 clip_start = getattr(cam_data, 'clip_start', 0.1)
                 clip_end = getattr(cam_data, 'clip_end', 1000.0)
                 is_ortho = getattr(cam_data, 'type', 'PERSP') == 'ORTHO'
-                ortho_scale = getattr(cam_data, 'ortho_scale', 6.0)
+                ortho_scale = _ue_ortho_scale(cam_data)
                 flags = 0
                 if is_ortho:
                     flags |= CAMERA_DEF_FLAG_IS_ORTHO
@@ -3224,7 +3230,7 @@ def check_updates():
                 sensor_height_mm=cam_data.sensor_height,
                 clip_start=cam_data.clip_start,
                 clip_end=cam_data.clip_end,
-                ortho_scale=cam_data.ortho_scale,
+                ortho_scale=_ue_ortho_scale(cam_data),
                 aspect_ratio=_aspect,
                 flags=flags,
             )
