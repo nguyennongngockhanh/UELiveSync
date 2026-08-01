@@ -21,6 +21,7 @@ from .protocol import (
     LENGTH_PREFIX_SIZE,
     UUID_SIZE,
     TRANSFORM3D_SIZE,
+    PRIMITIVE_SIZES,
 )
 
 
@@ -41,6 +42,48 @@ def _resolve_count(field_def, body_fields: dict) -> int:
     var_name = parts[0].strip()
     multiplier = int(parts[1].strip()) if len(parts) > 1 else 1
     return body_fields.get(var_name, 0) * multiplier
+
+
+def _min_field_size(field_def) -> int:
+    """Minimum wire size of a field, derived purely from schema metadata."""
+    if field_def.type in PRIMITIVE_SIZES:
+        return PRIMITIVE_SIZES[field_def.type]
+    if field_def.type == "float64":
+        return 8
+    if field_def.type == "uuid":
+        return UUID_SIZE
+    if field_def.type == "transform3d":
+        return TRANSFORM3D_SIZE
+    if field_def.type == "utf8_string":
+        return 2  # uint16 length prefix; empty string
+    if field_def.type == "raw_bytes":
+        return 4  # uint32 length prefix; empty payload
+    if field_def.type == "f32_array":
+        count = _resolve_count(field_def, {})
+        return 4 * count if count and count > 0 else 0
+    if field_def.type == "u32_array":
+        return 4  # uint32 wire-count prefix; empty payload
+    return 0
+
+
+def _min_required_bytes_after(body_fields: list, idx: int) -> int:
+    """Minimum bytes that required fields after body_fields[idx] must occupy."""
+    return sum(
+        _min_field_size(field_def)
+        for field_def in body_fields[idx + 1:]
+        if not field_def.optional
+    )
+
+
+def _optional_field_present(remaining: int, field_def, body_fields: list, idx: int) -> bool:
+    """
+    Presence predicate for an optional field, matching C++ deserializer semantics.
+
+    present(field) := remaining >= sizeof(field) + minimum_required_bytes_after(field)
+
+    Derived from schema metadata only; no message-type or byte-count constants.
+    """
+    return remaining >= _min_field_size(field_def) + _min_required_bytes_after(body_fields, idx)
 
 
 # ─── Deserialized Message ───────────────────────────────────────
@@ -241,19 +284,21 @@ def deserialize_frame(data: bytes) -> DeserializedMessage:
     body_start = offset
     body_fields: dict[str, Any] = {}
 
-    for field_def in msg_def.body_fields:
+    body_field_defs = msg_def.body_fields
+    for idx, field_def in enumerate(body_field_defs):
         if field_def.type in ("f32_array", "u32_array"):
             count = _resolve_count(field_def, body_fields)
             if count == 0:
                 body_fields[field_def.name] = []
                 continue
+        if field_def.optional and not _optional_field_present(
+            expected_total - offset, field_def, body_field_defs, idx
+        ):
+            continue
         if offset >= expected_total:
-            if field_def.optional:
-                break
-            else:
-                raise DeserializeError(
-                    f"Missing required field: {field_def.name}"
-                )
+            raise DeserializeError(
+                f"Missing required field: {field_def.name}"
+            )
         if field_def.type == "f32_array":
             value, offset = unpack_f32_array(data, offset, count)
         elif field_def.type == "u32_array":
