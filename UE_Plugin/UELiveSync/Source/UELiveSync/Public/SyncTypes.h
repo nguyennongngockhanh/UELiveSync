@@ -680,8 +680,8 @@ static_assert(
 // CAMERA DEFINITION PAYLOAD (Phase 7G Stage 3)
 // =========================================================
 
-// PT_CameraDef (0x1B) fixed-size payload: 44 bytes
-// Wire format:
+// PT_CameraDef (0x1B) fixed-size payload: 48 bytes
+// Wire format (V2):
 //   [0-15]  CameraGUID      FGuid   — camera object GUID
 //   [16-19] FocalLengthMM   float   — focal length in mm
 //   [20-23] SensorWidthMM   float   — sensor width in mm
@@ -689,8 +689,9 @@ static_assert(
 //   [28-31] ClipStart       float   — near clip plane distance
 //   [32-35] ClipEnd         float   — far clip plane distance
 //   [36-39] OrthoScale      float   — orthographic scale
-//   [40]    CameraFlags      uint8  — bit 0 = is_ortho, bit 1 = has_camera_def
-//   [41-43] Reserved         uint8[3]
+//   [40-43] AspectRatio     float   — Blender render aspect (resolution_x / resolution_y)
+//   [44]    CameraFlags      uint8  — bit 0 = is_ortho, bit 1 = has_camera_def
+//   [45-47] Reserved         uint8[3]
 struct FCameraDefPayload
 {
     FGuid   CameraGUID;
@@ -700,13 +701,14 @@ struct FCameraDefPayload
     float   ClipStart        = 10.0f;
     float   ClipEnd          = 100000.0f;
     float   OrthoScale       = 6.0f;
+    float   AspectRatio      = 0.0f;
     uint8   CameraFlags      = 0;
     uint8   Reserved[3]      = { 0, 0, 0 };
 };
 
 static_assert(
-    sizeof(FCameraDefPayload) == 44,
-    "FCameraDefPayload must be exactly 44 bytes");
+    sizeof(FCameraDefPayload) == 48,
+    "FCameraDefPayload must be exactly 48 bytes");
 
 #pragma pack(pop)
 
@@ -2177,7 +2179,7 @@ static constexpr uint32
     H = fnv(H, 680); // FFBXImportRequestPayload
 
     // Phase 7G Stage 3: Camera definition
-    H = fnv(H, 44); // FCameraDefPayload
+    H = fnv(H, 48); // FCameraDefPayload
 
     H = fnv(H, 0x01); H = fnv(H, 0x03);
     H = fnv(H, 0x04); H = fnv(H, 0x07);
@@ -2266,8 +2268,8 @@ static_assert(
     "FActiveCameraPayload must be exactly 28 bytes");
 
 static_assert(
-    sizeof(FCameraDefPayload) == 44,
-    "FCameraDefPayload must be exactly 44 bytes");
+    sizeof(FCameraDefPayload) == 48,
+    "FCameraDefPayload must be exactly 48 bytes");
 
 // =========================================================
 // SEQUENCER OP STATE (Phase 7E)

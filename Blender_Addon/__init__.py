@@ -2958,6 +2958,7 @@ class UELIVESYNC_OT_sync_active_camera_to_ue(
                 clip_start=clip_start,
                 clip_end=clip_end,
                 ortho_scale=ortho_scale,
+                aspect_ratio=network.render_aspect_ratio(bpy.context),
                 flags=flags,
             )
         except Exception as e:
@@ -3209,6 +3210,7 @@ class UELIVESYNC_OT_debug_send_camera_packets(
                     clip_start=clip_start,
                     clip_end=clip_end,
                     ortho_scale=ortho_scale,
+                    aspect_ratio=network.render_aspect_ratio(bpy.context),
                     flags=flags,
                 )
                 network.send_objects(

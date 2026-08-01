@@ -1785,13 +1785,24 @@ ACTIVE_CAMERA_PAYLOAD_SIZE = 28
 #   [36-39] ortho_scale   float LE — orthographic scale
 #   [40]    flags         uint8    — bit 0=is_ortho, bit 1=has_camera_def
 #   [41-43] reserved      bytes    — zero padding
-CAMERA_DEF_PAYLOAD_SIZE = 44
+CAMERA_DEF_PAYLOAD_SIZE = 48
+
+def render_aspect_ratio(context):
+    """Blender render aspect ratio: (resolution_x * pax) / (resolution_y * pay).
+
+    This is the single source of truth for camera aspect ratio in the
+    protocol — never derived from sensor or viewport dimensions.
+    """
+    render = context.scene.render
+    pax = getattr(render, 'pixel_aspect_x', 1.0)
+    pay = getattr(render, 'pixel_aspect_y', 1.0)
+    return (render.resolution_x * pax) / (max(render.resolution_y * pay, 1))
 
 def serialize_camera_def(camera_guid, focal_length_mm=50.0,
                           sensor_width_mm=36.0, sensor_height_mm=24.0,
                           clip_start=0.1, clip_end=1000.0,
-                          ortho_scale=6.0, flags=0):
-    """Serialize camera definition into fixed-size 44-byte payload.
+                          ortho_scale=6.0, aspect_ratio=0.0, flags=0):
+    """Serialize camera definition into fixed-size 48-byte payload.
 
     Args:
         camera_guid: UUID object, or None for default (all-zero GUID).
@@ -1801,6 +1812,7 @@ def serialize_camera_def(camera_guid, focal_length_mm=50.0,
         clip_start: Near clip plane distance.
         clip_end: Far clip plane distance.
         ortho_scale: Orthographic scale factor.
+        aspect_ratio: Blender render aspect (resolution_x / resolution_y).
         flags: Bitfield (bit 0=is_ortho, bit 1=has_camera_def).
 
     Returns bytes of length CAMERA_DEF_PAYLOAD_SIZE.
@@ -1810,7 +1822,7 @@ def serialize_camera_def(camera_guid, focal_length_mm=50.0,
     else:
         guid_bytes = pack_ue_fguid(camera_guid)
     return struct.pack(
-        "<16sffffffB3s",
+        "<16sfffffffB3s",
         guid_bytes,
         focal_length_mm,
         sensor_width_mm,
@@ -1818,6 +1830,7 @@ def serialize_camera_def(camera_guid, focal_length_mm=50.0,
         clip_start,
         clip_end,
         ortho_scale,
+        aspect_ratio,
         flags & 0xFF,
         b'\x00\x00\x00'
     )

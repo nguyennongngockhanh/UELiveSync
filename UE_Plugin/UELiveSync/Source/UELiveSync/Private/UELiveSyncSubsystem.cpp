@@ -3920,26 +3920,45 @@ ProcessBinaryPacket(
         Stats.CameraDefPacketsReceived.fetch_add(1, std::memory_order_relaxed);
 
         int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
-        if (ObjSize < sizeof(FCameraDefPayload))
+
+        FCameraDefPayload Payload;
+        switch (ObjSize)
         {
+        case 44:
+            // Legacy CameraDef (V1, 44 bytes): no AspectRatio field.
+            // CameraFlags at offset 40, Reserved at [41-43].
+            Payload.CameraGUID     = *reinterpret_cast<const FGuid*>(Ptr + 0);
+            Payload.FocalLengthMM  = *reinterpret_cast<const float*>(Ptr + 16);
+            Payload.SensorWidthMM  = *reinterpret_cast<const float*>(Ptr + 20);
+            Payload.SensorHeightMM = *reinterpret_cast<const float*>(Ptr + 24);
+            Payload.ClipStart      = *reinterpret_cast<const float*>(Ptr + 28);
+            Payload.ClipEnd        = *reinterpret_cast<const float*>(Ptr + 32);
+            Payload.OrthoScale     = *reinterpret_cast<const float*>(Ptr + 36);
+            Payload.CameraFlags    = *reinterpret_cast<const uint8*>(Ptr + 40);
+            Payload.AspectRatio    = 0.0f; // legacy: caller falls back to sensor ratio
+            break;
+        case 48:
+            // CameraDef (V2, 48 bytes): AspectRatio at offset 40,
+            // CameraFlags at offset 44, Reserved at [45-47].
+            Payload.CameraGUID     = *reinterpret_cast<const FGuid*>(Ptr + 0);
+            Payload.FocalLengthMM  = *reinterpret_cast<const float*>(Ptr + 16);
+            Payload.SensorWidthMM  = *reinterpret_cast<const float*>(Ptr + 20);
+            Payload.SensorHeightMM = *reinterpret_cast<const float*>(Ptr + 24);
+            Payload.ClipStart      = *reinterpret_cast<const float*>(Ptr + 28);
+            Payload.ClipEnd        = *reinterpret_cast<const float*>(Ptr + 32);
+            Payload.OrthoScale     = *reinterpret_cast<const float*>(Ptr + 36);
+            Payload.AspectRatio    = *reinterpret_cast<const float*>(Ptr + 40);
+            Payload.CameraFlags    = *reinterpret_cast<const uint8*>(Ptr + 44);
+            break;
+        default:
             Stats.CameraDefPacketsMalformed.fetch_add(1, std::memory_order_relaxed);
             Stats.MalformedPackets.fetch_add(1, std::memory_order_relaxed);
             UE_LOG(LogLiveSync, Warning,
-                TEXT("[CAMERA][MALFORMED] CameraDef payload size %d < %d"),
-                ObjSize, sizeof(FCameraDefPayload));
+                TEXT("[CAMERA][MALFORMED] CameraDef payload size %d (expected 44 or 48)"),
+                ObjSize);
             Stats.PacketsProcessed.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-
-        FCameraDefPayload Payload;
-        Payload.CameraGUID     = *reinterpret_cast<const FGuid*>(Ptr + 0);
-        Payload.FocalLengthMM  = *reinterpret_cast<const float*>(Ptr + 16);
-        Payload.SensorWidthMM  = *reinterpret_cast<const float*>(Ptr + 20);
-        Payload.SensorHeightMM = *reinterpret_cast<const float*>(Ptr + 24);
-        Payload.ClipStart      = *reinterpret_cast<const float*>(Ptr + 28);
-        Payload.ClipEnd        = *reinterpret_cast<const float*>(Ptr + 32);
-        Payload.OrthoScale     = *reinterpret_cast<const float*>(Ptr + 36);
-        Payload.CameraFlags    = *reinterpret_cast<const uint8*>(Ptr + 40);
 
         HandleCameraDef(Payload);
         Stats.CameraDefPacketsApplied.fetch_add(1, std::memory_order_relaxed);
@@ -7881,14 +7900,8 @@ void UUELiveSyncSubsystem::OnCameraUpdate(
         const float SensorW = View.HasSensorWidth
             ? FMath::Max(View.SensorWidth, 1.0f)
             : 36.0f; // default sensor width
-        const float SensorH = View.HasSensorHeight
-            ? FMath::Max(View.SensorHeight, 1.0f)
-            : 24.0f; // default sensor height
-
         const float FOVRad = 2.0f * FMath::Atan(SensorW / (2.0f * FocalMM));
         CamComp->FieldOfView = FMath::RadiansToDegrees(FOVRad);
-        CamComp->AspectRatio = SensorW / SensorH;
-        CamComp->bConstrainAspectRatio = true;
     }
 
     if (View.HasTransform)
@@ -12790,7 +12803,7 @@ HandleCameraDef(
     LastCameraDefSequence++;
 
     UE_LOG(LogLiveSync, Log,
-        TEXT("[CAMERA][DEF_RECV] guid=%s focal=%.1f sensor=%.1fx%.1f clip=[%.1f,%.1f] ortho=%.1f flags=%d"),
+        TEXT("[CAMERA][DEF_RECV] guid=%s focal=%.1f sensor=%.1fx%.1f clip=[%.1f,%.1f] ortho=%.1f aspect=%.4f flags=%d"),
         *Payload.CameraGUID.ToString(),
         Payload.FocalLengthMM,
         Payload.SensorWidthMM,
@@ -12798,6 +12811,7 @@ HandleCameraDef(
         Payload.ClipStart,
         Payload.ClipEnd,
         Payload.OrthoScale,
+        Payload.AspectRatio,
         Payload.CameraFlags);
 
 #if WITH_EDITOR
@@ -12838,6 +12852,22 @@ HandleCameraDef(
 
     const bool bIsOrtho = (Payload.CameraFlags & 0x01) != 0;
 
+    // Aspect ratio is a fundamental camera property synced from Blender
+    // render resolution — it applies to both projection modes, independent
+    // of the projection branch below.
+    if (Payload.AspectRatio > 0.0f)
+    {
+        CamComp->AspectRatio = Payload.AspectRatio;
+        CamComp->bConstrainAspectRatio = true;
+    }
+    else
+    {
+        // Legacy CameraDef (V1, 44 bytes) carries no aspect field —
+        // fall back to the sensor-derived ratio to preserve prior behavior.
+        CamComp->AspectRatio = Payload.SensorWidthMM / FMath::Max(Payload.SensorHeightMM, 1.0f);
+        CamComp->bConstrainAspectRatio = true;
+    }
+
     if (bIsOrtho)
     {
         // Orthographic projection
@@ -12846,10 +12876,11 @@ HandleCameraDef(
         CamComp->SetOrthoNearClipPlane(FMath::Max(Payload.ClipStart, 0.01f));
         CamComp->SetOrthoFarClipPlane(Payload.ClipEnd);
         UE_LOG(LogLiveSync, Log,
-            TEXT("[CAMERA][DEF_APPLY] ortho: width=%.1f near=%.1f far=%.1f on %s"),
+            TEXT("[CAMERA][DEF_APPLY] ortho: width=%.1f near=%.1f far=%.1f aspect=%.4f on %s"),
             CamComp->OrthoWidth,
             CamComp->OrthoNearClipPlane,
             CamComp->OrthoFarClipPlane,
+            CamComp->AspectRatio,
             *Camera->GetName());
     }
     else
@@ -12862,8 +12893,6 @@ HandleCameraDef(
 
         CamComp->SetProjectionMode(ECameraProjectionMode::Perspective);
         CamComp->FieldOfView = FOVDeg;
-        CamComp->AspectRatio = Payload.SensorWidthMM / FMath::Max(Payload.SensorHeightMM, 1.0f);
-        CamComp->bConstrainAspectRatio = true;
 
         UE_LOG(LogLiveSync, Log,
             TEXT("[CAMERA][DEF_APPLY] persp: FOV=%.1f aspect=%.2f focal=%.1f sensor=%.1fx%.1f clip=[%.1f,%.1f] on %s"),

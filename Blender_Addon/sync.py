@@ -158,6 +158,7 @@ try:
         pack_ue_fguid,
         PT_CameraDef,
         serialize_camera_def,
+        render_aspect_ratio,
         CAMERA_DEF_PAYLOAD_SIZE,
         CAMERA_DEF_FLAG_IS_ORTHO,
         CAMERA_DEF_FLAG_HAS_CAMERA_DEF,
@@ -3173,6 +3174,7 @@ def check_updates():
                     clip_start=clip_start,
                     clip_end=clip_end,
                     ortho_scale=ortho_scale,
+                    aspect_ratio=render_aspect_ratio(bpy.context),
                     flags=flags,
                 )
                 send_objects([camdef_payload], packet_type=PT_CameraDef, version=5)
@@ -3208,6 +3210,9 @@ def check_updates():
         last_sig = _last_camera_signature.get(guid_bytes)
 
         if last_sig is None or signature != last_sig:
+            # Aspect ratio is a fundamental camera property — synced from
+            # Blender render resolution (including pixel aspect).
+            _aspect = render_aspect_ratio(bpy.context)
             is_ortho = (cam_data.type == 'ORTHO')
             flags = CAMERA_DEF_FLAG_HAS_CAMERA_DEF
             if is_ortho:
@@ -3220,6 +3225,7 @@ def check_updates():
                 clip_start=cam_data.clip_start,
                 clip_end=cam_data.clip_end,
                 ortho_scale=cam_data.ortho_scale,
+                aspect_ratio=_aspect,
                 flags=flags,
             )
             send_objects([camdef_payload], packet_type=PT_CameraDef, version=5)
