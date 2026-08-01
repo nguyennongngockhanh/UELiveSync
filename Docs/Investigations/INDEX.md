@@ -10,6 +10,8 @@
 | INV-2026-006 | Boundary Evaluation | In Progress | P0 | INV-2026-005 | 2026-07-20 | Khanh |
 | INV-2026-009 | Camera Orientation Mismatch (Blender ↔ UE) | Closed | P0 | — | 2026-07-30 | Khanh |
 | INV-2026-010 | PiP Viewport Invalidation After OBJECT_CREATE / Mesh Rebuild | Closed | P0 | — | 2026-07-30 | Khanh |
+| INV-2026-011 | Ortho Scale Unit Mismatch (Blender m → UE cm) | Closed | P0 | — | 2026-07-31 | Khanh |
+| INV-2026-012 | Camera Aspect Ratio Not Synced via Protocol | Closed | P0 | — | 2026-07-31 | Khanh |
 
 ## INV-2026-009 — Camera Orientation Mismatch (Blender ↔ UE)
 
@@ -29,3 +31,19 @@ Alias: INV-E2.
 - **Root cause**: Editor viewport invalidation policy — spawn/rebuild did not invalidate the locked-actor viewport, so it kept showing stale frames.
 - **Resolution**: Viewport invalidation after OBJECT_CREATE / visibility / mesh rebuild. Instrumentation retained in `UELiveSyncSubsystem.cpp` (`[INV-E2][...]` markers) for future regression checks.
 - **Commit**: none yet (working-tree change, uncommitted).
+
+## INV-2026-011 — Ortho Scale Unit Mismatch (Blender m → UE cm)
+
+- **Symptom**: Orthographic framing in UE did not match the Blender camera; ortho width was off by the Blender meter → UE cm factor.
+- **Root cause**: `ortho_scale` was sent raw from Blender (meters) while `UCameraComponent::OrthoWidth` is in world units (cm). The m→cm conversion already applied to location in `get_transform` was never applied to ortho scale.
+- **Resolution**: Added `_ue_ortho_scale()` in `Blender_Addon/sync.py` (`ortho_scale * 100.0`), used in `_build_camera_signature`, the CameraDef def-scan path, and the standalone dirty-detection path.
+- **Evidence**: Runtime verified — ortho framing matches Blender only after applying `ortho_scale × 100`; both projection modes then match the Blender camera.
+- **Commit**: `5ec62be`.
+
+## INV-2026-012 — Camera Aspect Ratio Not Synced via Protocol
+
+- **Symptom**: UE camera aspect did not match Blender framing in both Perspective and Orthographic. UE derived aspect from sensor ratio (`36/24 = 1.5`) while Blender framing depends on render resolution (`1920×1080 = 1.7778`).
+- **Root cause**: `PT_CameraDef` carried no aspect field, so UE fell back to `SensorWidthMM / SensorHeightMM`. Aspect ratio is camera state (render framing), not viewport — it must come from Blender render resolution including pixel aspect.
+- **Resolution**: Extended `PT_CameraDef` from 44 → 48 bytes adding `AspectRatio` at offset 40 (V2; CameraFlags → 44, Reserved → [45-47]). Blender sends `render_aspect_ratio()` at both CameraDef emission points. UE parses both V1 (44B — legacy: sensor-ratio fallback) and V2 (48B) via an explicit `switch(ObjSize)`, applies aspect once before the projection branch (both Perspective and Orthographic), and removes every sensor-derived aspect override (perspective branch, CAMERA_UPDATE, CAMERA_CREATE).
+- **Evidence**: Runtime verified — `DEF_APPLY persp ... aspect=1.7778` and `DEF_APPLY ortho width=500.0 ... aspect=1.7778` match Blender. Wire tests 26/26 PASS.
+- **Commit**: `6dea4f8`.
