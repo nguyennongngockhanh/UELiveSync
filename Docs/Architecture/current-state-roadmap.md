@@ -230,6 +230,8 @@ Existing roadmap candidates remain options only and are not active work.
 
 11. **PT_Mesh (0x06) is experimental.** Full attribute sync (normals, UVs, tangents, vertex colors) not implemented. Production mesh sync uses FBX handoff (0x16) path.
 
+12. **Legacy camera tests broken at import since Phase 1.4 (`06e0793`).** `phase7d_stage1/1b/1c/2/3/4`, `phase7g_stage4_camera_transform_sync`, `phase7g_stage5_camera_sequencer_binding` use `sys.path.insert(0, Blender_Addon)` + top-level `import network`; `network.py` moved to relative imports (`from .msg_transport import ...`) in Phase 1.4, so they fail with `ImportError: attempted relative import with no known parent package`. Not related to CameraDef (INV-2026-011/012/013) or TEST-2026-001. Deferred to **TEST-2026-002** — migrate these tests to the `uelivesync` package import (like `phase7g_stage3_camera_def_wire.py`); no production code change.
+
 ---
 
 ## Recommended Next Work Options
@@ -248,6 +250,8 @@ Camera synchronization investigations completed:
 ### Investigation Closeout (2026-08-01)
 
 - **INV-2026-013 — Camera aspect not updated when render resolution changes: Closed.** Root cause: `_build_camera_signature()` excluded render settings, so changing `resolution_x/y` or `pixel_aspect_x/y` never dirtied the CameraDef gate and UE kept the stale aspect. Fixed by adding the four raw render fields to `_build_camera_signature()` in `Blender_Addon/sync.py` (signature depends on source state, not derived aspect). Protocol/wire unchanged. Runtime verified: every resolution field change re-emits CameraDef and UE applies the new aspect; same-aspect round-trip `3840×2160 → 1920×1080` returns to `1.7778`. Commit `37adf40`.
+
+- **TEST-2026-001 — Refresh stale static tests after CameraDef v2: Done.** Updated `ACameraActor` → `ALiveSyncCameraActor` and FNV payload 44 → 48 in `phase7g_stage3_camera_def_ue_apply.py` (19/19 PASS) and `phase7g_stage2_camera_actor_spawn.py` (10/10 PASS); `phase7g_stage3_camera_def_wire.py` 26/26 PASS. **TEST-2026-002 — Migrate legacy camera tests to package imports: Pending** (8 tests broken at import since Phase 1.4 `06e0793`; see Known Limitations #12).
 
 No MIG numbering changed here. Migration numbering normalization (AGENTS.md vs `65-phase1.4-foundation-stabilization.md`) is deferred to a separate documentation cleanup.
 
