@@ -2531,7 +2531,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                               f"combinedHash={combined_hash_val}")
 
                         scalar_changed = True
-                        if prev_prop_sig is not None:
+                        if prev_prop_sig is not None and current_prop_sig:
                             _scalar_len = len(next(iter(current_prop_sig.values())))
                             prev_scalar = {si: vals[:_scalar_len] for si, vals in prev_prop_sig.items()}
                             scalar_changed = current_prop_sig != prev_scalar
