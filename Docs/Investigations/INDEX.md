@@ -13,6 +13,7 @@
 | INV-2026-011 | Ortho Scale Unit Mismatch (Blender m → UE cm) | Closed | P0 | — | 2026-07-31 | Khanh |
 | INV-2026-012 | Camera Aspect Ratio Not Synced via Protocol | Closed | P0 | — | 2026-07-31 | Khanh |
 | INV-2026-013 | Camera Aspect Not Updated When Render Resolution Changes | Closed | P0 | — | 2026-08-01 | Khanh |
+| INV-2026-014 | FBX Export Operator StopIteration on Zero Material Slots | In Progress | P1 | — | 2026-08-01 | Khanh |
 
 ## INV-2026-009 — Camera Orientation Mismatch (Blender ↔ UE)
 
@@ -56,3 +57,11 @@ Alias: INV-E2.
 - **Resolution**: Added `render.resolution_x`, `render.resolution_y`, `render.pixel_aspect_x`, `render.pixel_aspect_y` to `_build_camera_signature()` in `Blender_Addon/sync.py`. Signature now depends on source state, not derived aspect — any render-settings change (including same-aspect changes like `1920×1080 → 3840×2160`) re-emits CameraDef. Protocol/wire unchanged (aspect payload already present from INV-2026-012).
 - **Evidence**: Runtime verified — each resolution field change re-emits CameraDef with the correct aspect applied in UE (`1.4815`, `1.3333`, `3.2`, `1.7778`, `0.8889`); same-aspect round-trip `3840×2160 → 1920×1080` returns to `1.7778`. Regression test `tests/phase7g_stage3_camera_signature_render_state.py` 11/11 PASS; wire test 26/26 PASS.
 - **Commit**: `37adf40`.
+
+## INV-2026-014 — FBX Export Operator StopIteration on Zero Material Slots
+
+- **Symptom**: "Sync Selected Mesh to UE (FBX)" operator on a mesh with zero material slots throws `StopIteration` at `Blender_Addon/__init__.py:2535` and reports `[FBX] ERROR: <name>`, after the FBX packet was already enqueued/sent. Core Asset Import still completes (UE `[FBX][VALIDATE] meshValid=1`).
+- **Classification**: Asset Import (smoke S7): PASS. Post-export operator cleanup: FAIL — operator robustness defect, not Asset Import failure.
+- **Root cause (hypothesis, fix pending)**: In the operator's post-export material dirty-signature block, `current_prop_sig` is an empty dict `{}` when the object has no material slots (`no_material_slots`, `mats=0`). The guard `if prev_prop_sig is not None:` protects only the previous signature, not an empty `current_prop_sig`; `_scalar_len = len(next(iter(current_prop_sig.values())))` then raises `StopIteration`.
+- **Evidence**: Reproduced twice deterministically under identical conditions (same Cube_B, no material slot, same operator, fresh boundary each run) — identical traceback, same callstack, `__init__.py:2535`, `[FBX] ERROR: Cube_B —`. UE import succeeded both times (`[FBX][VALIDATE] meshValid=1`, transactionId=1 and 2). Baseline: HEAD `2551d29` clean, addon loaded from repo via symlink chain (`5.2 → ~/.config/blender/5.1 → repo Blender_Addon`).
+- **Commit**: none (fix pending, follows Bug Lifecycle).
