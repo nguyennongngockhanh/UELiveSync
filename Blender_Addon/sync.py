@@ -15,7 +15,7 @@ from mathutils import Matrix
 from uuid import UUID
 
 from .msg_transport import get_transport, MsgType
-from .material_protocol import build_material_create, build_material_update, clear_material_sequences, _next_material_create_sequence, _next_material_update_sequence
+from .material_protocol import build_material_create, build_material_update, build_material_assign, clear_material_sequences, _next_material_create_sequence, _next_material_update_sequence, _next_material_assign_sequence
 from .object_protocol import build_object_create, build_object_update, build_object_reparent, build_object_visibility, build_object_rename, build_object_delete, clear_all_sequences, clear_delete_sequences, next_create_sequence, next_update_sequence, build_camera_create, build_camera_update, build_camera_setactive, clear_camera_sequences, _next_camera_create_sequence, _next_camera_update_sequence
 
 try:
@@ -300,6 +300,10 @@ _mat_create_sent_names = set()
 # Phase 1.4.2b: Per-material last-sent property state for MATERIAL_UPDATE detection
 # Maps mat_name -> (base_color_4f, metallic_f, roughness_f)
 _last_material_sent_props = {}
+
+# Phase 1.4.2c: Last-sent slot->material binding for MATERIAL_ASSIGN detection
+# Maps (persistent_id, slot_index) -> str(material_uuid)
+_mat_assigned_binding = {}
 
 # Phase 10J.5I: Per-GUID last material property signature for change detection
 # Maps guid -> {slot_index: (r, g, b, a, roughness, metallic)}
@@ -1524,6 +1528,7 @@ def check_updates():
         _last_material_sent_reason.clear()
         _mat_create_sent_names.clear()
         _last_material_sent_props.clear()  # Phase 1.4.2b
+        _mat_assigned_binding.clear()  # Phase 1.4.2c: force MATERIAL_ASSIGN resend
         _last_decision_init_printed.clear()
         _last_sidecar_digest.clear()
         _last_sidecar_info.clear()
@@ -1665,6 +1670,7 @@ def check_updates():
     material_payloads_to_send = []
     material_creates_to_send = []
     material_updates_to_send = []
+    material_assigns_to_send = []
     mesh_payloads_to_send = []
     object_create_msgs_to_send = []
     object_reparent_msgs_to_send = []
@@ -2406,6 +2412,40 @@ def check_updates():
                 if _mu_after > _mu_before:
                     print(f"[MATERIAL][MSGTYPE] collected {_mu_after - _mu_before} MATERIAL_UPDATE for guid={guid[:8]}")
 
+                # Phase 1.4.2c: collect MATERIAL_ASSIGN for slot->material
+                # bindings that differ from the last sent state.
+                _ma_before = len(material_assigns_to_send)
+                try:
+                    for slot_index, slot in enumerate(obj.material_slots):
+                        if not slot or not slot.material:
+                            continue
+                        mat = slot.material
+                        low, high = get_material_identity_hash(mat)
+                        mat_uuid = uuid.UUID(
+                            int=((high & 0xFFFFFFFFFFFFFFFF) << 64)
+                            | (low & 0xFFFFFFFFFFFFFFFF)
+                        )
+                        binding_key = (guid, slot_index)
+                        mat_uuid_str = str(mat_uuid)
+                        if _mat_assigned_binding.get(binding_key) == mat_uuid_str:
+                            continue
+                        _mat_assigned_binding[binding_key] = mat_uuid_str
+                        body = build_material_assign(
+                            persistent_id=guid_obj,
+                            material_id=mat_uuid,
+                            slot_index=slot_index,
+                            sequence_number=_next_material_assign_sequence(guid_obj),
+                            timestamp=time.time(),
+                        )
+                        material_assigns_to_send.append(
+                            (MsgType.MATERIAL_ASSIGN, body)
+                        )
+                except Exception as _ma_exc:
+                    print(f"[MATERIAL][MSGTYPE][ERROR] {_ma_exc}")
+                _ma_after = len(material_assigns_to_send)
+                if _ma_after > _ma_before:
+                    print(f"[MATERIAL][MSGTYPE] collected {_ma_after - _ma_before} MATERIAL_ASSIGN for guid={guid[:8]}")
+
                 # Phase 7H: log MATX_VALUE_SEND for each slot/channel
                 if mat_props:
                     for si in mat_props:
@@ -2881,6 +2921,23 @@ def check_updates():
                 print(f"[MATERIAL][MSGTYPE] Sent {sent_count} MATERIAL_UPDATE via MsgType")
             _append_blender_debug_log(
                 f"[MAT][MSGTYPE] MATERIAL_UPDATE sent={sent_count}"
+            )
+
+    # =====================================================
+    # SEND MATERIAL ASSIGN (Phase 1.4.2c — MsgType)
+    # =====================================================
+
+    if material_assigns_to_send:
+        transport = get_transport()
+        if transport is not None:
+            sent_count = 0
+            for msg_type, body in material_assigns_to_send:
+                if transport.send_msg(msg_type, body):
+                    sent_count += 1
+            if _verbose_logging:
+                print(f"[MATERIAL][MSGTYPE] Sent {sent_count} MATERIAL_ASSIGN via MsgType")
+            _append_blender_debug_log(
+                f"[MAT][MSGTYPE] MATERIAL_ASSIGN sent={sent_count}"
             )
 
     # =====================================================

@@ -32,12 +32,15 @@ from .msg_transport import (
 # create packets never advance the update counter and vice versa.
 _material_create_sequences: Dict[str, int] = {}
 _material_update_sequences: Dict[str, int] = {}
+# Per-object-id sequence counters for assigns. Key: str(persistent_id).
+_material_assign_sequences: Dict[str, int] = {}
 
 
 def clear_material_sequences() -> None:
     """Reset all material sequence counters (call on session start/end)."""
     _material_create_sequences.clear()
     _material_update_sequences.clear()
+    _material_assign_sequences.clear()
 
 
 def _next_material_create_sequence(material_id) -> int:
@@ -51,6 +54,13 @@ def _next_material_update_sequence(material_id) -> int:
     key = str(material_id)
     seq = _material_update_sequences.get(key, 0) + 1
     _material_update_sequences[key] = seq
+    return seq
+
+
+def _next_material_assign_sequence(persistent_id) -> int:
+    key = str(persistent_id)
+    seq = _material_assign_sequences.get(key, 0) + 1
+    _material_assign_sequences[key] = seq
     return seq
 
 
