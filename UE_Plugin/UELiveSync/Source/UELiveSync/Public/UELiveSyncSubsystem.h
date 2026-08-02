@@ -576,6 +576,16 @@ private:
         const LiveSyncBridge::MaterialAssignView& View,
         UMaterialInterface* Material);
 
+    /** Re-apply an updated material to every mesh slot that currently
+     *  shows OldMID. Uses ActorCache + component state as the ownership
+     *  source of truth (no dedicated reverse mapping). Called by
+     *  OnMaterialUpdate after the registry is invalidated and rebuilt.
+     */
+    void ReapplyMaterialAssignments(
+        const FGuid& MaterialGuid,
+        UMaterialInterface* OldMID,
+        UMaterialInterface* NewMID);
+
     /** Register a material identity → path mapping in MaterialPathCache.
      *  Logs a warning on identity collision (same identity, different path).
      */

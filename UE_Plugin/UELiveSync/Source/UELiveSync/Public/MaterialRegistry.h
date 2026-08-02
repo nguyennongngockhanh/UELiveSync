@@ -28,7 +28,10 @@ public:
 
     UMaterialInterface* Resolve(const FGuid& Id);
 
-    // TODO Phase 2: Invalidate(UUID), Clear(), OnAssetReload()
+    // Removes the cached instance for Id (if any) and returns the
+    // previously cached pointer (nullptr if not cached). Does NOT
+    // build a new instance; callers re-Resolve after Invalidate.
+    UMaterialInterface* Invalidate(const FGuid& Id);
 
 private:
     UMaterialInterface* BuildMaterial(const MaterialDefinition& Def);

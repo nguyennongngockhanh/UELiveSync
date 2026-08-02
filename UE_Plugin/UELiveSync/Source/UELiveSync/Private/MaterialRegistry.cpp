@@ -38,3 +38,15 @@ UMaterialInterface* MaterialRegistry::BuildMaterial(
     }
     return Factory(Def);
 }
+
+UMaterialInterface* MaterialRegistry::Invalidate(const FGuid& Id)
+{
+    TObjectPtr<UMaterialInterface>* Existing = Cache.Find(Id);
+    if (!Existing)
+    {
+        return nullptr;
+    }
+    UMaterialInterface* Result = *Existing;
+    Cache.Remove(Id);
+    return Result;
+}

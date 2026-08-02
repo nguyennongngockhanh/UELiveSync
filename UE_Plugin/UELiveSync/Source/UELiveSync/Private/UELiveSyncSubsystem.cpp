@@ -8715,6 +8715,23 @@ void UUELiveSyncSubsystem::OnMaterialCreate(
     FGuid MaterialGuid;
     FMemory::Memcpy(&MaterialGuid, View.MaterialId.data(), 16);
 
+    // Stale-rejection: per-material sequence tracking (create counter).
+    // Mirrors GUpdateSequences / GCameraUpdateSequences pattern.
+    static TMap<FGuid, uint32> GMaterialCreateSequences;
+    const uint32 IncomingSeq = View.SequenceNumber;
+    if (uint32* LastSeq = GMaterialCreateSequences.Find(MaterialGuid))
+    {
+        if (IncomingSeq <= *LastSeq)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MATERIAL][CREATE][STALE] id=%s seq=%u last=%u"),
+                *MaterialGuid.ToString(EGuidFormats::Digits),
+                IncomingSeq, *LastSeq);
+            return;
+        }
+    }
+    GMaterialCreateSequences.Add(MaterialGuid, IncomingSeq);
+
     MaterialCreateStorage.Add(MaterialGuid, View);
     MaterialDatabase.RegisterDefinition(View);
 
@@ -8742,6 +8759,24 @@ void UUELiveSyncSubsystem::OnMaterialUpdate(
 
     FGuid MaterialGuid;
     FMemory::Memcpy(&MaterialGuid, View.MaterialId.data(), 16);
+
+    // Stale-rejection: per-material sequence tracking (update counter).
+    // Kept separate from the create counter — Blender tracks create and
+    // update sequences independently per material.
+    static TMap<FGuid, uint32> GMaterialUpdateSequences;
+    const uint32 IncomingSeq = View.SequenceNumber;
+    if (uint32* LastSeq = GMaterialUpdateSequences.Find(MaterialGuid))
+    {
+        if (IncomingSeq <= *LastSeq)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MATERIAL][UPDATE][STALE] id=%s seq=%u last=%u"),
+                *MaterialGuid.ToString(EGuidFormats::Digits),
+                IncomingSeq, *LastSeq);
+            return;
+        }
+    }
+    GMaterialUpdateSequences.Add(MaterialGuid, IncomingSeq);
 
     auto* Existing = MaterialCreateStorage.Find(MaterialGuid);
     if (Existing)
@@ -8775,6 +8810,17 @@ void UUELiveSyncSubsystem::OnMaterialUpdate(
         *MaterialGuid.ToString(EGuidFormats::Digits),
         View.Metallic, View.Roughness,
         View.HasTexturePath ? View.TexturePath.c_str() : "none");
+
+    // Re-apply: invalidate the cached MID, rebuild from the updated
+    // definition, and refresh any mesh slot that currently shows the
+    // stale instance. Re-uses ActorCache + component state as the
+    // ownership source of truth (no dedicated reverse mapping).
+    UMaterialInterface* OldMID = MaterialReg->Invalidate(MaterialGuid);
+    UMaterialInterface* NewMID = MaterialReg->Resolve(MaterialGuid);
+    if (OldMID && NewMID && OldMID != NewMID)
+    {
+        ReapplyMaterialAssignments(MaterialGuid, OldMID, NewMID);
+    }
 }
 
 // =========================================================
@@ -8789,6 +8835,27 @@ void UUELiveSyncSubsystem::OnMaterialAssign(
 {
     CHECK_GAME_THREAD();
 
+    FGuid ObjectGuid;
+    FMemory::Memcpy(&ObjectGuid, View.PersistentId.data(), 16);
+
+    // Stale-rejection: per-object sequence tracking for assigns.
+    // Keyed by the assigned object so reassignments of the same object
+    // advance one monotonic counter.
+    static TMap<FGuid, uint32> GMaterialAssignSequences;
+    const uint32 IncomingSeq = View.SequenceNumber;
+    if (uint32* LastSeq = GMaterialAssignSequences.Find(ObjectGuid))
+    {
+        if (IncomingSeq <= *LastSeq)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[MATERIAL][ASSIGN][STALE] object=%s seq=%u last=%u"),
+                *ObjectGuid.ToString(EGuidFormats::Digits),
+                IncomingSeq, *LastSeq);
+            return;
+        }
+    }
+    GMaterialAssignSequences.Add(ObjectGuid, IncomingSeq);
+
     FGuid MaterialGuid;
     FMemory::Memcpy(&MaterialGuid, View.MaterialId.data(), 16);
 
@@ -8802,6 +8869,49 @@ void UUELiveSyncSubsystem::OnMaterialAssign(
     }
 
     AssignMaterial(View, Material);
+}
+
+// =========================================================
+// REAPPLY MATERIAL ASSIGNMENTS (private helper)
+// =========================================================
+// Replaces OldMID with NewMID on every mesh slot currently using it.
+// Uses ActorCache + component GetMaterial as the ownership source of
+// truth; requires no dedicated reverse mapping. Runs on game thread
+// via OnMaterialUpdate.
+// =========================================================
+
+void UUELiveSyncSubsystem::ReapplyMaterialAssignments(
+    const FGuid& MaterialGuid,
+    UMaterialInterface* OldMID,
+    UMaterialInterface* NewMID)
+{
+    for (const auto& Kvp : ActorCache)
+    {
+        AActor* Actor = Kvp.Value.Get();
+        if (!Actor)
+        {
+            continue;
+        }
+        UStaticMeshComponent* MeshComp =
+            Actor->FindComponentByClass<UStaticMeshComponent>();
+        if (!MeshComp)
+        {
+            continue;
+        }
+        const int32 NumMaterials = MeshComp->GetNumMaterials();
+        for (int32 SlotIndex = 0; SlotIndex < NumMaterials; ++SlotIndex)
+        {
+            if (MeshComp->GetMaterial(SlotIndex) != OldMID)
+            {
+                continue;
+            }
+            MeshComp->SetMaterial(SlotIndex, NewMID);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][REAPPLY] material=%s object=%s slot=%d OK"),
+                *MaterialGuid.ToString(EGuidFormats::Digits),
+                *Actor->GetName(), SlotIndex);
+        }
+    }
 }
 
 // =========================================================
