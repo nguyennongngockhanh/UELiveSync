@@ -15,7 +15,7 @@ from mathutils import Matrix
 from uuid import UUID
 
 from .msg_transport import get_transport, MsgType
-from .material_protocol import build_material_create, build_material_update
+from .material_protocol import build_material_create, build_material_update, clear_material_sequences, _next_material_create_sequence, _next_material_update_sequence
 from .object_protocol import build_object_create, build_object_update, build_object_reparent, build_object_visibility, build_object_rename, build_object_delete, clear_all_sequences, clear_delete_sequences, next_create_sequence, next_update_sequence, build_camera_create, build_camera_update, build_camera_setactive, clear_camera_sequences, _next_camera_create_sequence, _next_camera_update_sequence
 
 try:
@@ -1513,6 +1513,7 @@ def check_updates():
         _known_guids.clear()
         clear_all_sequences()
         clear_camera_sequences()
+        clear_material_sequences()
         _last_collection_state.clear()
         _collection_anti_loop_guids.clear()
         _last_active_camera_guid = b''  # Phase 7D: resend on next tick
@@ -2339,6 +2340,8 @@ def check_updates():
                             metallic=metallic,
                             roughness=roughness,
                             emission=emission,
+                            sequence_number=_next_material_create_sequence(mat_uuid),
+                            timestamp=time.time(),
                         )
                         material_creates_to_send.append(
                             (MsgType.MATERIAL_CREATE, body)
@@ -2392,6 +2395,8 @@ def check_updates():
                             metallic=metallic,
                             roughness=roughness,
                             emission=emission,
+                            sequence_number=_next_material_update_sequence(mat_uuid),
+                            timestamp=time.time(),
                         )
                         material_updates_to_send.append(
                             (MsgType.MATERIAL_UPDATE, body)
