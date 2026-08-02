@@ -410,6 +410,18 @@ inline DeserializedMessage DeserializeFrame(const uint8_t* data, size_t size) {
             msg.body["sequence_number"] = state.unpack_uint32();
             msg.body["timestamp"] = state.unpack_float64();
             break;
+        case MsgType::FBX_IMPORT_REQUEST:
+            msg.body["persistent_id"] = state.unpack_uuid();
+            msg.body["version"] = state.unpack_uint32();
+            msg.body["fbx_path"] = state.unpack_utf8_string();
+            msg.body["object_name"] = state.unpack_utf8_string();
+            msg.body["vert_count"] = state.unpack_uint32();
+            msg.body["tri_count"] = state.unpack_uint32();
+            msg.body["mat_slot_count"] = state.unpack_uint32();
+            msg.body["geometry_hash"] = state.unpack_uint64();
+            msg.body["sequence_number"] = state.unpack_uint32();
+            msg.body["timestamp"] = state.unpack_float64();
+            break;
         case MsgType::CAMERA_CREATE: {
             msg.body["camera_id"] = state.unpack_uuid();
             msg.body["name"] = state.unpack_utf8_string();

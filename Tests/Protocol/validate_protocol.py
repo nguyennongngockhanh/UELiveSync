@@ -35,7 +35,7 @@ from common import (
 
 VECTORS_DIR = Path(__file__).resolve().parent / "vectors" / "v1"
 
-PRIMITIVE_TYPES = {"uint8", "uint16", "uint32", "uint64", "float32"}
+PRIMITIVE_TYPES = {"uint8", "uint16", "uint32", "uint64", "float32", "float64"}
 COMPOSITE_TYPES = {"uuid", "transform3d", "utf8_string", "f32_array", "u32_array", "raw_bytes"}
 
 # Pre-session messages: only these three use before_session header

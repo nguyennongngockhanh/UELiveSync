@@ -387,6 +387,28 @@ VECTORS = [
         },
     },
 
+    # ── FBX Import message ──
+    {
+        "name": "FBX_IMPORT_REQUEST",
+        "file": "FBX_IMPORT_REQUEST.bin",
+        "msg_type": MsgType.FBX_IMPORT_REQUEST,
+        "flags": 0,
+        "sequence_id": 24,
+        "session_id": TEST_SESSION_ID,
+        "fields": {
+            "persistent_id": str(UUID_A),
+            "version": 1,
+            "fbx_path": "/home/user/.cache/uelivesync/fbx/00112233445566778899aabbccddeeff.fbx",
+            "object_name": "Cabinet",
+            "vert_count": 846,
+            "tri_count": 1528,
+            "mat_slot_count": 2,
+            "geometry_hash": 0x123456789ABCDEF0,
+            "sequence_number": 44,
+            "timestamp": 1700000044.0,
+        },
+    },
+
     # ── Camera messages ──
     {
         "name": "CAMERA_CREATE",

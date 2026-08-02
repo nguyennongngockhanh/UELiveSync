@@ -3,10 +3,10 @@
   "protocol_version": 1,
   "protocol_revision": 1,
   "generator_version": "1.0.0",
-  "git_commit": "f27f46ec194b",
-  "protocol_sha256": "0fe3d6991d95bcd07ee2690404ef778e19a16089de6c8e60112843148f91fd57",
-  "generated_at": "2026-08-02T07:49:49.728228+00:00",
-  "vector_count": 31,
+  "git_commit": "74182577c3ad",
+  "protocol_sha256": "62a63b90ff8eaa34e07b44b51734c5d4bbc455fe1acfe2381c9225e885d7db51",
+  "generated_at": "2026-08-02T08:37:05.529704+00:00",
+  "vector_count": 32,
   "vectors": [
     {
       "name": "HELLO",
@@ -441,6 +441,28 @@
         "timestamp": 1700000043.0
       },
       "size": 63
+    },
+    {
+      "name": "FBX_IMPORT_REQUEST",
+      "file": "FBX_IMPORT_REQUEST.bin",
+      "msg_type": 96,
+      "msg_type_name": "FBX_IMPORT_REQUEST",
+      "flags": 0,
+      "sequence_id": 24,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "version": 1,
+        "fbx_path": "/home/user/.cache/uelivesync/fbx/00112233445566778899aabbccddeeff.fbx",
+        "object_name": "Cabinet",
+        "vert_count": 846,
+        "tri_count": 1528,
+        "mat_slot_count": 2,
+        "geometry_hash": 1311768467463790320,
+        "sequence_number": 44,
+        "timestamp": 1700000044.0
+      },
+      "size": 150
     },
     {
       "name": "CAMERA_CREATE",

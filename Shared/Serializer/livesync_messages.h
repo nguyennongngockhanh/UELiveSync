@@ -304,6 +304,29 @@ inline std::vector<uint8_t> serialize_body_material_assign(
     return body;
 }
 
+inline std::vector<uint8_t> serialize_body_fbx_import_request(
+    const std::string& persistent_id,
+    uint32_t version,
+    const std::string& fbx_path, const std::string& object_name,
+    uint32_t vert_count, uint32_t tri_count, uint32_t mat_slot_count,
+    uint64_t geometry_hash,
+    uint32_t sequence_number, double timestamp)
+{
+    std::vector<uint8_t> body;
+    auto pid = parse_uuid(persistent_id);
+    pack_uuid(body, pid.data());
+    pack_uint32(body, version);
+    pack_utf8_string(body, fbx_path);
+    pack_utf8_string(body, object_name);
+    pack_uint32(body, vert_count);
+    pack_uint32(body, tri_count);
+    pack_uint32(body, mat_slot_count);
+    pack_uint64(body, geometry_hash);
+    pack_uint32(body, sequence_number);
+    pack_float64(body, timestamp);
+    return body;
+}
+
 inline std::vector<uint8_t> serialize_body_mesh_start(
     const std::string& persistent_id, uint16_t total_chunks,
     uint8_t format_flags)

@@ -151,7 +151,8 @@ if ! $SKIP_PYTHON; then
         if [ -f "$PYTHON_DIR/cross_language_verify.py" ] && [ -d "$VECTORS_DIR/cpp_serialized" ]; then
             xlang_output=$(cd "$PYTHON_DIR" && python3 cross_language_verify.py "$VECTORS_DIR" 2>&1)
             if echo "$xlang_output" | grep -q "ALL CROSS-LANGUAGE TESTS PASSED"; then
-                printf "${BOLD}%-28s${NC} ${GREEN}PASS${NC} (93)\n" "Cross-language verify"
+                xlang_count=$(python3 -c "import json;print(json.load(open('$VECTORS_DIR/manifest.json'))['vector_count'])" 2>/dev/null || echo "?")
+                printf "${BOLD}%-28s${NC} ${GREEN}PASS${NC} (%s)\n" "Cross-language verify" "$xlang_count"
                 pass_count=$((pass_count + 1))
             else
                 printf "${BOLD}%-28s${NC} ${RED}FAIL${NC}\n" "Cross-language verify"

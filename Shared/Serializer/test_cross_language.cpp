@@ -307,6 +307,19 @@ static std::vector<uint8_t> serialize_from_manifest(const json& vec) {
                 fields["sequence_number"].get<uint32_t>(),
                 fields["timestamp"].get<double>());
             break;
+        case MsgType::FBX_IMPORT_REQUEST:
+            body = serialize_body_fbx_import_request(
+                fields["persistent_id"].get<std::string>(),
+                fields["version"].get<uint32_t>(),
+                fields["fbx_path"].get<std::string>(),
+                fields["object_name"].get<std::string>(),
+                fields["vert_count"].get<uint32_t>(),
+                fields["tri_count"].get<uint32_t>(),
+                fields["mat_slot_count"].get<uint32_t>(),
+                fields["geometry_hash"].get<uint64_t>(),
+                fields["sequence_number"].get<uint32_t>(),
+                fields["timestamp"].get<double>());
+            break;
         case MsgType::CAMERA_CREATE: {
             auto tr = manifest_transform_to_vec(fields["transform"]);
             float cs = fields.value("clip_start", 0.1f);

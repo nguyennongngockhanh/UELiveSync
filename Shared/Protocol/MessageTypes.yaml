@@ -480,6 +480,24 @@ messages:
       - { name: camera_id,     type: uuid }
     description: "Set as active viewport camera."
 
+  # --- FBX Import ---
+  FBX_IMPORT_REQUEST:
+    code: 0x60
+    direction: B→U
+    session_required: true
+    body:
+      - { name: persistent_id,   type: uuid }
+      - { name: version,         type: uint32 }
+      - { name: fbx_path,        type: utf8_string }
+      - { name: object_name,     type: utf8_string }
+      - { name: vert_count,      type: uint32 }
+      - { name: tri_count,       type: uint32 }
+      - { name: mat_slot_count,  type: uint32 }
+      - { name: geometry_hash,   type: uint64 }
+      - { name: sequence_number, type: uint32 }
+      - { name: timestamp,       type: float64 }
+    description: "FBX import request (mesh handoff). persistent_id is the ObjectGUID. Semantic parity with legacy PT_FBXImportRequest (0x16); represents the same capability, no new import semantics. sequence_number enables stale-rejection; timestamp for ordering."
+
   # --- System Response ---
   SYNC_ACK:
     code: 0xF0

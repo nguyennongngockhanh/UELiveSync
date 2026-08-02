@@ -370,6 +370,24 @@
   },
   {
     "body": {
+      "fbx_path": "/home/user/.cache/uelivesync/fbx/00112233445566778899aabbccddeeff.fbx",
+      "geometry_hash": 1311768467463790320,
+      "mat_slot_count": 2,
+      "object_name": "Cabinet",
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "sequence_number": 44,
+      "tri_count": 1528,
+      "version": 1,
+      "vert_count": 846
+    },
+    "flags": 0,
+    "msg_type": 96,
+    "name": "FBX_IMPORT_REQUEST",
+    "sequence_id": 24,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
       "camera_flags": 2,
       "camera_id": "00112233445566778899aabbccddeeff",
       "clip_end": 1000.0,

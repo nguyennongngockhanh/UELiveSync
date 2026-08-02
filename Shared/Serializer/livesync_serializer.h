@@ -46,6 +46,7 @@ enum class MsgType : uint8_t {
     CAMERA_CREATE   = 0x50,
     CAMERA_UPDATE   = 0x51,
     CAMERASETACTIVE = 0x52,
+    FBX_IMPORT_REQUEST = 0x60,
     HELLO           = 0x10,
     HELLO_ACK       = 0x11,
     REJECT          = 0x12,

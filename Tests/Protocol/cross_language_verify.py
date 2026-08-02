@@ -184,6 +184,7 @@ UUID_FIELDS = {
     "MATERIAL_CREATE": ["material_id"],
     "MATERIAL_UPDATE": ["material_id"],
     "MATERIAL_ASSIGN": ["persistent_id", "material_id"],
+    "FBX_IMPORT_REQUEST": ["persistent_id"],
     "CAMERA_CREATE": ["camera_id"],
     "CAMERA_UPDATE": ["camera_id"],
     "CAMERASETACTIVE": ["camera_id"],
