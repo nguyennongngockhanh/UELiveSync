@@ -173,6 +173,8 @@ struct MaterialCreateView
     std::vector<float> Emission;
     bool HasTexturePath;
     std::string TexturePath;
+    uint32_t SequenceNumber;
+    double Timestamp;
 };
 
 struct MaterialUpdateView
@@ -184,6 +186,8 @@ struct MaterialUpdateView
     std::vector<float> Emission;
     bool HasTexturePath;
     std::string TexturePath;
+    uint32_t SequenceNumber;
+    double Timestamp;
 };
 
 struct MaterialAssignView
@@ -191,6 +195,8 @@ struct MaterialAssignView
     std::array<uint8_t, 16> PersistentId;
     std::array<uint8_t, 16> MaterialId;
     uint8_t SlotIndex;
+    uint32_t SequenceNumber;
+    double Timestamp;
 };
 
 // =========================================================

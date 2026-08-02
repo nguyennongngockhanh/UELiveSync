@@ -955,6 +955,8 @@ inline MaterialCreateView BuildMaterialCreateView(
     auto* tex = TryGetField<std::string>(msg, "texture_path");
     v.HasTexturePath = (tex != nullptr);
     v.TexturePath = tex ? *tex : std::string{};
+    v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
+    v.Timestamp = GetField<double>(msg, "timestamp");
     return v;
 }
 
@@ -970,6 +972,8 @@ inline MaterialUpdateView BuildMaterialUpdateView(
     auto* tex = TryGetField<std::string>(msg, "texture_path");
     v.HasTexturePath = (tex != nullptr);
     v.TexturePath = tex ? *tex : std::string{};
+    v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
+    v.Timestamp = GetField<double>(msg, "timestamp");
     return v;
 }
 
@@ -980,6 +984,8 @@ inline MaterialAssignView BuildMaterialAssignView(
     v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
     v.MaterialId = GetField<std::array<uint8_t, 16>>(msg, "material_id");
     v.SlotIndex = GetField<uint8_t>(msg, "slot_index");
+    v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
+    v.Timestamp = GetField<double>(msg, "timestamp");
     return v;
 }
 
