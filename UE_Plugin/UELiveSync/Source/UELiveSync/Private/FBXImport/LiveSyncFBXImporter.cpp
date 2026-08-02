@@ -384,22 +384,6 @@ static FString FStringFromFixedAnsi(
 // VALIDATION HELPERS
 // =========================================================
 
-static bool ValidatePayloadSize(int32 PayloadSize, FLiveSyncStats& Stats)
-{
-    // Phase 10J.5F: accept both old (680) and new (688) payload sizes
-    constexpr int32 kFBXPayloadSizeMin = 680;
-    if (PayloadSize < kFBXPayloadSizeMin)
-    {
-        Stats.FBXImportRequestsRejected.fetch_add(
-            1, std::memory_order_relaxed);
-        UE_LOG(LogLiveSync, Warning,
-            TEXT("[FBX] Truncated request: size %d < %d"),
-            PayloadSize, kFBXPayloadSizeMin);
-        return false;
-    }
-    return true;
-}
-
 static bool ValidateVersion(uint32 Version, FLiveSyncStats& Stats)
 {
     if (Version != 1)
@@ -1228,8 +1212,7 @@ static FFBXImportSemanticSignature ComputeFBXSemanticSignature(
 }
 
 bool FLiveSyncFBXImporter::HandleImport(
-    const uint8* PayloadPtr,
-    int32 PayloadSize,
+    const FFBXImportRequestPayload& Payload,
     const FFBXImportContext& Context)
 {
     check(IsInGameThread());
@@ -1258,20 +1241,9 @@ bool FLiveSyncFBXImporter::HandleImport(
         &PhaseDurations,
         Context.Stats);
 
-    if (!ValidatePayloadSize(PayloadSize, *Context.Stats))
-    {
-        return false;
-    }
-
-    // Phase 10J.5F: Backward-compatible payload reading.
-    // Accept old (680) and new (688) payload sizes. GeometryHash defaults to 0
-    // for old protocol payloads.
-    FFBXImportRequestPayload Request;
-    FMemory::Memzero(&Request, sizeof(FFBXImportRequestPayload));
-    {
-        const int32 CopySize = FMath::Min(PayloadSize, (int32)sizeof(FFBXImportRequestPayload));
-        FMemory::Memcpy(&Request, PayloadPtr, CopySize);
-    }
+    // MIG-005: payload arrives fully parsed via the semantic bridge.
+    // Wire-size validation is replaced by semantic deserialization.
+    const FFBXImportRequestPayload Request = Payload;
 
     TxnSummary.SetGuid(Request.ObjectGUID);
 

@@ -72,6 +72,28 @@ struct CameraSetActiveView
 };
 
 // =========================================================
+// FBX Import (MIG-005: semantic FBX_IMPORT_REQUEST)
+// =========================================================
+// Represents the same capability as the legacy PT_FBXImportRequest
+// (0x16). fbx_path/object_name are variable-length utf8 strings
+// instead of fixed-size arrays; payload timestamp is informational
+// (UE resolves freshness from the FBX file mtime).
+
+struct FbxImportRequestView
+{
+    std::array<uint8_t, 16> PersistentId;
+    uint32_t Version;
+    std::string FbxPath;
+    std::string ObjectName;
+    uint32_t VertCount;
+    uint32_t TriCount;
+    uint32_t MatSlotCount;
+    uint64_t GeometryHash;
+    uint32_t SequenceNumber;
+    double Timestamp;
+};
+
+// =========================================================
 // Object
 // =========================================================
 

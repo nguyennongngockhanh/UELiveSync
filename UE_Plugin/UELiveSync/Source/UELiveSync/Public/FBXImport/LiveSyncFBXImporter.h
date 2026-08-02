@@ -63,8 +63,7 @@ class FLiveSyncFBXImporter
 {
 public:
     static bool HandleImport(
-        const uint8* PayloadPtr,
-        int32 PayloadSize,
+        const FFBXImportRequestPayload& Payload,
         const FFBXImportContext& Context
     );
 

@@ -185,6 +185,7 @@ inline const MessageTraits GetMessageTraits(livesync::MsgType Type)
         case livesync::MsgType::CAMERA_CREATE:
         case livesync::MsgType::CAMERA_UPDATE:
         case livesync::MsgType::CAMERASETACTIVE:
+        case livesync::MsgType::FBX_IMPORT_REQUEST:
         case livesync::MsgType::SYNC_ACK:
         case livesync::MsgType::ERROR:
         case livesync::MsgType::DISCONNECT:
@@ -230,6 +231,7 @@ inline int g_meshdelta_calls = 0;
 inline int g_cameracreate_calls = 0;
 inline int g_cameraupdate_calls = 0;
 inline int g_camerasetactive_calls = 0;
+inline int g_fbximportrequest_calls = 0;
 
 inline void ResetAllCounters()
 {
@@ -254,6 +256,7 @@ inline void ResetAllCounters()
     g_cameracreate_calls = 0;
     g_cameraupdate_calls = 0;
     g_camerasetactive_calls = 0;
+    g_fbximportrequest_calls = 0;
 }
 #endif
 
@@ -1345,6 +1348,74 @@ inline EDispatchResult ProcessMeshDelta(
 }
 
 // =========================================================
+// Builders — FBX Import (pure functions)
+// =========================================================
+
+inline FbxImportRequestView BuildFbxImportRequestView(
+    const livesync::DeserializedMessage& msg)
+{
+    FbxImportRequestView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.Version = GetField<uint32_t>(msg, "version");
+    v.FbxPath = GetField<std::string>(msg, "fbx_path");
+    v.ObjectName = GetField<std::string>(msg, "object_name");
+    v.VertCount = GetField<uint32_t>(msg, "vert_count");
+    v.TriCount = GetField<uint32_t>(msg, "tri_count");
+    v.MatSlotCount = GetField<uint32_t>(msg, "mat_slot_count");
+    v.GeometryHash = GetField<uint64_t>(msg, "geometry_hash");
+    v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
+    v.Timestamp = GetField<double>(msg, "timestamp");
+    return v;
+}
+
+// =========================================================
+// Log functions — FBX Import
+// =========================================================
+
+inline void LogFbxImportRequest(const FbxImportRequestView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][FBX_IMPORT_REQUEST] id=%hs version=%u "
+             "path=%hs name=%hs verts=%u tris=%u mats=%u "
+             "geomHash=%llu seq=%u ts=%.3f"),
+        id_str, static_cast<unsigned>(v.Version),
+        v.FbxPath.c_str(), v.ObjectName.c_str(),
+        v.VertCount, v.TriCount, v.MatSlotCount,
+        (unsigned long long)v.GeometryHash,
+        v.SequenceNumber, v.Timestamp);
+}
+
+// =========================================================
+// Dispatch functions — FBX Import (fan-out only)
+// =========================================================
+
+inline void DispatchFbxImportRequest(
+    const FbxImportRequestView& v,
+    const DispatchContext& ctx)
+{
+    LogFbxImportRequest(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnFbxImportRequest(v);
+}
+
+// =========================================================
+// Process functions — FBX Import (orchestration)
+// =========================================================
+
+inline EDispatchResult ProcessFbxImportRequest(
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_fbximportrequest_calls++;
+#endif
+    auto view = BuildFbxImportRequestView(msg);
+    DispatchFbxImportRequest(view, ctx);
+    return EDispatchResult::Handled;
+}
+
+// =========================================================
 // ValidateExtraInvariants — per-message-type checks
 // =========================================================
 // Called AFTER DeserializeFrame succeeds and traits check passes.
@@ -1514,6 +1585,9 @@ inline EDispatchResult DispatchMsgTypePacket(
 
         case livesync::MsgType::CAMERASETACTIVE:
             return ProcessCameraSetActive(msg, ctx);
+
+        case livesync::MsgType::FBX_IMPORT_REQUEST:
+            return ProcessFbxImportRequest(msg, ctx);
 
         default:
             UE_LOG(LogLiveSync, Log,

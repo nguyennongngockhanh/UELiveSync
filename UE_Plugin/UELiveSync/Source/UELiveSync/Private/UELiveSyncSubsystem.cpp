@@ -3365,7 +3365,7 @@ ProcessBinaryPacket(
         CVarLiveSyncValidateProtocol.GetValueOnGameThread())
     {
         static constexpr uint8 kValidTypes[] =
-            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B };
+            { 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x18, 0x19, 0x1A, 0x1B };
 
         static constexpr uint8 kValidFlags[] =
             { 0x00, 0x01, 0x02, 0x03 };
@@ -4776,175 +4776,6 @@ ProcessBinaryPacket(
         Stats.PacketsProcessed.fetch_add(
             1,
             std::memory_order_relaxed);
-        return;
-    }
-
-    // =====================================================
-    // FBX IMPORT REQUEST (Phase 7C Stage 3A.1 — PT_FBXImportRequest 0x16)
-    // =====================================================
-    // Fixed 688-byte payload (Phase 10J.5F: added GeometryHash).
-    // Backward compatible: old 680-byte payloads accepted (GeometryHash = 0).
-    // UE validates path safety, imports FBX as StaticMesh under
-    // /Game/UELiveSync/Imported, then spawns/updates a StaticMeshActor
-    // tagged with the LiveSync GUID.
-    // =====================================================
-
-    if (PacketType == 0x16)
-    {
-        TRACE_CPUPROFILER_EVENT_SCOPE(UELiveSync_ProcessFBXImport);
-
-        Stats.FBXImportRequestsReceived.fetch_add(
-            1, std::memory_order_relaxed);
-
-        int32 ObjSize = static_cast<int32>(PacketEnd - Ptr);
-        // Accept both old (680) and new (688) payload sizes
-        constexpr int32 kFBXPayloadSizeMin = 680;
-        if (ObjSize < kFBXPayloadSizeMin)
-        {
-            Stats.MalformedPackets.fetch_add(
-                1, std::memory_order_relaxed);
-            UE_LOG(LogLiveSync, Warning,
-                TEXT("[FBX] Truncated payload: size %d < %d"),
-                ObjSize, kFBXPayloadSizeMin);
-            Stats.PacketsProcessed.fetch_add(
-                1, std::memory_order_relaxed);
-            return;
-        }
-
-        {
-            // Phase 10J.5K: Extract GUID to mark FBX pending before import.
-            FGuid FbxRequestGuid;
-            FMemory::Memcpy(&FbxRequestGuid, Ptr, sizeof(FGuid));
-            FBXPendingGuids.Add(FbxRequestGuid);
-            UE_LOG(LogLiveSync, Log,
-                TEXT("[FBX][AUTH] mark_pending guid=%s reason=fbx_request_received"),
-                *FbxRequestGuid.ToString(EGuidFormats::Digits));
-
-            FFBXImportContext Ctx;
-            Ctx.World = GetWorld();
-            Ctx.Stats = &Stats;
-            Ctx.FindActor = [this](const FGuid& G) { return FindActorFast(G); };
-            Ctx.OnActorCached = [this](const FGuid& G, AActor* A) { ActorCache.Add(G, A); };
-            Ctx.OnMarkFbxAuthority = [this](const FGuid& G)
-            {
-                FBXAuthoritativeGuids.Add(G);
-                FBXPendingGuids.Remove(G);
-                UE_LOG(LogLiveSync, Log,
-                    TEXT("[FBX][AUTH] guid=%s authority=fbx"),
-                    *G.ToString(EGuidFormats::Digits));
-            };
-            Ctx.OnScheduleRepair = [this](const FGuid& G)
-            {
-                FDeferredFBXRepairEntry Entry;
-                Entry.Guid = G;
-                Entry.PassNumber = 1;
-                Entry.ScheduleTime = FPlatformTime::Seconds();
-                DeferredFBXRepairs.Add(Entry);
-
-                FDeferredFBXRepairEntry Entry2;
-                Entry2.Guid = G;
-                Entry2.PassNumber = 2;
-                Entry2.ScheduleTime = FPlatformTime::Seconds();
-                DeferredFBXRepairs.Add(Entry2);
-            };
-            // Phase 10J.5L: After EnsureFBXMeshRenderable fallback, restore generated MIDs.
-            // Phase 7H/7G.5: do NOT override imported FBX materials with MIDs.
-            Ctx.OnRestoreGeneratedMaterials = [this](const FGuid& G, UStaticMeshComponent* SMC)
-            {
-                if (!SMC)
-                    return;
-                const FString GuidShort = G.ToString(EGuidFormats::Short);
-                const int32 NumSlots = SMC->GetNumMaterials();
-
-                // Phase 7H Task 4: Count cache entries before restore.
-                int32 CacheHits = 0;
-                for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
-                {
-                    const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
-                    TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
-                    if (Found && *Found) ++CacheHits;
-                }
-
-                UE_LOG(LogLiveSync, Log,
-                    TEXT("[MATERIAL][GENERATED_MID_RESTORE_CHECK] guid=%s cachedSlots=%d meshSlots=%d"),
-                    *G.ToString(EGuidFormats::Digits), CacheHits, NumSlots);
-
-                // Guard: only restore if all mesh slots have cached MIDs.
-                if (CacheHits != NumSlots)
-                {
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("[MATERIAL][GENERATED_MID_RESTORE_SKIP] guid=%s cachedSlots=%d meshSlots=%d reason=slot_count_mismatch"),
-                        *G.ToString(EGuidFormats::Digits), CacheHits, NumSlots);
-                    return;
-                }
-
-                int32 RestoredCount = 0;
-                for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
-                {
-                    const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
-                    TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
-                    UMaterialInterface* CurrentMat = SMC->GetMaterial(SlotIdx);
-                    if (Found && *Found && CurrentMat != *Found)
-                    {
-                        SMC->SetMaterial(SlotIdx, *Found);
-                        ++RestoredCount;
-                        UE_LOG(LogLiveSync, Log,
-                            TEXT("[MATERIAL][GENERATED_PARAM_MID_APPLY] guid=%s slot=%d restored=MID_UELiveSync_%s_%d"),
-                            *G.ToString(EGuidFormats::Digits), SlotIdx,
-                            *GuidShort, SlotIdx);
-                    }
-                }
-
-                UE_LOG(LogLiveSync, Log,
-                    TEXT("[MATERIAL][GENERATED_MID_RESTORE_OK] guid=%s slots=%d"),
-                    *G.ToString(EGuidFormats::Digits), RestoredCount);
-
-                if (RestoredCount > 0)
-                {
-                    UE_LOG(LogLiveSync, Log,
-                        TEXT("[MAT][AUTH] guid=%s slot_count=%d authority=generated_mid"),
-                        *G.ToString(EGuidFormats::Digits), RestoredCount);
-                }
-            };
-            // Task 9B: wire sidecar texture import registration.
-            Ctx.OnSidecarTextureImported = [this](
-                const FGuid& G, const FString& SourceFilename, const TSoftObjectPtr<UTexture2D>& TexPtr)
-            {
-                if (!TexPtr.IsValid()) return;
-                // Canonical key: lowercase basename without extension or hash suffix.
-                // Must match the MTEX lookup key (TexRef.ImageName, dot-stripped, lowercased).
-                FString BaseName = FPaths::GetBaseFilename(SourceFilename).ToLower();
-                {
-                    // Strip __{hash} suffix (sidecar naming convention)
-                    int32 UnderscorePos = BaseName.Find(TEXT("__"));
-                    if (UnderscorePos != INDEX_NONE)
-                    {
-                        BaseName = BaseName.Left(UnderscorePos);
-                    }
-                }
-                {
-                    // Strip any remaining dots (e.g. "marble.png" -> "marble")
-                    int32 DotPos = INDEX_NONE;
-                    if (BaseName.FindChar(TEXT('.'), DotPos))
-                    {
-                        BaseName = BaseName.Left(DotPos);
-                    }
-                }
-                if (!ImportedSidecarTexturesByGuid.Contains(G))
-                {
-                    ImportedSidecarTexturesByGuid.Add(G, TMap<FString, TSoftObjectPtr<UTexture2D>>());
-                }
-                auto& SidecarMap = ImportedSidecarTexturesByGuid[G];
-                if (!SidecarMap.Contains(BaseName))
-                {
-                    SidecarMap.Add(BaseName, TexPtr);
-                }
-            };
-            FLiveSyncFBXImporter::HandleImport(Ptr, ObjSize, Ctx);
-        }
-
-        Stats.PacketsProcessed.fetch_add(
-            1, std::memory_order_relaxed);
         return;
     }
 
@@ -8869,6 +8700,207 @@ void UUELiveSyncSubsystem::OnMaterialAssign(
     }
 
     AssignMaterial(View, Material);
+}
+
+// =========================================================
+// ON FBX IMPORT REQUEST (IGameplaySink override)
+// =========================================================
+// MIG-005: semantic FBX_IMPORT_REQUEST entry point.
+// Replaces the legacy PT_FBXImportRequest (0x16) inline block in
+// ProcessBinaryPacket. Adapter only: builds the legacy payload
+// struct from the semantic view and forwards to the unchanged
+// FLiveSyncFBXImporter::HandleImport. Capability, validation,
+// sidecar, repair, spawn/update and authority bookkeeping are
+// preserved.
+// =========================================================
+
+void UUELiveSyncSubsystem::OnFbxImportRequest(
+    const LiveSyncBridge::FbxImportRequestView& View)
+{
+    CHECK_GAME_THREAD();
+
+    Stats.FBXImportRequestsReceived.fetch_add(
+        1, std::memory_order_relaxed);
+
+    FGuid FbxRequestGuid;
+    FMemory::Memcpy(&FbxRequestGuid, View.PersistentId.data(), 16);
+
+    // Stale-rejection: per-object monotonic sequence tracking.
+    // Mirrors GUpdateSequences / GMaterialCreateSequences pattern.
+    static TMap<FGuid, uint32> GFbxImportSequences;
+    const uint32 IncomingSeq = View.SequenceNumber;
+    if (uint32* LastSeq = GFbxImportSequences.Find(FbxRequestGuid))
+    {
+        if (IncomingSeq <= *LastSeq)
+        {
+            UE_LOG(LogLiveSync, Verbose,
+                TEXT("[FBX][STALE] guid=%s seq=%u last=%u"),
+                *FbxRequestGuid.ToString(EGuidFormats::Digits),
+                IncomingSeq, *LastSeq);
+            return;
+        }
+    }
+    GFbxImportSequences.Add(FbxRequestGuid, IncomingSeq);
+
+    // Build the importer payload from the semantic view. Variable-length
+    // utf8 strings are copied into the fixed-size legacy arrays.
+    FFBXImportRequestPayload Payload;
+    FMemory::Memzero(&Payload, sizeof(FFBXImportRequestPayload));
+    Payload.ObjectGUID = FbxRequestGuid;
+    Payload.Version = View.Version;
+    if (View.FbxPath.size() < UE_ARRAY_COUNT(Payload.FbxPath))
+    {
+        FMemory::Memcpy(Payload.FbxPath, View.FbxPath.c_str(), View.FbxPath.size() + 1);
+    }
+    else
+    {
+        FMemory::Memcpy(Payload.FbxPath, View.FbxPath.c_str(), UE_ARRAY_COUNT(Payload.FbxPath) - 1);
+        Payload.FbxPath[UE_ARRAY_COUNT(Payload.FbxPath) - 1] = 0;
+    }
+    if (View.ObjectName.size() < UE_ARRAY_COUNT(Payload.ObjectName))
+    {
+        FMemory::Memcpy(Payload.ObjectName, View.ObjectName.c_str(), View.ObjectName.size() + 1);
+    }
+    else
+    {
+        FMemory::Memcpy(Payload.ObjectName, View.ObjectName.c_str(), UE_ARRAY_COUNT(Payload.ObjectName) - 1);
+        Payload.ObjectName[UE_ARRAY_COUNT(Payload.ObjectName) - 1] = 0;
+    }
+    Payload.VertCount = View.VertCount;
+    Payload.TriCount = View.TriCount;
+    Payload.MatSlotCount = View.MatSlotCount;
+    Payload.Timestamp = View.Timestamp;
+    Payload.GeometryHash = View.GeometryHash;
+
+    {
+        // Phase 10J.5K: Extract GUID to mark FBX pending before import.
+        FBXPendingGuids.Add(FbxRequestGuid);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][AUTH] mark_pending guid=%s reason=fbx_request_received"),
+            *FbxRequestGuid.ToString(EGuidFormats::Digits));
+
+        FFBXImportContext Ctx;
+        Ctx.World = GetWorld();
+        Ctx.Stats = &Stats;
+        Ctx.FindActor = [this](const FGuid& G) { return FindActorFast(G); };
+        Ctx.OnActorCached = [this](const FGuid& G, AActor* A) { ActorCache.Add(G, A); };
+        Ctx.OnMarkFbxAuthority = [this](const FGuid& G)
+        {
+            FBXAuthoritativeGuids.Add(G);
+            FBXPendingGuids.Remove(G);
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[FBX][AUTH] guid=%s authority=fbx"),
+                *G.ToString(EGuidFormats::Digits));
+        };
+        Ctx.OnScheduleRepair = [this](const FGuid& G)
+        {
+            FDeferredFBXRepairEntry Entry;
+            Entry.Guid = G;
+            Entry.PassNumber = 1;
+            Entry.ScheduleTime = FPlatformTime::Seconds();
+            DeferredFBXRepairs.Add(Entry);
+
+            FDeferredFBXRepairEntry Entry2;
+            Entry2.Guid = G;
+            Entry2.PassNumber = 2;
+            Entry2.ScheduleTime = FPlatformTime::Seconds();
+            DeferredFBXRepairs.Add(Entry2);
+        };
+        // Phase 10J.5L: After EnsureFBXMeshRenderable fallback, restore generated MIDs.
+        // Phase 7H/7G.5: do NOT override imported FBX materials with MIDs.
+        Ctx.OnRestoreGeneratedMaterials = [this](const FGuid& G, UStaticMeshComponent* SMC)
+        {
+            if (!SMC)
+                return;
+            const FString GuidShort = G.ToString(EGuidFormats::Short);
+            const int32 NumSlots = SMC->GetNumMaterials();
+
+            // Phase 7H Task 4: Count cache entries before restore.
+            int32 CacheHits = 0;
+            for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
+            {
+                const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
+                TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
+                if (Found && *Found) ++CacheHits;
+            }
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][GENERATED_MID_RESTORE_CHECK] guid=%s cachedSlots=%d meshSlots=%d"),
+                *G.ToString(EGuidFormats::Digits), CacheHits, NumSlots);
+
+            // Guard: only restore if all mesh slots have cached MIDs.
+            if (CacheHits != NumSlots)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MATERIAL][GENERATED_MID_RESTORE_SKIP] guid=%s cachedSlots=%d meshSlots=%d reason=slot_count_mismatch"),
+                    *G.ToString(EGuidFormats::Digits), CacheHits, NumSlots);
+                return;
+            }
+
+            int32 RestoredCount = 0;
+            for (int32 SlotIdx = 0; SlotIdx < NumSlots; ++SlotIdx)
+            {
+                const FString Key = FString::Printf(TEXT("%s_%d"), *GuidShort, SlotIdx);
+                TObjectPtr<UMaterialInstanceDynamic>* Found = GeneratedMaterialCache.Find(Key);
+                UMaterialInterface* CurrentMat = SMC->GetMaterial(SlotIdx);
+                if (Found && *Found && CurrentMat != *Found)
+                {
+                    SMC->SetMaterial(SlotIdx, *Found);
+                    ++RestoredCount;
+                    UE_LOG(LogLiveSync, Log,
+                        TEXT("[MATERIAL][GENERATED_PARAM_MID_APPLY] guid=%s slot=%d restored=MID_UELiveSync_%s_%d"),
+                        *G.ToString(EGuidFormats::Digits), SlotIdx,
+                        *GuidShort, SlotIdx);
+                }
+            }
+
+            UE_LOG(LogLiveSync, Log,
+                TEXT("[MATERIAL][GENERATED_MID_RESTORE_OK] guid=%s slots=%d"),
+                *G.ToString(EGuidFormats::Digits), RestoredCount);
+
+            if (RestoredCount > 0)
+            {
+                UE_LOG(LogLiveSync, Log,
+                    TEXT("[MAT][AUTH] guid=%s slot_count=%d authority=generated_mid"),
+                    *G.ToString(EGuidFormats::Digits), RestoredCount);
+            }
+        };
+        // Task 9B: wire sidecar texture import registration.
+        Ctx.OnSidecarTextureImported = [this](
+            const FGuid& G, const FString& SourceFilename, const TSoftObjectPtr<UTexture2D>& TexPtr)
+        {
+            if (!TexPtr.IsValid()) return;
+            // Canonical key: lowercase basename without extension or hash suffix.
+            // Must match the MTEX lookup key (TexRef.ImageName, dot-stripped, lowercased).
+            FString BaseName = FPaths::GetBaseFilename(SourceFilename).ToLower();
+            {
+                // Strip __{hash} suffix (sidecar naming convention)
+                int32 UnderscorePos = BaseName.Find(TEXT("__"));
+                if (UnderscorePos != INDEX_NONE)
+                {
+                    BaseName = BaseName.Left(UnderscorePos);
+                }
+            }
+            {
+                // Strip any remaining dots (e.g. "marble.png" -> "marble")
+                int32 DotPos = INDEX_NONE;
+                if (BaseName.FindChar(TEXT('.'), DotPos))
+                {
+                    BaseName = BaseName.Left(DotPos);
+                }
+            }
+            if (!ImportedSidecarTexturesByGuid.Contains(G))
+            {
+                ImportedSidecarTexturesByGuid.Add(G, TMap<FString, TSoftObjectPtr<UTexture2D>>());
+            }
+            auto& SidecarMap = ImportedSidecarTexturesByGuid[G];
+            if (!SidecarMap.Contains(BaseName))
+            {
+                SidecarMap.Add(BaseName, TexPtr);
+            }
+        };
+        FLiveSyncFBXImporter::HandleImport(Payload, Ctx);
+    }
 }
 
 // =========================================================

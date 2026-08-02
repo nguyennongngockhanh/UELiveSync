@@ -32,6 +32,7 @@ struct IGameplaySink
     virtual void OnMeshEnd(const LiveSyncBridge::MeshEndView&) {}
     virtual void OnMeshData(const LiveSyncBridge::MeshDataView&) {}
     virtual void OnMeshDelta(const LiveSyncBridge::MeshDeltaView&) {}
+    virtual void OnFbxImportRequest(const LiveSyncBridge::FbxImportRequestView&) {}
 
     virtual void OnCameraCreate(const LiveSyncBridge::CameraCreateView&) = 0;
     virtual void OnCameraUpdate(const LiveSyncBridge::CameraUpdateView&) = 0;

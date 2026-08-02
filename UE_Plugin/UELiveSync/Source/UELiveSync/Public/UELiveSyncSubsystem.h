@@ -234,6 +234,9 @@ private:
     virtual void OnMaterialAssign(
         const LiveSyncBridge::MaterialAssignView& View) override;
 
+    virtual void OnFbxImportRequest(
+        const LiveSyncBridge::FbxImportRequestView& View) override;
+
     // =====================================================
     // TRANSFORM PIPELINE
     // =====================================================

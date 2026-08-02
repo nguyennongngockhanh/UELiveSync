@@ -1308,8 +1308,8 @@ struct FLiveSyncStats
     std::atomic<int32> CapabilityResponseReceived{0};   // Total PT_CapabilityResponse packets received
     std::atomic<int32> CapabilityPacketsMalformed{0};    // Packets rejected (bad size)
 
-    // --- Phase 7C Stage 3A.1: FBX Mesh Handoff Import ---
-    std::atomic<int32> FBXImportRequestsReceived{0};     // Total PT_FBXImportRequest packets received
+    // --- Phase 7C Stage 3A.1: FBX Mesh Handoff Import (semantic FBX_IMPORT_REQUEST) ---
+    std::atomic<int32> FBXImportRequestsReceived{0};     // Total FBX_IMPORT_REQUEST packets received
     std::atomic<int32> FBXImportRequestsRejected{0};     // Packets rejected (bad path, invalid, etc.)
     std::atomic<int32> FBXImportSucceeded{0};             // Successful FBX → StaticMesh imports
     std::atomic<int32> FBXImportFailed{0};                // Failed FBX imports (UE import API error)
@@ -2175,9 +2175,6 @@ static constexpr uint32
     H = fnv(H, 14); // KEYFRAME_HEADER_SIZE
     H = fnv(H, 25); // KEYFRAME_ENTRY_SIZE
 
-    // Phase 7C Stage 3A.1: FBX Mesh Handoff Import
-    H = fnv(H, 680); // FFBXImportRequestPayload
-
     // Phase 7G Stage 3: Camera definition
     H = fnv(H, 48); // FCameraDefPayload
 
@@ -2194,7 +2191,6 @@ static constexpr uint32
     H = fnv(H, 0x13); // PT_Timeline (Phase 7B)
     H = fnv(H, 0x14); // PT_PlaybackState (Phase 7C)
     H = fnv(H, 0x15); // PT_ActiveCamera (Phase 7D)
-    H = fnv(H, 0x16); // PT_FBXImportRequest (Phase 7C Stage 3A.1)
     H = fnv(H, 0x17); // PT_Keyframe (Phase 7E Stage 7)
     H = fnv(H, 0x18); // PT_SequencerOp (Phase 7E)
     H = fnv(H, 0x19); // PT_TimelineState (Phase 7F Stage 1)

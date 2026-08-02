@@ -156,6 +156,10 @@ struct FakeGameplaySink : IGameplaySink
     int MaterialAssignCalls = 0;
     MaterialAssignView LastMaterialAssign{};
 
+    // FBX_IMPORT_REQUEST
+    int FbxImportRequestCalls = 0;
+    FbxImportRequestView LastFbxImportRequest{};
+
     void OnObjectCreate(const ObjectCreateView& View) override
     {
         ++ObjectCreateCalls;
@@ -256,6 +260,12 @@ struct FakeGameplaySink : IGameplaySink
     {
         ++MaterialAssignCalls;
         LastMaterialAssign = View;
+    }
+
+    void OnFbxImportRequest(const FbxImportRequestView& View) override
+    {
+        ++FbxImportRequestCalls;
+        LastFbxImportRequest = View;
     }
 };
 
@@ -1255,6 +1265,75 @@ int main(int argc, char** argv)
             {
                 printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
                     sink.MaterialAssignCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 43: FBX_IMPORT_REQUEST -> Handled + builder ──
+    {
+        auto buf = read_file((dir + "FBX_IMPORT_REQUEST.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  FBX_IMPORT_REQUEST.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
+            check_result("FBX_IMPORT_REQUEST", r,
+                EDispatchResult::Handled, 1, g_fbximportrequest_calls);
+            check_no_violation("FBX_IMPORT_REQUEST (no violation)", r);
+
+            if (r == EDispatchResult::Handled)
+            {
+                auto msg = livesync::DeserializeFrame(
+                    buf.data(), buf.size());
+                auto view = BuildFbxImportRequestView(msg);
+                bool ok = true;
+                ok = ok && (view.FbxPath ==
+                    "/home/user/.cache/uelivesync/fbx/00112233445566778899aabbccddeeff.fbx");
+                ok = ok && (view.ObjectName == "Cabinet");
+                ok = ok && (view.Version == 1);
+                ok = ok && (view.VertCount == 846);
+                ok = ok && (view.TriCount == 1528);
+                ok = ok && (view.MatSlotCount == 2);
+                ok = ok && (view.GeometryHash == 0x123456789ABCDEF0ULL);
+                ok = ok && (view.SequenceNumber == 44);
+                printf("  %s  FBX_IMPORT_REQUEST (builder) "
+                       "name=%s verts=%u tris=%u mats=%u geomHash=0x%llx\n",
+                    ok ? "PASS" : "FAIL",
+                    view.ObjectName.c_str(), view.VertCount,
+                    view.TriCount, view.MatSlotCount,
+                    (unsigned long long)view.GeometryHash);
+                if (ok) passed++; else failed++;
+            }
+        }
+    }
+
+    // ── Test 44: FakeGameplaySink receives FBX_IMPORT_REQUEST ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "FBX_IMPORT_REQUEST.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  FBX_IMPORT_REQUEST.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_FBX_IMPORT_REQUEST", r,
+                EDispatchResult::Handled, 1, g_fbximportrequest_calls);
+            if (sink.FbxImportRequestCalls == 1)
+            {
+                printf("  PASS  FakeGameplaySink received OnFbxImportRequest\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.FbxImportRequestCalls);
                 ++failed;
             }
         }
