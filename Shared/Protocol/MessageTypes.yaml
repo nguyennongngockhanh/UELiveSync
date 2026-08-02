@@ -402,7 +402,9 @@ messages:
       - { name: roughness,     type: float32 }
       - { name: emission,      type: f32_array, count: 3 }
       - { name: texture_path,  type: utf8_string, optional: true }
-    description: "New material definition."
+      - { name: sequence_number, type: uint32 }
+      - { name: timestamp,      type: float64 }
+    description: "New material definition. sequence_number enables stale-rejection; timestamp for ordering."
 
   MATERIAL_UPDATE:
     code: 0x41
@@ -410,12 +412,14 @@ messages:
     session_required: true
     body:
       - { name: material_id,   type: uuid }
-      - { name: base_color,    type: f32_array, count: 4, optional: true }
-      - { name: metallic,      type: float32, optional: true }
-      - { name: roughness,     type: float32, optional: true }
-      - { name: emission,      type: f32_array, count: 3, optional: true }
+      - { name: base_color,    type: f32_array, count: 4 }
+      - { name: metallic,      type: float32 }
+      - { name: roughness,     type: float32 }
+      - { name: emission,      type: f32_array, count: 3 }
       - { name: texture_path,  type: utf8_string, optional: true }
-    description: "Parameter changes."
+      - { name: sequence_number, type: uint32 }
+      - { name: timestamp,      type: float64 }
+    description: "Parameter changes. Material properties are always packed (full state); texture_path is the only optional field."
 
   MATERIAL_ASSIGN:
     code: 0x42
@@ -425,6 +429,8 @@ messages:
       - { name: persistent_id, type: uuid }
       - { name: material_id,   type: uuid }
       - { name: slot_index,    type: uint8 }
+      - { name: sequence_number, type: uint32 }
+      - { name: timestamp,      type: float64 }
     description: "Assign material to slot."
 
   # --- Camera ---

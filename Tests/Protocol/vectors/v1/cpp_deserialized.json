@@ -321,6 +321,7 @@
       "metallic": 1.0,
       "name": "Gold",
       "roughness": 0.30000001192092896,
+      "sequence_number": 41,
       "texture_path": "T_Gold_BaseColor"
     },
     "flags": 0,
@@ -345,7 +346,8 @@
       "material_id": "ffeeddccbbaa99887766554433221100",
       "metallic": 0.0,
       "roughness": 0.5,
-      "texture_path": ""
+      "sequence_number": 42,
+      "texture_path": "T_Update_BaseColor"
     },
     "flags": 0,
     "msg_type": 65,
@@ -357,6 +359,7 @@
     "body": {
       "material_id": "ffeeddccbbaa99887766554433221100",
       "persistent_id": "00112233445566778899aabbccddeeff",
+      "sequence_number": 43,
       "slot_index": 0
     },
     "flags": 0,

@@ -375,10 +375,17 @@ inline DeserializedMessage DeserializeFrame(const uint8_t* data, size_t size) {
             msg.body["metallic"] = state.unpack_float32();
             msg.body["roughness"] = state.unpack_float32();
             msg.body["emission"] = state.unpack_f32_array(3);
-            // texture_path is optional
-            if (state.offset < msg.total_size) {
-                msg.body["texture_path"] = state.unpack_utf8_string();
+            // texture_path is optional. Remaining bytes after emission with
+            // texture_path: 2 (min utf8 prefix) + 4 (seq) + 8 (ts) = 14.
+            // Without texture_path: 12
+            {
+                const size_t body_end = msg.total_size;
+                if (body_end - state.offset >= 14) {
+                    msg.body["texture_path"] = state.unpack_utf8_string();
+                }
             }
+            msg.body["sequence_number"] = state.unpack_uint32();
+            msg.body["timestamp"] = state.unpack_float64();
             break;
         case MsgType::MATERIAL_UPDATE:
             msg.body["material_id"] = state.unpack_uuid();
@@ -386,15 +393,22 @@ inline DeserializedMessage DeserializeFrame(const uint8_t* data, size_t size) {
             msg.body["metallic"] = state.unpack_float32();
             msg.body["roughness"] = state.unpack_float32();
             msg.body["emission"] = state.unpack_f32_array(3);
-            // texture_path is optional — read if data remains
-            if (state.offset < msg.total_size) {
-                msg.body["texture_path"] = state.unpack_utf8_string();
+            // texture_path is optional — same predicate as MATERIAL_CREATE
+            {
+                const size_t body_end = msg.total_size;
+                if (body_end - state.offset >= 14) {
+                    msg.body["texture_path"] = state.unpack_utf8_string();
+                }
             }
+            msg.body["sequence_number"] = state.unpack_uint32();
+            msg.body["timestamp"] = state.unpack_float64();
             break;
         case MsgType::MATERIAL_ASSIGN:
             msg.body["persistent_id"] = state.unpack_uuid();
             msg.body["material_id"] = state.unpack_uuid();
             msg.body["slot_index"] = state.unpack_uint8();
+            msg.body["sequence_number"] = state.unpack_uint32();
+            msg.body["timestamp"] = state.unpack_float64();
             break;
         case MsgType::CAMERA_CREATE: {
             msg.body["camera_id"] = state.unpack_uuid();

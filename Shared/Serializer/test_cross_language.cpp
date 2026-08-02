@@ -283,7 +283,9 @@ static std::vector<uint8_t> serialize_from_manifest(const json& vec) {
                 fields["material_id"], fields["name"],
                 bc[0], bc[1], bc[2], bc[3],
                 fields["metallic"], fields["roughness"],
-                em[0], em[1], em[2], tex);
+                em[0], em[1], em[2], tex,
+                fields["sequence_number"].get<uint32_t>(),
+                fields["timestamp"].get<double>());
             break;
         }
         case MsgType::MATERIAL_UPDATE: {
@@ -292,16 +294,18 @@ static std::vector<uint8_t> serialize_from_manifest(const json& vec) {
             std::string tex = fields.contains("texture_path") ?
                 fields["texture_path"].get<std::string>() : "";
             body = serialize_body_material_update(fields["material_id"],
-                true, bc[0], bc[1], bc[2], bc[3],
-                true, fields["metallic"],
-                true, fields["roughness"],
-                true, em[0], em[1], em[2],
-                true, tex);
+                bc[0], bc[1], bc[2], bc[3],
+                fields["metallic"], fields["roughness"],
+                em[0], em[1], em[2], tex,
+                fields["sequence_number"].get<uint32_t>(),
+                fields["timestamp"].get<double>());
             break;
         }
         case MsgType::MATERIAL_ASSIGN:
             body = serialize_body_material_assign(
-                fields["persistent_id"], fields["material_id"], fields["slot_index"]);
+                fields["persistent_id"], fields["material_id"], fields["slot_index"],
+                fields["sequence_number"].get<uint32_t>(),
+                fields["timestamp"].get<double>());
             break;
         case MsgType::CAMERA_CREATE: {
             auto tr = manifest_transform_to_vec(fields["transform"]);

@@ -236,7 +236,8 @@ inline std::vector<uint8_t> serialize_body_material_create(
     float bc_r, float bc_g, float bc_b, float bc_a,
     float metallic, float roughness,
     float em_r, float em_g, float em_b,
-    const std::string& texture_path)
+    const std::string& texture_path,
+    uint32_t sequence_number, double timestamp)
 {
     std::vector<uint8_t> body;
     auto mid = parse_uuid(material_id);
@@ -254,46 +255,43 @@ inline std::vector<uint8_t> serialize_body_material_create(
     if (!texture_path.empty()) {
         pack_utf8_string(body, texture_path);
     }
+    pack_uint32(body, sequence_number);
+    pack_float64(body, timestamp);
     return body;
 }
 
 inline std::vector<uint8_t> serialize_body_material_update(
     const std::string& material_id,
-    bool has_base_color, float bc_r, float bc_g, float bc_b, float bc_a,
-    bool has_metallic, float metallic,
-    bool has_roughness, float roughness,
-    bool has_emission, float em_r, float em_g, float em_b,
-    bool has_texture_path, const std::string& texture_path)
+    float bc_r, float bc_g, float bc_b, float bc_a,
+    float metallic, float roughness,
+    float em_r, float em_g, float em_b,
+    const std::string& texture_path,
+    uint32_t sequence_number, double timestamp)
 {
     std::vector<uint8_t> body;
     auto mid = parse_uuid(material_id);
     pack_uuid(body, mid.data());
-    if (has_base_color) {
-        pack_float32(body, bc_r);
-        pack_float32(body, bc_g);
-        pack_float32(body, bc_b);
-        pack_float32(body, bc_a);
-    }
-    if (has_metallic) {
-        pack_float32(body, metallic);
-    }
-    if (has_roughness) {
-        pack_float32(body, roughness);
-    }
-    if (has_emission) {
-        pack_float32(body, em_r);
-        pack_float32(body, em_g);
-        pack_float32(body, em_b);
-    }
-    if (has_texture_path) {
+    pack_float32(body, bc_r);
+    pack_float32(body, bc_g);
+    pack_float32(body, bc_b);
+    pack_float32(body, bc_a);
+    pack_float32(body, metallic);
+    pack_float32(body, roughness);
+    pack_float32(body, em_r);
+    pack_float32(body, em_g);
+    pack_float32(body, em_b);
+    if (!texture_path.empty()) {
         pack_utf8_string(body, texture_path);
     }
+    pack_uint32(body, sequence_number);
+    pack_float64(body, timestamp);
     return body;
 }
 
 inline std::vector<uint8_t> serialize_body_material_assign(
     const std::string& persistent_id, const std::string& material_id,
-    uint8_t slot_index)
+    uint8_t slot_index,
+    uint32_t sequence_number, double timestamp)
 {
     std::vector<uint8_t> body;
     auto pid = parse_uuid(persistent_id);
@@ -301,6 +299,8 @@ inline std::vector<uint8_t> serialize_body_material_assign(
     auto mid = parse_uuid(material_id);
     pack_uuid(body, mid.data());
     pack_uint8(body, slot_index);
+    pack_uint32(body, sequence_number);
+    pack_float64(body, timestamp);
     return body;
 }
 

@@ -349,6 +349,8 @@ VECTORS = [
             "roughness": 0.3,
             "emission": [0.0, 0.0, 0.0],
             "texture_path": "T_Gold_BaseColor",
+            "sequence_number": 41,
+            "timestamp": 1700000041.0,
         },
     },
     {
@@ -364,7 +366,9 @@ VECTORS = [
             "metallic": 0.0,
             "roughness": 0.5,
             "emission": [0.0, 0.0, 0.0],
-            "texture_path": "",
+            "texture_path": "T_Update_BaseColor",
+            "sequence_number": 42,
+            "timestamp": 1700000042.0,
         },
     },
     {
@@ -378,6 +382,8 @@ VECTORS = [
             "persistent_id": str(UUID_A),
             "material_id": str(UUID_B),
             "slot_index": 0,
+            "sequence_number": 43,
+            "timestamp": 1700000043.0,
         },
     },
 

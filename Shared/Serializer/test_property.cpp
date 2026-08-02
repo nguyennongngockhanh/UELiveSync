@@ -604,9 +604,10 @@ static void test_property_material_create() {
         float er = rand_float(), eg = rand_float(), eb = rand_float();
         std::string tex = rand_bool() ? rand_string() : "";
         uint32_t seq = rand_u32();
+        double ts = rand_float() * 1000.0;
 
         auto body = serialize_body_material_create(mid, name,
-            bcr, bcg, bcb, bca, met, rou, er, eg, eb, tex);
+            bcr, bcg, bcb, bca, met, rou, er, eg, eb, tex, seq, ts);
         auto frame = PackFrame(MsgType::MATERIAL_CREATE, 0, seq, DEFAULT_SID, body);
         auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -636,6 +637,8 @@ static void test_property_material_create() {
             check(has_field(d, "texture_path"), "material_create has tex");
             check(get_field<std::string>(d, "texture_path") == tex, "material_create tex");
         }
+        check(get_field<uint32_t>(d, "sequence_number") == seq, "material_create seq");
+        check(floats_eq(get_field<double>(d, "timestamp"), ts), "material_create ts");
     }
 }
 
@@ -645,15 +648,15 @@ static void test_property_material_update() {
         float bcr = rand_float(), bcg = rand_float(), bcb = rand_float(), bca = rand_float();
         float met = rand_float(), rou = rand_float();
         float er = rand_float(), eg = rand_float(), eb = rand_float();
-        std::string tex = rand_string();
+        std::string tex = rand_bool() ? rand_string() : "";
         uint32_t seq = rand_u32();
+        double ts = rand_float() * 1000.0;
 
-        // All optional fields present (known protocol limitation)
         auto body = serialize_body_material_update(mid,
-            true, bcr, bcg, bcb, bca,
-            true, met, true, rou,
-            true, er, eg, eb,
-            true, tex);
+            bcr, bcg, bcb, bca,
+            met, rou,
+            er, eg, eb,
+            tex, seq, ts);
         auto frame = PackFrame(MsgType::MATERIAL_UPDATE, 0, seq, DEFAULT_SID, body);
         auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -673,7 +676,12 @@ static void test_property_material_update() {
         check(em.size() == 3, "material_update em size");
         check(floats_eq(em[0], er), "material_update er");
 
-        check(get_field<std::string>(d, "texture_path") == tex, "material_update tex");
+        if (!tex.empty()) {
+            check(has_field(d, "texture_path"), "material_update has tex");
+            check(get_field<std::string>(d, "texture_path") == tex, "material_update tex");
+        }
+        check(get_field<uint32_t>(d, "sequence_number") == seq, "material_update seq");
+        check(floats_eq(get_field<double>(d, "timestamp"), ts), "material_update ts");
     }
 }
 
@@ -683,8 +691,9 @@ static void test_property_material_assign() {
         std::string mid = rand_uuid_str();
         uint8_t slot = rand_u8();
         uint32_t seq = rand_u32();
+        double ts = rand_float() * 1000.0;
 
-        auto body = serialize_body_material_assign(pid, mid, slot);
+        auto body = serialize_body_material_assign(pid, mid, slot, seq, ts);
         auto frame = PackFrame(MsgType::MATERIAL_ASSIGN, 0, seq, DEFAULT_SID, body);
         auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -696,6 +705,8 @@ static void test_property_material_assign() {
         auto omid = parse_uuid(mid);
         check(uuid_eq(dmid, omid), "material_assign mid");
         check(get_field<uint8_t>(d, "slot_index") == slot, "material_assign slot");
+        check(get_field<uint32_t>(d, "sequence_number") == seq, "material_assign seq");
+        check(floats_eq(get_field<double>(d, "timestamp"), ts), "material_assign ts");
     }
 }
 

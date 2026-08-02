@@ -359,13 +359,14 @@
       "metallic": 1.0,
       "name": "Gold",
       "roughness": 0.30000001192092896,
+      "sequence_number": 41,
       "texture_path": "T_Gold_BaseColor"
     },
-    "cpp_size": 94,
+    "cpp_size": 106,
     "flags": 0,
     "msg_type": 64,
     "name": "MATERIAL_CREATE",
-    "original_size": 94,
+    "original_size": 106,
     "sequence_id": 18,
     "session_id": 16045690984503098046
   },
@@ -385,13 +386,14 @@
       "material_id": "ffeeddccbbaa99887766554433221100",
       "metallic": 0.0,
       "roughness": 0.5,
-      "texture_path": ""
+      "sequence_number": 42,
+      "texture_path": "T_Update_BaseColor"
     },
-    "cpp_size": 72,
+    "cpp_size": 102,
     "flags": 0,
     "msg_type": 65,
     "name": "MATERIAL_UPDATE",
-    "original_size": 72,
+    "original_size": 102,
     "sequence_id": 19,
     "session_id": 16045690984503098046
   },
@@ -399,13 +401,14 @@
     "body": {
       "material_id": "ffeeddccbbaa99887766554433221100",
       "persistent_id": "00112233445566778899aabbccddeeff",
+      "sequence_number": 43,
       "slot_index": 0
     },
-    "cpp_size": 51,
+    "cpp_size": 63,
     "flags": 0,
     "msg_type": 66,
     "name": "MATERIAL_ASSIGN",
-    "original_size": 51,
+    "original_size": 63,
     "sequence_id": 20,
     "session_id": 16045690984503098046
   },

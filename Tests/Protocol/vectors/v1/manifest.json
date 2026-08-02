@@ -3,9 +3,9 @@
   "protocol_version": 1,
   "protocol_revision": 1,
   "generator_version": "1.0.0",
-  "git_commit": "a83987a3036b",
-  "protocol_sha256": "ad2ad7283a4f6ceaa26c16b6d875a15c06bdeb3cb424c0d97a5cff6e38b7d92a",
-  "generated_at": "2026-07-29T11:35:25.058832+00:00",
+  "git_commit": "f27f46ec194b",
+  "protocol_sha256": "0fe3d6991d95bcd07ee2690404ef778e19a16089de6c8e60112843148f91fd57",
+  "generated_at": "2026-08-02T07:49:49.728228+00:00",
   "vector_count": 31,
   "vectors": [
     {
@@ -390,9 +390,11 @@
           0.0,
           0.0
         ],
-        "texture_path": "T_Gold_BaseColor"
+        "texture_path": "T_Gold_BaseColor",
+        "sequence_number": 41,
+        "timestamp": 1700000041.0
       },
-      "size": 94
+      "size": 106
     },
     {
       "name": "MATERIAL_UPDATE",
@@ -417,9 +419,11 @@
           0.0,
           0.0
         ],
-        "texture_path": ""
+        "texture_path": "T_Update_BaseColor",
+        "sequence_number": 42,
+        "timestamp": 1700000042.0
       },
-      "size": 72
+      "size": 102
     },
     {
       "name": "MATERIAL_ASSIGN",
@@ -432,9 +436,11 @@
       "fields": {
         "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
         "material_id": "ffeeddcc-bbaa-9988-7766-554433221100",
-        "slot_index": 0
+        "slot_index": 0,
+        "sequence_number": 43,
+        "timestamp": 1700000043.0
       },
-      "size": 51
+      "size": 63
     },
     {
       "name": "CAMERA_CREATE",
