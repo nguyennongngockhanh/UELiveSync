@@ -2079,7 +2079,7 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
 
     bl_description = \
         "Export selected MESH objects to FBX cache and " \
-        "send PT_FBXImportRequest to UE for StaticMesh import"
+        "send FBX_IMPORT_REQUEST to UE for StaticMesh import"
 
     def _collect_mesh_objects(self, context):
         selected = [
@@ -2426,22 +2426,76 @@ class UELIVESYNC_OT_sync_selected_mesh_to_ue_fbx(
                 # Task A: deterministic send-ready log before helper
                 print(f"[FBX][SEND_READY] guid={guid_hex[:8]} fbx={fbx_path} sidecarTextures={len(sidecar_info)}")
 
-                # Phase 3.5: use manifest v3 serialize-and-send helper
-                send_result = _mv3.serialize_and_send_fbx_request(
-                    manifest_result=manifest_result,
-                    serialize_fn=network.serialize_fbx_import_request,
-                    send_fn=network.send_objects,
-                    guid_obj=guid_obj,
-                    fbx_path=fbx_path,
-                    object_name=safe_name,
-                    vert_count=vert_count,
-                    tri_count=tri_count,
-                    mat_slot_count=mat_slot_count,
-                    timestamp=time.time(),
-                    geometry_hash=geometry_hash,
-                    packet_type=network.PT_FBXImportRequest,
-                    version=network.LIVE_SYNC_VERSION_V5,
+                # MIG-005: semantic FBX_IMPORT_REQUEST emission.
+                # Manifest durability gate unchanged; payload built by
+                # fbx_protocol and framed by MsgTransport. Legacy
+                # serialize_and_send_fbx_request stays for measurements.
+                from . import fbx_protocol as _fbxp
+                from .msg_transport import (
+                    get_transport as _get_transport,
+                    MsgType as _MsgType,
                 )
+
+                if not _mv3.should_send_after_pipeline(manifest_result):
+                    network._append_blender_debug_log(
+                        f"[FBX_ENQUEUE_SKIP] guid={guid_hex[:8]} reason=manifest_not_durable"
+                    )
+                    send_result = _mv3.FBXPacketTransactionResult(
+                        status="suppressed",
+                        action="manifest_not_durable",
+                        sent=False,
+                    )
+                else:
+                    try:
+                        _fbx_body = _fbxp.build_fbx_import_request(
+                            persistent_id=guid_obj,
+                            fbx_path=fbx_path,
+                            object_name=safe_name,
+                            vert_count=vert_count,
+                            tri_count=tri_count,
+                            mat_slot_count=mat_slot_count,
+                            geometry_hash=geometry_hash,
+                            version=1,
+                            sequence_number=_fbxp._next_fbx_import_sequence(guid_hex),
+                            timestamp=time.time(),
+                        )
+                        _transport = _get_transport()
+                        _sent = bool(
+                            _transport
+                            and _transport.send_msg(
+                                _MsgType.FBX_IMPORT_REQUEST, _fbx_body)
+                        )
+                        network._append_blender_debug_log(
+                            f"[FBX_ENQUEUE] guid={guid_hex[:8]} "
+                            f"payload_bytes={len(_fbx_body)} "
+                            f"packet_type=0x60 version=1"
+                        )
+                        if _sent:
+                            network._append_blender_debug_log(
+                                f"[FBX_ENQUEUE_SENT] guid={guid_hex[:8]} "
+                                f"status=send_msg_enqueued"
+                            )
+                        else:
+                            network._append_blender_debug_log(
+                                f"[FBX_ENQUEUE_FAIL] guid={guid_hex[:8]} "
+                                f"reason=send_failed"
+                            )
+                        send_result = _mv3.FBXPacketTransactionResult(
+                            status="success" if _sent else "failure",
+                            action="sent" if _sent else "send_failed",
+                            sent=_sent,
+                        )
+                    except Exception as _send_exc:
+                        network._append_blender_debug_log(
+                            f"[FBX_ENQUEUE_FAIL] guid={guid_hex[:8]} "
+                            f"reason=serialization_failed error={_send_exc}"
+                        )
+                        send_result = _mv3.FBXPacketTransactionResult(
+                            status="failure",
+                            action="serialization_failed",
+                            sent=False,
+                            error=str(_send_exc),
+                        )
                 print(
                     f"[FBX][SEND_RESULT] "
                     f"sent={send_result.sent} "

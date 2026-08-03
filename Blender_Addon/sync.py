@@ -16,6 +16,7 @@ from uuid import UUID
 
 from .msg_transport import get_transport, MsgType
 from .material_protocol import build_material_create, build_material_update, build_material_assign, clear_material_sequences, _next_material_create_sequence, _next_material_update_sequence, _next_material_assign_sequence
+from .fbx_protocol import clear_fbx_sequences
 from .object_protocol import build_object_create, build_object_update, build_object_reparent, build_object_visibility, build_object_rename, build_object_delete, clear_all_sequences, clear_delete_sequences, next_create_sequence, next_update_sequence, build_camera_create, build_camera_update, build_camera_setactive, clear_camera_sequences, _next_camera_create_sequence, _next_camera_update_sequence
 
 try:
@@ -1518,6 +1519,7 @@ def check_updates():
         clear_all_sequences()
         clear_camera_sequences()
         clear_material_sequences()
+        clear_fbx_sequences()
         _last_collection_state.clear()
         _collection_anti_loop_guids.clear()
         _last_active_camera_guid = b''  # Phase 7D: resend on next tick
