@@ -17,26 +17,7 @@ from typing import Optional, Tuple
 from .msg_transport import (
     MsgType, pack_u8, pack_u32, pack_f64, pack_utf8, pack_uuid,
 )
-
-
-def _uuid_to_fguid_bytes(uuid_obj) -> bytes:
-    """Convert uuid.UUID to 16 bytes matching FGuid internal LE layout.
-
-    FGuid stores A,B,C,D as uint32 in native (LE) byte order.
-    FMemory::Memcpy reads these bytes directly, so we must pack
-    in the same layout as the legacy serializer (struct.pack('<IIII', ...)).
-
-    This is DIFFERENT from uuid.UUID.bytes (big-endian RFC 4122).
-    Using uuid.UUID.bytes produces a byte-swapped GUID that won't match
-    actors spawned by the legacy PT_Create path.
-    """
-    a = uuid_obj.time_low
-    b = (uuid_obj.time_mid << 16) | uuid_obj.time_hi_version
-    c = ((uuid_obj.clock_seq_hi_variant << 24) |
-         (uuid_obj.clock_seq_low << 16) |
-         ((uuid_obj.node >> 32) & 0xFFFF))
-    d = uuid_obj.node & 0xFFFFFFFF
-    return struct.pack('<IIII', a, b, c, d)
+from .protocol_guid import uuid_to_fguid_bytes
 
 
 def build_object_create(
@@ -64,14 +45,14 @@ def build_object_create(
     body = bytearray()
 
     # persistent_id: UUID (16 bytes, FGuid LE layout)
-    body.extend(_uuid_to_fguid_bytes(persistent_id))
+    body.extend(uuid_to_fguid_bytes(persistent_id))
 
     # name: utf8_string
     body.extend(pack_utf8(name))
 
     # parent_id: UUID (optional, 16 bytes, FGuid LE layout)
     if parent_id is not None:
-        body.extend(_uuid_to_fguid_bytes(parent_id))
+        body.extend(uuid_to_fguid_bytes(parent_id))
 
     # primitive_type: uint8
     body.extend(pack_u8(primitive_type))
@@ -113,7 +94,7 @@ def build_object_update(
     body = bytearray()
 
     # persistent_id: UUID (16 bytes, FGuid LE layout)
-    body.extend(_uuid_to_fguid_bytes(persistent_id))
+    body.extend(uuid_to_fguid_bytes(persistent_id))
 
     # transform: 10 floats LE
     body.extend(struct.pack('<3f', *location[:3]))
@@ -187,7 +168,7 @@ def build_object_delete(
     Total body: 28 bytes.
     """
     body = bytearray()
-    body.extend(_uuid_to_fguid_bytes(persistent_id))
+    body.extend(uuid_to_fguid_bytes(persistent_id))
 
     # Monotonic sequence per GUID (replay dedup / stale rejection)
     guid_key = str(persistent_id)
@@ -212,7 +193,7 @@ def build_object_rename(
       new_name:      utf8_string
     """
     body = bytearray()
-    body.extend(_uuid_to_fguid_bytes(persistent_id))
+    body.extend(uuid_to_fguid_bytes(persistent_id))
     body.extend(pack_utf8(new_name))
     return bytes(body)
 
@@ -228,7 +209,7 @@ def build_object_visibility(
       visible:       uint8 (1=visible, 0=hidden)
     """
     body = bytearray()
-    body.extend(_uuid_to_fguid_bytes(persistent_id))
+    body.extend(uuid_to_fguid_bytes(persistent_id))
     body.extend(pack_u8(1 if visible else 0))
     return bytes(body)
 
@@ -244,9 +225,9 @@ def build_object_reparent(
       new_parent_id:  UUID (16 bytes, FGuid LE, all-zero = detach)
     """
     body = bytearray()
-    body.extend(_uuid_to_fguid_bytes(persistent_id))
+    body.extend(uuid_to_fguid_bytes(persistent_id))
     if new_parent_id is not None:
-        body.extend(_uuid_to_fguid_bytes(new_parent_id))
+        body.extend(uuid_to_fguid_bytes(new_parent_id))
     else:
         body.extend(b'\x00' * 16)
     return bytes(body)
@@ -316,10 +297,10 @@ def build_camera_create(
       timestamp:      float64 LE
     """
     body = bytearray()
-    body.extend(_uuid_to_fguid_bytes(camera_id))
+    body.extend(uuid_to_fguid_bytes(camera_id))
     body.extend(pack_utf8(name))
     if parent_id is not None:
-        body.extend(_uuid_to_fguid_bytes(parent_id))
+        body.extend(uuid_to_fguid_bytes(parent_id))
     body.extend(struct.pack('<10f',
         location[0], location[1], location[2],
         rotation[0], rotation[1], rotation[2], rotation[3],
@@ -367,7 +348,7 @@ def build_camera_update(
       timestamp:      float64 LE
     """
     body = bytearray()
-    body.extend(_uuid_to_fguid_bytes(camera_id))
+    body.extend(uuid_to_fguid_bytes(camera_id))
     body.extend(struct.pack('<10f',
         location[0], location[1], location[2],
         rotation[0], rotation[1], rotation[2], rotation[3],
@@ -393,5 +374,5 @@ def build_camera_setactive(
       camera_id: UUID (16 bytes)
     """
     body = bytearray()
-    body.extend(_uuid_to_fguid_bytes(camera_id))
+    body.extend(uuid_to_fguid_bytes(camera_id))
     return bytes(body)

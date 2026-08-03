@@ -700,7 +700,8 @@ static void test_property_material_assign() {
         check(d.msg_type == MsgType::MATERIAL_ASSIGN, "material_assign msg_type");
         auto dpid = get_field<std::array<uint8_t, 16>>(d, "persistent_id");
         auto opid = parse_uuid(pid);
-        check(uuid_eq(dpid, opid), "material_assign pid");
+        // persistent_id is an Object-GUID reference → FGuid LE layout (MIG-006).
+        check(uuid_eq(dpid, fguid_from_rfc(opid)), "material_assign pid (FGuid LE)");
         auto dmid = get_field<std::array<uint8_t, 16>>(d, "material_id");
         auto omid = parse_uuid(mid);
         check(uuid_eq(dmid, omid), "material_assign mid");

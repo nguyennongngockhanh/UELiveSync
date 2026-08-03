@@ -14,6 +14,7 @@
 | INV-2026-012 | Camera Aspect Ratio Not Synced via Protocol | Closed | P0 | — | 2026-07-31 | Khanh |
 | INV-2026-013 | Camera Aspect Not Updated When Render Resolution Changes | Closed | P0 | — | 2026-08-01 | Khanh |
 | INV-2026-014 | FBX Export Operator StopIteration on Zero Material Slots | Closed | P1 | — | 2026-08-01 | Khanh |
+| INV-2026-016 | FBX Actor Ownership Mismatch — UUID Encoding Divergence (LE/FGuid vs RFC 4122) | Resolved via MIG-006 | P0 | MIG-002, MIG-005 | 2026-08-03 | Khanh |
 
 ## INV-2026-009 — Camera Orientation Mismatch (Blender ↔ UE)
 

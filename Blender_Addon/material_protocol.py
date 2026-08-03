@@ -26,6 +26,7 @@ from .msg_transport import (
     MsgType, pack_u8, pack_u32, pack_u64, pack_f32, pack_f64,
     pack_utf8, pack_uuid,
 )
+from .protocol_guid import uuid_to_fguid_bytes, uuid_to_rfc4122_bytes
 
 # Per-material-id sequence counters (like objects and cameras).
 # Key: str(material_id). create/update tracked separately so stale
@@ -64,11 +65,6 @@ def _next_material_assign_sequence(persistent_id) -> int:
     return seq
 
 
-def _uuid_to_raw(uuid_obj) -> bytes:
-    """Convert uuid.UUID to 16 raw bytes (RFC 4122 / network byte order)."""
-    return uuid_obj.bytes
-
-
 def _uuid_to_raw_from_hex(hex_str: str) -> bytes:
     """Convert 32-char hex string to 16 raw bytes."""
     import uuid as _uuid
@@ -93,7 +89,7 @@ def build_material_create(
     if isinstance(material_id, bytes) and len(material_id) == 16:
         body.extend(material_id)
     else:
-        body.extend(_uuid_to_raw(material_id))
+        body.extend(uuid_to_rfc4122_bytes(material_id))
 
     # name: utf8_string
     body.extend(pack_utf8(name))
@@ -140,7 +136,7 @@ def build_material_update(
     if isinstance(material_id, bytes) and len(material_id) == 16:
         body.extend(material_id)
     else:
-        body.extend(_uuid_to_raw(material_id))
+        body.extend(uuid_to_rfc4122_bytes(material_id))
 
     # base_color: f32_array(4)
     body.extend(struct.pack('<4f', *base_color[:4]))
@@ -177,17 +173,18 @@ def build_material_assign(
     """MATERIAL_ASSIGN body bytes."""
     body = bytearray()
 
-    # persistent_id: UUID (16 bytes) — the object
+    # persistent_id: UUID (16 bytes) — Object-GUID reference (FGuid LE layout,
+    # MIG-006): must resolve the actor spawned by the OBJECT channel.
     if isinstance(persistent_id, bytes) and len(persistent_id) == 16:
         body.extend(persistent_id)
     else:
-        body.extend(_uuid_to_raw(persistent_id))
+        body.extend(uuid_to_fguid_bytes(persistent_id))
 
-    # material_id: UUID (16 bytes)
+    # material_id: UUID (16 bytes) — material-namespace identity (RFC 4122).
     if isinstance(material_id, bytes) and len(material_id) == 16:
         body.extend(material_id)
     else:
-        body.extend(_uuid_to_raw(material_id))
+        body.extend(uuid_to_rfc4122_bytes(material_id))
 
     # slot_index: uint8
     body.extend(pack_u8(slot_index))

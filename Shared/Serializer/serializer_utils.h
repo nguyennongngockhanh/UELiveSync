@@ -28,4 +28,17 @@ inline std::array<uint8_t, 16> parse_uuid(const std::string& s) {
     return result;
 }
 
+/// Convert RFC 4122 16 bytes to the FGuid LE layout used for Object-GUID
+/// references (MIG-006): each 4-byte group is stored as a little-endian uint32.
+inline std::array<uint8_t, 16> fguid_from_rfc(const std::array<uint8_t, 16>& bytes) {
+    std::array<uint8_t, 16> out{};
+    for (int i = 0; i < 16; i += 4) {
+        out[i] = bytes[i + 3];
+        out[i + 1] = bytes[i + 2];
+        out[i + 2] = bytes[i + 1];
+        out[i + 3] = bytes[i];
+    }
+    return out;
+}
+
 } // namespace livesync

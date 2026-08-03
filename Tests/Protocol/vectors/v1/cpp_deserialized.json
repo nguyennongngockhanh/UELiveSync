@@ -358,7 +358,7 @@
   {
     "body": {
       "material_id": "ffeeddccbbaa99887766554433221100",
-      "persistent_id": "00112233445566778899aabbccddeeff",
+      "persistent_id": "3322110077665544bbaa9988ffeeddcc",
       "sequence_number": 43,
       "slot_index": 0
     },
@@ -374,7 +374,7 @@
       "geometry_hash": 1311768467463790320,
       "mat_slot_count": 2,
       "object_name": "Cabinet",
-      "persistent_id": "00112233445566778899aabbccddeeff",
+      "persistent_id": "3322110077665544bbaa9988ffeeddcc",
       "sequence_number": 44,
       "tri_count": 1528,
       "version": 1,

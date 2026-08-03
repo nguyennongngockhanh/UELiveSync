@@ -22,6 +22,7 @@ from .msg_transport import (
     MsgType, pack_u8, pack_u32, pack_u64, pack_f32, pack_f64,
     pack_utf8, pack_uuid,
 )
+from .protocol_guid import uuid_to_fguid_bytes
 
 # Per-object-id sequence counters for FBX import requests. Key: str(persistent_id).
 _fbx_import_sequences: Dict[str, int] = {}
@@ -39,11 +40,6 @@ def _next_fbx_import_sequence(persistent_id) -> int:
     return seq
 
 
-def _uuid_to_raw(uuid_obj) -> bytes:
-    """Convert uuid.UUID to 16 raw bytes (RFC 4122 / network byte order)."""
-    return uuid_obj.bytes
-
-
 def build_fbx_import_request(
     persistent_id,
     fbx_path: str,
@@ -59,11 +55,12 @@ def build_fbx_import_request(
     """FBX_IMPORT_REQUEST body bytes."""
     body = bytearray()
 
-    # persistent_id: UUID (16 bytes)
+    # persistent_id: UUID (16 bytes) — Object-GUID reference (FGuid LE layout,
+    # MIG-006): must resolve the actor spawned by the OBJECT channel.
     if isinstance(persistent_id, bytes) and len(persistent_id) == 16:
         body.extend(persistent_id)
     else:
-        body.extend(_uuid_to_raw(persistent_id))
+        body.extend(uuid_to_fguid_bytes(persistent_id))
 
     # version: uint32 LE
     body.extend(pack_u32(version))

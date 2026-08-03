@@ -131,8 +131,28 @@ def compare_values(name, field, expected, actual, tolerance=1e-5):
     return True
 
 
-def compare_uuid_format(name, field, manifest_val, cpp_val):
+def fguid_hex_to_canonical(hex_str):
+    """Convert FGuid LE-layout raw bytes (as hex) back to canonical RFC uuid hex.
+
+    FGuid stores A,B,C,D as little-endian uint32; each 4-byte group must be
+    byte-reversed to recover the canonical uuid. Used for Object-GUID reference
+    fields that use the LE/FGuid layout (MIG-006)."""
+    h = hex_str.lower()
+    groups = [h[i:i + 8] for i in range(0, len(h), 8)]
+    out = []
+    for g in groups:
+        pairs = [g[i:i + 2] for i in range(0, 8, 2)]
+        out.extend(reversed(pairs))
+    return "".join(out)
+
+
+def compare_uuid_format(name, field, manifest_val, cpp_val, fguid=False):
     """Compare UUID values — manifest uses hyphenated, C++ uses hex."""
+    if fguid:
+        # Object-GUID reference: C++/Python hex is the raw FGuid LE bytes.
+        # Reverse each 4-byte group to recover the canonical uuid for the
+        # manifest comparison.
+        cpp_val = fguid_hex_to_canonical(cpp_val) if isinstance(cpp_val, str) else cpp_val
     # Strip hyphens from manifest UUID
     manifest_stripped = manifest_val.replace("-", "") if isinstance(manifest_val, str) else ""
     cpp_stripped = cpp_val.replace("-", "") if isinstance(cpp_val, str) else ""
@@ -142,13 +162,16 @@ def compare_uuid_format(name, field, manifest_val, cpp_val):
     return True
 
 
-def compare_vector_vs_manifest(vector_name, cpp_body, manifest_fields, is_uuid_key):
+def compare_vector_vs_manifest(vector_name, cpp_body, manifest_fields, is_uuid_key, is_fguid_key):
     """Compare all fields in a vector against manifest."""
     all_ok = True
     for key, expected in manifest_fields.items():
         if key in cpp_body:
             actual = cpp_body[key]
-            if key in is_uuid_key:
+            if key in is_fguid_key:
+                if not compare_uuid_format(vector_name, key, expected, actual, fguid=True):
+                    all_ok = False
+            elif key in is_uuid_key:
                 if not compare_uuid_format(vector_name, key, expected, actual):
                     all_ok = False
             elif not compare_values(vector_name, key, expected, actual):
@@ -196,6 +219,14 @@ UUID_FIELDS = {
     "SEQUENCE_WRAPAROUND": [],
 }
 
+# Object-GUID reference fields that use the LE/FGuid layout (MIG-006).
+# These bytes decode byte-swapped vs RFC 4122 and must be normalized before
+# comparison against the manifest's canonical uuid strings.
+FGUID_FIELDS = {
+    "MATERIAL_ASSIGN": ["persistent_id"],
+    "FBX_IMPORT_REQUEST": ["persistent_id"],
+}
+
 
 def main():
     if len(sys.argv) < 2:
@@ -237,7 +268,8 @@ def main():
             continue
 
         cpp_body = cpp_by_name[name].get("body", {})
-        ok = compare_vector_vs_manifest(name, cpp_body, manifest_fields, uuid_keys)
+        fguid_keys = FGUID_FIELDS.get(name, [])
+        ok = compare_vector_vs_manifest(name, cpp_body, manifest_fields, uuid_keys, fguid_keys)
         if ok:
             print(f"  PASS  {name}")
             pass_count += 1
@@ -264,7 +296,8 @@ def main():
             continue
 
         cpp_body = cpp_ser_by_name[name].get("body", {})
-        ok = compare_vector_vs_manifest(name, cpp_body, manifest_fields, uuid_keys)
+        fguid_keys = FGUID_FIELDS.get(name, [])
+        ok = compare_vector_vs_manifest(name, cpp_body, manifest_fields, uuid_keys, fguid_keys)
         if ok:
             print(f"  PASS  {name}")
             pass2 += 1
@@ -320,7 +353,8 @@ def main():
                         else:
                             py_body[k] = v
 
-                    ok = compare_vector_vs_manifest(name, py_body, manifest_fields, uuid_keys)
+                    fguid_keys = FGUID_FIELDS.get(name, [])
+                    ok = compare_vector_vs_manifest(name, py_body, manifest_fields, uuid_keys, fguid_keys)
                     if ok:
                         print(f"  PASS  {name}")
                         pass3 += 1

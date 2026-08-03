@@ -295,7 +295,7 @@ inline std::vector<uint8_t> serialize_body_material_assign(
 {
     std::vector<uint8_t> body;
     auto pid = parse_uuid(persistent_id);
-    pack_uuid(body, pid.data());
+    pack_uuid_fguid(body, pid.data());  // Object-GUID reference → FGuid LE (MIG-006)
     auto mid = parse_uuid(material_id);
     pack_uuid(body, mid.data());
     pack_uint8(body, slot_index);
@@ -314,7 +314,7 @@ inline std::vector<uint8_t> serialize_body_fbx_import_request(
 {
     std::vector<uint8_t> body;
     auto pid = parse_uuid(persistent_id);
-    pack_uuid(body, pid.data());
+    pack_uuid_fguid(body, pid.data());  // Object-GUID reference → FGuid LE (MIG-006)
     pack_uint32(body, version);
     pack_utf8_string(body, fbx_path);
     pack_utf8_string(body, object_name);

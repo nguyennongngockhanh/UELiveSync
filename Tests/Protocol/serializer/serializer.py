@@ -79,6 +79,45 @@ def pack_uuid(v: str | uuid_mod.UUID) -> bytes:
     return u.bytes  # Already RFC 4122 canonical 16 bytes
 
 
+def pack_uuid_fguid(v: str | uuid_mod.UUID) -> bytes:
+    """
+    FGuid (mixed-endian) LE layout — mirrors the production Object-GUID channel
+    (Blender_Addon/protocol_guid.py:uuid_to_fguid_bytes).
+
+    Writes A,B,C,D as little-endian uint32. For uuid U this is:
+        A = U.time_low
+        B = (U.time_mid << 16) | U.time_hi_version
+        C = (U.clock_seq_hi_variant << 24) | (U.clock_seq_low << 16) | ((U.node >> 32) & 0xFFFF)
+        D = U.node & 0xFFFFFFFF
+    packed with '<IIII'.
+
+    NOT the same as RFC 4122 pack_uuid: the two layouts produce different wire
+    bytes and hence different FGuid identities after an Unreal memcpy. Only
+    Object-GUID reference fields must use this layout (MIG-006).
+    """
+    if isinstance(v, str):
+        u = uuid_mod.UUID(v)
+    else:
+        u = v
+    return struct.pack(
+        "<IIII",
+        u.time_low,
+        (u.time_mid << 16) | u.time_hi_version,
+        ((u.clock_seq_hi_variant << 24) |
+         (u.clock_seq_low << 16) |
+         ((u.node >> 32) & 0xFFFF)),
+        u.node & 0xFFFFFFFF,
+    )
+
+
+# Fields that carry an Object-GUID reference and MUST use the LE/FGuid layout
+# (MIG-006). Everything else of type "uuid" stays RFC 4122.
+FGUID_UUID_FIELDS: dict[MsgType, set[str]] = {
+    MsgType.FBX_IMPORT_REQUEST: {"persistent_id"},
+    MsgType.MATERIAL_ASSIGN: {"persistent_id"},
+}
+
+
 def pack_utf8_string(v: str) -> bytes:
     """UTF-8 with uint16 LE length prefix. Length = bytes, not characters."""
     encoded = v.encode("utf-8")
@@ -224,7 +263,10 @@ def serialize_body(msg_type: MsgType, fields: dict[str, Any]) -> bytes:
             else:
                 raise SerializeError(f"Missing required field: {field_def.name}")
         value = fields[field_def.name]
-        body.extend(pack_field(field_def.type, value))
+        if field_def.type == "uuid" and field_def.name in FGUID_UUID_FIELDS.get(msg_type, set()):
+            body.extend(pack_uuid_fguid(value))
+        else:
+            body.extend(pack_field(field_def.type, value))
 
     return bytes(body)
 

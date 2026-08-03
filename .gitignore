@@ -48,6 +48,9 @@ AGENTS.md
 
 # tests (local only)
 tests/
+!Tests/Protocol/tests/
+Tests/Protocol/tests/*
+!Tests/Protocol/tests/test_cross_channel_guid_contract.py
 
 # C++ test executables (built from Shared/Serializer/*.cpp)
 Shared/Serializer/test_bridge_dispatch

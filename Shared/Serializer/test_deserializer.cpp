@@ -18,6 +18,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <set>
 
 using json = nlohmann::json;
 using namespace livesync;
@@ -48,7 +49,16 @@ static bool uuid_equal(const std::array<uint8_t, 16>& a, const std::string& b) {
     return std::memcmp(a.data(), parsed.data(), 16) == 0;
 }
 
+// Object-GUID reference fields use the FGuid LE layout (MIG-006): the wire bytes
+// are byte-swapped per 4-byte group vs RFC 4122. Compare against the FGuid
+// encoding of the manifest's canonical uuid.
+static bool fguid_uuid_equal(const std::array<uint8_t, 16>& a, const std::string& b) {
+    auto expected = fguid_from_rfc(parse_uuid(b));
+    return std::memcmp(a.data(), expected.data(), 16) == 0;
+}
+
 static int verify_fields(const json& expected, const DeserializedMessage& msg,
+                          const std::set<std::string>& fguid_fields,
                           const std::string& prefix = "") {
     int errors = 0;
     for (auto& [key, val] : expected.items()) {
@@ -109,7 +119,10 @@ static int verify_fields(const json& expected, const DeserializedMessage& msg,
                     errors++;
                 }
             } else if (auto* p = std::get_if<std::array<uint8_t, 16>>(&v)) {
-                if (!uuid_equal(*p, exp)) {
+                bool ok = fguid_fields.count(key)
+                    ? fguid_uuid_equal(*p, exp)
+                    : uuid_equal(*p, exp);
+                if (!ok) {
                     std::cerr << "    MISMATCH " << field << ": UUID mismatch\n";
                     errors++;
                 }
@@ -213,7 +226,12 @@ int main(int argc, char* argv[]) {
             }
 
             // Verify body fields
-            errors += verify_fields(vec["fields"], msg);
+            // Object-GUID references (FGuid LE, MIG-006) for these two messages.
+            std::set<std::string> fguid_fields;
+            if (name == "MATERIAL_ASSIGN" || name == "FBX_IMPORT_REQUEST") {
+                fguid_fields.insert("persistent_id");
+            }
+            errors += verify_fields(vec["fields"], msg, fguid_fields);
 
             if (errors == 0) {
                 std::cout << "  PASS  " << name << " (" << golden.size() << " bytes)\n";

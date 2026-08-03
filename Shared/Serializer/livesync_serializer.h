@@ -133,6 +133,20 @@ inline void pack_uuid(std::vector<uint8_t>& out, const uint8_t bytes[16]) {
     out.insert(out.end(), bytes, bytes + 16);
 }
 
+// FGuid (mixed-endian) LE layout — mirrors the production Object-GUID channel
+// (Blender_Addon/protocol_guid.py:uuid_to_fguid_bytes).  Each 4-byte group of the
+// RFC 4122 bytes is stored as a little-endian uint32 (A,B,C,D).  Only
+// Object-GUID reference fields must use this layout (MIG-006); material-namespace
+// uuids stay RFC via pack_uuid().
+inline void pack_uuid_fguid(std::vector<uint8_t>& out, const uint8_t bytes[16]) {
+    for (int i = 0; i < 16; i += 4) {
+        out.push_back(bytes[i + 3]);
+        out.push_back(bytes[i + 2]);
+        out.push_back(bytes[i + 1]);
+        out.push_back(bytes[i]);
+    }
+}
+
 inline void pack_transform3d(
     std::vector<uint8_t>& out,
     float px, float py, float pz,
