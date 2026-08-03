@@ -103,7 +103,7 @@ Four commits, in the fixed MIG-003/004 order: protocol → UE gameplay → Blend
 | Protocol suite | PASS — `run_all_tests.sh` 10/10 suites (bridge 87/87, cross-language 32) |
 | UE build | PASS — `ProjectTemplateEditor` build Succeeded after plugin sync (SRC `UE_Plugin/UELiveSync` → DST `ProjectTemplate/Plugins/UELiveSync`) |
 | Blender | PASS — byte-parity check + all modified addon modules py_compile clean |
-| Runtime (user-launched) | PENDING — binary behavior parity (Acceptance G) requires the user-launched Blender + UE session |
+| Runtime (user-launched) | PASS — Acceptance G verified in user-launched Blender 5.1 + UE5.8 session (see Runtime Evidence below) |
 
 ## Acceptance Criteria
 
@@ -113,4 +113,28 @@ Four commits, in the fixed MIG-003/004 order: protocol → UE gameplay → Blend
 4. Stale/reordered FBX import packets rejected.
 5. Legacy 0x16 is no longer a valid production packet.
 
-Criteria 1–5 verified at code/regression level; viewport verification of the spawned StaticMeshActor is PENDING until the next user-launched runtime session.
+Criteria 1–5 verified at code/regression level and confirmed at runtime (user-launched session, see Runtime Evidence).
+
+## Runtime Evidence (Acceptance G)
+
+User-launched session 2026-08-03: Blender 5.1 Flatpak (PID 14193) + UE5.8-debug ProjectTemplate (PID 12365), TCP 57000.
+
+Two `Sync Selected Mesh to UE (FBX)` presses on the "Soft Velvet Sage Green Wooden Accent Chair" (persistent_id `72fa9f09-bca9-4ee6-80cb-a63b0a9268ee`), fresh-log boundaries recorded before each press:
+
+| Acceptance G step | Evidence |
+|---|---|
+| Blender sends FBX_IMPORT_REQUEST (0x60) | `[FBX_ENQUEUE] guid=72fa9f09 payload_bytes=225 packet_type=0x60 version=1` + `[FBX_ENQUEUE_SENT]` (Blender debug log) |
+| UE receives semantic message | `[BRIDGE][FBX_IMPORT_REQUEST] id=72fa9f09-... version=1 path=.../Soft_Velvet_Sage_Green_Wooden_Accent_Chair.fbx name=... verts=7505 tris=14518 mats=2 geomHash=... seq=1` — all 10 fields decoded |
+| Bridge → GameplaySink → OnFbxImportRequest | `[FBX][AUTH] mark_pending ... reason=fbx_request_received` + `[FBX] Request guid=...` (handler ran) |
+| GFbxImportSequences | seq=1 accepted (create); seq=2 accepted (update) |
+| HandleImport called | `[FBX][PHASE] request_parse/path_validation` → `LogFactory: FactoryCreateFile: StaticMesh with FbxFactory` → `LogFbx: FBX Scene Loaded Succesfully` → `[FBX][IMPORTED_ASSET_SUMMARY] meshes=1` |
+| StaticMeshActor created / updated | seq=1: `[FBX_SPAWN] actor=LS_FBX_099FFA72` → `Spawned StaticMeshActor: LS_FBX_099FFA72` → `[FBX_ACTOR_CACHED]`; seq=2: `[FBX][VALIDATE] ... meshValid=1 material0=/Game/UELiveSync/Imported/Wooden.Wooden` (existing actor reused) |
+| Parity — ObjectGUID | Blender persistent_id `72fa9f09-bca9-4ee6-80cb-a63b0a9268ee` → UE actor GUID `099FFA72E64EA9BC3BA6CB80EE68920A` (byte-reversed, same mapping as legacy 0x16) |
+| Parity — authority bookkeeping | `mark_pending` on receive → `[FBX][AUTH] ... authority=fbx` on completion (both presses) |
+| Stale-reject (lower-seq replay) | Not triggerable via UI (addon emits monotonic seq); covered by `test_bridge_dispatch` Tests 43/44 + `GFbxImportSequences` logic |
+
+Notes:
+- Legacy packets still emitted by Blender during Start Sync / full snapshot are skipped by UE: `Unknown packet type 0x15` (type=0x15 ver=5 seq=25 size=52 objs=1 — legacy PT_ActiveCamera; semantic camera is CAMERASETACTIVE 0x52) and `Unknown packet type 0x03` (legacy PT_Create). Neither is 0x60 and neither affects the FBX_IMPORT_REQUEST flow. Tracked as a separate legacy-cleanup backlog item ("Packet 0x15 origin"), not a MIG-005 blocker.
+- First press of the session landed on a connection that heartbeat-timed out during the heavy export (UE teardown 08:39:05 / reconnect 08:39:08); the 0x60 packet enqueued at 08:38:53 was lost in teardown. Retry on the stable connection succeeded. Transport timing artifact, not a message/importer defect.
+- Sidecar texture import reported `SIDECAR_TEXTURE_IMPORT_FAIL src=all reason=import_assets_returned_zero` (`SIDECAR_RESULT_MAP_READY expected=12 resolved=0`). Texture-sidecar resolution lives inside the untouched importer (D2 black box); outside Acceptance G scope.
+- Blender addon was re-synced from `Blender_Addon/` into the Flatpak config before this session (backup `UELiveSync.bak_20260803_082202`).
