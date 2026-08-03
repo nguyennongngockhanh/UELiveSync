@@ -53,7 +53,8 @@ Only mention a file, class, function, counter, or test if it exists in evidence 
 
 Current work:
 
-Phase 1.5 — Legacy Protocol Elimination (IN PROGRESS)
+Phase 1.4 — Complete (MIG-003, MIG-004A, MIG-004B, MIG-005, MIG-006)
+Phase 1.5 — Legacy Protocol Elimination (current / in progress)
 
 Completed Migrations:
 - MIG-001: OBJECT_DELETE semantic migration (COMPLETE)
@@ -72,17 +73,16 @@ Completed Migrations:
   - Known limitation: Blender _get_primitive_type() only distinguishes Camera vs non-camera (ENH-PrimitiveTypeDetection)
   - ADR-68: Docs/Architecture/68-mig-002-object-create-update-semantic-migration.md
   - Template v3 repeatability confirmed
+- MIG-003: Camera operations semantic migration (COMPLETE)
+- MIG-004A: Material operations semantic migration (COMPLETE)
+- MIG-004B: Material runtime integration (COMPLETE)
+- MIG-005: FBX import semantic migration (COMPLETE)
+- MIG-006: Object-GUID wire normalization to LE/FGuid across semantic protocol (COMPLETE) — fixes INV-2026-016; ADR-71
 
 Key architectural pattern:
 - Semantic event pipeline: Blender detects → Serialize → Transport → Bridge → Gameplay → Presentation → Regression
 - Three contracts every feature must answer: Network, Gameplay, Presentation
 - "Make it maintainable" — new features should be hard to create bugs for
-
-Remaining MIG items:
-- MIG-003: Camera operations (pending)
-- MIG-003: Camera operations (pending)
-- MIG-004: Material operations (pending)
-- MIG-005: Mesh operations (pending)
 
 Known issues:
 - PT_CameraDef (0x1B): Protocol schema gap — 4 fields missing from MsgType CAMERA_CREATE
