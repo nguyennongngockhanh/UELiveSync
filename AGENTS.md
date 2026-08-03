@@ -56,6 +56,23 @@ Current work:
 Phase 1.4 — Complete (MIG-003, MIG-004A, MIG-004B, MIG-005, MIG-006)
 Phase 1.5 — Legacy Protocol Elimination (current / in progress)
 
+Phase 1.5 capabilities:
+- 0x16 PT_FBXImportRequest DECOMMISSIONED (COMPLETE — 07ca0f0, ADR-72)
+- Next: 0x03 PT_Create or 0x04 PT_Delete (independent of 0x16)
+- Backlog — Legacy Test & Documentation Hygiene: stale pre-MIG-005 tests
+  `tests/phase10a32_*`, `tests/phase10a33_*`, `tests/phase10a34_*` (assert
+  `serialize_fbx_import_request` / `hasattr(net, "PT_FBXImportRequest")`,
+  failures identical at HEAD, OUTSIDE regression suite) → cleanup in a
+  dedicated cycle; optionally normalize residual doc mentions in
+  AGENTS.md / STATUS.md / Shared/Protocol/MessageTypes.yaml.
+
+Phase 1.5 Acceptance criterion (per-capability, replaces "grep = 0 outside Docs/.recovery"):
+  No production references remain. Allowed residual references:
+  - Docs / ADR / STATUS / AGENTS
+  - Protocol specification (e.g. Shared/Protocol/MessageTypes.yaml)
+  - Historical provenance comments (e.g. UELiveSyncSubsystem.cpp:8709)
+  - Stale-test references recorded in the backlog (cleanup cycle)
+
 Completed Migrations:
 - MIG-001: OBJECT_DELETE semantic migration (COMPLETE)
   - Extended OBJECT_DELETE body from 16 to 28 bytes (persistent_id + sequence_number + timestamp)
