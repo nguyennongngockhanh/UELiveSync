@@ -74,8 +74,8 @@ struct CameraSetActiveView
 // =========================================================
 // FBX Import (MIG-005: semantic FBX_IMPORT_REQUEST)
 // =========================================================
-// Represents the same capability as the legacy PT_FBXImportRequest
-// (0x16). fbx_path/object_name are variable-length utf8 strings
+// Represents the semantic FBX_IMPORT_REQUEST (0x60) message.
+// fbx_path/object_name are variable-length utf8 strings
 // instead of fixed-size arrays; payload timestamp is informational
 // (UE resolves freshness from the FBX file mtime).
 

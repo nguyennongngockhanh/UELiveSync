@@ -10,9 +10,8 @@ Wire format matches C++ deserializer expectations:
                       mat_slot_count(u32), geometry_hash(u64),
                       sequence_number(u32), timestamp(f64)
 
-Represents the same capability as the legacy PT_FBXImportRequest (0x16)
-production packet. sequence_number/timestamp are trailing fields
-(MIG-003 pattern).
+Represents the FBX_IMPORT_REQUEST (0x60) semantic message.
+sequence_number/timestamp are trailing fields (MIG-003 pattern).
 """
 
 import struct

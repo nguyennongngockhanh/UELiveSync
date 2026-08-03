@@ -1264,7 +1264,7 @@ private:
 
     // Phase 10J.5K: Per-GUID set of FBX-pending GUIDs. While pending,
     // PT_Mesh for that GUID is rejected to prevent race between
-    // PT_FBXImportRequest and PT_Mesh.
+    // FBX_IMPORT_REQUEST and PT_Mesh.
     TSet<FGuid> FBXPendingGuids;
 
     // Task 9B.5: per-GUID syncId correlation for FBX → MATX transaction tracking.

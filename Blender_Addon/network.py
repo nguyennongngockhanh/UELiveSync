@@ -371,9 +371,6 @@ PT_Timeline = 0x13   # Phase 7B: timeline/playhead frame sync
 PT_PlaybackState = 0x14  # Phase 7C: playback state (play/pause/stop/loop)
 PT_ActiveCamera = 0x15  # Phase 7D: active camera selection (GUID-only, no params)
 
-# Phase 7C Stage 3A.1: FBX Mesh Handoff Import (PT_FBXImportRequest = 0x16)
-PT_FBXImportRequest = 0x16  # FBX mesh import request (fixed 680-byte payload)
-
 # Phase 7E Stage 7: Keyframe replication (PT_Keyframe = 0x17)
 PT_Keyframe = 0x17  # Keyframe replication (fixed header + repeated entries)
 
@@ -446,58 +443,6 @@ def compute_fbx_geometry_hash(mesh):
     except Exception:
         return 0
 
-
-def serialize_fbx_import_request(
-    guid_obj, fbx_path, object_name,
-    vert_count, tri_count, mat_slot_count,
-    timestamp, geometry_hash=0, version=1
-):
-    """Serialize a PT_FBXImportRequest (0x16) fixed-size payload.
-
-    Wire format (688 bytes):
-        ObjectGUID  : 16 bytes (4 × uint32 LE)
-        Version     : uint32 LE
-        FbxPath     : 512 bytes, UTF-8 null-padded
-        ObjectName  : 128 bytes, UTF-8 null-padded
-        VertCount   : uint32 LE
-        TriCount    : uint32 LE
-        MatSlotCount: uint32 LE
-        Timestamp   : double LE
-        GeometryHash: uint64 LE  — geometry content signature (Phase 10J.5F)
-
-    Backward compatible: geometry_hash=0 indicates old/unknown protocol.
-    Old 680-byte payloads are accepted on the UE side (GeometryHash = 0).
-
-    Args:
-        guid_obj: UUID object for the object GUID.
-        fbx_path: Absolute filesystem path to the exported .fbx file.
-        object_name: Display name for the object.
-        vert_count: Vertex count in the exported mesh.
-        tri_count: Triangle count in the exported mesh.
-        mat_slot_count: Number of material slots.
-        timestamp: Unix timestamp (seconds since epoch) as float.
-        geometry_hash: 64-bit geometry content hash (0 = unknown/old protocol).
-        version: Payload format version (default 1).
-
-    Returns:
-        bytes: 688-byte fixed-size payload.
-    """
-    guid_bytes = pack_ue_fguid(guid_obj)
-    fbx_path_bytes = fbx_path.encode('utf-8')
-    name_bytes = object_name.encode('utf-8')
-    fmt = '<16sI512s128sIIIdQ'
-    return struct.pack(
-        fmt,
-        guid_bytes,
-        version,
-        fbx_path_bytes.ljust(512, b'\x00')[:512],
-        name_bytes.ljust(128, b'\x00')[:128],
-        vert_count,
-        tri_count,
-        mat_slot_count,
-        timestamp,
-        geometry_hash,
-    )
 
 # Phase 9: Capability negotiation (announce/response)
 PT_CapabilityAnnounce  = 0x11  # Phase 9: capability bitmask from Blender to UE

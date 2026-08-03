@@ -32,7 +32,7 @@
 | 18 | PT_Timeline | 0x13 | -- | -- | NONE | **MISSING** |
 | 19 | PT_PlaybackState | 0x14 | -- | -- | NONE | **MISSING** |
 | 20 | PT_ActiveCamera | 0x15 | CAMERASETACTIVE | 0x52 | 1:1 | MAPPED |
-| 21 | PT_FBXImportRequest | 0x16 | FBX_IMPORT_REQUEST | 0x60 | 1:1 | MAPPED (MIG-005; same capability, legacy 0x16 retired) |
+| 21 | PT_FBXImportRequest | 0x16 | FBX_IMPORT_REQUEST | 0x60 | 1:1 | MAPPED (Phase 1.5: legacy 0x16 DECOMMISSIONED; semantic 0x60 only) |
 | 22 | PT_Keyframe | 0x17 | -- | -- | NONE | **MISSING** |
 | 23 | PT_SequencerOp | 0x18 | -- | -- | NONE | **MISSING** |
 | 24 | PT_TimelineState | 0x19 | -- | -- | NONE | **MISSING** |

@@ -244,10 +244,6 @@ enum EPacketType : uint8
     // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md
     PT_ActiveCamera   = 0x15,  // Active camera identity (event-driven, NOT state stream)
 
-    // Phase 7C Stage 3A.1: FBX Mesh Handoff Import
-    // Fixed 680-byte payload: GUID(16) + Version(4) + FbxPath(512) + Name(128) + Verts(4) + Tris(4) + Mats(4) + Timestamp(8)
-    PT_FBXImportRequest = 0x16,
-
     // Phase 7E: Sequencer operations (discrete events, NOT state stream)
     // See Docs/Architecture/54-phase7e-sequencer-keyframe-scope-lock.md
     PT_SequencerOp    = 0x18,  // Sequencer operation (create, add possessable, etc.)
@@ -587,7 +583,7 @@ static_assert(
 // FBX IMPORT REQUEST PAYLOAD (Phase 7C Stage 3A.1)
 // =========================================================
 
-// PT_FBXImportRequest (0x16) fixed-size payload: 688 bytes
+// FBX_IMPORT_REQUEST (0x60) fixed-size payload: 688 bytes
 // Wire format:
 //   [0-15]   ObjectGUID   FGuid      — object GUID
 //   [16-19]  Version      uint32     — payload format version (1)
