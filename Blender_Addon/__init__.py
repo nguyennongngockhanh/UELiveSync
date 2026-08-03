@@ -3093,12 +3093,6 @@ class UELIVESYNC_OT_debug_send_camera_packets(
     bl_description = \
         "Send specific camera packet types for freeze isolation"
 
-    send_create: bpy.props.BoolProperty(
-        name="Send PT_Create",
-        description="Send PT_Create (0x03) to spawn camera actor",
-        default=False,
-    )
-
     send_transform: bpy.props.BoolProperty(
         name="Send PT_Transform",
         description="Send PT_Transform (0x01) for position",
@@ -3158,36 +3152,8 @@ class UELIVESYNC_OT_debug_send_camera_packets(
 
         sent_packets = []
 
-        # --- PT_Create (0x03) ---
-        if self.send_create:
-            try:
-                obj_payload = network.serialize_object_v3(
-                    guid_obj,
-                    transform,
-                    timestamp,
-                    parent_guid_obj=None,
-                    primitive_type=network.PRIMITIVE_CAMERA,
-                )
-                network.send_objects(
-                    [obj_payload],
-                    packet_type=0x03,
-                )
-                sent_packets.append("PT_Create")
-                print(
-                    f"[LiveSync][DEBUG] EXPERIMENTAL: Sent PT_Create for "
-                    f"{camera_obj.name} GUID={guid_hex} — "
-                    f"if UE freezes, camera actor spawn is the cause"
-                )
-            except Exception as e:
-                self.report(
-                    {'ERROR'},
-                    f"PT_Create send failed: {e}"
-                )
-                return {'CANCELLED'}
-
         # --- PT_Transform (0x01, default) ---
-        if self.send_transform and not self.send_create:
-            # Rebuild payload if we didn't already create it
+        if self.send_transform:
             try:
                 obj_payload = network.serialize_object_v3(
                     guid_obj,
@@ -3196,23 +3162,6 @@ class UELIVESYNC_OT_debug_send_camera_packets(
                     parent_guid_obj=None,
                     primitive_type=network.PRIMITIVE_CAMERA,
                 )
-                network.send_objects(
-                    [obj_payload],
-                )
-                sent_packets.append("PT_Transform")
-                print(
-                    f"[LiveSync][DEBUG] Sent PT_Transform for "
-                    f"{camera_obj.name}"
-                )
-            except Exception as e:
-                self.report(
-                    {'ERROR'},
-                    f"PT_Transform send failed: {e}"
-                )
-                return {'CANCELLED'}
-        elif self.send_transform:
-            # send_create was True, payload already exists
-            try:
                 network.send_objects(
                     [obj_payload],
                 )

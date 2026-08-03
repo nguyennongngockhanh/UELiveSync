@@ -48,7 +48,6 @@ try:
         PT_BeginSnapshot,
         PT_EndSnapshot,
         PT_AssetDef,
-        PT_Delete_V5,
         PT_Collection,
         PT_Material,
         get_object_material_slots,
@@ -104,9 +103,6 @@ try:
         TIMELINE_PAYLOAD_SIZE,
         is_timeline_effective,
         set_timeline_enabled,
-        PT_ActiveCamera,
-        serialize_active_camera,
-        ACTIVE_CAMERA_PAYLOAD_SIZE,
         NULL_CAMERA_GUID,
         PT_TimelineState,
         serialize_timeline_state,
@@ -200,7 +196,6 @@ except ImportError:
         PT_BeginSnapshot,
         PT_EndSnapshot,
         PT_AssetDef,
-        PT_Delete_V5,
         PT_Collection,
         PT_Material,
         LIVE_SYNC_VERSION_V5,
@@ -245,9 +240,6 @@ except ImportError:
         TIMELINE_PAYLOAD_SIZE,
         is_timeline_effective,
         set_timeline_enabled,
-        PT_ActiveCamera,
-        serialize_active_camera,
-        ACTIVE_CAMERA_PAYLOAD_SIZE,
         NULL_CAMERA_GUID,
         PT_TimelineState,
         serialize_timeline_state,
@@ -383,8 +375,6 @@ _timeline_state_changes = 0
 
 # Phase 7D Stage 2: active camera detection state machine
 _last_active_camera_guid = None  # None=uninitialized, b''=reconnect, bytes=last sent
-_active_camera_sequence = 0
-_active_camera_packets_sent = 0
 _active_camera_state_changes = 0
 _camera_def_packets_sent = 0
 
@@ -1430,8 +1420,6 @@ def check_updates():
     global _scan_counter
     global _known_guids
     global _last_active_camera_guid
-    global _active_camera_sequence
-    global _active_camera_packets_sent
     global _active_camera_state_changes
     global _camera_def_packets_sent
     global _sequencer_op_packets_sent
@@ -1634,29 +1622,13 @@ def check_updates():
                 f"({len(snapshot_roots)} roots, {len(snapshot_children)} children)"
             )
 
-        if snapshot_roots:
-
-            send_objects(
-                snapshot_roots,
-                packet_type=0x03,
-                flags=0x02
-            )
-            _burst_packet_count += 1
-
-        if snapshot_children:
-
-            send_objects(
-                snapshot_children,
-                packet_type=0x03,
-                flags=0x02 | 0x01
-            )
-            _burst_packet_count += 1
-
-            if _verbose_logging:
-                print(
-                    f"[Snapshot] Sent {len(snapshot_objects)}"
-                    " objects"
-                )
+        # Phase 1.5: legacy PT_Create (0x03) snapshot emission removed —
+        # UE no longer dispatches 0x03 (see kValidTypes in
+        # UELiveSyncSubsystem.cpp). snapshot_roots/snapshot_children
+        # lists remain as the last_sent_transforms cache population
+        # source above; reconnect snapshot semantics for plain objects
+        # are a known limitation (pre-existing, not a Phase 1 regression)
+        # tracked for a future "Snapshot Semantic Reconnect" MIG.
 
     objects_to_send = []
     create_objects = []
@@ -2736,47 +2708,14 @@ def check_updates():
             )
             _burst_packet_count += 1
 
-    # =====================================================
-    # SEND DELETE PACKETS (V3 legacy — unreachable, kept
-    # for backward compat until fully removed in Phase 1.5)
-    # =====================================================
-
-    if deletes_to_send:
-
-        send_objects(
-            deletes_to_send,
-            packet_type=0x04
-        )
-        _burst_packet_count += 1
-
-    # =====================================================
-    # SEND CREATE PACKETS (first-time objects, roots)
-    # =====================================================
-
-    if create_objects:
-
-        send_objects(
-            create_objects,
-            packet_type=0x03
-        )
-        _burst_packet_count += 1
-
-    # =====================================================
-    # SEND CREATE PACKETS (first-time objects, children)
-    # =====================================================
-
-    if children_create:
-
-        send_objects(
-            children_create,
-            packet_type=0x03,
-            flags=0x01
-        )
-        _burst_packet_count += 1
+    # Phase 1.5: legacy PT_Delete (0x04) and PT_Create (0x03)
+    # packet emission removed — UE no longer dispatches these
+    # opcodes (see kValidTypes in UELiveSyncSubsystem.cpp).
+    # Deletes and creates now travel exclusively via the semantic
+    # OBJECT_DELETE / OBJECT_CREATE MsgType channels below.
 
     # =====================================================
     # SEND OBJECT CREATE via MsgType (Phase 1.4.4)
-    # Alongside legacy PT_Create for verification.
     # =====================================================
 
     if object_create_msgs_to_send:
@@ -3217,26 +3156,20 @@ def check_updates():
             guid_bytes = NULL_CAMERA_GUID
 
         if _last_active_camera_guid is None or _last_active_camera_guid == b'' or guid_bytes != _last_active_camera_guid:
-            _active_camera_sequence += 1
-            payload = serialize_active_camera(
-                guid_obj,
-                _active_camera_sequence,
-                time.time(),
-            )
-            send_objects([payload], packet_type=PT_ActiveCamera, version=5)
-            _burst_packet_count += 1
-            _active_camera_packets_sent += 1
+            # Phase 1.5: legacy PT_ActiveCamera (0x15) packet emission
+            # removed — UE no longer dispatches 0x15 (see kValidTypes
+            # in UELiveSyncSubsystem.cpp). Active-camera routing now
+            # travels exclusively via the semantic CAMERASETACTIVE
+            # MsgType channel below.
             _active_camera_state_changes += 1
-            _runtime_stats["active_camera_packets_sent"] = _active_camera_packets_sent
             _runtime_stats["active_camera_state_changes"] = _active_camera_state_changes
 
-            # Dual-emission: CAMERASETACTIVE alongside PT_ActiveCamera (MIG-003)
+            # CAMERASETACTIVE (MIG-003)
             if guid_obj is not None:
                 transport = get_transport()
                 if transport is not None:
                     setactive_body = build_camera_setactive(guid_obj)
                     transport.send_msg(MsgType.CAMERASETACTIVE, setactive_body)
-                    _runtime_stats["active_camera_packets_sent"] = _active_camera_packets_sent
 
             # Send CameraDef alongside PT_ActiveCamera when camera is valid
             if camera_obj is not None and hasattr(camera_obj, 'data') and camera_obj.data is not None:
@@ -3741,8 +3674,6 @@ def start_sync():
     global _timeline_packets_sent
     global _timeline_state_changes
     global _last_active_camera_guid
-    global _active_camera_sequence
-    global _active_camera_packets_sent
     global _active_camera_state_changes
     global _camera_def_packets_sent
     global _last_decision_init_printed
@@ -3778,9 +3709,7 @@ def start_sync():
     _timeline_sequence = 0
     _timeline_packets_sent = 0
     _timeline_state_changes = 0
-    _last_active_camera_guid = b''  # Phase 7D: trigger initial PT_ActiveCamera + PT_CameraDef on first tick
-    _active_camera_sequence = 0
-    _active_camera_packets_sent = 0
+    _last_active_camera_guid = b''  # Phase 7D: trigger initial CAMERASETACTIVE + PT_CameraDef on first tick
     _active_camera_state_changes = 0
     _camera_def_packets_sent = 0
     _keyframe_sequence = 0
