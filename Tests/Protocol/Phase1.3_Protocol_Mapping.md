@@ -2,9 +2,9 @@
 
 ## Summary
 
-- **14 old PT_* types** map cleanly to new MsgType
+- **15 old PT_* types** map cleanly to new MsgType
 - **2 replaced** by SCENE_FULL framing (BeginSnapshot, EndSnapshot)
-- **10 MISSING** from new protocol — need design decisions
+- **9 MISSING** from new protocol — need design decisions
 - **20 new MsgTypes** have no old equivalent (pure new features)
 - **1 dead code** (PT_Reserved_02)
 
@@ -32,14 +32,14 @@
 | 18 | PT_Timeline | 0x13 | -- | -- | NONE | **MISSING** |
 | 19 | PT_PlaybackState | 0x14 | -- | -- | NONE | **MISSING** |
 | 20 | PT_ActiveCamera | 0x15 | CAMERASETACTIVE | 0x52 | 1:1 | MAPPED |
-| 21 | PT_FBXImportRequest | 0x16 | -- | -- | NONE | **MISSING** |
+| 21 | PT_FBXImportRequest | 0x16 | FBX_IMPORT_REQUEST | 0x60 | 1:1 | MAPPED (MIG-005; same capability, legacy 0x16 retired) |
 | 22 | PT_Keyframe | 0x17 | -- | -- | NONE | **MISSING** |
 | 23 | PT_SequencerOp | 0x18 | -- | -- | NONE | **MISSING** |
 | 24 | PT_TimelineState | 0x19 | -- | -- | NONE | **MISSING** |
 | 25 | PT_PlaybackTransport | 0x1A | -- | -- | NONE | **MISSING** |
 | 26 | PT_CameraDef | 0x1B | CAMERA_CREATE/UPDATE | 0x50/51 | 1:2 | PARTIAL (clip planes, ortho missing) |
 
-## 10 Missing Message Types (Need Design)
+## 9 Missing Message Types (Need Design)
 
 | # | Old Packet | Payload | Complexity | Recommendation |
 |---|---|---|---|---|
@@ -47,12 +47,11 @@
 | 2 | PT_Collection | Variable | High | Design COLLECTION_UPDATE or defer to application layer |
 | 3 | PT_Timeline | 36 bytes | Medium | Design TIMELINE_STATE |
 | 4 | PT_PlaybackState | 14 bytes | Low | Design PLAYBACK_STATE |
-| 5 | PT_FBXImportRequest | 688 bytes | Low | Design FBX_IMPORT_REQUEST or handle as app-level |
-| 6 | PT_Keyframe | 14+N*25 bytes | High | Design KEYFRAME_BATCH |
-| 7 | PT_SequencerOp | 16+opcode-specific | High | Design SEQUENCE_OP with sub-opcodes |
-| 8 | PT_TimelineState | 20 bytes | Low | Design TIMELINE_UPDATE or merge with #3 |
-| 9 | PT_PlaybackTransport | 6 bytes | Low | Design PLAYBACK_COMMAND |
-| 10 | PT_CameraDef | 44 bytes | Medium | Extend CAMERA_CREATE/UPDATE with optional fields |
+| 5 | PT_Keyframe | 14+N*25 bytes | High | Design KEYFRAME_BATCH |
+| 6 | PT_SequencerOp | 16+opcode-specific | High | Design SEQUENCE_OP with sub-opcodes |
+| 7 | PT_TimelineState | 20 bytes | Low | Design TIMELINE_UPDATE or merge with #3 |
+| 8 | PT_PlaybackTransport | 6 bytes | Low | Design PLAYBACK_COMMAND |
+| 9 | PT_CameraDef | 44 bytes | Medium | Extend CAMERA_CREATE/UPDATE with optional fields |
 
 ## Header Incompatibilities
 
