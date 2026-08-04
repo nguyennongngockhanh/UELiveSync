@@ -79,7 +79,20 @@ Phase 1.5 capabilities:
   callers + serializer-private state); FDeleteSequenceTracker/GDeleteSequences kept —
   live semantic storage via OnObjectDelete → HandleDelete; world-replay 0x0E tag
   cpp:11945 + Replay.inl kept — UE-internal replay domain)
-- Next: one capability per packet type: WAIT group (0x05/0x06/0x08/0x1B)
+- **Phase 1.5 COMPLETE** for its defined scope (packets replaced by semantic messages) —
+  see ADR-81 (`Docs/Architecture/81-phase15-completion-summary.md`). All 9 capabilities
+  done. WAIT group (0x05/0x06/0x08/0x1B) RETAINED as production protocol — W0
+  investigation (ADR-81) proved none has a working semantic replacement:
+  - 0x05 PT_Material — WAIT: semantic MATERIAL_* (0x40/41/42) exists + dual-emit, but
+    not runtime-validated as full replacement (blocked on mesh pipeline)
+  - 0x06 PT_Mesh — WAIT: MESH_* (0x30-34) defined in msg_transport but NOT wired in
+    Blender; PT_Mesh is the only working mesh channel (future: FBX handoff)
+  - 0x08 PT_AssetDef — WAIT: no semantic replacement exists (no ASSET_* MsgType)
+  - 0x1B PT_CameraDef — WAIT: CAMERA_CREATE/UPDATE PARTIAL (4 fields missing: clip
+    planes, ortho); PT_CameraDef supplements the schema gap
+  - Decommission criteria (all three, then capability cadence re-applies): MIG reaches
+    semantic parity + runtime acceptance; Blender emitter semantic-only; UE
+    dispatcher/kValidTypes dropped. Flipping to PERMANENT requires a dedicated ADR.
 - Backlog — Legacy Test & Documentation Hygiene: stale pre-MIG-005 tests
   `tests/phase10a32_*`, `tests/phase10a33_*`, `tests/phase10a34_*` (assert
   `serialize_fbx_import_request` / `hasattr(net, "PT_FBXImportRequest")`,
