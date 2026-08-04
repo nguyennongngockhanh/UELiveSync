@@ -24,7 +24,7 @@
 | 10 | PT_EndSnapshot | 0x0A | (implicit in SCENE_FULL) | 0x03 | Conceptual | REPLACED |
 | 11 | PT_Visibility | 0x0B | OBJECT_VISIBILITY | 0x25 | 1:1 | DECOMMISSIONED (semantic OBJECT_VISIBILITY 0x25 only) |
 | 12 | PT_Rename | 0x0C | OBJECT_RENAME | 0x23 | 1:1 | DECOMMISSIONED (semantic OBJECT_RENAME 0x23 only) |
-| 13 | PT_Hierarchy | 0x0D | OBJECT_REPARENT | 0x24 | 1:1 | MAPPED |
+| 13 | PT_Hierarchy | 0x0D | OBJECT_REPARENT | 0x24 | 1:1 | DECOMMISSIONED (semantic OBJECT_REPARENT 0x24 only) |
 | 14 | PT_Delete_V5 | 0x0E | OBJECT_DELETE | 0x22 | 2:1 (with V3) | MAPPED (full Phase 6E semantic: seq+ts+tombstone) |
 | 15 | PT_Collection | 0x0F | -- | -- | NONE | **MISSING** |
 | 16 | PT_CapabilityAnnounce | 0x11 | HELLO | 0x10 | Conceptual | MAPPED |

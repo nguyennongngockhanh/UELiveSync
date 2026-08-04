@@ -212,13 +212,6 @@ enum EPacketType : uint8
     PT_BeginSnapshot = 0x09,
     PT_EndSnapshot   = 0x0A,
 
-    // Phase 6: Semantic editor-event replication
-    // See Docs/Architecture/19-phase6-vertical-slice-rename.md
-
-    // Phase 6D: Hierarchy replication (semantic attachment event)
-    // See Docs/Architecture/24-phase6D-hierarchy-scope-lock.md
-    PT_Hierarchy     = 0x0D,  // Semantic attach/detach event (discrete, NOT state stream)
-
     // Phase 6E: Lifecycle/delete replication (identity-destruction event)
     // See Docs/Architecture/29-phase6E-lifecycle-scope-lock.md
     PT_Delete_V5      = 0x0E,  // V5+ delete with sequence + tombstone semantics
@@ -1588,27 +1581,6 @@ struct FVisibilitySequenceTracker
         LastSequence.Add(Guid, AppliedSeq);
     }
 };
-
-
-// =========================================================
-// HIERARCHY PACKET (Phase 6D, PT_Hierarchy = 0x0D)
-// =========================================================
-// Discrete semantic editor-event payload for attachment intent.
-// NOT a state-stream packet — hierarchy changes are discrete
-// editor mutations, not continuously sampled values.
-//
-// Wire format (fixed 44 bytes per object):
-//   offset  size  field
-//   0       16    Child GUID (4 × uint32 LE)
-//   16      16    Parent GUID (4 × uint32 LE, all-zero = detach-to-root)
-//   32       4    sequence_number (uint32 LE, monotonic per-GUID)
-//   36       8    timestamp (double LE)
-//
-// Provenance (EChangeOrigin) is in-memory only — NOT on the wire.
-// See Docs/Architecture/24-phase6D-hierarchy-scope-lock.md
-//
-// Fixed payload: 16 + 16 + 4 + 8 = 44 bytes
-// =========================================================
 
 
 // =========================================================

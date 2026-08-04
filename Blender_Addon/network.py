@@ -360,7 +360,6 @@ PRIMITIVE_CAMERA   = 0x05
 PT_BeginSnapshot = 0x09
 PT_EndSnapshot = 0x0A
 PT_AssetDef = 0x08
-PT_Hierarchy = 0x0D
 PT_Delete_V5 = 0x0E  # Phase 6E: lifecycle/delete (V5+, 28-byte fixed payload)
 PT_Collection = 0x0F  # Phase 6F: collection/group replication (metadata-only)
 PT_Material = 0x05   # Phase 7B: material slot identity
@@ -2712,19 +2711,6 @@ def serialize_object_v3(guid_obj, transform, timestamp, parent_guid_obj=None, pr
     return payload
 
 
-# =========================================================
-# HIERARCHY SERIALIZATION (Phase 6D, PT_Hierarchy = 0x0D)
-# =========================================================
-# Fixed-size wire format per object (44 bytes):
-#   + GUID(16) + ParentGuid(16) + sequence(4) + timestamp(8)
-#
-# All-zero ParentGuid = detach-to-root semantic.
-# This is a discrete semantic attachment event, NOT a state stream.
-# See Docs/Architecture/24-phase6D-hierarchy-scope-lock.md
-# =========================================================
-
-_hierarchy_sequences = {}
-
 # Phase 6E: Per-GUID delete sequence tracker (monotonic, replay dedup)
 _delete_sequences = {}
 
@@ -2752,47 +2738,6 @@ def serialize_delete(guid_obj):
     payload.extend(struct.pack("<I", seq))
 
     # Timestamp (double, seconds)
-    payload.extend(struct.pack("<d", time.time()))
-
-    return payload
-
-
-def serialize_hierarchy(guid_obj, parent_guid_obj):
-    """44 bytes per object: GUID(16) + ParentGuid(16) + sequence(4) + timestamp(8).
-
-    PT_Hierarchy (V5+) fixed-size wire format.
-    parent_guid_obj=None means detach-to-root (all-zero ParentGuid).
-    """
-    payload = bytearray()
-
-    # GUID
-    d_a = guid_obj.time_low
-    d_b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
-    d_c = (guid_obj.clock_seq_hi_variant << 24
-           | guid_obj.clock_seq_low << 16
-           | (guid_obj.node >> 32) & 0xFFFF)
-    d_d = guid_obj.node & 0xFFFFFFFF
-    payload.extend(struct.pack("<IIII", d_a, d_b, d_c, d_d))
-
-    # Parent GUID (all-zero = detach-to-root)
-    if parent_guid_obj is not None:
-        p_a = parent_guid_obj.time_low
-        p_b = (parent_guid_obj.time_mid << 16) | parent_guid_obj.time_hi_version
-        p_c = (parent_guid_obj.clock_seq_hi_variant << 24
-               | parent_guid_obj.clock_seq_low << 16
-               | (parent_guid_obj.node >> 32) & 0xFFFF)
-        p_d = parent_guid_obj.node & 0xFFFFFFFF
-        payload.extend(struct.pack("<IIII", p_a, p_b, p_c, p_d))
-    else:
-        payload.extend(struct.pack("<IIII", 0, 0, 0, 0))
-
-    # Monotonic sequence per GUID (replay dedup)
-    guid_key = str(guid_obj)
-    seq = _hierarchy_sequences.get(guid_key, 0) + 1
-    _hierarchy_sequences[guid_key] = seq
-    payload.extend(struct.pack("<I", seq))
-
-    # Timestamp
     payload.extend(struct.pack("<d", time.time()))
 
     return payload
@@ -3480,12 +3425,6 @@ class LiveSyncClient:
         self.sock = None
         self.connected = False
         self._status_detail = "Disconnected"
-
-        # Phase 6D: reset hierarchy sequence tracker on disconnect
-        global _hierarchy_sequences
-        if _hierarchy_sequences:
-            _hierarchy_sequences.clear()
-            print("[HIERARCHY] Sequence tracker cleared on disconnect")
 
         # Phase 6E: reset delete sequence tracker on disconnect
         global _delete_sequences

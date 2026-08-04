@@ -103,45 +103,9 @@ ValidatePacketOrdering(const FLiveSyncPacket& Packet)
         {
             switch (PktType)
             {
-            case 0x0D: // PT_Hierarchy
-                Stats.PacketHierarchyBeforeCreate.fetch_add(1, std::memory_order_relaxed);
-                if (bPhase6HVerbose)
-                {
-                    UE_LOG(LogLiveSync, Warning,
-                        TEXT("[PHASE6H][ORDER] Hierarchy before create: GUID=%s"),
-                        *Guid.ToString(EGuidFormats::Digits));
-                }
-                break;
             case 0x0F: // PT_Collection
                 Stats.PacketCollectionBeforeCreate.fetch_add(1, std::memory_order_relaxed);
                 break;
-            }
-        }
-
-        // Duplicate attach detection (PT_Hierarchy)
-        if (PktType == 0x0D && ObjPtr + 32 <= PacketEnd)
-        {
-            uint32 ParentGuidParts[4];
-            FMemory::Memcpy(ParentGuidParts, ObjPtr + 16, 16);
-            FGuid ParentGuid(ParentGuidParts[0], ParentGuidParts[1],
-                             ParentGuidParts[2], ParentGuidParts[3]);
-
-            AActor* ChildActor = FindActorFast(Guid);
-            if (ChildActor)
-            {
-                AActor* CurrentParent = ChildActor->GetAttachParentActor();
-
-                if (!ParentGuid.IsValid() && CurrentParent == nullptr)
-                {
-                    // Duplicate detach: already root
-                    Stats.PacketDuplicateDetachDetected.fetch_add(1, std::memory_order_relaxed);
-                }
-                else if (ParentGuid.IsValid() && CurrentParent &&
-                         FindGuidForActor(CurrentParent) == ParentGuid)
-                {
-                    // Duplicate attach: already attached to same parent
-                    Stats.PacketDuplicateAttachDetected.fetch_add(1, std::memory_order_relaxed);
-                }
             }
         }
 

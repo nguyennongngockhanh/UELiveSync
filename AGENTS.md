@@ -67,7 +67,10 @@ Phase 1.5 capabilities:
 - 0x0C PT_Rename DECOMMISSIONED (COMPLETE — C2; ADR-77; runtime N/A — semantic
   OBJECT_RENAME 0x23 only; FRenameSequenceTracker kept — live via HandleRename;
   EWorldReplayDomain::Rename + cpp:9935 0x0C marker kept — world-replay internal)
-- Next: one capability per packet type: C3 — 0x0D PT_Hierarchy, C4 — 0x15 PT_ActiveCamera,
+- 0x0D PT_Hierarchy DECOMMISSIONED (COMPLETE — C3; ADR-78; runtime N/A — semantic
+  OBJECT_REPARENT 0x24 only; FHierarchySequenceTracker kept — live via reparent handler;
+  serialize_delete()/_delete_sequences VERIFIED untouched — C5 surface)
+- Next: one capability per packet type: C4 — 0x15 PT_ActiveCamera,
   C5 — 0x0E PT_Delete_V5 (largest, needs dedicated investigation), then WAIT group
   (0x05/0x06/0x08/0x1B)
 - Backlog — Legacy Test & Documentation Hygiene: stale pre-MIG-005 tests
