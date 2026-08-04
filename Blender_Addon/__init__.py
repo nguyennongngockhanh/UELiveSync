@@ -371,26 +371,6 @@ class UELIVESYNC_OT_stop(
         return {'FINISHED'}
 
 
-class UELIVESYNC_OT_rebind_all(
-    bpy.types.Operator
-):
-    bl_idname = \
-        "uelivesync.rebind_all"
-
-    bl_label = "Rebind All"
-
-    def execute(self, context):
-
-        count = sync.rebind_all()
-
-        self.report(
-            {'INFO'},
-            f"Rebound {count} objects"
-        )
-
-        return {'FINISHED'}
-
-
 class UELIVESYNC_OT_dump_diagnostics(
     bpy.types.Operator
 ):
@@ -3447,11 +3427,6 @@ class UELIVESYNC_PT_panel(
             )
 
         layout.operator(
-            "uelivesync.rebind_all",
-            icon='UV_SYNC_SELECT',
-        )
-
-        layout.operator(
             "uelivesync.sync_selected_mesh_to_ue_fbx",
             icon='MESH_DATA',
         )
@@ -3485,7 +3460,6 @@ classes = (
     UELIVESYNC_OT_show_error,
     UELIVESYNC_OT_start,
     UELIVESYNC_OT_stop,
-    UELIVESYNC_OT_rebind_all,
     UELIVESYNC_OT_dump_diagnostics,
     UELIVESYNC_OT_discover_server,
     UELIVESYNC_OT_use_discovered_server,

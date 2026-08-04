@@ -45,8 +45,6 @@ try:
         PRIMITIVE_PLANE,
         PRIMITIVE_EMPTY,
         PRIMITIVE_CAMERA,
-        PT_BeginSnapshot,
-        PT_EndSnapshot,
         PT_AssetDef,
         PT_Collection,
         PT_Material,
@@ -193,8 +191,6 @@ except ImportError:
         PRIMITIVE_PLANE,
         PRIMITIVE_EMPTY,
         PRIMITIVE_CAMERA,
-        PT_BeginSnapshot,
-        PT_EndSnapshot,
         PT_AssetDef,
         PT_Collection,
         PT_Material,
@@ -1631,9 +1627,7 @@ def check_updates():
         # tracked for a future "Snapshot Semantic Reconnect" MIG.
 
     objects_to_send = []
-    create_objects = []
     children_to_send = []
-    children_create = []
     deletes_to_send = []
     delete_msgs_to_send = []
     asset_defs_to_send = []
@@ -1839,11 +1833,7 @@ def check_updates():
 
                 if is_first_send:
 
-                    children_create.append(
-                        serialized
-                    )
-
-                    # Phase 1.4.4: MsgType OBJECT_CREATE alongside legacy PT_Create
+                    # Phase 1.4.4: MsgType OBJECT_CREATE
                     _spawn_loc = transform["location"]
                     _spawn_rot = transform["rotation"]
                     _spawn_scl = transform["scale"]
@@ -1892,11 +1882,7 @@ def check_updates():
 
                 if is_first_send:
 
-                    create_objects.append(
-                        serialized
-                    )
-
-                    # Phase 1.4.4: MsgType OBJECT_CREATE alongside legacy PT_Create
+                    # Phase 1.4.4: MsgType OBJECT_CREATE
                     _spawn_loc = transform["location"]
                     _spawn_rot = transform["rotation"]
                     _spawn_scl = transform["scale"]
@@ -3395,135 +3381,6 @@ def get_tracked_count():
     )
 
     return count
-
-
-def rebind_all():
-
-    global tracked_objects
-    global last_sent_transforms
-
-    if not tracked_objects:
-        return 0
-
-    roots = []
-    children = []
-
-    # Depth-sort: parents before children in snapshot emission
-    _rb_parent_map = {}
-    for g, (o, _) in tracked_objects.items():
-        try:
-            _ = o.name
-        except ReferenceError:
-            continue
-        _rb_parent_map[g] = get_parent_guid(o)
-
-    _rb_depth_cache = {}
-    _rb_sorted = sorted(
-        tracked_objects.items(),
-        key=lambda item: _get_parent_depth(
-            item[0], _rb_parent_map, _rb_depth_cache
-        )
-    )
-
-    for guid, obj_data in _rb_sorted:
-
-        obj, guid_obj = obj_data
-
-        try:
-            _ = obj.name
-        except ReferenceError:
-            continue
-
-        transform = get_transform(obj)
-
-        parent_guid = get_parent_guid(obj)
-
-        parent_guid_obj = (
-            UUID(parent_guid)
-            if parent_guid else None
-        )
-
-        timestamp = time.time()
-
-        try:
-
-            serialized = serialize_object_v3(
-                guid_obj,
-                transform,
-                timestamp,
-                parent_guid_obj,
-                primitive_type=(
-                    _get_primitive_type(obj)
-                ),
-            )
-
-        except Exception as e:
-
-            print(
-                "[Rebind] Serialization failed "
-                f"for {obj.name}: {e}"
-            )
-
-            continue
-
-        if parent_guid_obj:
-            children.append(serialized)
-        else:
-            roots.append(serialized)
-
-        last_sent_transforms[guid] = {
-
-            "location":
-                transform["location"][:],
-
-            "rotation":
-                transform["rotation"][:],
-
-            "scale":
-                transform["scale"][:]
-        }
-
-    total_sent = 0
-
-    if roots or children:
-
-        send_objects(
-            [],
-            packet_type=PT_BeginSnapshot,
-        )
-
-        if roots:
-
-            send_objects(
-                roots,
-                packet_type=0x03,
-                flags=0x02,
-            )
-
-            total_sent += len(roots)
-
-        if children:
-
-            send_objects(
-                children,
-                packet_type=0x03,
-                flags=0x02 | 0x01,
-            )
-
-            total_sent += len(children)
-
-        send_objects(
-            [],
-            packet_type=PT_EndSnapshot,
-        )
-
-    if _verbose_logging:
-        print(
-            f"[Rebind] Sent {total_sent} objects "
-            f"({len(roots)} roots, {len(children)} children)"
-        )
-
-    return total_sent
 
 
 def dump_diagnostics():

@@ -206,7 +206,6 @@ enum EPacketType : uint8
 {
     PT_Transform = 0x01,
     PT_Reserved_02 = 0x02,  // Legacy — was PT_Hierarchy in early Phase 3; unused
-    PT_Create      = 0x03,
     PT_Delete    = 0x04,
     PT_Material  = 0x05,
     PT_Mesh      = 0x06,
@@ -1886,7 +1885,7 @@ enum class EWorldReplayDomain : uint8
 {
     Unknown      = 0,
     Collection   = 1,  // PT_Collection (collection membership/identity)
-    Lifecycle    = 2,  // PT_Create, PT_Delete, PT_Delete_V5
+    Lifecycle    = 2,  // PT_Delete, PT_Delete_V5
     Rename       = 3,  // PT_Rename
     Transform    = 4,  // PT_Transform (state-sampled, not raw-stream)
 };

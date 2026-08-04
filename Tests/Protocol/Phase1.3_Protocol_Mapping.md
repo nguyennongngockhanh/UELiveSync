@@ -14,7 +14,7 @@
 |---|---|---|---|---|---|---|
 | 1 | PT_Transform | 0x01 | OBJECT_UPDATE | 0x21 | Partial 1:1 | MAPPED (parent separated, primitive type lost) |
 | 2 | PT_Reserved_02 | 0x02 | -- | -- | None | DEAD CODE |
-| 3 | PT_Create | 0x03 | OBJECT_CREATE | 0x20 | 1:1 | MAPPED (name added, primitive type lost) |
+| 3 | PT_Create | 0x03 | OBJECT_CREATE | 0x20 | 1:1 | MAPPED (Phase 1.5: legacy 0x03 DECOMMISSIONED; semantic OBJECT_CREATE only) |
 | 4 | PT_Delete | 0x04 | OBJECT_DELETE | 0x22 | 2:1 (with V5) | MAPPED (full Phase 6E semantic: seq+ts+tombstone) |
 | 5 | PT_Material | 0x05 | MATERIAL_CREATE/UPDATE/ASSIGN | 0x40/41/42 | 1:3 | MAPPED (cleaner separation) |
 | 6 | PT_Mesh | 0x06 | MESH_DATA/DELTA/START/CHUNK/END | 0x30-34 | 1:5 | MAPPED (chunked transfer new) |
