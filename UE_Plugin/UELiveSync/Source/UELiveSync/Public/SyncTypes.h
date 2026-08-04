@@ -205,7 +205,6 @@ struct FSyncTransformState
 enum EPacketType : uint8
 {
     PT_Transform = 0x01,
-    PT_Reserved_02 = 0x02,  // Legacy — was PT_Hierarchy in early Phase 3; unused
     PT_Material  = 0x05,
     PT_Mesh      = 0x06,
     PT_Heartbeat = 0x07,
