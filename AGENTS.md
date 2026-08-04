@@ -62,7 +62,9 @@ Phase 1.5 capabilities:
 - 0x04 PT_Delete DECOMMISSIONED (COMPLETE — 00d8545, ADR-74; runtime PASS; 0x0E
   PT_Delete_V5 kept for capability C5)
 - 0x02 PT_Reserved_02 DECOMMISSIONED (COMPLETE — ADR-75; runtime N/A — no wire presence)
-- Next: one capability per packet type: C1 — 0x0B PT_Visibility, C2 — 0x0C PT_Rename,
+- 0x0B PT_Visibility DECOMMISSIONED (COMPLETE — C1; ADR-76; runtime N/A — semantic
+  OBJECT_VISIBILITY 0x25 only; FVisibilitySequenceTracker kept — live via HandleVisibility)
+- Next: one capability per packet type: C2 — 0x0C PT_Rename,
   C3 — 0x0D PT_Hierarchy, C4 — 0x15 PT_ActiveCamera, C5 — 0x0E PT_Delete_V5 (largest,
   needs dedicated investigation), then WAIT group (0x05/0x06/0x08/0x1B)
 - Backlog — Legacy Test & Documentation Hygiene: stale pre-MIG-005 tests

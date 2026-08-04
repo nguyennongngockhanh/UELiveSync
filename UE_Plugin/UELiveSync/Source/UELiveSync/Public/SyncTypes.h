@@ -214,7 +214,6 @@ enum EPacketType : uint8
 
     // Phase 6: Semantic editor-event replication
     // See Docs/Architecture/19-phase6-vertical-slice-rename.md
-    PT_Visibility    = 0x0B,  // Semantic visibility toggle (discrete, NOT state stream)
     PT_Rename        = 0x0C,  // Semantic rename event (discrete, NOT state stream)
 
     // Phase 6D: Hierarchy replication (semantic attachment event)
@@ -1594,27 +1593,6 @@ struct FRenameSequenceTracker
         LastSequence.Add(Guid, AppliedSeq);
     }
 };
-
-
-// =========================================================
-// VISIBILITY PACKET (Phase 6, PT_Visibility = 0x0B)
-// =========================================================
-// Discrete semantic editor-event payload.
-// NOT a state-stream packet — visibility is a discrete toggle,
-// not a continuously sampled value.
-//
-// Wire format (fixed 29 bytes per object):
-//   offset  size  field
-//   0       16    GUID (4 × uint32 LE)
-//   16      1     bHidden (uint8: 0=visible, 1=hidden in editor)
-//   17      4     sequence_number (uint32 LE, monotonic per-GUID)
-//   21      8     timestamp (double LE)
-//
-// Provenance (EChangeOrigin) is in-memory only — NOT on the wire.
-// See Docs/Architecture/21-phase6-vertical-slice-visibility.md §2
-//
-// Fixed payload: 16 + 1 + 4 + 8 = 29 bytes
-// =========================================================
 
 
 // =========================================================

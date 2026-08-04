@@ -121,15 +121,6 @@ ValidatePacketOrdering(const FLiveSyncPacket& Packet)
                         *Guid.ToString(EGuidFormats::Digits));
                 }
                 break;
-            case 0x0B: // PT_Visibility
-                Stats.PacketVisibilityBeforeCreate.fetch_add(1, std::memory_order_relaxed);
-                if (bPhase6HVerbose)
-                {
-                    UE_LOG(LogLiveSync, Warning,
-                        TEXT("[PHASE6H][ORDER] Visibility before create: GUID=%s"),
-                        *Guid.ToString(EGuidFormats::Digits));
-                }
-                break;
             case 0x0F: // PT_Collection
                 Stats.PacketCollectionBeforeCreate.fetch_add(1, std::memory_order_relaxed);
                 break;
