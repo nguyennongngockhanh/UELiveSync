@@ -366,7 +366,6 @@ PT_Material = 0x05   # Phase 7B: material slot identity
 PT_Mesh = 0x06       # Phase 7C: mesh geometry chunk
 PT_Timeline = 0x13   # Phase 7B: timeline/playhead frame sync
 PT_PlaybackState = 0x14  # Phase 7C: playback state (play/pause/stop/loop)
-PT_ActiveCamera = 0x15  # Phase 7D: active camera selection (GUID-only, no params)
 
 # Phase 7E Stage 7: Keyframe replication (PT_Keyframe = 0x17)
 PT_Keyframe = 0x17  # Keyframe replication (fixed header + repeated entries)
@@ -455,7 +454,7 @@ CAPABILITY_RESPONSE_PAYLOAD_SIZE  = 4
 
 CAP_SUPPORTS_TIMELINE_SYNC       = 0x10  # Bit 4: PT_Timeline (0x13) supported
 CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20  # Bit 5: PT_Keyframe (0x17) supported
-CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40  # Bit 6: PT_ActiveCamera (0x15) supported
+CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40  # Bit 6: active camera sync supported (CAMERASETACTIVE)
 CAP_SUPPORTS_SEQUENCER_OPS       = 0x80  # Bit 7: PT_SequencerOp (0x18) supported
 CAP_SUPPORTS_CAMERA_DEF_SYNC     = 0x100 # Bit 8: PT_CameraDef (0x1B) supported
 CAP_SUPPORTS_CAMERA_FOV_KEYFRAME = 0x400 # Bit 10: Camera FOV keyframe (channel 11)
@@ -1865,28 +1864,6 @@ def send_playback_transport(conn, command, frame_current, flags=0):
 
 
 NULL_CAMERA_GUID = b'\x00' * 16
-
-def serialize_active_camera(guid_obj, sequence, timestamp):
-    """Serialize active camera payload into fixed-size 28-byte payload.
-
-    Payload layout:
-      [0-15]  guid      bytes   — 16-byte camera object GUID (all-zero = no active camera)
-      [16-19] sequence  uint32 LE — monotonic global counter
-      [20-27] timestamp double LE — time.time() at detection
-
-    guid_obj: UUID object, or None for no active camera (writes all-zero GUID).
-    Returns bytes of length ACTIVE_CAMERA_PAYLOAD_SIZE.
-    """
-    if guid_obj is None:
-        guid_bytes = NULL_CAMERA_GUID
-    else:
-        guid_bytes = pack_ue_fguid(guid_obj)
-    return struct.pack(
-        "<16sId",
-        guid_bytes,
-        sequence & 0xFFFFFFFF,
-        timestamp
-    )
 
 
 # =========================================================

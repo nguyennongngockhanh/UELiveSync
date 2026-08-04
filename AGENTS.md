@@ -70,15 +70,27 @@ Phase 1.5 capabilities:
 - 0x0D PT_Hierarchy DECOMMISSIONED (COMPLETE — C3; ADR-78; runtime N/A — semantic
   OBJECT_REPARENT 0x24 only; FHierarchySequenceTracker kept — live via reparent handler;
   serialize_delete()/_delete_sequences VERIFIED untouched — C5 surface)
-- Next: one capability per packet type: C4 — 0x15 PT_ActiveCamera,
-  C5 — 0x0E PT_Delete_V5 (largest, needs dedicated investigation), then WAIT group
-  (0x05/0x06/0x08/0x1B)
+- 0x15 PT_ActiveCamera DECOMMISSIONED (COMPLETE — C4; ADR-79; runtime N/A — semantic
+  CAMERASETACTIVE 0x52 only; FActiveCameraPayload RETAINED — live semantic storage via
+  OnCameraSetActive → HandleActiveCamera (retain-storage, not remove-packet);
+  CAP_SUPPORTS_ACTIVE_CAMERA_SYNC 0x40 kept — real wire capability)
+- Next: one capability per packet type: C5 — 0x0E PT_Delete_V5 (largest, needs dedicated
+  investigation), then WAIT group (0x05/0x06/0x08/0x1B)
 - Backlog — Legacy Test & Documentation Hygiene: stale pre-MIG-005 tests
   `tests/phase10a32_*`, `tests/phase10a33_*`, `tests/phase10a34_*` (assert
   `serialize_fbx_import_request` / `hasattr(net, "PT_FBXImportRequest")`,
   failures identical at HEAD, OUTSIDE regression suite) → cleanup in a
   dedicated cycle; optionally normalize residual doc mentions in
-  AGENTS.md / STATUS.md / Shared/Protocol/MessageTypes.yaml.
+  AGENTS.md / STATUS.md / Shared/Protocol/MessageTypes.yaml. Also stale
+  C4 residuals (OUTSIDE regression suite, never run — root tests/ collection
+  aborts at HEAD on phase7c sys.exit(1)): `tests/phase7d_stage1_active_camera_wire.py`
+  (`network.PT_ActiveCamera` / `network.serialize_active_camera`),
+  `tests/phase7d_stage2_camera_detection.py`, `tests/phase7d_stage3_ue_handler_validation.py`,
+  `tests/phase7d_stage4_viewport_apply.py`, `tests/phase7h_material_policy_camera_ux.py`,
+  `tests/phase7e_stage10b_pack_ue_fguid.py`, `tests/phase7g_stage2_reserved_packet_guard.py`,
+  `tests/e2e9_camera_sceneoutliner_safe_lifecycle.py`; stale diagnostic tools
+  `tools/uelivesync_7g_camera_def_client.py` + `uelivesync_7g_camera_transform_client.py`
+  (inline `PT_ACTIVE_CAMERA = 0x15`, emit legacy packet).
 
 Phase 1.5 Acceptance criterion (per-capability, replaces "grep = 0 outside Docs/.recovery"):
   No production references remain. Allowed residual references:

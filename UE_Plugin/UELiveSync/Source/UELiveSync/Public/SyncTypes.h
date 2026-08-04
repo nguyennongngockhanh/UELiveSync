@@ -228,10 +228,6 @@ enum EPacketType : uint8
     // See Docs/Architecture/52-phase7-animation-sequencer-scope-lock.md
     PT_PlaybackState  = 0x14,  // Playback transport state (discrete event, NOT Sequencer control)
 
-    // Phase 7D: Active camera selection (GUID-only, no camera parameters)
-    // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md
-    PT_ActiveCamera   = 0x15,  // Active camera identity (event-driven, NOT state stream)
-
     // Phase 7E: Sequencer operations (discrete events, NOT state stream)
     // See Docs/Architecture/54-phase7e-sequencer-keyframe-scope-lock.md
     PT_SequencerOp    = 0x18,  // Sequencer operation (create, add possessable, etc.)
@@ -492,11 +488,10 @@ static_assert(
 // ACTIVE CAMERA PAYLOAD (Phase 7D)
 // =========================================================
 
-// PT_ActiveCamera (0x15) fixed-size payload: 28 bytes
-// Wire format:
-//   [0-15]  CameraGUID  FGuid   — camera object GUID (all-zero = no active camera)
-//   [16-19] Sequence    uint32  — global monotonic counter (LE)
-//   [20-27] Timestamp   double  — time.time() at detection (LE)
+// Storage payload for semantic active-camera synchronization
+// (CAMERASETACTIVE bridge). Not a legacy packet wire layout.
+// Legacy PT_ActiveCamera (0x15) wire surface decommissioned;
+// fed via OnCameraSetActive (Bridge → CAMERASETACTIVE).
 //
 // See Docs/Architecture/53-phase7d-camera-sync-scope-lock.md
 struct FActiveCameraPayload
@@ -1211,7 +1206,7 @@ struct FLiveSyncStats
     std::atomic<int32> TimelinePacketsMalformed{0};     // Packets rejected (bad size)
 
     // --- Phase 7D: Active camera sync (game thread) ---
-    std::atomic<int32> ActiveCameraPacketsReceived{0};         // Total PT_ActiveCamera packets received
+    std::atomic<int32> ActiveCameraPacketsReceived{0};         // Total active camera packets received (legacy wire path decommissioned)
     std::atomic<int32> ActiveCameraPacketsApplied{0};          // Packets accepted (valid sequence + GUID)
     std::atomic<int32> ActiveCameraPacketsStale{0};             // Packets rejected (stale/duplicate sequence)
     std::atomic<int32> ActiveCameraPacketsMalformed{0};         // Packets rejected (bad size)
@@ -2195,7 +2190,7 @@ struct FSequencerOpState
 
 constexpr uint32 CAP_SUPPORTS_TIMELINE_SYNC       = 0x10;  // Bit 4: PT_Timeline (0x13) supported
 constexpr uint32 CAP_SUPPORTS_KEYFRAME_REPLICATION = 0x20;  // Bit 5: PT_Keyframe (0x17) supported
-constexpr uint32 CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40;  // Bit 6: PT_ActiveCamera (0x15) supported
+constexpr uint32 CAP_SUPPORTS_ACTIVE_CAMERA_SYNC  = 0x40;  // Bit 6: active camera sync supported (CAMERASETACTIVE)
 constexpr uint32 CAP_SUPPORTS_SEQUENCER_OPS       = 0x80;  // Bit 7: PT_SequencerOp (0x18) supported
 constexpr uint32 CAP_SUPPORTS_CAMERA_DEF_SYNC      = 0x100; // Bit 8: PT_CameraDef (0x1B) supported
 constexpr uint32 CAP_SUPPORTS_CAMERA_SEQ_BIND       = 0x200; // Bit 9: Camera → Sequencer binding (Phase 7G.5)

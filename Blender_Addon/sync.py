@@ -3144,7 +3144,7 @@ def check_updates():
                     setactive_body = build_camera_setactive(guid_obj)
                     transport.send_msg(MsgType.CAMERASETACTIVE, setactive_body)
 
-            # Send CameraDef alongside PT_ActiveCamera when camera is valid
+            # Send CameraDef alongside active-camera selection when camera is valid
             if camera_obj is not None and hasattr(camera_obj, 'data') and camera_obj.data is not None:
                 cam_data = camera_obj.data
                 focal = getattr(cam_data, 'lens', 50.0)
