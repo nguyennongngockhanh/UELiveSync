@@ -41,6 +41,7 @@ struct CameraCreateView
     uint8_t CameraFlags;
     uint32_t SequenceNumber;
     double Timestamp;
+    double AspectRatio;  // MIG-008: Blender render aspect ratio
 };
 
 struct CameraUpdateView
@@ -64,6 +65,8 @@ struct CameraUpdateView
     uint8_t CameraFlags;
     uint32_t SequenceNumber;
     double Timestamp;
+    bool HasAspectRatio;   // MIG-008: Blender render aspect ratio
+    double AspectRatio;
 };
 
 struct CameraSetActiveView

@@ -723,10 +723,11 @@ static void test_property_camera_create() {
         uint8_t cf = static_cast<uint8_t>(rand_u32() & 0xFF);
         uint32_t seq = rand_u32();
         double ts = rand_float() * 1000.0;
+        double ar = rand_float() * 4.0;  // MIG-008: aspect_ratio
 
         auto body = serialize_body_camera_create(cid, name, "",
             px, py, pz, rx, ry, rz, rw, sx, sy, sz,
-            fl, sw, sh, cs, ce, os, cf, seq, ts);
+            fl, sw, sh, cs, ce, os, cf, seq, ts, ar);
         auto frame = PackFrame(MsgType::CAMERA_CREATE, 0, seq, DEFAULT_SID, body);
         auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -751,6 +752,7 @@ static void test_property_camera_create() {
         check(get_field<uint8_t>(d, "camera_flags") == cf, "camera_create cf");
         check(get_field<uint32_t>(d, "sequence_number") == seq, "camera_create seq");
         check(floats_eq(get_field<double>(d, "timestamp"), ts), "camera_create ts");
+        check(floats_eq(get_field<double>(d, "aspect_ratio"), ar), "camera_create ar");
     }
 }
 
@@ -765,10 +767,11 @@ static void test_property_camera_update() {
         uint8_t cf = static_cast<uint8_t>(rand_u32() & 0xFF);
         uint32_t seq = rand_u32();
         double ts = rand_float() * 1000.0;
+        double ar = rand_float() * 4.0;  // MIG-008: aspect_ratio
 
         auto body = serialize_body_camera_update(cid,
             px, py, pz, rx, ry, rz, rw, sx, sy, sz,
-            fl, sw, sh, cs, ce, os, cf, seq, ts);
+            fl, sw, sh, cs, ce, os, cf, seq, ts, ar);
         auto frame = PackFrame(MsgType::CAMERA_UPDATE, 0, seq, DEFAULT_SID, body);
         auto d = DeserializeFrame(frame.data(), frame.size());
 
@@ -792,6 +795,7 @@ static void test_property_camera_update() {
         check(get_field<uint8_t>(d, "camera_flags") == cf, "camera_update cf");
         check(get_field<uint32_t>(d, "sequence_number") == seq, "camera_update seq");
         check(floats_eq(get_field<double>(d, "timestamp"), ts), "camera_update ts");
+        check(floats_eq(get_field<double>(d, "aspect_ratio"), ar), "camera_update ar");
     }
 }
 

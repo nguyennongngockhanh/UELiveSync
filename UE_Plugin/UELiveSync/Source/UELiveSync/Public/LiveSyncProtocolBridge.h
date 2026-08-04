@@ -338,6 +338,9 @@ inline CameraCreateView BuildCameraCreateView(
     v.CameraFlags = GetField<uint8_t>(msg, "camera_flags");
     v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
     v.Timestamp = GetField<double>(msg, "timestamp");
+    // MIG-008: aspect_ratio (backward compat — old messages lack this field)
+    auto* ar = TryGetField<double>(msg, "aspect_ratio");
+    v.AspectRatio = ar ? *ar : 0.0;
     return v;
 }
 
@@ -373,6 +376,10 @@ inline CameraUpdateView BuildCameraUpdateView(
     v.CameraFlags = cf ? *cf : 0;
     v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
     v.Timestamp = GetField<double>(msg, "timestamp");
+    // MIG-008: aspect_ratio (backward compat — old messages lack this field)
+    auto* ar = TryGetField<double>(msg, "aspect_ratio");
+    v.HasAspectRatio = (ar != nullptr);
+    v.AspectRatio = ar ? *ar : 0.0;
     return v;
 }
 
@@ -396,11 +403,11 @@ inline void LogCameraCreate(const CameraCreateView& v)
         TEXT("[BRIDGE][CAMERA_CREATE] id=%hs name=%hs "
              "focal=%.1f sensor=%.1fx%.1f "
              "clip=%.2f..%.2f ortho=%.2f flags=0x%02x "
-             "seq=%u ts=%.3f"),
+             "aspect=%.4f seq=%u ts=%.3f"),
         id_str, v.Name.c_str(),
         v.FocalLength, v.SensorWidth, v.SensorHeight,
         v.ClipStart, v.ClipEnd, v.OrthoScale, v.CameraFlags,
-        v.SequenceNumber, v.Timestamp);
+        v.AspectRatio, v.SequenceNumber, v.Timestamp);
 }
 
 inline void LogCameraUpdate(const CameraUpdateView& v)
@@ -411,7 +418,7 @@ inline void LogCameraUpdate(const CameraUpdateView& v)
         TEXT("[BRIDGE][CAMERA_UPDATE] id=%hs "
              "has_transform=%d focal=%hs%.1f "
              "clip=%hs%.2f/%hs%.2f ortho=%hs%.2f flags=%hs0x%02x "
-             "seq=%u ts=%.3f"),
+             "has_aspect=%d aspect=%.4f seq=%u ts=%.3f"),
         id_str,
         static_cast<int>(v.HasTransform),
         v.HasFocalLength ? "" : "not_set=",
@@ -424,6 +431,8 @@ inline void LogCameraUpdate(const CameraUpdateView& v)
         v.HasOrthoScale ? v.OrthoScale : 0.0f,
         v.HasCameraFlags ? "" : "not_set=0x",
         v.HasCameraFlags ? v.CameraFlags : 0,
+        static_cast<int>(v.HasAspectRatio),
+        v.AspectRatio,
         v.SequenceNumber, v.Timestamp);
 }
 

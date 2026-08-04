@@ -454,9 +454,14 @@ inline DeserializedMessage DeserializeFrame(const uint8_t* data, size_t size) {
             msg.body["camera_flags"] = state.unpack_uint8();
             msg.body["sequence_number"] = state.unpack_uint32();
             msg.body["timestamp"] = state.unpack_float64();
+            // MIG-008: aspect_ratio appended after timestamp (backward compat —
+            // old messages end at timestamp, trailing bytes are absent)
+            if (state.offset < body_end) {
+                msg.body["aspect_ratio"] = state.unpack_float64();
+            }
             break;
         }
-        case MsgType::CAMERA_UPDATE:
+        case MsgType::CAMERA_UPDATE: {
             msg.body["camera_id"] = state.unpack_uuid();
             msg.body["transform"] = state.unpack_transform3d();
             msg.body["focal_length"] = state.unpack_float32();
@@ -468,7 +473,12 @@ inline DeserializedMessage DeserializeFrame(const uint8_t* data, size_t size) {
             msg.body["camera_flags"] = state.unpack_uint8();
             msg.body["sequence_number"] = state.unpack_uint32();
             msg.body["timestamp"] = state.unpack_float64();
+            // MIG-008: aspect_ratio appended after timestamp (backward compat)
+            if (state.offset < msg.total_size) {
+                msg.body["aspect_ratio"] = state.unpack_float64();
+            }
             break;
+        }
         case MsgType::CAMERASETACTIVE:
             msg.body["camera_id"] = state.unpack_uuid();
             break;

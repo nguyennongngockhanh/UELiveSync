@@ -3229,6 +3229,7 @@ def check_updates():
                         scale=(cam_scl[0], cam_scl[1], cam_scl[2]),
                         sequence_number=cam_seq,
                         timestamp=time.time(),
+                        aspect_ratio=render_aspect_ratio(bpy.context),
                     )
                     transport.send_msg(MsgType.CAMERA_CREATE, create_body)
                     _camera_def_packets_sent += 1
@@ -3312,6 +3313,7 @@ def check_updates():
                     camera_flags=update_flags,
                     sequence_number=cam_seq,
                     timestamp=time.time(),
+                    aspect_ratio=_aspect,
                 )
                 transport.send_msg(MsgType.CAMERA_UPDATE, update_body)
                 _camera_def_packets_sent += 1

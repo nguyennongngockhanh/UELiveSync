@@ -465,6 +465,7 @@ messages:
       - { name: camera_flags,   type: uint8, description: "bit0=is_ortho; bit1=DEPRECATED has_camera_def (compat only, new senders MUST ignore)" }
       - { name: sequence_number, type: uint32 }
       - { name: timestamp,      type: float64 }
+      - { name: aspect_ratio,   type: float64, optional: true, description: "MIG-008: Blender render aspect ratio (resolution_x * pixel_aspect_x / (resolution_y * pixel_aspect_y)). Appended after timestamp for backward compat." }
     description: "New camera with full state. sequence_number enables stale-rejection; timestamp for ordering. camera_flags bit1 (has_camera_def) is DEPRECATED and will be removed in a future migration."
 
   CAMERA_UPDATE:
@@ -483,6 +484,7 @@ messages:
       - { name: camera_flags,   type: uint8, optional: true, description: "bit0=is_ortho; bit1=DEPRECATED has_camera_def" }
       - { name: sequence_number, type: uint32 }
       - { name: timestamp,      type: float64 }
+      - { name: aspect_ratio,   type: float64, optional: true, description: "MIG-008: Blender render aspect ratio. Appended after timestamp for backward compat." }
     description: "Property delta. sequence_number enables stale-rejection; timestamp for ordering. camera_flags bit1 (has_camera_def) is DEPRECATED."
 
   CAMERASETACTIVE:

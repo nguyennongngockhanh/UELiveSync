@@ -7892,14 +7892,21 @@ void UUELiveSyncSubsystem::ApplyCameraParams(
         CamComp->SetProjectionMode(ECameraProjectionMode::Perspective);
         CamComp->FieldOfView = FOVDeg;
 
-        // Aspect ratio is owned by PT_CameraDef (single source of truth);
-        // it is not derived here on the camera create path.
-
         // Clip planes: UCameraComponent does not expose ZNear/ZFar for perspective.
         // Log diagnostic only; UE RHI defaults apply.
         UE_LOG(LogLiveSync, Log,
             TEXT("[CAMERA][CREATE] perspective clip: ZNear=%.1f ZFar=%.1f — RHI defaults"),
             View.ClipStart, View.ClipEnd);
+    }
+
+    // MIG-008: aspect ratio — single source of truth for both projection modes.
+    // Derived from Blender render resolution (resolution_x * pixel_aspect_x /
+    // resolution_y * pixel_aspect_y). HandleCameraDef applies this from
+    // FCameraDefPayload; the semantic path applies it here from CameraCreateView.
+    if (View.AspectRatio > 0.0)
+    {
+        CamComp->AspectRatio = View.AspectRatio;
+        CamComp->bConstrainAspectRatio = true;
     }
 }
 
@@ -7990,6 +7997,13 @@ void UUELiveSyncSubsystem::OnCameraUpdate(
         CamComp->FieldOfView = FMath::RadiansToDegrees(FOVRad);
     }
 
+    // MIG-008: aspect ratio delta (single source of truth: Blender render resolution)
+    if (View.HasAspectRatio && View.AspectRatio > 0.0)
+    {
+        CamComp->AspectRatio = View.AspectRatio;
+        CamComp->bConstrainAspectRatio = true;
+    }
+
     if (View.HasTransform)
     {
         FVector NewLoc(View.Transform.X, View.Transform.Y, View.Transform.Z);
@@ -8054,7 +8068,7 @@ void UUELiveSyncSubsystem::OnCameraUpdate(
     }
 
     UE_LOG(LogLiveSync, Log,
-        TEXT("[CAMERA][UPDATE] Applied delta for GUID=%s focal=%d sensor=%d transform=%d clip=%d/%d ortho=%d flags=%d seq=%u"),
+        TEXT("[CAMERA][UPDATE] Applied delta for GUID=%s focal=%d sensor=%d transform=%d clip=%d/%d ortho=%d flags=%d aspect=%d seq=%u"),
         *CameraGUID.ToString(EGuidFormats::Digits),
         View.HasFocalLength ? 1 : 0,
         View.HasSensorWidth ? 1 : 0,
@@ -8063,6 +8077,7 @@ void UUELiveSyncSubsystem::OnCameraUpdate(
         View.HasClipEnd ? 1 : 0,
         View.HasOrthoScale ? 1 : 0,
         View.HasCameraFlags ? 1 : 0,
+        View.HasAspectRatio ? 1 : 0,
         View.SequenceNumber);
 }
 

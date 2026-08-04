@@ -190,7 +190,8 @@ inline std::vector<uint8_t> serialize_body_camera_create(
     float focal_length, float sensor_width, float sensor_height,
     float clip_start, float clip_end, float ortho_scale,
     uint8_t camera_flags,
-    uint32_t sequence_number, double timestamp)
+    uint32_t sequence_number, double timestamp,
+    double aspect_ratio = 0.0)
 {
     std::vector<uint8_t> body;
     auto cid = parse_uuid(camera_id);
@@ -210,6 +211,7 @@ inline std::vector<uint8_t> serialize_body_camera_create(
     pack_uint8(body, camera_flags);
     pack_uint32(body, sequence_number);
     pack_float64(body, timestamp);
+    pack_float64(body, aspect_ratio);
     return body;
 }
 
@@ -221,7 +223,8 @@ inline std::vector<uint8_t> serialize_body_camera_update(
     float focal_length, float sensor_width, float sensor_height,
     float clip_start, float clip_end, float ortho_scale,
     uint8_t camera_flags,
-    uint32_t sequence_number, double timestamp)
+    uint32_t sequence_number, double timestamp,
+    double aspect_ratio = 0.0)
 {
     std::vector<uint8_t> body;
     auto cid = parse_uuid(camera_id);
@@ -236,6 +239,7 @@ inline std::vector<uint8_t> serialize_body_camera_update(
     pack_uint8(body, camera_flags);
     pack_uint32(body, sequence_number);
     pack_float64(body, timestamp);
+    pack_float64(body, aspect_ratio);
     return body;
 }
 

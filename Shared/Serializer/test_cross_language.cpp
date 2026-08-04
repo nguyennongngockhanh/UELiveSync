@@ -338,6 +338,7 @@ static std::vector<uint8_t> serialize_from_manifest(const json& vec) {
             uint32_t seq = fields.contains("sequence_number")
                 ? static_cast<uint32_t>(fields["sequence_number"]) : 0U;
             double ts = fields.value("timestamp", 0.0);
+            double ar = fields.value("aspect_ratio", 0.0);
             std::string parent_id_str;
             if (fields.contains("parent_id")) {
                 parent_id_str = fields["parent_id"].get<std::string>();
@@ -346,7 +347,7 @@ static std::vector<uint8_t> serialize_from_manifest(const json& vec) {
                 tr[0], tr[1], tr[2], tr[3], tr[4], tr[5], tr[6],
                 tr[7], tr[8], tr[9],
                 fields["focal_length"], fields["sensor_width"], fields["sensor_height"],
-                cs, ce, os, cf, seq, ts);
+                cs, ce, os, cf, seq, ts, ar);
             break;
         }
         case MsgType::CAMERA_UPDATE: {
@@ -354,13 +355,14 @@ static std::vector<uint8_t> serialize_from_manifest(const json& vec) {
             uint32_t seq = fields.contains("sequence_number")
                 ? static_cast<uint32_t>(fields["sequence_number"]) : 0U;
             double ts = fields.value("timestamp", 0.0);
+            double ar = fields.value("aspect_ratio", 0.0);
             body = serialize_body_camera_update(fields["camera_id"],
                 tr[0], tr[1], tr[2], tr[3], tr[4], tr[5], tr[6],
                 tr[7], tr[8], tr[9],
                 fields["focal_length"], fields["sensor_width"], fields["sensor_height"],
                 fields["clip_start"], fields["clip_end"], fields["ortho_scale"],
                 static_cast<uint8_t>(fields.value("camera_flags", 0)),
-                seq, ts);
+                seq, ts, ar);
             break;
         }
         case MsgType::CAMERASETACTIVE:

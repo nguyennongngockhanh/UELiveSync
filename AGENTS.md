@@ -91,8 +91,10 @@ Phase 1.5 capabilities:
     (MIG-007, ADR-82, runtime PASS); dual-emission active (legacy 0x08 retained until
     decommission ADR); `HandleAssetDef` is sole implementation (bridge converts view);
     `_asset_identity_sequences` / `FAssetIdentitySequenceTracker` dedicated tracker
-  - 0x1B PT_CameraDef — WAIT: CAMERA_CREATE/UPDATE PARTIAL (4 fields missing: clip
-    planes, ortho); PT_CameraDef supplements the schema gap
+  - 0x1B PT_CameraDef — MIG COMPLETE: aspect_ratio added to CAMERA_CREATE/UPDATE
+    (MIG-008, ADR-83, runtime PASS); semantic schema achieves field parity with
+    PT_CameraDef; ApplyCameraParams is single point of application; dual-emission
+    active; legacy 0x1B retained pending decommission ADR
   - Decommission criteria (all three, then capability cadence re-applies): MIG reaches
     semantic parity + runtime acceptance; Blender emitter semantic-only; UE
     dispatcher/kValidTypes dropped. Flipping to PERMANENT requires a dedicated ADR.
@@ -150,6 +152,9 @@ Completed Migrations:
 - MIG-007: OBJECT_ASSET_IDENTITY semantic path for PT_AssetDef (0x08) — semantic 0x26 added,
   dual-emission active, HandleAssetDef sole implementation, runtime PASS; legacy 0x08 retained
   pending decommission ADR; ADR-82
+- MIG-008: Camera aspect_ratio schema completion for PT_CameraDef (0x1B) — aspect_ratio added
+  to CAMERA_CREATE/UPDATE, semantic schema achieves field parity, ApplyCameraParams single
+  point of application, runtime PASS; legacy 0x1B retained pending decommission ADR; ADR-83
 
 Key architectural pattern:
 - Semantic event pipeline: Blender detects → Serialize → Transport → Bridge → Gameplay → Presentation → Regression

@@ -325,6 +325,7 @@ def build_camera_create(
     camera_flags: int = 0,
     sequence_number: int = 0,
     timestamp: float = 0.0,
+    aspect_ratio: float = 0.0,
 ) -> bytes:
     """CAMERA_CREATE body bytes (full camera state).
 
@@ -342,6 +343,7 @@ def build_camera_create(
       camera_flags:   uint8 (bit0=is_ortho; bit1=DEPRECATED)
       sequence_number: uint32 LE
       timestamp:      float64 LE
+      aspect_ratio:   float64 LE (MIG-008, appended after timestamp)
     """
     body = bytearray()
     body.extend(uuid_to_fguid_bytes(camera_id))
@@ -361,6 +363,7 @@ def build_camera_create(
     body.extend(pack_u8(camera_flags))
     body.extend(pack_u32(sequence_number))
     body.extend(pack_f64(timestamp))
+    body.extend(pack_f64(aspect_ratio))
     return bytes(body)
 
 
@@ -378,6 +381,7 @@ def build_camera_update(
     camera_flags: int = 0,
     sequence_number: int = 0,
     timestamp: float = 0.0,
+    aspect_ratio: float = 0.0,
 ) -> bytes:
     """CAMERA_UPDATE body bytes (full camera state).
 
@@ -393,6 +397,7 @@ def build_camera_update(
       camera_flags:   uint8
       sequence_number: uint32 LE
       timestamp:      float64 LE
+      aspect_ratio:   float64 LE (MIG-008, appended after timestamp)
     """
     body = bytearray()
     body.extend(uuid_to_fguid_bytes(camera_id))
@@ -409,6 +414,7 @@ def build_camera_update(
     body.extend(pack_u8(camera_flags))
     body.extend(pack_u32(sequence_number))
     body.extend(pack_f64(timestamp))
+    body.extend(pack_f64(aspect_ratio))
     return bytes(body)
 
 

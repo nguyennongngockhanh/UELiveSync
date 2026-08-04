@@ -446,6 +446,7 @@ VECTORS = [
             "camera_flags": 2,
             "sequence_number": 21,
             "timestamp": 1234500.0,
+            "aspect_ratio": 1.7778,
         },
     },
     {
@@ -467,6 +468,7 @@ VECTORS = [
             "camera_flags": 0,
             "sequence_number": 22,
             "timestamp": 1234600.0,
+            "aspect_ratio": 2.3333,
         },
     },
     {
