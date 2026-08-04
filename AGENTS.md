@@ -58,7 +58,12 @@ Phase 1.5 — Legacy Protocol Elimination (current / in progress)
 
 Phase 1.5 capabilities:
 - 0x16 PT_FBXImportRequest DECOMMISSIONED (COMPLETE — 07ca0f0, ADR-72)
-- Next: 0x03 PT_Create or 0x04 PT_Delete (independent of 0x16)
+- 0x03 PT_Create DECOMMISSIONED (COMPLETE — 0d49d18, ADR-73)
+- 0x04 PT_Delete DECOMMISSIONED (COMPLETE — ADR-74; runtime PASS; 0x0E PT_Delete_V5 kept
+  for capability C)
+- Next: 0x0B PT_Visibility, 0x0C PT_Rename, 0x0D PT_Hierarchy, 0x0E PT_Delete_V5, 0x15
+  PT_ActiveCamera (capability C group), then 0x02 Reserved, then WAIT group
+  (0x05/0x06/0x08/0x1B)
 - Backlog — Legacy Test & Documentation Hygiene: stale pre-MIG-005 tests
   `tests/phase10a32_*`, `tests/phase10a33_*`, `tests/phase10a34_*` (assert
   `serialize_fbx_import_request` / `hasattr(net, "PT_FBXImportRequest")`,

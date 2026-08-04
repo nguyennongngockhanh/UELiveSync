@@ -2714,31 +2714,6 @@ def serialize_object_v3(guid_obj, transform, timestamp, parent_guid_obj=None, pr
     return payload
 
 
-def serialize_delete_v3(guid_obj):
-
-    payload = bytearray()
-
-    d_a = guid_obj.time_low
-    d_b = (
-        guid_obj.time_mid << 16
-    ) | guid_obj.time_hi_version
-    d_c = (
-        guid_obj.clock_seq_hi_variant << 24
-    ) | (
-        guid_obj.clock_seq_low << 16
-    ) | (
-        (guid_obj.node >> 32) & 0xFFFF
-    )
-    d_d = guid_obj.node & 0xFFFFFFFF
-
-    payload.extend(struct.pack(
-        "<IIII",
-        d_a, d_b, d_c, d_d
-    ))
-
-    return payload
-
-
 # =========================================================
 # SERIALIZE RENAME (Phase 6 — Semantic Event)
 # =========================================================

@@ -28,7 +28,6 @@ try:
         send_snapshot,
         serialize_object,
         serialize_object_v3,
-        serialize_delete_v3,
         is_connected,
         get_last_error,
         get_last_error_severity,
@@ -174,7 +173,6 @@ except ImportError:
         send_snapshot,
         serialize_object,
         serialize_object_v3,
-        serialize_delete_v3,
         is_connected,
         get_last_error,
         get_last_error_severity,
@@ -1628,7 +1626,6 @@ def check_updates():
 
     objects_to_send = []
     children_to_send = []
-    deletes_to_send = []
     delete_msgs_to_send = []
     asset_defs_to_send = []
     renames_to_send = []
@@ -1665,13 +1662,7 @@ def check_updates():
             current_count
         )
 
-        deletes_to_send_scan, _ = (
-            scan_scene()
-        )
-
-    else:
-
-        deletes_to_send_scan = 0
+        scan_scene()
 
     # Periodic scan to catch edge cases
     # (object added then removed between frames)
@@ -1759,11 +1750,7 @@ def check_updates():
             _last_collection_state.pop(guid, None)  # Phase 6F: cleanup collection state
             _last_camera_signature.pop(guid, None)  # Phase 10A.2
 
-            deletes_to_send.append(
-                serialize_delete_v3(guid_obj)
-            )
-
-            # Phase 6E: also emit OBJECT_DELETE via MsgType
+            # Phase 6E: emit OBJECT_DELETE via MsgType
             delete_msgs_to_send.append(
                 (MsgType.OBJECT_DELETE, build_object_delete(guid_obj))
             )
