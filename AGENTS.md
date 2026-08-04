@@ -74,8 +74,12 @@ Phase 1.5 capabilities:
   CAMERASETACTIVE 0x52 only; FActiveCameraPayload RETAINED — live semantic storage via
   OnCameraSetActive → HandleActiveCamera (retain-storage, not remove-packet);
   CAP_SUPPORTS_ACTIVE_CAMERA_SYNC 0x40 kept — real wire capability)
-- Next: one capability per packet type: C5 — 0x0E PT_Delete_V5 (largest, needs dedicated
-  investigation), then WAIT group (0x05/0x06/0x08/0x1B)
+- 0x0E PT_Delete_V5 DECOMMISSIONED (COMPLETE — C5; ADR-80; runtime N/A — semantic
+  OBJECT_DELETE 0x22 only; serialize_delete()/_delete_sequences REMOVED (proven zero
+  callers + serializer-private state); FDeleteSequenceTracker/GDeleteSequences kept —
+  live semantic storage via OnObjectDelete → HandleDelete; world-replay 0x0E tag
+  cpp:11945 + Replay.inl kept — UE-internal replay domain)
+- Next: one capability per packet type: WAIT group (0x05/0x06/0x08/0x1B)
 - Backlog — Legacy Test & Documentation Hygiene: stale pre-MIG-005 tests
   `tests/phase10a32_*`, `tests/phase10a33_*`, `tests/phase10a34_*` (assert
   `serialize_fbx_import_request` / `hasattr(net, "PT_FBXImportRequest")`,
@@ -90,7 +94,13 @@ Phase 1.5 capabilities:
   `tests/phase7e_stage10b_pack_ue_fguid.py`, `tests/phase7g_stage2_reserved_packet_guard.py`,
   `tests/e2e9_camera_sceneoutliner_safe_lifecycle.py`; stale diagnostic tools
   `tools/uelivesync_7g_camera_def_client.py` + `uelivesync_7g_camera_transform_client.py`
-  (inline `PT_ACTIVE_CAMERA = 0x15`, emit legacy packet).
+  (inline `PT_ACTIVE_CAMERA = 0x15`, emit legacy packet). Also stale C5 residuals
+  (reference `serialize_delete` / `PT_Delete_V5` / `0x0E`):
+  `tests/current_state_roadmap_audit.py`, `tests/phase7e_stage10a5a_reserved_packet_type_guard.py`,
+  `tests/phase6b_runtime_audit.py`, `tests/phase10j_material_metadata_lifecycle.py`,
+  `tests/phase6b_failure_injection.py`, `tests/phase6h_semantic_consistency.py`,
+  `tests/phase7c_mesh_protocol_extraction.py`, `tests/phase7e_stage3_sequencer_op_wire.py`,
+  `tests/phase7b_material_wire_handler.py`, `tests/phase7a_hygiene_validation.py`.
 
 Phase 1.5 Acceptance criterion (per-capability, replaces "grep = 0 outside Docs/.recovery"):
   No production references remain. Allowed residual references:

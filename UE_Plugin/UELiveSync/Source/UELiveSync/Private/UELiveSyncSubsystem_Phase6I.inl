@@ -285,9 +285,6 @@ TrackPerDomainPacket(uint8 PacketType)
     case 0x01: // PT_Transform
         Phase6IPerSecondTransforms++;
         break;
-    case 0x0E: // PT_Delete_V5
-        Phase6IPerSecondDeletes++;
-        break;
     case 0x0F: // PT_Collection
         Phase6IPerSecondCollections++;
         break;

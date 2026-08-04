@@ -212,10 +212,6 @@ enum EPacketType : uint8
     PT_BeginSnapshot = 0x09,
     PT_EndSnapshot   = 0x0A,
 
-    // Phase 6E: Lifecycle/delete replication (identity-destruction event)
-    // See Docs/Architecture/29-phase6E-lifecycle-scope-lock.md
-    PT_Delete_V5      = 0x0E,  // V5+ delete with sequence + tombstone semantics
-
     // Phase 6F: Collection/group replication (metadata-only grouping layer)
     // See Docs/Architecture/38-phase6F-collection-scope-lock.md
     PT_Collection     = 0x0F,  // Collection membership events (metadata, NOT scene graph)
@@ -1050,7 +1046,7 @@ struct FLiveSyncStats
     std::atomic<int32> HierarchyDeferredResolved{0};   // Deferred entries resolved (parent found)
 
     // --- Lifecycle/delete diagnostics (Phase 6E, written by game thread) ---
-    std::atomic<int32> DeletePackets{0};               // Total PT_Delete_V5 packets received
+    std::atomic<int32> DeletePackets{0};               // Total legacy PT_Delete_V5 packets received
     std::atomic<int32> DeleteProcessed{0};             // Delete events accepted and applied (live)
     std::atomic<int32> DeleteReplayApplied{0};         // Delete events applied from snapshot replay
     std::atomic<int32> DeleteReplaySkipped{0};         // Delete events skipped during replay
@@ -1615,7 +1611,7 @@ struct FHierarchySequenceTracker
 
 
 // =========================================================
-// DELETE SEQUENCE TRACKER (Phase 6E, PT_Delete_V5 = 0x0E)
+// DELETE SEQUENCE TRACKER (Phase 6E, semantic OBJECT_DELETE)
 // =========================================================
 // Tracks the last-applied delete sequence number per GUID
 // for stale/duplicate replay rejection.
@@ -1791,7 +1787,7 @@ enum class EWorldReplayDomain : uint8
 {
     Unknown      = 0,
     Collection   = 1,  // PT_Collection (collection membership/identity)
-    Lifecycle    = 2,  // PT_Delete_V5
+    Lifecycle    = 2,  // OBJECT_DELETE (semantic replay)
     Rename       = 3,  // OBJECT_RENAME (semantic replay)
     Transform    = 4,  // PT_Transform (state-sampled, not raw-stream)
 };
@@ -2128,13 +2124,13 @@ static_assert(
     "V3 delete must be exactly 16 bytes");
 
 // =========================================================
-// V5+ DELETE (PT_Delete_V5) OBJECT LAYOUT
+// OBJECT_DELETE (0x22) BODY LAYOUT (28 bytes)
 // 16 GUID (4 × uint32)
 //  4 SEQUENCE NUMBER (uint32 LE, monotonic per-GUID)
 //  8 TIMESTAMP (double LE)
 // =========================================================
 //
-// Wire format (fixed 28 bytes per object):
+// Semantic body layout (fixed 28 bytes per object):
 //   offset  size  field
 //   0       16    Target GUID (4 × uint32 LE)
 //   16       4    sequence_number (uint32 LE, monotonic per-GUID)

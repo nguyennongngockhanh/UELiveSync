@@ -360,7 +360,6 @@ PRIMITIVE_CAMERA   = 0x05
 PT_BeginSnapshot = 0x09
 PT_EndSnapshot = 0x0A
 PT_AssetDef = 0x08
-PT_Delete_V5 = 0x0E  # Phase 6E: lifecycle/delete (V5+, 28-byte fixed payload)
 PT_Collection = 0x0F  # Phase 6F: collection/group replication (metadata-only)
 PT_Material = 0x05   # Phase 7B: material slot identity
 PT_Mesh = 0x06       # Phase 7C: mesh geometry chunk
@@ -2688,38 +2687,6 @@ def serialize_object_v3(guid_obj, transform, timestamp, parent_guid_obj=None, pr
     return payload
 
 
-# Phase 6E: Per-GUID delete sequence tracker (monotonic, replay dedup)
-_delete_sequences = {}
-
-def serialize_delete(guid_obj):
-    """28 bytes per object: GUID(16) + sequence(4) + timestamp(8).
-
-    PT_Delete_V5 (0x0E) fixed-size wire format.
-    First identity-destruction semantic lane.
-    """
-    payload = bytearray()
-
-    # GUID decomposition (4 x uint32 LE)
-    d_a = guid_obj.time_low
-    d_b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
-    d_c = (guid_obj.clock_seq_hi_variant << 24
-           | guid_obj.clock_seq_low << 16
-           | (guid_obj.node >> 32) & 0xFFFF)
-    d_d = guid_obj.node & 0xFFFFFFFF
-    payload.extend(struct.pack("<IIII", d_a, d_b, d_c, d_d))
-
-    # Monotonic sequence per GUID (replay dedup)
-    guid_key = str(guid_obj)
-    seq = _delete_sequences.get(guid_key, 0) + 1
-    _delete_sequences[guid_key] = seq
-    payload.extend(struct.pack("<I", seq))
-
-    # Timestamp (double, seconds)
-    payload.extend(struct.pack("<d", time.time()))
-
-    return payload
-
-
 # =========================================================
 # GUID PACKING: UE FGuid compatible (4 × uint32 LE)
 # =========================================================
@@ -3402,12 +3369,6 @@ class LiveSyncClient:
         self.sock = None
         self.connected = False
         self._status_detail = "Disconnected"
-
-        # Phase 6E: reset delete sequence tracker on disconnect
-        global _delete_sequences
-        if _delete_sequences:
-            _delete_sequences.clear()
-            print("[DELETE] Sequence tracker cleared on disconnect")
 
         # Phase 7C: reset playback sequence on disconnect
         global _playback_sequence, _last_playback_state
