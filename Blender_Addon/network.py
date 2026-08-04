@@ -360,7 +360,6 @@ PRIMITIVE_CAMERA   = 0x05
 PT_BeginSnapshot = 0x09
 PT_EndSnapshot = 0x0A
 PT_AssetDef = 0x08
-PT_Rename = 0x0C
 PT_Hierarchy = 0x0D
 PT_Delete_V5 = 0x0E  # Phase 6E: lifecycle/delete (V5+, 28-byte fixed payload)
 PT_Collection = 0x0F  # Phase 6F: collection/group replication (metadata-only)
@@ -2714,55 +2713,6 @@ def serialize_object_v3(guid_obj, transform, timestamp, parent_guid_obj=None, pr
 
 
 # =========================================================
-# SERIALIZE RENAME (Phase 6 — Semantic Event)
-# =========================================================
-# Wire format:
-#   GUID (16 bytes) + old_name_length (2) + old_name (N)
-#   + new_name_length (2) + new_name (M) + sequence (4) + timestamp (8)
-#
-# This is a semantic editor event, NOT a state stream packet.
-# See Docs/Architecture/19-phase6-vertical-slice-rename.md §4
-# =========================================================
-
-_rename_sequences = {}
-
-def serialize_rename(guid_obj, old_name, new_name):
-
-    payload = bytearray()
-
-    # GUID
-    d_a = guid_obj.time_low
-    d_b = (guid_obj.time_mid << 16) | guid_obj.time_hi_version
-    d_c = (guid_obj.clock_seq_hi_variant << 24
-           | guid_obj.clock_seq_low << 16
-           | (guid_obj.node >> 32) & 0xFFFF)
-    d_d = guid_obj.node & 0xFFFFFFFF
-
-    payload.extend(struct.pack("<IIII", d_a, d_b, d_c, d_d))
-
-    # Old name
-    old_bytes = old_name.encode("utf-8")
-    payload.extend(struct.pack("<H", len(old_bytes)))
-    payload.extend(old_bytes)
-
-    # New name
-    new_bytes = new_name.encode("utf-8")
-    payload.extend(struct.pack("<H", len(new_bytes)))
-    payload.extend(new_bytes)
-
-    # Monotonic sequence per GUID (replay dedup)
-    guid_key = str(guid_obj)
-    seq = _rename_sequences.get(guid_key, 0) + 1
-    _rename_sequences[guid_key] = seq
-    payload.extend(struct.pack("<I", seq))
-
-    # Timestamp
-    payload.extend(struct.pack("<d", time.time()))
-
-    return payload
-
-
-# =========================================================
 # HIERARCHY SERIALIZATION (Phase 6D, PT_Hierarchy = 0x0D)
 # =========================================================
 # Fixed-size wire format per object (44 bytes):
@@ -3530,12 +3480,6 @@ class LiveSyncClient:
         self.sock = None
         self.connected = False
         self._status_detail = "Disconnected"
-
-        # Phase 6: reset rename sequence tracker on disconnect
-        global _rename_sequences
-        if _rename_sequences:
-            _rename_sequences.clear()
-            print("[RENAME] Sequence tracker cleared on disconnect")
 
         # Phase 6D: reset hierarchy sequence tracker on disconnect
         global _hierarchy_sequences

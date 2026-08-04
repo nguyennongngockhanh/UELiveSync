@@ -214,7 +214,6 @@ enum EPacketType : uint8
 
     // Phase 6: Semantic editor-event replication
     // See Docs/Architecture/19-phase6-vertical-slice-rename.md
-    PT_Rename        = 0x0C,  // Semantic rename event (discrete, NOT state stream)
 
     // Phase 6D: Hierarchy replication (semantic attachment event)
     // See Docs/Architecture/24-phase6D-hierarchy-scope-lock.md
@@ -1527,42 +1526,6 @@ struct FLiveSyncPacket
 
 
 // =========================================================
-// RENAME PACKET (Phase 6, PT_Rename = 0x0C)
-// =========================================================
-// Discrete semantic editor-event payload.
-// NOT a state-stream packet — rename is a lifecycle-sensitive,
-// ordering-sensitive, provenance-carrying mutation.
-//
-// Wire format (variable length):
-//   offset  size  field
-//   0       16    GUID (4 × uint32 LE)
-//   16      2     old_name_length (uint16 LE)
-//   18      N     old_name (UTF-8)
-//   18+N    2     new_name_length (uint16 LE)
-//   20+N    M     new_name (UTF-8)
-//   20+N+M  4     sequence_number (uint32 LE, monotonic per-GUID)
-//   24+N+M  8     timestamp (double LE)
-//
-// Provenance (EChangeOrigin) is in-memory only — NOT on the wire.
-// See Docs/Architecture/19-phase6-vertical-slice-rename.md §5
-//
-// Max total payload: 16 + 2 + 256 + 2 + 256 + 4 + 8 = 544 bytes
-// =========================================================
-
-struct FLiveSyncRenamePacket
-{
-    FGuid    Guid;
-    FString  OldName;
-    FString  NewName;
-    uint32   SequenceNumber = 0;   // Monotonic per-GUID (replay dedup)
-    double   Timestamp      = 0.0;
-
-    // In-memory provenance (not serialized)
-    EChangeOrigin Origin = EChangeOrigin::Unspecified;
-};
-
-
-// =========================================================
 // RENAME SEQUENCE TRACKER (Phase 6)
 // =========================================================
 // Tracks the last-applied rename sequence number per GUID
@@ -1862,7 +1825,7 @@ enum class EWorldReplayDomain : uint8
     Unknown      = 0,
     Collection   = 1,  // PT_Collection (collection membership/identity)
     Lifecycle    = 2,  // PT_Delete_V5
-    Rename       = 3,  // PT_Rename
+    Rename       = 3,  // OBJECT_RENAME (semantic replay)
     Transform    = 4,  // PT_Transform (state-sampled, not raw-stream)
 };
 

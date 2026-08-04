@@ -64,9 +64,12 @@ Phase 1.5 capabilities:
 - 0x02 PT_Reserved_02 DECOMMISSIONED (COMPLETE — ADR-75; runtime N/A — no wire presence)
 - 0x0B PT_Visibility DECOMMISSIONED (COMPLETE — C1; ADR-76; runtime N/A — semantic
   OBJECT_VISIBILITY 0x25 only; FVisibilitySequenceTracker kept — live via HandleVisibility)
-- Next: one capability per packet type: C2 — 0x0C PT_Rename,
-  C3 — 0x0D PT_Hierarchy, C4 — 0x15 PT_ActiveCamera, C5 — 0x0E PT_Delete_V5 (largest,
-  needs dedicated investigation), then WAIT group (0x05/0x06/0x08/0x1B)
+- 0x0C PT_Rename DECOMMISSIONED (COMPLETE — C2; ADR-77; runtime N/A — semantic
+  OBJECT_RENAME 0x23 only; FRenameSequenceTracker kept — live via HandleRename;
+  EWorldReplayDomain::Rename + cpp:9935 0x0C marker kept — world-replay internal)
+- Next: one capability per packet type: C3 — 0x0D PT_Hierarchy, C4 — 0x15 PT_ActiveCamera,
+  C5 — 0x0E PT_Delete_V5 (largest, needs dedicated investigation), then WAIT group
+  (0x05/0x06/0x08/0x1B)
 - Backlog — Legacy Test & Documentation Hygiene: stale pre-MIG-005 tests
   `tests/phase10a32_*`, `tests/phase10a33_*`, `tests/phase10a34_*` (assert
   `serialize_fbx_import_request` / `hasattr(net, "PT_FBXImportRequest")`,

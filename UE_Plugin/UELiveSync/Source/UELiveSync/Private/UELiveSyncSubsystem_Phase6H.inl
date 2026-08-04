@@ -112,15 +112,6 @@ ValidatePacketOrdering(const FLiveSyncPacket& Packet)
                         *Guid.ToString(EGuidFormats::Digits));
                 }
                 break;
-            case 0x0C: // PT_Rename
-                Stats.PacketRenameBeforeCreate.fetch_add(1, std::memory_order_relaxed);
-                if (bPhase6HVerbose)
-                {
-                    UE_LOG(LogLiveSync, Warning,
-                        TEXT("[PHASE6H][ORDER] Rename before create: GUID=%s"),
-                        *Guid.ToString(EGuidFormats::Digits));
-                }
-                break;
             case 0x0F: // PT_Collection
                 Stats.PacketCollectionBeforeCreate.fetch_add(1, std::memory_order_relaxed);
                 break;
