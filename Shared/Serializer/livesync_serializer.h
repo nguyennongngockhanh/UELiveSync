@@ -35,6 +35,7 @@ enum class MsgType : uint8_t {
     OBJECT_RENAME   = 0x23,
     OBJECT_REPARENT = 0x24,
     OBJECT_VISIBILITY = 0x25,
+    OBJECT_ASSET_IDENTITY = 0x26,
     MESH_DATA       = 0x30,
     MESH_DELTA      = 0x31,
     MESH_START      = 0x32,

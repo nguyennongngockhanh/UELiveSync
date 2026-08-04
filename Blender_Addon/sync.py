@@ -17,7 +17,7 @@ from uuid import UUID
 from .msg_transport import get_transport, MsgType
 from .material_protocol import build_material_create, build_material_update, build_material_assign, clear_material_sequences, _next_material_create_sequence, _next_material_update_sequence, _next_material_assign_sequence
 from .fbx_protocol import clear_fbx_sequences
-from .object_protocol import build_object_create, build_object_update, build_object_reparent, build_object_visibility, build_object_rename, build_object_delete, clear_all_sequences, clear_delete_sequences, next_create_sequence, next_update_sequence, build_camera_create, build_camera_update, build_camera_setactive, clear_camera_sequences, _next_camera_create_sequence, _next_camera_update_sequence
+from .object_protocol import build_object_create, build_object_update, build_object_reparent, build_object_visibility, build_object_rename, build_object_delete, build_object_asset_identity, clear_all_sequences, clear_delete_sequences, next_create_sequence, next_update_sequence, build_camera_create, build_camera_update, build_camera_setactive, clear_camera_sequences, _next_camera_create_sequence, _next_camera_update_sequence
 
 try:
     from . import network as _network_mod
@@ -1639,6 +1639,7 @@ def check_updates():
     mesh_payloads_to_send = []
     object_create_msgs_to_send = []
     object_reparent_msgs_to_send = []
+    asset_identity_msgs_to_send = []
 
     # =====================================================
     # MATSTALL: track GUIDs that had material changes this tick
@@ -1950,6 +1951,19 @@ def check_updates():
                             mesh_high,
                             mesh_prim
                         )
+                    )
+                    # MIG-007: semantic OBJECT_ASSET_IDENTITY dual-emit.
+                    # Mirrors every condition that emits PT_AssetDef
+                    # (first send / mesh change → full snapshot, late
+                    # join, recovery all covered by is_first_send).
+                    asset_identity_msgs_to_send.append(
+                        (MsgType.OBJECT_ASSET_IDENTITY,
+                         build_object_asset_identity(
+                             guid_obj,
+                             mesh_low,
+                             mesh_high,
+                             mesh_prim
+                         ))
                     )
 
                 _last_mesh_identity[guid] = (
@@ -2754,6 +2768,25 @@ def check_updates():
             version=LIVE_SYNC_VERSION_V5
         )
         _burst_packet_count += 1
+
+    # =====================================================
+    # SEND ASSET IDENTITY (MIG-007 — MsgType OBJECT_ASSET_IDENTITY)
+    # Semantic companion to PT_AssetDef: Bridge → OnObjectAssetIdentity
+    # → HandleAssetDef. Same emit conditions as PT_AssetDef.
+    # =====================================================
+
+    if asset_identity_msgs_to_send:
+        transport = get_transport()
+        if transport is not None:
+            sent_count = 0
+            for msg_type, body in asset_identity_msgs_to_send:
+                if transport.send_msg(msg_type, body):
+                    sent_count += 1
+            if _verbose_logging:
+                print(f"[OBJECT][MSGTYPE] Sent {sent_count} OBJECT_ASSET_IDENTITY via MsgType")
+            _append_blender_debug_log(
+                f"[OBJ][MSGTYPE] OBJECT_ASSET_IDENTITY sent={sent_count}"
+            )
 
     # =====================================================
     # SEND RENAME (Phase 6 — MsgType OBJECT_RENAME)

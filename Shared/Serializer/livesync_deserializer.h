@@ -235,6 +235,15 @@ inline void deserialize_body_object_visibility(UnpackState& s, DeserializedMessa
     msg.body["visible"] = s.unpack_uint8();
 }
 
+inline void deserialize_body_object_asset_identity(UnpackState& s, DeserializedMessage& msg) {
+    msg.body["persistent_id"] = s.unpack_uuid();
+    msg.body["identity_low"] = s.unpack_uint64();
+    msg.body["identity_high"] = s.unpack_uint64();
+    msg.body["primitive_fallback"] = s.unpack_uint8();
+    msg.body["sequence_number"] = s.unpack_uint32();
+    msg.body["timestamp"] = s.unpack_float64();
+}
+
 inline void deserialize_body_sync_ack(UnpackState& s, DeserializedMessage& msg) {
     msg.body["acked_seq"] = s.unpack_uint32();
 }
@@ -323,6 +332,9 @@ inline DeserializedMessage DeserializeFrame(const uint8_t* data, size_t size) {
             break;
         case MsgType::OBJECT_VISIBILITY:
             deserialize_body_object_visibility(state, msg);
+            break;
+        case MsgType::OBJECT_ASSET_IDENTITY:
+            deserialize_body_object_asset_identity(state, msg);
             break;
         case MsgType::MESH_START:
             msg.body["persistent_id"] = state.unpack_uuid();

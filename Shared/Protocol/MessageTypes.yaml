@@ -328,6 +328,19 @@ messages:
       - { name: visible,       type: uint8 }
     description: "Show/hide."
 
+  OBJECT_ASSET_IDENTITY:
+    code: 0x26
+    direction: B→U
+    session_required: true
+    body:
+      - { name: persistent_id,      type: uuid }
+      - { name: identity_low,       type: uint64 }
+      - { name: identity_high,      type: uint64 }
+      - { name: primitive_fallback, type: uint8 }
+      - { name: sequence_number,    type: uint32 }
+      - { name: timestamp,          type: float64 }
+    description: "Mesh asset identity (xxHash64 of mesh name + primitive fallback). Replaces PT_AssetDef in semantic protocol. sequence_number enables stale-rejection; timestamp for ordering."
+
   # --- Mesh ---
   MESH_DATA:
     code: 0x30

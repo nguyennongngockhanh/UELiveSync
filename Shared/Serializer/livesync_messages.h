@@ -164,6 +164,23 @@ inline std::vector<uint8_t> serialize_body_object_visibility(
     return body;
 }
 
+inline std::vector<uint8_t> serialize_body_object_asset_identity(
+    const std::string& persistent_id,
+    uint64_t identity_low, uint64_t identity_high,
+    uint8_t primitive_fallback,
+    uint32_t sequence_number, double timestamp)
+{
+    std::vector<uint8_t> body;
+    auto pid = parse_uuid(persistent_id);
+    pack_uuid(body, pid.data());
+    pack_uint64(body, identity_low);
+    pack_uint64(body, identity_high);
+    pack_uint8(body, primitive_fallback);
+    pack_uint32(body, sequence_number);
+    pack_float64(body, timestamp);
+    return body;
+}
+
 inline std::vector<uint8_t> serialize_body_camera_create(
     const std::string& camera_id, const std::string& name,
     const std::string& parent_id,

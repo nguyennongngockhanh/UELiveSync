@@ -251,6 +251,9 @@ FHierarchySequenceTracker GHierarchySequences;
 // --- Delete sequence tracker (Phase 6E, single subsystem-level instance) ---
 FDeleteSequenceTracker GDeleteSequences;
 
+// --- Asset identity sequence tracker (MIG-007, semantic OBJECT_ASSET_IDENTITY) ---
+FAssetIdentitySequenceTracker GAssetIdentitySequences;
+
 // --- Collection sequence tracker (Phase 6F, single subsystem-level instance) ---
 FCollectionSequenceTracker GCollectionSequences;
 
@@ -2746,6 +2749,10 @@ StopNetworkThread()
     GDeleteTombstoneMap.Empty();
     GDeleteTombstoneOrder.Empty();
     DeferredDeleteQueue.Empty();
+
+    // MIG-007: clear asset identity sequence tracker — semantic
+    // OBJECT_ASSET_IDENTITY replay must start from a clean tracker.
+    GAssetIdentitySequences.Clear();
 
     // Phase 6F: clear collection sequence tracker — collections
     // Replay buffer: MUST NOT survive reconnect. Replay rebuilds from snapshot.
@@ -7675,6 +7682,48 @@ void UUELiveSyncSubsystem::OnObjectVisibility(
     // TCP guarantees ordering. bSkipSequenceCheck=true.
     HandleVisibility(Guid, bHidden, 0, 0.0,
                      EChangeOrigin::RemoteReplicated, /*bSkipSequenceCheck=*/true);
+}
+
+// =========================================================
+// ON OBJECT ASSET IDENTITY (IGameplaySink override — MIG-007)
+// =========================================================
+// Semantic replacement for legacy PT_AssetDef. Stale-rejects via
+// the per-GUID GAssetIdentitySequences tracker, then routes into
+// the existing HandleAssetDef implementation (single handler,
+// no intermediate layer). HandleAssetDef updates AssetMetadata +
+// PendingAssetQueue; ResolvePendingAssets → AssetPathCache →
+// AssignStaticMesh on the next tick.
+// =========================================================
+
+void UUELiveSyncSubsystem::OnObjectAssetIdentity(
+    const LiveSyncBridge::ObjectAssetIdentityView& View)
+{
+    CHECK_GAME_THREAD();
+
+    FGuid Guid;
+    FMemory::Memcpy(&Guid, View.PersistentId.data(), 16);
+
+    // =====================================================
+    // (STAGE 3) REJECT: Stale or duplicate sequence number
+    // =====================================================
+
+    if (GAssetIdentitySequences.IsStaleOrDuplicate(Guid, View.SequenceNumber))
+    {
+        UE_LOG(LogLiveSync, Verbose,
+            TEXT("[ASSETDEF][STALE] Rejected — stale/duplicate sequence "
+                 "GUID=%s Seq=%u"),
+            *Guid.ToString(EGuidFormats::Digits),
+            View.SequenceNumber);
+        return;
+    }
+
+    HandleAssetDef(
+        Guid,
+        View.IdentityHigh,
+        View.IdentityLow,
+        View.PrimitiveFallback);
+
+    GAssetIdentitySequences.Update(Guid, View.SequenceNumber);
 }
 
 // =========================================================

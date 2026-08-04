@@ -1659,6 +1659,47 @@ struct FDeleteSequenceTracker
 
 
 // =========================================================
+// ASSET IDENTITY SEQUENCE TRACKER (MIG-007, OBJECT_ASSET_IDENTITY = 0x26)
+// =========================================================
+// Tracks the last-applied sequence number per GUID for the
+// semantic OBJECT_ASSET_IDENTITY channel. Mirrors FDeleteSequenceTracker.
+//
+// Per-GUID monotonic sequence tracking. Bounded at 2048 entries,
+// evicts oldest on overflow. Cleared on StopNetworkThread and
+// ConsoleReset.
+// =========================================================
+
+struct FAssetIdentitySequenceTracker
+{
+    TMap<FGuid, uint32> LastSequence;
+    static constexpr uint32 MAX_TRACKED_GUIDS = 2048;
+
+    bool IsStaleOrDuplicate(const FGuid& Guid, uint32 IncomingSeq)
+    {
+        if (const uint32* LastSeq = LastSequence.Find(Guid))
+        {
+            return IncomingSeq <= *LastSeq;
+        }
+        return false;
+    }
+
+    void Update(const FGuid& Guid, uint32 AppliedSeq)
+    {
+        if (LastSequence.Num() >= MAX_TRACKED_GUIDS)
+        {
+            LastSequence.Remove(LastSequence.CreateIterator().Key());
+        }
+        LastSequence.Add(Guid, AppliedSeq);
+    }
+
+    void Clear()
+    {
+        LastSequence.Empty();
+    }
+};
+
+
+// =========================================================
 // COLLECTION SEQUENCE TRACKER (Phase 6F, PT_Collection = 0x0F)
 // =========================================================
 // Tracks the last-applied collection sequence number per GUID

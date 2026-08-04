@@ -212,6 +212,22 @@
   },
   {
     "body": {
+      "identity_high": 11072869122414935808,
+      "identity_low": 1234605616436508552,
+      "persistent_id": "00112233445566778899aabbccddeeff",
+      "primitive_fallback": 3,
+      "sequence_number": 7
+    },
+    "cpp_size": 63,
+    "flags": 0,
+    "msg_type": 38,
+    "name": "OBJECT_ASSET_IDENTITY",
+    "original_size": 63,
+    "sequence_id": 10,
+    "session_id": 16045690984503098046
+  },
+  {
+    "body": {
       "format_flags": 1,
       "persistent_id": "00112233445566778899aabbccddeeff",
       "total_chunks": 3

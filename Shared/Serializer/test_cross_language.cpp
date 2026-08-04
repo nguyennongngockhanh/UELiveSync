@@ -238,6 +238,15 @@ static std::vector<uint8_t> serialize_from_manifest(const json& vec) {
         case MsgType::OBJECT_VISIBILITY:
             body = serialize_body_object_visibility(fields["persistent_id"], fields["visible"]);
             break;
+        case MsgType::OBJECT_ASSET_IDENTITY:
+            body = serialize_body_object_asset_identity(
+                fields["persistent_id"],
+                fields["identity_low"].get<uint64_t>(),
+                fields["identity_high"].get<uint64_t>(),
+                fields["primitive_fallback"].get<uint8_t>(),
+                fields["sequence_number"].get<uint32_t>(),
+                fields["timestamp"].get<double>());
+            break;
         case MsgType::MESH_START:
             body = serialize_body_mesh_start(fields["persistent_id"],
                 fields["total_chunks"], fields["format_flags"]);

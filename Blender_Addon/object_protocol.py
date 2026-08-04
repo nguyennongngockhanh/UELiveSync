@@ -15,7 +15,7 @@ import time
 from typing import Optional, Tuple
 
 from .msg_transport import (
-    MsgType, pack_u8, pack_u32, pack_f64, pack_utf8, pack_uuid,
+    MsgType, pack_u8, pack_u32, pack_u64, pack_f64, pack_utf8, pack_uuid,
 )
 from .protocol_guid import uuid_to_fguid_bytes
 
@@ -125,6 +125,7 @@ def build_object_update(
 _delete_sequences = {}
 _update_sequences = {}
 _create_sequences = {}
+_asset_identity_sequences = {}
 
 
 def clear_all_sequences():
@@ -132,11 +133,17 @@ def clear_all_sequences():
     _delete_sequences.clear()
     _update_sequences.clear()
     _create_sequences.clear()
+    _asset_identity_sequences.clear()
 
 
 def clear_delete_sequences():
     """Reset per-GUID delete sequence counters (legacy alias)."""
     _delete_sequences.clear()
+
+
+def clear_asset_identity_sequences():
+    """Reset per-GUID asset identity sequence counters."""
+    _asset_identity_sequences.clear()
 
 
 def next_create_sequence(persistent_id) -> int:
@@ -174,6 +181,46 @@ def build_object_delete(
     guid_key = str(persistent_id)
     seq = _delete_sequences.get(guid_key, 0) + 1
     _delete_sequences[guid_key] = seq
+    body.extend(pack_u32(seq))
+
+    # Timestamp (float64, seconds since epoch)
+    body.extend(pack_f64(time.time()))
+
+    return bytes(body)
+
+
+def build_object_asset_identity(
+    persistent_id,
+    identity_low: int,
+    identity_high: int,
+    primitive_fallback: int,
+) -> bytes:
+    """OBJECT_ASSET_IDENTITY body bytes.
+
+    Wire format (matches C++ deserialize_body_object_asset_identity):
+      persistent_id:       UUID (16 bytes, FGuid LE)
+      identity_low:        uint64 LE — mesh identity hash low
+      identity_high:       uint64 LE — mesh identity hash high
+      primitive_fallback:  uint8
+      sequence_number:     uint32 LE — monotonic per-GUID counter
+      timestamp:           float64 LE — seconds since epoch
+
+    Total body: 45 bytes.
+    """
+    body = bytearray()
+    body.extend(uuid_to_fguid_bytes(persistent_id))
+
+    # Identity hash (2 x uint64 LE)
+    body.extend(pack_u64(identity_low & 0xFFFFFFFFFFFFFFFF))
+    body.extend(pack_u64(identity_high & 0xFFFFFFFFFFFFFFFF))
+
+    # Primitive fallback (uint8)
+    body.extend(pack_u8(primitive_fallback))
+
+    # Monotonic sequence per GUID (replay dedup / stale rejection)
+    guid_key = str(persistent_id)
+    seq = _asset_identity_sequences.get(guid_key, 0) + 1
+    _asset_identity_sequences[guid_key] = seq
     body.extend(pack_u32(seq))
 
     # Timestamp (float64, seconds since epoch)

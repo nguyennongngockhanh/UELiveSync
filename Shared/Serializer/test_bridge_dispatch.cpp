@@ -112,6 +112,10 @@ struct FakeGameplaySink : IGameplaySink
     int ObjectVisibilityCalls = 0;
     ObjectVisibilityView LastObjectVisibility{};
 
+    // OBJECT_ASSET_IDENTITY
+    int ObjectAssetIdentityCalls = 0;
+    ObjectAssetIdentityView LastObjectAssetIdentity{};
+
     // CAMERA_SETACTIVE
     int CameraSetActiveCalls = 0;
     CameraSetActiveView LastCameraSetActive{};
@@ -194,6 +198,12 @@ struct FakeGameplaySink : IGameplaySink
     {
         ++ObjectVisibilityCalls;
         LastObjectVisibility = View;
+    }
+
+    void OnObjectAssetIdentity(const ObjectAssetIdentityView& View) override
+    {
+        ++ObjectAssetIdentityCalls;
+        LastObjectAssetIdentity = View;
     }
 
     void OnCameraCreate(const CameraCreateView& View) override
@@ -435,6 +445,22 @@ int main(int argc, char** argv)
             check_result("OBJECT_REPARENT", r,
                 EDispatchResult::Handled, 1, g_objectreparent_calls);
             check_no_violation("OBJECT_REPARENT (no violation)", r);
+        }
+    }
+
+    // ── Test 10.5: OBJECT_ASSET_IDENTITY -> Handled (MIG-007) ──
+    {
+        auto buf = read_file((dir + "OBJECT_ASSET_IDENTITY.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_ASSET_IDENTITY.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()),
+                DispatchContext{});
+            check_result("OBJECT_ASSET_IDENTITY", r,
+                EDispatchResult::Handled, 1, g_objectassetidentity_calls);
+            check_no_violation("OBJECT_ASSET_IDENTITY (no violation)", r);
         }
     }
 
@@ -845,6 +871,38 @@ int main(int argc, char** argv)
             {
                 printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
                     sink.ObjectVisibilityCalls);
+                ++failed;
+            }
+        }
+    }
+
+    // ── Test 28.5: FakeGameplaySink receives OBJECT_ASSET_IDENTITY (MIG-007) ──
+    {
+        FakeGameplaySink sink;
+        DispatchContext ctx;
+        ctx.Gameplay = &sink;
+
+        auto buf = read_file((dir + "OBJECT_ASSET_IDENTITY.bin").c_str());
+        if (buf.empty()) { printf("  SKIP  OBJECT_ASSET_IDENTITY.bin not found\n"); }
+        else
+        {
+            ResetAllCounters();
+            auto r = DispatchMsgTypePacket(buf.data(),
+                static_cast<int32>(buf.size()), ctx);
+            check_result("DI_OBJECT_ASSET_IDENTITY", r,
+                EDispatchResult::Handled, 1, g_objectassetidentity_calls);
+            if (sink.ObjectAssetIdentityCalls == 1 &&
+                sink.LastObjectAssetIdentity.IdentityLow == 0x1122334455667788ULL &&
+                sink.LastObjectAssetIdentity.IdentityHigh == 0x99AABBCCDDEEFF00ULL &&
+                sink.LastObjectAssetIdentity.PrimitiveFallback == 3)
+            {
+                printf("  PASS  FakeGameplaySink received OnObjectAssetIdentity\n");
+                ++passed;
+            }
+            else
+            {
+                printf("  FAIL  FakeGameplaySink calls=%d (expected 1)\n",
+                    sink.ObjectAssetIdentityCalls);
                 ++failed;
             }
         }

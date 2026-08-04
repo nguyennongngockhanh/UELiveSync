@@ -3,10 +3,10 @@
   "protocol_version": 1,
   "protocol_revision": 1,
   "generator_version": "1.0.0",
-  "git_commit": "c2f3cfca3c5e",
-  "protocol_sha256": "62a63b90ff8eaa34e07b44b51734c5d4bbc455fe1acfe2381c9225e885d7db51",
-  "generated_at": "2026-08-03T05:35:36.448635+00:00",
-  "vector_count": 32,
+  "git_commit": "0ca701797fe2",
+  "protocol_sha256": "1093916a9b1ef53eb234e568ae5f8522cdcbc7e116c1091706f96964f5c09bb6",
+  "generated_at": "2026-08-04T03:33:21.849064+00:00",
+  "vector_count": 33,
   "vectors": [
     {
       "name": "HELLO",
@@ -235,6 +235,24 @@
         "visible": 0
       },
       "size": 35
+    },
+    {
+      "name": "OBJECT_ASSET_IDENTITY",
+      "file": "OBJECT_ASSET_IDENTITY.bin",
+      "msg_type": 38,
+      "msg_type_name": "OBJECT_ASSET_IDENTITY",
+      "flags": 0,
+      "sequence_id": 10,
+      "session_id": 16045690984503098046,
+      "fields": {
+        "persistent_id": "00112233-4455-6677-8899-aabbccddeeff",
+        "identity_low": 1234605616436508552,
+        "identity_high": 11072869122414935808,
+        "primitive_fallback": 3,
+        "sequence_number": 7,
+        "timestamp": 1700000000.5
+      },
+      "size": 63
     },
     {
       "name": "MESH_START",

@@ -87,7 +87,10 @@ Phase 1.5 capabilities:
     not runtime-validated as full replacement (blocked on mesh pipeline)
   - 0x06 PT_Mesh — WAIT: MESH_* (0x30-34) defined in msg_transport but NOT wired in
     Blender; PT_Mesh is the only working mesh channel (future: FBX handoff)
-  - 0x08 PT_AssetDef — WAIT: no semantic replacement exists (no ASSET_* MsgType)
+  - 0x08 PT_AssetDef — MIG COMPLETE: OBJECT_ASSET_IDENTITY (0x26) semantic path added
+    (MIG-007, ADR-82, runtime PASS); dual-emission active (legacy 0x08 retained until
+    decommission ADR); `HandleAssetDef` is sole implementation (bridge converts view);
+    `_asset_identity_sequences` / `FAssetIdentitySequenceTracker` dedicated tracker
   - 0x1B PT_CameraDef — WAIT: CAMERA_CREATE/UPDATE PARTIAL (4 fields missing: clip
     planes, ortho); PT_CameraDef supplements the schema gap
   - Decommission criteria (all three, then capability cadence re-applies): MIG reaches
@@ -144,6 +147,9 @@ Completed Migrations:
 - MIG-004B: Material runtime integration (COMPLETE)
 - MIG-005: FBX import semantic migration (COMPLETE)
 - MIG-006: Object-GUID wire normalization to LE/FGuid across semantic protocol (COMPLETE) — fixes INV-2026-016; ADR-71
+- MIG-007: OBJECT_ASSET_IDENTITY semantic path for PT_AssetDef (0x08) — semantic 0x26 added,
+  dual-emission active, HandleAssetDef sole implementation, runtime PASS; legacy 0x08 retained
+  pending decommission ADR; ADR-82
 
 Key architectural pattern:
 - Semantic event pipeline: Blender detects → Serialize → Transport → Bridge → Gameplay → Presentation → Regression

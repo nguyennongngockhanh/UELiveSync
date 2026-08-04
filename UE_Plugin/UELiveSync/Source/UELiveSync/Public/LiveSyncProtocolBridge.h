@@ -174,6 +174,7 @@ inline const MessageTraits GetMessageTraits(livesync::MsgType Type)
         case livesync::MsgType::OBJECT_RENAME:
         case livesync::MsgType::OBJECT_REPARENT:
         case livesync::MsgType::OBJECT_VISIBILITY:
+        case livesync::MsgType::OBJECT_ASSET_IDENTITY:
         case livesync::MsgType::MESH_DATA:
         case livesync::MsgType::MESH_DELTA:
         case livesync::MsgType::MESH_START:
@@ -219,6 +220,7 @@ inline int g_objectupdate_calls = 0;
 inline int g_objectdelete_calls = 0;
 inline int g_objectrename_calls = 0;
 inline int g_objectvisibility_calls = 0;
+inline int g_objectassetidentity_calls = 0;
 inline int g_objectreparent_calls = 0;
 inline int g_materialcreate_calls = 0;
 inline int g_materialupdate_calls = 0;
@@ -244,6 +246,7 @@ inline void ResetAllCounters()
     g_objectdelete_calls = 0;
     g_objectrename_calls = 0;
     g_objectvisibility_calls = 0;
+    g_objectassetidentity_calls = 0;
     g_objectreparent_calls = 0;
     g_materialcreate_calls = 0;
     g_materialupdate_calls = 0;
@@ -567,6 +570,19 @@ inline ObjectVisibilityView BuildObjectVisibilityView(
     return v;
 }
 
+inline ObjectAssetIdentityView BuildObjectAssetIdentityView(
+    const livesync::DeserializedMessage& msg)
+{
+    ObjectAssetIdentityView v;
+    v.PersistentId = GetField<std::array<uint8_t, 16>>(msg, "persistent_id");
+    v.IdentityLow = GetField<uint64_t>(msg, "identity_low");
+    v.IdentityHigh = GetField<uint64_t>(msg, "identity_high");
+    v.PrimitiveFallback = GetField<uint8_t>(msg, "primitive_fallback");
+    v.SequenceNumber = GetField<uint32_t>(msg, "sequence_number");
+    v.Timestamp = GetField<double>(msg, "timestamp");
+    return v;
+}
+
 inline ObjectReparentView BuildObjectReparentView(
     const livesync::DeserializedMessage& msg)
 {
@@ -632,6 +648,20 @@ inline void LogObjectVisibility(const ObjectVisibilityView& v)
         id_str, static_cast<unsigned>(v.Visible));
 }
 
+inline void LogObjectAssetIdentity(const ObjectAssetIdentityView& v)
+{
+    char id_str[37];
+    FormatUuid(v.PersistentId, id_str, sizeof(id_str));
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[BRIDGE][OBJECT_ASSET_IDENTITY] id=%hs identity_low=%llu "
+             "identity_high=%llu primitive_fallback=%u seq=%u ts=%.3f"),
+        id_str,
+        static_cast<unsigned long long>(v.IdentityLow),
+        static_cast<unsigned long long>(v.IdentityHigh),
+        static_cast<unsigned>(v.PrimitiveFallback),
+        v.SequenceNumber, v.Timestamp);
+}
+
 inline void LogObjectReparent(const ObjectReparentView& v)
 {
     char id_str[37];
@@ -685,6 +715,14 @@ inline void DispatchObjectVisibility(
 {
     LogObjectVisibility(v);
     if (ctx.Gameplay) ctx.Gameplay->OnObjectVisibility(v);
+}
+
+inline void DispatchObjectAssetIdentity(
+    const ObjectAssetIdentityView& v,
+    const DispatchContext& ctx)
+{
+    LogObjectAssetIdentity(v);
+    if (ctx.Gameplay) ctx.Gameplay->OnObjectAssetIdentity(v);
 }
 
 inline void DispatchObjectReparent(
@@ -756,6 +794,18 @@ inline EDispatchResult ProcessObjectVisibility(
 #endif
     auto view = BuildObjectVisibilityView(msg);
     DispatchObjectVisibility(view, ctx);
+    return EDispatchResult::Handled;
+}
+
+inline EDispatchResult ProcessObjectAssetIdentity(
+    const livesync::DeserializedMessage& msg,
+    const DispatchContext& ctx)
+{
+#ifdef UELIVESYNC_BRIDGE_TESTING
+    g_objectassetidentity_calls++;
+#endif
+    auto view = BuildObjectAssetIdentityView(msg);
+    DispatchObjectAssetIdentity(view, ctx);
     return EDispatchResult::Handled;
 }
 
@@ -1549,6 +1599,9 @@ inline EDispatchResult DispatchMsgTypePacket(
 
         case livesync::MsgType::OBJECT_VISIBILITY:
             return ProcessObjectVisibility(msg, ctx);
+
+        case livesync::MsgType::OBJECT_ASSET_IDENTITY:
+            return ProcessObjectAssetIdentity(msg, ctx);
 
         case livesync::MsgType::OBJECT_REPARENT:
             return ProcessObjectReparent(msg, ctx);

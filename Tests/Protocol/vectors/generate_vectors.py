@@ -255,6 +255,22 @@ VECTORS = [
             "visible": 0,
         },
     },
+    {
+        "name": "OBJECT_ASSET_IDENTITY",
+        "file": "OBJECT_ASSET_IDENTITY.bin",
+        "msg_type": MsgType.OBJECT_ASSET_IDENTITY,
+        "flags": 0,
+        "sequence_id": 10,
+        "session_id": TEST_SESSION_ID,
+        "fields": {
+            "persistent_id": str(UUID_A),
+            "identity_low": 0x1122334455667788,
+            "identity_high": 0x99AABBCCDDEEFF00,
+            "primitive_fallback": 3,
+            "sequence_number": 7,
+            "timestamp": 1700000000.5,
+        },
+    },
 
     # ── Mesh messages ──
     {

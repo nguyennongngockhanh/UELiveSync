@@ -22,6 +22,7 @@ struct IGameplaySink
     virtual void OnObjectRename(const LiveSyncBridge::ObjectRenameView&) {}
     virtual void OnObjectVisibility(const LiveSyncBridge::ObjectVisibilityView&) {}
     virtual void OnObjectReparent(const LiveSyncBridge::ObjectReparentView&) {}
+    virtual void OnObjectAssetIdentity(const LiveSyncBridge::ObjectAssetIdentityView&) {}
 
     virtual void OnMaterialCreate(const LiveSyncBridge::MaterialCreateView&) {}
     virtual void OnMaterialUpdate(const LiveSyncBridge::MaterialUpdateView&) {}

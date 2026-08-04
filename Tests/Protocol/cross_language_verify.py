@@ -199,6 +199,7 @@ UUID_FIELDS = {
     "OBJECT_RENAME": ["persistent_id"],
     "OBJECT_REPARENT": ["persistent_id", "new_parent_id"],
     "OBJECT_VISIBILITY": ["persistent_id"],
+    "OBJECT_ASSET_IDENTITY": ["persistent_id"],
     "MESH_START": ["persistent_id"],
     "MESH_CHUNK": ["persistent_id"],
     "MESH_END": ["persistent_id"],

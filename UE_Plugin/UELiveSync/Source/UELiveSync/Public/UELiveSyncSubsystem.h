@@ -201,6 +201,9 @@ private:
     virtual void OnObjectVisibility(
         const LiveSyncBridge::ObjectVisibilityView& View) override;
 
+    virtual void OnObjectAssetIdentity(
+        const LiveSyncBridge::ObjectAssetIdentityView& View) override;
+
     virtual void OnCameraCreate(
         const LiveSyncBridge::CameraCreateView& View) override;
 

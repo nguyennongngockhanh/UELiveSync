@@ -141,6 +141,16 @@ struct ObjectVisibilityView
     uint8_t Visible;
 };
 
+struct ObjectAssetIdentityView
+{
+    std::array<uint8_t, 16> PersistentId;
+    uint64_t IdentityLow;
+    uint64_t IdentityHigh;
+    uint8_t PrimitiveFallback;
+    uint32_t SequenceNumber;
+    double Timestamp;
+};
+
 struct ObjectReparentView
 {
     std::array<uint8_t, 16> PersistentId;
