@@ -114,6 +114,7 @@
 | [64](64-editor-presentation-contract.md) | Editor Presentation Contract |
 | [67](67-mig-001-object-delete-semantic-migration.md) | MIG-001: Object Delete Semantic Migration |
 | [68](68-mig-002-object-create-update-semantic-migration.md) | MIG-002: Object Create/Update Semantic Migration |
+| [84](84-mig-009-fbx-handoff-hardening.md) | MIG-009: FBX Handoff Hardening (Design) |
 
 ## Current State & Roadmap
 
