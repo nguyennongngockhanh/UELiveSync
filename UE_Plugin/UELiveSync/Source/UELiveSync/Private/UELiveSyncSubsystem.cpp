@@ -611,8 +611,8 @@ static TAutoConsoleVariable<int32>
 static TAutoConsoleVariable<float>
     CVarLiveSyncHeartbeatTimeout(
         TEXT("UE.LiveSync.HeartbeatTimeout"),
-        15.0f,
-        TEXT("Seconds without heartbeat before disconnecting"),
+        30.0f,
+        TEXT("Seconds without heartbeat before disconnecting. Raised from 15s to 30s as INV-2026-019 hotfix: Blender's synchronous FBX export can block the main-loop heartbeat sender for ~13.5s (measured worst case); 15s timeout killed the connection mid-export and lost the first FBX_IMPORT_REQUEST. Real fix: Blender heartbeats from a transport thread (INV-2026-019 Step 2), which removes the starvation entirely."),
         ECVF_Default
     );
 

@@ -79,6 +79,17 @@ def set_verbose(enabled):
     _network_verbose = enabled
 
 
+# Heartbeat interval (seconds) for the transport heartbeat thread.
+# Set by sync.py from the addon preference (default 5.0). The heartbeat is
+# enqueued from a dedicated daemon thread (not the Blender main loop) so a
+# long synchronous bpy.ops export can never starve it (INV-2026-019 Step 2).
+_heartbeat_interval = 5.0
+
+def set_heartbeat_interval(interval):
+    global _heartbeat_interval
+    _heartbeat_interval = max(0.5, float(interval))
+
+
 # Phase 7C: playback preference toggle
 _playback_enabled = False
 
@@ -3028,6 +3039,17 @@ class LiveSyncClient:
 
         self._thread.start()
 
+        self._last_heartbeat_enqueued = 0.0
+
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            daemon=True
+        )
+
+        print("[LiveSync] Starting heartbeat thread...", flush=True)
+
+        self._heartbeat_thread.start()
+
         print("[LiveSync] Sender thread started, initiating connect...", flush=True)
 
         self.connect()
@@ -3117,6 +3139,59 @@ class LiveSyncClient:
                         _send_announce(self)
 
                 continue
+
+    # =====================================================
+    # HEARTBEAT LOOP (daemon thread — independent of main loop)
+    # =====================================================
+    # INV-2026-019 Step 2: heartbeat (0x07) is enqueued here instead of from
+    # check_updates() on the Blender main thread. A synchronous bpy.ops export
+    # blocks the main loop for the whole export duration; previously that
+    # starved the heartbeat and UE's 15s heartbeat timeout disconnected the
+    # socket mid-export, losing the first FBX_IMPORT_REQUEST (0x60).
+
+    def _heartbeat_loop(self):
+
+        print("[LiveSync] Heartbeat thread started", flush=True)
+
+        while self._running:
+
+            try:
+
+                now = time.time()
+
+                if now - self._last_heartbeat_enqueued >= _heartbeat_interval:
+
+                    self._last_heartbeat_enqueued = now
+
+                    try:
+
+                        self.send_packet(
+                            [],
+                            packet_type=0x07
+                        )
+
+                        _append_blender_debug_log(
+                            "[DIAG][HB_THREAD] sent ts=%.3f "
+                            "interval=%.1f queue=%d"
+                            % (
+                                now,
+                                _heartbeat_interval,
+                                self._send_queue.qsize()
+                            )
+                        )
+
+                    except Exception as e:
+
+                        self.last_error = (
+                            f"Heartbeat send failed: {e}"
+                        )
+                        self.last_error_severity = "WARNING"
+
+            except Exception:
+
+                pass
+
+            time.sleep(0.5)
 
     # =====================================================
     # INTERNAL I/O (caller must hold _lock)
@@ -3435,6 +3510,11 @@ class LiveSyncClient:
         self._thread.join(
             timeout=2.0
         )
+
+        if hasattr(self, "_heartbeat_thread"):
+            self._heartbeat_thread.join(
+                timeout=2.0
+            )
 
         self.close()
 

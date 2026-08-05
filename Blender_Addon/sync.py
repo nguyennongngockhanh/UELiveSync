@@ -38,6 +38,7 @@ try:
         get_runtime_stats,
         set_critical_error,
         set_verbose as _network_set_verbose,
+        set_heartbeat_interval as _network_set_heartbeat_interval,
         PRIMITIVE_CUBE,
         PRIMITIVE_SPHERE,
         PRIMITIVE_CYLINDER,
@@ -183,6 +184,7 @@ except ImportError:
         get_runtime_stats,
         set_critical_error,
         set_verbose as _network_set_verbose,
+        set_heartbeat_interval as _network_set_heartbeat_interval,
         PRIMITIVE_CUBE,
         PRIMITIVE_SPHERE,
         PRIMITIVE_CYLINDER,
@@ -1475,6 +1477,10 @@ def check_updates():
     _heartbeat_interval = _get_threshold(
         "heartbeat_interval",
         5.0
+    )
+
+    _network_set_heartbeat_interval(
+        _heartbeat_interval
     )
 
     _scan_interval = _get_threshold(
@@ -3000,53 +3006,12 @@ def check_updates():
         )
         _burst_packet_count += 1
 
-    # =====================================================
-    # HEARTBEAT (every 5 seconds)
-    # =====================================================
-
-    now = time.time()
-
-    if now - _last_heartbeat_time >= _heartbeat_interval:
-
-
-
-        # MATSTALL: log network send for material and transform.
-        if _verbose_logging or (material_payloads_to_send and "Suzanne" in str(material_payloads_to_send)):
-            _connected = is_connected()
-            print(
-                f"[MATSTALL][BLENDER] net_send mat_count={len(material_payloads_to_send)} "
-                f"connected={_connected}"
-            )
-        if _verbose_logging and objects_to_send:
-            _connected = is_connected()
-            print(
-                f"[MATSTALL][BLENDER] net_send transform_count={len(objects_to_send)} "
-                f"children={len(children_to_send)} connected={_connected}"
-            )
-        if _verbose_logging:
-            print(
-                "[LiveSync] Sending heartbeat",
-                flush=True
-            )
-
-        send_objects(
-            [],
-            packet_type=0x07
-        )
-        _burst_packet_count += 1
-
-        # Phase 10A.3: log heartbeat to debug file for monitoring
-        try:
-            _hb_connected = is_connected()
-            _hb_client = getattr(_client, '_runtime_stats', {}) if _client else {}
-            _hb_queue = _hb_client.get('queue_depth', -1) if _hb_client else -1
-            _hb_sent = _hb_client.get('packets_sent', 0) if _hb_client else 0
-            with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _hb_f:
-                _hb_f.write(f"[DIAG][HB] sent queue_depth={_hb_queue} total_sent={_hb_sent} connected={_hb_connected}\n")
-        except Exception:
-            pass
-
-        _last_heartbeat_time = now
+    # HEARTBEAT (0x07) is sent by the transport heartbeat thread
+    # (network.LiveSyncClient._heartbeat_loop), not from this main-loop
+    # callback. A synchronous bpy.ops export blocks the Blender main loop for
+    # the whole export duration; sending heartbeats here previously starved
+    # them and UE's heartbeat timeout disconnected mid-export, losing the
+    # first FBX_IMPORT_REQUEST (INV-2026-019 Step 2).
 
     try:
         with open("/home/nguyennongngockhanh/.cache/uelivesync/uelivesync_blender_debug.log", "a") as _f:
