@@ -5521,12 +5521,26 @@ UpdateTargetTransform(
         ParentGuid !=
         State.ParentGuid;
 
+    // [INV-2026-017][B2] First UpdateTargetTransform call for this GUID.
+    // The actor is spawned from OBJECT_CREATE with its own transform, which
+    // may differ from this first update (e.g. a static scale change). The
+    // unchanged early-return compares incoming against the stored Target,
+    // which was just seeded to equal incoming — so a first update that
+    // differs from the actor's actual transform would never be applied.
+    const bool bInitializedThisCall =
+        !State.bInitialized;
+
     if (!State.bInitialized)
     {
         if (bIsLocalTransform &&
             ParentGuid.IsValid())
         {
-            // Attached child: initialize local-space state
+            // Attached child: initialize local-space state.
+            // [INV-2026-017][B2] CurrentLocal mirrors the actor's ACTUAL
+            // relative transform (spawned from OBJECT_CREATE), never
+            // overwrites it. LocalTarget holds the incoming authoritative
+            // value, so a first update that differs from spawn is applied
+            // through the normal interpolation pipeline.
             State.CurrentLocalLocation =
                 Location;
 
@@ -5535,6 +5549,30 @@ UpdateTargetTransform(
 
             State.CurrentLocalScale =
                 Scale;
+
+            {
+                AActor* ChildActor =
+                    FindActorFast(Guid);
+
+                if (ChildActor &&
+                    ChildActor->GetRootComponent())
+                {
+                    State.CurrentLocalLocation =
+                        ChildActor->
+                        GetRootComponent()->
+                        GetRelativeLocation();
+
+                    State.CurrentLocalRotation =
+                        ChildActor->
+                        GetRootComponent()->
+                        GetRelativeRotation().
+                        Quaternion();
+
+                    State.CurrentLocalScale =
+                        ChildActor->
+                        GetActorRelativeScale3D();
+                }
+            }
 
             State.LocalTargetLocation =
                 Location;
@@ -5560,9 +5598,9 @@ UpdateTargetTransform(
             if (Parent)
             {
                 FTransform LocalXForm(
-                    Rotation,
-                    Location,
-                    Scale);
+                    State.CurrentLocalRotation,
+                    State.CurrentLocalLocation,
+                    State.CurrentLocalScale);
 
                 FTransform ParentWorld =
                     Parent->
@@ -5587,7 +5625,12 @@ UpdateTargetTransform(
         }
         else
         {
-            // Root actor: initialize world-space state
+            // Root actor: initialize world-space state.
+            // [INV-2026-017][B2] Current* mirrors the actor's ACTUAL world
+            // transform (spawned from OBJECT_CREATE), never overwrites it.
+            // Target* holds the incoming authoritative value, so a first
+            // update that differs from spawn (e.g. a static scale change) is
+            // applied through the normal interpolation pipeline.
             State.CurrentLocation =
                 Location;
 
@@ -5596,6 +5639,27 @@ UpdateTargetTransform(
 
             State.CurrentScale =
                 Scale;
+
+            {
+                AActor* Actor =
+                    FindActorFast(Guid);
+
+                if (Actor)
+                {
+                    State.CurrentLocation =
+                        Actor->
+                        GetActorLocation();
+
+                    State.CurrentRotation =
+                        Actor->
+                        GetActorRotation().
+                        Quaternion();
+
+                    State.CurrentScale =
+                        Actor->
+                        GetActorScale3D();
+                }
+            }
 
             State.bHasLocalTarget =
                 false;
@@ -5713,10 +5777,90 @@ UpdateTargetTransform(
         ScaleDistance >=
         SclThreshold;
 
-    if (!bLocationChanged &&
+    // [INV-2026-017][B2] On the first call, incoming was just seeded into
+    // Target*, so the threshold check below would always read "unchanged".
+    // Fall through to the normal store/interpolation pipeline instead; when
+    // Current* == Target* the interpolation is a no-op (idempotent), and when
+    // they differ (spawn transform != first update) the change is applied.
+    if (bInitializedThisCall)
+    {
+        // fall through to the authoritative store + interpolation pipeline
+    }
+    else if (!bLocationChanged &&
         !bRotationChanged &&
         !bScaleChanged)
     {
+        // [INV-2026-017][B1] Root→child transition on an unchanged value:
+        // the packet explicitly carries a LOCAL transform with a valid parent,
+        // so the state must not remain in world mode even when the value equals
+        // the stored target. (The semantic OBJECT_UPDATE queued before
+        // OBJECT_REPARENT stored this local value as world, making this first
+        // PT_Transform appear "unchanged".) Establish local-space state so
+        // InterpolateTransforms takes the attached path instead of treating a
+        // Blender-local value as world-space.
+        if (bIsLocalTransform &&
+            ParentGuid.IsValid() &&
+            !State.bHasLocalTarget)
+        {
+            State.CurrentLocalLocation =
+                Location;
+
+            State.CurrentLocalRotation =
+                Rotation;
+
+            State.CurrentLocalScale =
+                Scale;
+
+            State.LocalTargetLocation =
+                Location;
+
+            State.LocalTargetRotation =
+                Rotation;
+
+            State.LocalTargetScale =
+                Scale;
+
+            State.bHasLocalTarget =
+                true;
+
+            // NON-AUTHORITATIVE
+            // Derived world-space debug/fallback cache only.
+            // Attached interpolation authority remains local-space.
+
+            {
+                AActor* Parent =
+                    FindActorFast(ParentGuid);
+
+                if (Parent)
+                {
+                    FTransform LocalXForm(
+                        Rotation,
+                        Location,
+                        Scale);
+
+                    FTransform ParentWorld =
+                        Parent->
+                        GetActorTransform();
+
+                    FTransform WorldXForm =
+                        LocalXForm *
+                        ParentWorld;
+
+                    State.TargetLocation =
+                        WorldXForm.
+                        GetLocation();
+
+                    State.TargetRotation =
+                        WorldXForm.
+                        GetRotation();
+
+                    State.TargetScale =
+                        WorldXForm.
+                        GetScale3D();
+                }
+            }
+        }
+
         if (bParentChanged)
         {
             State.ParentGuid =
@@ -6479,8 +6623,8 @@ InterpolateTransforms(
                     FMath::RadiansToDegrees(DeltaAngleRad));
             }
 
-                    Actor->SetActorTransform(RootDirectXForm);
-                    DiagBasis_CameraOneShot(Actor, Guid);
+            Actor->SetActorTransform(RootDirectXForm);
+            DiagBasis_CameraOneShot(Actor, Guid);
                     // Phase 10J.5D.5: TRANSFORM_WARN for FBX-authoritative actors
                     if (FBXAuthoritativeGuids.Contains(Guid))
                     {
@@ -8117,10 +8261,24 @@ void UUELiveSyncSubsystem::OnObjectUpdate(
         FVector Scale(
             View.Transform[7], View.Transform[8], View.Transform[9]);
 
-        // No parent info in ObjectUpdateView — use current parent.
-        // bIsLocalTransform=false: protocol sends world-space transforms.
+        // No parent info in ObjectUpdateView — use current tracked parent.
+        // Parented children: Blender sends LOCAL transforms
+        // (get_transform() returns matrix_local when parent is tracked).
+        FGuid EffectiveParentGuid;
+        bool bIsLocalTransform = false;
+        if (FSyncTransformState* Existing =
+            TransformStates.Find(Guid))
+        {
+            if (Existing->bHasParent &&
+                Existing->ParentGuid.IsValid())
+            {
+                EffectiveParentGuid =
+                    Existing->ParentGuid;
+                bIsLocalTransform = true;
+            }
+        }
         UpdateTargetTransform(Guid, Location, Rotation, Scale,
-                              FGuid(), /*bIsLocalTransform=*/false);
+                              EffectiveParentGuid, bIsLocalTransform);
 
 #if WITH_EDITOR
         if (GEditor)

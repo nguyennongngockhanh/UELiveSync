@@ -15,6 +15,7 @@
 | INV-2026-013 | Camera Aspect Not Updated When Render Resolution Changes | Closed | P0 | — | 2026-08-01 | Khanh |
 | INV-2026-014 | FBX Export Operator StopIteration on Zero Material Slots | Closed | P1 | — | 2026-08-01 | Khanh |
 | INV-2026-016 | FBX Actor Ownership Mismatch — UUID Encoding Divergence (LE/FGuid vs RFC 4122) | Resolved via MIG-006 | P0 | MIG-002, MIG-005 | 2026-08-03 | Khanh |
+| INV-2026-017 | Reparent with Non-Unit Scale Causes Child Position/Size Jump | Closed | P1 | — | 2026-08-04 | Khanh |
 
 ## INV-2026-009 — Camera Orientation Mismatch (Blender ↔ UE)
 
@@ -67,3 +68,14 @@ Alias: INV-E2.
 - **Resolution**: `Blender_Addon/__init__.py` guard changed to `if prev_prop_sig is not None and current_prop_sig:` — the scalar-length comparison now executes only when `current_prop_sig` contains at least one material entry; empty `{}` is valid runtime state and skips the comparison.
 - **Evidence**: Reproduced twice deterministically under identical conditions (same Cube_B, no material slot, same operator, fresh boundary each run) — identical traceback, same callstack, `__init__.py:2535`, `[FBX] ERROR: Cube_B —`. UE import succeeded both times (`[FBX][VALIDATE] meshValid=1`, transactionId=1 and 2). Post-fix runtime verification on the same baseline (HEAD `51eab68`, addon loaded from repo via symlink chain): (1) no-material mesh → 0 `StopIteration`/ERROR, operator completes (`[DIAG][FBX_OP_DONE] totalMs=50.1`), UE `meshValid=1`; (2) mesh with one material slot (New material on Cube_B) → snapshot sent with values (`[MAT][SEND] slot=0 matx=1 color=(0.800,...) roughness=0.500`), operator completes (`[DIAG][FBX_OP_DONE] totalMs=17.1`), UE `[MATERIAL][FBX_IMPORTED_APPLY] slot=0` + `meshValid=1 material0=MI_UELiveSync_...`. Acceptance criteria 1–4 all PASS. `python -m py_compile` PASS. Static pytest blocked by pre-existing Known Limitation #12 (relative import of addon as top-level module), out of scope for this investigation.
 - **Commit**: `51eab68`.
+
+## INV-2026-017 — Reparent with Non-Unit Scale Causes Child Position/Size Jump
+
+- **Symptom**: When parent or child has scale ≠ (1,1,1), performing "Set Parent" in Blender causes the child to jump position and change size permanently in UE. Does NOT appear when all scale = (1,1,1).
+- **Status**: Closed (2026-08-05). Two causally-linked root causes confirmed and fixed:
+  - **B1** — Blender-local transform applied as world after reparent (OBJECT_UPDATE flushed before OBJECT_REPARENT; the PT_Transform with local+parent hit the "unchanged" early-return, never established `bHasLocalTarget`, so interpolation took the ROOT path).
+  - **B2** — parent's first static scale update swallowed by the init path (`Current*=Target*=incoming` assumed the actor already equals the first update; an update differing from spawn transform was never applied until a later motion flushed it).
+- **Resolution**: Both fixes inside `UpdateTargetTransform` only. Patch A establishes local state on the unchanged early-return when the packet is explicitly local+parented. Patch B seeds `Current*` from the actor's actual transform (idempotent, read-only) and lets the first call fall through the normal interpolation pipeline.
+- **Verification**: 5/5 scenarios PASS on instrumented build (spawn, transform, reparent scale=1, reparent scale≠1, B2 static scale) AND re-verified 5/5 on the clean build with UE-viewport acceptance. `[INV017B]` instrumentation removed.
+- **Prior finding (discredited)**: MsgType OBJECT_UPDATE (0x0d) detach hypothesis; candidate fix disproved (kept only briefly for bisect, then squashed away).
+- **Commit**: single fix commit (Patch A + Patch B + docs) on `phase1.4-core-sync`.
