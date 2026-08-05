@@ -16,6 +16,10 @@
 #include "Factories/FbxStaticMeshImportData.h"
 #include "ObjectTools.h"
 #include "AutomatedAssetImportData.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "Misc/PackageName.h"
+#include "Modules/ModuleManager.h"
+#include "UObject/Package.h"
 #endif
 
 static TAutoConsoleVariable<int32> CVarLiveSyncFBXVerboseLogs(
@@ -458,6 +462,16 @@ static FString SanitizeObjectName(const FString& RawName)
         SafeName = TEXT("Mesh");
     }
     return SafeName;
+}
+
+// Canonical asset name UE actually assigns when importing a sidecar texture file
+// via ImportAssetsAutomated: the file base name is sanitized ('.' -> '_') and
+// lowercased for key comparison. Matching code must use this form, NOT the raw
+// GetBaseFilename (which keeps the inner dots) — otherwise every lookup misses
+// the real asset and EffectiveTexCount stays 0 (INV-2026-018 / Bug B).
+static FString CanonicalSidecarTextureName(const FString& SourceFile)
+{
+    return SanitizeObjectName(FPaths::GetBaseFilename(SourceFile)).ToLower();
 }
 
 // =========================================================
@@ -1211,6 +1225,129 @@ static FFBXImportSemanticSignature ComputeFBXSemanticSignature(
     return Sig;
 }
 
+// MIG-009 WS-1: resolve sidecar textures declared by the Blender-side manifest
+// v3 (manifest_v3.json). Only the subset needed for sidecar texture resolution
+// is parsed: schemaVersion + assets[].destinationBasename (+ destinationSize as
+// an optional size check). occurrences[] and material metadata are intentionally
+// NOT parsed yet (no coupling with the full schema).
+// Returns true when a valid v3 manifest was found and used (v3 is the authority
+// for this FbxDir); false lets the caller fall back to the legacy v2 read.
+static bool TryResolveManifestV3Sidecars(
+    const FString& FbxDir,
+    TArray<FString>& OutSidecarFiles)
+{
+    const FString ManifestPath = FbxDir / TEXT("manifest_v3.json");
+    if (!IFileManager::Get().FileExists(*ManifestPath))
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][SIDECAR_MANIFEST_V3_NOT_FOUND] path=%s"), *ManifestPath);
+        return false;
+    }
+
+    FString ManifestContent;
+    if (!FFileHelper::LoadFileToString(ManifestContent, *ManifestPath))
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[FBX][SIDECAR_MANIFEST_V3_READ_FAIL] path=%s"), *ManifestPath);
+        return false;
+    }
+
+    TSharedPtr<FJsonObject> ManifestJson;
+    TSharedRef<TJsonReader<>> Reader =
+        TJsonReaderFactory<>::Create(ManifestContent);
+    if (!FJsonSerializer::Deserialize(Reader, ManifestJson) || !ManifestJson.IsValid())
+    {
+        UE_LOG(LogLiveSync, Warning,
+            TEXT("[FBX][SIDECAR_MANIFEST_V3_PARSE_FAIL] path=%s"), *ManifestPath);
+        return false;
+    }
+
+    int32 SchemaVersion = 0;
+    if (!ManifestJson->TryGetNumberField(TEXT("schemaVersion"), SchemaVersion) ||
+        SchemaVersion != 3)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][SIDECAR_MANIFEST_V3_UNSUPPORTED] path=%s version=%d"),
+            *ManifestPath, SchemaVersion);
+        return false;
+    }
+
+    const TSharedPtr<FJsonObject>* AssetsObj = nullptr;
+    if (!ManifestJson->TryGetObjectField(TEXT("assets"), AssetsObj) || !AssetsObj)
+    {
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][SIDECAR_MANIFEST_V3_NO_ASSETS] path=%s"), *ManifestPath);
+        return true;
+    }
+
+    int32 ResolvedCount = 0;
+    for (const auto& Entry : (*AssetsObj)->Values)
+    {
+        const TSharedPtr<FJsonValue>& Val = Entry.Value;
+        if (!Val.IsValid() || Val->Type != EJson::Object)
+            continue;
+
+        const TSharedPtr<FJsonObject>* AssetObj = nullptr;
+        if (!Val->TryGetObject(AssetObj) || !AssetObj)
+            continue;
+
+        // Only ready assets carry a verifiable destination file.
+        FString Status;
+        if ((*AssetObj)->TryGetStringField(TEXT("status"), Status) && Status != TEXT("ready"))
+        {
+            continue;
+        }
+
+        FString Basename;
+        if (!(*AssetObj)->TryGetStringField(TEXT("destinationBasename"), Basename) ||
+            Basename.IsEmpty())
+        {
+            continue;
+        }
+
+        int64 DestinationSize = 0;
+        (*AssetObj)->TryGetNumberField(TEXT("destinationSize"), DestinationSize);
+
+        // Sidecars are written flat in FbxDir; also accept the textures/ subfolder.
+        FString CandidatePath = FbxDir / Basename;
+        if (!IFileManager::Get().FileExists(*CandidatePath))
+        {
+            const FString AltPath = FbxDir / TEXT("textures") / Basename;
+            if (IFileManager::Get().FileExists(*AltPath))
+            {
+                CandidatePath = AltPath;
+            }
+        }
+
+        const int64 ActualSize = IFileManager::Get().FileSize(*CandidatePath);
+        if (ActualSize <= 0)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[FBX][SIDECAR_MANIFEST_V3_MISSING] path=%s size=%lld"),
+                *CandidatePath, ActualSize);
+            continue;
+        }
+        if (DestinationSize > 0 && ActualSize != DestinationSize)
+        {
+            UE_LOG(LogLiveSync, Warning,
+                TEXT("[FBX][SIDECAR_MANIFEST_V3_SIZE_MISMATCH] path=%s expected=%lld actual=%lld"),
+                *CandidatePath, DestinationSize, ActualSize);
+            continue;
+        }
+
+        OutSidecarFiles.AddUnique(CandidatePath);
+        UE_LOG(LogLiveSync, Log,
+            TEXT("[FBX][SIDECAR_MANIFEST_V3_RESOLVED] basename=%s path=%s size=%lld"),
+            *Basename, *CandidatePath, ActualSize);
+        ++ResolvedCount;
+    }
+
+    UE_LOG(LogLiveSync, Log,
+        TEXT("[FBX][SIDECAR_MANIFEST_V3_READ] path=%s assets=%d resolved=%d"),
+        *ManifestPath, (*AssetsObj)->Values.Num(), ResolvedCount);
+    return true;
+}
+
 bool FLiveSyncFBXImporter::HandleImport(
     const FFBXImportRequestPayload& Payload,
     const FFBXImportContext& Context)
@@ -1521,6 +1658,10 @@ bool FLiveSyncFBXImporter::HandleImport(
         const FString FbxDir = FPaths::GetPath(FbxPathStr);
             TArray<FString> ManifestSidecarFiles;
 
+            // MIG-009 WS-1: manifest v3 is the authority when present; fall
+            // back to the legacy v2 read, then the directory scan.
+            if (!TryResolveManifestV3Sidecars(FbxDir, ManifestSidecarFiles))
+            {
             // Task C/D: read manifest.json for deterministic sidecar texture discovery
             FString MeshName = FPaths::GetCleanFilename(FbxPathStr);
             const FString FbxExt = TEXT(".fbx");
@@ -1624,6 +1765,7 @@ bool FLiveSyncFBXImporter::HandleImport(
             {
                 FString NotFoundLog = TEXT("[FBX][SIDECAR_MANIFEST_NOT_FOUND] path=") + ManifestPath;
                 UE_LOG(LogLiveSync, Log, TEXT("%s"), *NotFoundLog);
+            }
             }
 
             TArray<FString> SidecarFiles;
@@ -1902,10 +2044,12 @@ bool FLiveSyncFBXImporter::HandleImport(
 
                 for (const FString& SourceFile : SidecarFiles)
                 {
-                    FString BaseName = FPaths::GetBaseFilename(SourceFile);
+                    FString BaseName = CanonicalSidecarTextureName(SourceFile);
                     // Task 9B.2: textures go to /Game/UELiveSync/Imported/Textures/
                     // to prevent /Game/UELiveSync/Imported/Wood.Wood (material) vs
                     // /Game/UELiveSync/Imported/Textures/Wood.Wood (texture) collision.
+                    // NOTE: BaseName is the CANONICAL (sanitized) asset name UE assigns
+                    // on import, so ObjectPath matches the actual asset (INV-2026-018).
                     FString DestPackagePath = SidecarAssetBasePath / BaseName;
                     FString ObjectPath = DestPackagePath + TEXT(".") + BaseName;
 
@@ -2021,7 +2165,7 @@ bool FLiveSyncFBXImporter::HandleImport(
                             continue;
 
                         FString Canonical =
-                            FPaths::GetBaseFilename(SourceFile).ToLower();
+                            CanonicalSidecarTextureName(SourceFile);
 
                         UObject** Found = ImportedByCanonicalName.Find(Canonical);
                         if (Found)
@@ -2055,8 +2199,7 @@ bool FLiveSyncFBXImporter::HandleImport(
                     {
                         // Task 9B.1: verify canonical source key matches canonical asset name.
                         FString SourceFile = SidecarFiles.IsValidIndex(Fi) ? SidecarFiles[Fi] : FString();
-                        FString BaseName = FPaths::GetBaseFilename(SourceFile);
-                        FString CanonicalKey = BaseName.ToLower();
+                        FString CanonicalKey = CanonicalSidecarTextureName(SourceFile);
                         FString TexturePath = Tex->GetPathName();
                         FString AssetKey = Tex->GetName().ToLower();
 
